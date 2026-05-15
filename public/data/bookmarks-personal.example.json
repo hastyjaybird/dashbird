@@ -1,0 +1,8 @@
+{
+  "sections": [
+    {
+      "title": "Bookmarks",
+      "items": [{ "word": "Example", "href": "https://example.com/" }]
+    }
+  ]
+}

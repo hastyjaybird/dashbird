@@ -1,2 +1,0 @@
-# Last successful backup — one ISO 8601 line (env LAST_BACKUP_AT overrides this file).
-# Example: 2026-05-10T18:30:00-07:00

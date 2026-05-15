@@ -5,3 +5,9 @@ node_modules/
 *.log
 .DS_Store
 features.txt
+
+# Local-only (never push real copies of these)
+public/data/bookmarks-personal.json
+public/data/notes.md
+public/data/last-backup.txt
+request.txt
