@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>dashbird</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="dashy">
+    <header class="topbar glass" role="banner">
+      <span class="brand">dashbird</span>
+    </header>
+
+    <div class="layout-body">
+      <aside class="chat-sidebar" aria-labelledby="h-openrouter-chat">
+        <div class="chat-sidebar__inner panel panel--glass">
+          <h2 id="h-openrouter-chat" class="chat-sidebar__heading">OpenRouter Chat</h2>
+          <div id="mount-chat" class="chat-sidebar__mount"></div>
+        </div>
+      </aside>
+
+      <div
+        id="chat-sidebar-resizer"
+        class="chat-sidebar-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize OpenRouter chat column"
+        tabindex="0"
+        hidden
+      ></div>
+
+      <div class="layout-main">
+        <main class="dashboard">
+          <div class="row row--hero">
+            <section
+              class="panel panel--glass panel--hero"
+              aria-label="Time, location, and weather"
+            >
+              <div id="mount-hero" class="panel__body panel__body--hero"></div>
+            </section>
+          </div>
+
+          <div class="row row--web-search">
+            <section
+              class="panel panel--glass panel--web-search"
+              aria-label="Web search"
+            >
+              <div id="mount-web-search" class="panel__body panel__body--web-search"></div>
+            </section>
+          </div>
+
+          <div class="row row--bookmarks-mega">
+            <section class="panel panel--glass panel--bookmarks-bundle" aria-label="Bookmarks">
+              <details class="bookmarks-mega" open>
+                <summary class="bookmarks-mega__summary">Bookmarks</summary>
+                <div class="bookmarks-mega__body">
+                  <div class="bookmarks-mega__columns">
+                    <div class="bookmarks-mega__col">
+                      <h3 id="h-personal" class="bookmarks-mega__col-title">Personal</h3>
+                      <div id="mount-bookmarks-personal" class="panel__body panel__body--bookmarks"></div>
+                    </div>
+                    <div class="bookmarks-mega__col">
+                      <h3 id="h-admin" class="bookmarks-mega__col-title">Admin</h3>
+                      <div id="mount-bookmarks-work" class="panel__body panel__body--bookmarks"></div>
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </section>
+          </div>
+
+          <div class="row row--stack">
+            <section class="panel panel--glass panel--calendar" aria-labelledby="h-calendar">
+              <h2 id="h-calendar">Calendar</h2>
+              <div id="mount-calendar" class="panel__body panel__body--calendar"></div>
+            </section>
+            <section class="panel panel--glass" aria-labelledby="h-notes">
+              <h2 id="h-notes">Notes</h2>
+              <div id="mount-notes" class="panel__body notes-body"></div>
+            </section>
+          </div>
+        </main>
+      </div>
+
+      <aside
+        id="mount-health-sidebar"
+        class="health-sidebar"
+        aria-label="System health"
+      ></aside>
+    </div>
+    <script type="module" src="/js/app.js"></script>
+  </body>
+</html>

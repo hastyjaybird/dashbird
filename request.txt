@@ -1,0 +1,69 @@
+# Dashbird backlog (v1)
+
+## How to read / edit
+- Start each item with: `done` · `done-ish` · `not started` · `v1.2` (same meanings as below).
+- For `not started`, the next line must be `  /next step:` + concrete steps; use `HUMAN:` when only you can act.
+
+## Legend
+- **done** — implemented in this repo
+- **done-ish** — partial; needs your data or a product call
+- **not started** — not built
+- **v1.2** — defer until prerequisite work (see `docs/v2-roadmap.md`)
+
+## Recently added 
+
+
+
+
+## Shipped (short)
+done — Hero: half-width top band, smaller weather, clock unchanged, removed green Oakland line; responsive width.
+done — Bookmarks: collapsible sections (first open); Personal = Tools → Social → Shopping → Media; Admin label; Admin tiles = Clients (Drive + icon) → Community → Banking → Other Services; Lili bank link; Banking removed from Personal.
+done — Sky strip: `/api/sky-events` + calendar + `public/assets/sky/*`; short row titles from `eventTypes.label`; supermoon rows have title only (no subtitle); before peak shows peak line, after start (and after peak if set) shows `Until …` through end; **Aurora** uses `aurora.png`; hero **moonrise** uses Vecteezy moon-phase strip (`moon-phases-strip.jpg`) with circular crop + `object-position` from `getMoonPhase01`; hero **sunset** uses `sunset-glyph.png` (transparent, `/icons/weather/`) in a **round** frame.
+done — Layout: Personal + Admin bookmarks live in one collapsible **Bookmarks** panel; OpenRouter chat is a **left column** (full height under the top bar) with messages scrolling above a **fixed composer** (dock + textarea + Send) so the input stays visible without scrolling the page.
+
+## Open
+not started — Sky sources: each event type should point at the best “for my area” reference (zip or lat/lon); replace weak links.
+  /next step: Review `sources` + per-event `source` in `sky-events-calendar.json`; HUMAN: note any sites you want locked in.
+
+not started — Link + asset audit (dead hrefs; unused files only removed when clearly duplicate).
+  /next step: Crawl bookmark URLs + static asset references; fix or prune with intent.
+
+## HUMAN queue
+- Add missing **Other Services** billers in `public/data/bookmarks-work.json` (utilities, insurance, subscriptions).
+
+## TESTING (only if requested in chat)
+not started — Security audit (API keys, exposure, PII, abuse of funded APIs, ransomware-style payloads).
+
+done-ish — OpenRouter / LLM spend
+  /next step: HUMAN: usage caps/alerts; rotate key if leaked; do not ship a public URL with a funded key and no auth.
+
+@@@ IGNORE BELOW THIS LINE, DO NOT INCLUDE WITH DASHBIRD PROJECT@@@@
+v2:
+Features for DASHBIRD - only do these after all dashbird change requests section has been complete
+have two tabs under openrouter chat, second tab will be 'sessions' make it so you can look up session history, autogenerate a title name for the session on session start. allow the user to bulk delete sessions and pin them to the top. 
+  (no tag) shows status of agent daily operations
+  (no tag) has a bioclock showing what time in my female cycle i am (lutheal phase etc)- this should be editable or someting with notes so that it adusts over time, i dont want any third party knowing this information. maybe i create my own ai agent to track this, make a markup file and adjust future cycle date predictions, i dont know)
+  (no tag) add a persisting button that alerts when an amazon package has arrived that persists until i click it off (info will come from an outside ai agent that will be looking at email, connect later)
+  (no tag) add rain expected in x minutes (set the specific location to 1712 32nd st oakland ca 94608). if theres no rain expected in the next 3 days then dont display anything
+
+  done-ish  last backup line in top bar — NEED FROM HUMAN: LAST_BACKUP_AT or public/data/last-backup.txt (ISO); update after backups
+  (no tag) add feature: perplexity has a great way of referencing where all its information comes from and when you hover over the small link icon it gives a summary of that particuar reference in the context of the topic, I want this in the response window of the agent.
+  (no tag) i want the whole experience of syncing notes like Keep. is there a widget to just use my keep account? (see docs/v2-roadmap.md — Keep is v2 / OAuth)
+
+
+ai agents (build separately):
+(note: these are notes for ideas to build a separate project file that orchestrates various subagents listed here. The idea is i would publish the stats of those agents, and then call the stats to show in the dashboard for some of them. for the most part ignore this list below for the Dashbird project)
+
+/global agent features
+call or text human if something is needed. 
+one agent to orchestrate sub-agents
+
+/subagents
+upload a tiktok collection that has been curated with videos about programming, and review the content for current relevance and accuracy. delete videos that are not true, or obsolete in their 
+read emails make a global email summary, notify of important emails that need responding to, make an industry summary report (i get a lot of newsletters from various industries, give a highlight reel)
+scraping for events
+finding people like me
+
+
+
+

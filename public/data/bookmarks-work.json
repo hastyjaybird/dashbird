@@ -1,0 +1,64 @@
+{
+  "sections": [
+    {
+      "title": "Utilities",
+      "items": [
+        { "word": "Calendar", "href": "https://calendar.google.com/" },
+        { "word": "Maps", "href": "https://maps.google.com/" }
+      ]
+    },
+    {
+      "title": "Clients",
+      "items": [
+        { "word": "PREB", "href": "https://energia.pr.gov/en" },
+        { "word": "Teams", "href": "https://teams.microsoft.com/" },
+        { "word": "Outlook", "href": "https://outlook.office.com/mail/" },
+        {
+          "word": "Drive",
+          "href": "https://drive.google.com/",
+          "icon": "/assets/tile-google-drive.svg"
+        }
+      ]
+    },
+    {
+      "title": "Community",
+      "items": [
+        { "word": "Coda", "href": "https://coda.io/" },
+        { "word": "Slack", "href": "https://slack.com/" },
+        { "word": "Discord", "href": "https://discord.com/" }
+      ]
+    },
+    {
+      "title": "Banking",
+      "items": [
+        { "word": "USAA", "href": "https://www.usaa.com/" },
+        { "word": "Vanguard", "href": "https://investor.vanguard.com/" },
+        { "word": "Xero", "href": "https://go.xero.com/" },
+        {
+          "word": "Beneficial State Bank",
+          "href": "https://beneficialstatebank.com/"
+        },
+        { "word": "Lili", "href": "https://lili.co/" },
+        { "word": "Venmo", "href": "https://venmo.com/" },
+        { "word": "PayPal", "href": "https://www.paypal.com/" }
+      ]
+    },
+    {
+      "title": "Other Services",
+      "items": [
+        {
+          "word": "Kaiser",
+          "href": "https://healthy.kaiserpermanente.org/northern-california/front-door"
+        },
+        { "word": "FasTrak", "href": "https://www.bayareafastrak.org/" },
+        { "word": "CA DMV", "href": "https://www.dmv.ca.gov/" },
+        {
+          "word": "Google Play",
+          "href": "https://play.google.com/store/account"
+        },
+        { "word": "Covered California", "href": "https://www.coveredca.com/" },
+        { "word": "Delta Dental", "href": "https://www.deltadental.com/" }
+      ]
+    }
+  ]
+}

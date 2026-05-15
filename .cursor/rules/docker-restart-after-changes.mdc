@@ -1,0 +1,14 @@
+---
+description: Restart Docker Compose after editing this project
+alwaysApply: true
+---
+
+# Docker after changes
+
+Whenever you modify files in this repository as part of the work (code, static assets, Docker config, env examples, etc.), **restart the stack** from the project root so the running container matches the tree:
+
+```bash
+cd /home/jaybird/jayprograms/dashbird && docker compose up -d --build
+```
+
+Use `docker compose down && docker compose up -d --build` if a full recycle is needed. Do this **after** your edits for that turn are done, not only on request.

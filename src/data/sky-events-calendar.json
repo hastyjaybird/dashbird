@@ -1,0 +1,261 @@
+{
+  "meta": {
+    "timezone_note": "Event times are ISO 8601 (Z or offsets). Edit this file or replace with scraper output. HUMAN: ISS sighting times — use NASA Spot the Station (https://spotthestation.nasa.gov/) as the primary source; Heavens-Above is optional for extra pass detail. Bright satellite / Iridium-class flares — use Heavens-Above (https://www.heavens-above.com/) as the primary list after you set your observing site. Launch times from SpaceLaunchSchedule / NASASpaceflight; storms from NOAA SWPC. Hero aurora strip: live SWPC Ovation + planetary K at WEATHER_LAT/LON from .env (94608 Oakland defaults); calendar aurora events are not used when that fetch succeeds. When SWPC data loads, the aurora row is shown only if modeled likelihood is Medium or higher (Low is hidden). Planet rows (type planet): API adds Mercury–Saturn when each passes civil-night, altitude, and brightness checks at WEATHER_LAT/LON; Uranus and Neptune are not treated as casual naked-eye targets here.",
+    "window_policy": "API returns events overlapping the requested window. Supermoon (type supermoon): row is kept only if the event sets listedSupermoon: true (you have confirmed that full moon appears on a public supermoon list — NASA Science, Sky at Night, etc. — not every full moon qualifies) AND “today” in America/Los_Angeles is within ±1 calendar day of peakAt. See filterSupermoonForHeroStrip in src/lib/sky-events.js.",
+    "icon_sources": "Raster sky icons from Vecteezy / iStock / HiClipart / GetDrawings / Pinterest as noted in scripts/process_sky_icons.py. ISS, satellite flare (iridium), and Starlink rows share `satelite.png`. Respect each site’s license. Planet strip icons live in `public/assets/sky/planets/` (PNG/WebP); paths are mapped in `src/lib/planet-icons.js`.",
+    "meteor_range_policy": "Rows with type `meteor` use `startsAt`/`endsAt` only for the **peak night window** (roughly the night named on AMS / IMO calendars). The shower’s full active span is longer — see AMS shower calendar for activity dates and moonlight."
+  },
+  "sources": [
+    {
+      "name": "NASA Spot the Station (ISS)",
+      "url": "https://spotthestation.nasa.gov/",
+      "topics": ["iss", "spacecraft"]
+    },
+    {
+      "name": "NOAA Space Weather Prediction Center",
+      "url": "https://www.swpc.noaa.gov/",
+      "topics": ["geomagnetic", "aurora", "solar"]
+    },
+    {
+      "name": "NASA JPL — What’s Up / skywatching",
+      "url": "https://solarsystem.nasa.gov/skywatching/home/",
+      "topics": ["planets", "comets", "eclipses"]
+    },
+    {
+      "name": "Heavens-Above (satellite passes & bright flares)",
+      "url": "https://www.heavens-above.com/",
+      "topics": ["starlink", "satellites", "iridium"]
+    },
+    {
+      "name": "In-The-Sky.org",
+      "url": "https://in-the-sky.org/",
+      "topics": ["planets", "comets", "meteor"]
+    },
+    {
+      "name": "IMO meteor shower calendar",
+      "url": "https://www.imo.net/resources/calendar/",
+      "topics": ["meteor"]
+    },
+    {
+      "name": "American Meteor Society — shower calendar (peaks & moon)",
+      "url": "https://www.amsmeteors.org/meteor-showers/meteor-shower-calendar/",
+      "topics": ["meteor"]
+    },
+    {
+      "name": "SpaceLaunchSchedule",
+      "url": "https://www.spacelaunchschedule.com/",
+      "topics": ["rocket"]
+    },
+    {
+      "name": "NASA TV / launch coverage",
+      "url": "https://www.nasa.gov/nasalive/",
+      "topics": ["rocket"]
+    },
+    {
+      "name": "Time and Date — eclipses",
+      "url": "https://www.timeanddate.com/eclipse/",
+      "topics": ["lunar_eclipse", "solar_eclipse"]
+    },
+    {
+      "name": "SpaceWeatherLive",
+      "url": "https://www.spaceweatherlive.com/",
+      "topics": ["aurora", "geomagnetic", "solar"]
+    }
+  ],
+  "eventTypes": [
+    {
+      "id": "aurora",
+      "label": "Aurora",
+      "icon": "/assets/sky/aurora.png",
+      "forecastUrl": "https://www.swpc.noaa.gov/products/aurora-30-minute-forecast"
+    },
+    {
+      "id": "geomagnetic",
+      "label": "Geomagnetic storm",
+      "icon": "/assets/sky/geomagnetic.png",
+      "forecastUrl": "https://www.swpc.noaa.gov/products/goes-proton-flux"
+    },
+    {
+      "id": "lunar_eclipse",
+      "label": "Lunar eclipse",
+      "icon": "/assets/sky/lunareclipse.png"
+    },
+    {
+      "id": "solar_eclipse",
+      "label": "Solar eclipse",
+      "icon": "/assets/sky/solareclipse.png"
+    },
+    {
+      "id": "comet",
+      "label": "Comet",
+      "icon": "/assets/sky/comet.png"
+    },
+    {
+      "id": "supermoon",
+      "label": "Supermoon",
+      "icon": "/assets/sky/supermoon.png"
+    },
+    {
+      "id": "meteor",
+      "label": "Meteor shower",
+      "icon": "/assets/sky/meteor.png",
+      "forecastUrl": "https://www.amsmeteors.org/meteor-showers/meteor-shower-calendar/"
+    },
+    {
+      "id": "planet",
+      "label": "Planet",
+      "icon": "/assets/sky/planets/venus.png",
+      "forecastUrl": "https://science.nasa.gov/solar-system/skywatching/"
+    },
+    {
+      "id": "iss",
+      "label": "ISS pass",
+      "icon": "/assets/sky/satelite.png",
+      "forecastUrl": "https://spotthestation.nasa.gov/"
+    },
+    {
+      "id": "iridium",
+      "label": "Satellite flare",
+      "icon": "/assets/sky/satelite.png",
+      "forecastUrl": "https://www.heavens-above.com/"
+    },
+    {
+      "id": "starlink",
+      "label": "Satellite train",
+      "icon": "/assets/sky/satelite.png"
+    },
+    {
+      "id": "rocket",
+      "label": "Rocket launch",
+      "icon": "/assets/sky/rocket.png"
+    },
+    {
+      "id": "rainbow",
+      "label": "Rainbow",
+      "icon": "/assets/sky/rainbow.png"
+    }
+  ],
+  "events": [
+    {
+      "id": "iss-sample-oakland",
+      "type": "iss",
+      "title": "ISS pass (sample row)",
+      "startsAt": "2026-05-12T03:15:00-07:00",
+      "endsAt": "2026-05-12T03:22:00-07:00",
+      "source": "NASA Spot the Station — official sighting forecasts for your location (spotthestation.nasa.gov). Replace this sample with your export or manual entry."
+    },
+    {
+      "id": "eta-aquariids-2026",
+      "type": "meteor",
+      "title": "η Aquariids meteor shower",
+      "startsAt": "2026-05-05T08:00:00Z",
+      "endsAt": "2026-05-06T14:00:00Z",
+      "peakAt": "2026-05-06T08:00:00Z",
+      "source": "Peak night May 5–6, 2026 (predawn max); shower stays active to ~May 28 — see AMS calendar for full span & moon."
+    },
+    {
+      "id": "aurora-watch-sample",
+      "type": "aurora",
+      "title": "Aurora / high-latitude activity watch",
+      "startsAt": "2026-05-10T00:00:00Z",
+      "endsAt": "2026-05-14T23:59:59Z",
+      "source": "Superseded in the hero strip by live NOAA Ovation + Kp at WEATHER_LAT/LON (94608 defaults in .env)."
+    },
+    {
+      "id": "starlink-train-sample",
+      "type": "starlink",
+      "title": "Starlink deployment train (twilight)",
+      "startsAt": "2026-05-11T02:00:00Z",
+      "endsAt": "2026-05-11T04:00:00Z",
+      "source": "Heavens-Above / SeeSatellite; times are placeholders."
+    },
+    {
+      "id": "iridium-flare-sample",
+      "type": "iridium",
+      "title": "Iridium-class flare (bright glint)",
+      "startsAt": "2026-05-12T20:00:00-07:00",
+      "endsAt": "2026-05-12T20:02:00-07:00",
+      "source": "Heavens-Above — set your location, then use satellite passes / bright-flare style predictions (heavens-above.com). Classic Iridium mirror flares are rare after the constellation refresh; replace with a real event from their lists."
+    },
+    {
+      "id": "falcon-launch-sample",
+      "type": "rocket",
+      "title": "Launch window (example)",
+      "startsAt": "2026-05-13T08:00:00Z",
+      "endsAt": "2026-05-13T12:00:00Z",
+      "source": "SpaceLaunchSchedule / operator NOTAMs — replace with real window."
+    },
+    {
+      "id": "total-lunar-eclipse-sep-2025",
+      "type": "lunar_eclipse",
+      "title": "Total lunar eclipse (Americas)",
+      "startsAt": "2025-09-07T22:00:00Z",
+      "endsAt": "2025-09-08T04:00:00Z",
+      "peakAt": "2025-09-08T02:45:00Z",
+      "source": "NASA eclipse bulletins (historical template row; adjust for future eclipses)."
+    },
+    {
+      "id": "total-solar-eclipse-sample-2024",
+      "type": "solar_eclipse",
+      "title": "Total solar eclipse (template)",
+      "startsAt": "2024-04-08T16:30:00-05:00",
+      "endsAt": "2024-04-08T17:00:00-05:00",
+      "peakAt": "2024-04-08T16:42:00-05:00",
+      "source": "NASA eclipse bulletins — replace with your viewing location / path of totality."
+    },
+    {
+      "id": "perseids-2026",
+      "type": "meteor",
+      "title": "Perseids meteor shower",
+      "startsAt": "2026-08-12T08:00:00Z",
+      "endsAt": "2026-08-13T20:00:00Z",
+      "peakAt": "2026-08-13T06:00:00Z",
+      "source": "Peak night Aug 12–13, 2026; activity Jul 17–Aug 24 — AMS / IMO calendars."
+    },
+    {
+      "id": "geminids-2026",
+      "type": "meteor",
+      "title": "Geminids meteor shower",
+      "startsAt": "2026-12-13T08:00:00Z",
+      "endsAt": "2026-12-14T20:00:00Z",
+      "peakAt": "2026-12-14T06:00:00Z",
+      "source": "Peak night Dec 13–14, 2026; activity Dec 4–17 — AMS / IMO calendars."
+    },
+    {
+      "id": "comet-sample",
+      "type": "comet",
+      "title": "Bright comet opportunity (placeholder)",
+      "startsAt": "2026-10-01T12:00:00Z",
+      "endsAt": "2026-10-15T12:00:00Z",
+      "peakAt": "2026-10-08T12:00:00Z",
+      "source": "JPL Small-Body Database / CBAT when a target is favorable."
+    },
+    {
+      "id": "geomagnetic-storm-sample",
+      "type": "geomagnetic",
+      "title": "Geomagnetic storm / radio blackout risk (sample)",
+      "startsAt": "2026-05-12T00:00:00Z",
+      "endsAt": "2026-05-12T23:59:59Z",
+      "source": "Superseded for the hero strip by live GOES ≥10 MeV data: the geomagnetic icon appears only when primary GOES integral flux at ≥10 MeV reaches the NOAA S1 threshold (10 pfu). Use SWPC alerts for Kp-driven windows separately."
+    },
+    {
+      "id": "supermoon-2026-11",
+      "type": "supermoon",
+      "title": "Beaver supermoon (full moon near perigee)",
+      "startsAt": "2026-11-23T08:00:00Z",
+      "endsAt": "2026-11-26T07:59:59Z",
+      "peakAt": "2026-11-24T14:53:00Z",
+      "listedSupermoon": true,
+      "source": "Listed supermoon (not a generic full moon): Nov 2026 in common three-supermoon series (e.g. BBC Sky at Night, Space.com). peakAt ≈ full moon UTC (Time and Date / NASA Science). listedSupermoon + peak window gate the hero strip; see meta.window_policy."
+    },
+    {
+      "id": "rainbow-sample",
+      "type": "rainbow",
+      "title": "Rainbow window (sample)",
+      "startsAt": "2026-05-12T06:00:00-07:00",
+      "endsAt": "2026-05-12T20:00:00-07:00",
+      "peakAt": "2026-05-12T15:00:00-07:00",
+      "source": "Illustrative — tie to precip + clearing + sun angle when automating."
+    }
+  ]
+}

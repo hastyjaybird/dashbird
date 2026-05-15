@@ -1,0 +1,14 @@
+Moon phase icons (phase-0.png … phase-7.png)
+=============================================
+
+The app loads eight PNGs from `public/assets/sky/moon/phase-{0..7}.png`
+(see `MOON_PHASE_ICON_URLS` in `public/js/lib/moon-phase.js`).
+
+If your PNGs are derived from the earlier Wikimedia Commons SVG set
+(“Moon phase 0.svg” … “Moon phase 7.svg”, Daniel Kmiec / User:Dannix,
+CC BY 3.0 — https://creativecommons.org/licenses/by/3.0/deed.en ), retain
+reasonable credit. That SVG set had a blue instructional background
+rectangle removed in-repo before rasterizing or swapping assets.
+
+If you replaced the art entirely, update this file with your own
+license / attribution as needed.

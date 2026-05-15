@@ -1,0 +1,73 @@
+Dashbird — California-focused weather icons (minimal set)
+===========================================================
+
+Goal: one raster (or SVG) file per *bucket* the app uses for the hero,
+nothing else. Pick each asset from your Flaticon filtered searches
+(style_id=8, author_id=1, word=weather); do not bulk-download pages.
+
+Data source: Open-Meteo `weather_code` (WMO Weather interpretation codes WW).
+
+-------------------------------------------------------------------
+A) CONDITION ICONS — exactly 7 files (required before wiring the UI)
+-------------------------------------------------------------------
+
+Filename        WMO codes (Open-Meteo)     Typical / extreme CA context
+--------------- ------------------------ --------------------------------
+clear.png       0, 1                     Clear / mainly clear; heat-wave skies
+partly.png      2                        Partly cloudy (marine layer mix, etc.)
+cloudy.png      3                        Overcast / “June Gloom”–type deck
+fog.png         45, 48                   Coastal & valley fog, rime fog
+rain.png        51–67, 80–82             Drizzle → atmospheric river heavy rain;
+                                       includes freezing drizzle/rain (56–57, 66–67)
+snow.png        71–77, 85, 86            Sierra / mountain snow & snow showers
+storm.png       95, 96, 99               Thunderstorms; hail codes 96/99 (hail
+                                       forecast nuance is model-dependent)
+
+The app maps every API code to one of these seven buckets (see
+public/js/panels/weather-polygon.js `classify()`). No separate icon is
+used for “wind only” — Open-Meteo does not emit a dedicated wind WW code
+for current conditions in this table.
+
+Wildfire smoke: the WW table above has no distinct “smoke” code. Smoke
+episodes may sometimes resemble fog in modeled `weather_code`, or may not
+map 1:1. If you later add AQI or another field, add a new bucket + file
+then — not part of this minimal set.
+
+-------------------------------------------------------------------
+B) ASTRO GLYPHS (optional — only if you replace inline SVGs later)
+-------------------------------------------------------------------
+
+sun-glyph.png   (not WMO)                Small sun in sunset row
+moon-glyph.png  (not WMO)                Small moon in moonrise row
+sunset-glyph.png (not WMO)               Hero sunset row — transparent PNG
+                                       (see `sunset-glyph-source.png`).
+
+Sunset source (authoritative raster):
+  public/icons/weather/sunset-glyph-source.png
+  — Latest Cursor attachment (synthwave gradient sun, pre-cut transparency):
+    `.cursor/projects/home-jaybird-jayprograms-dashbird/assets/isolated-sunset-gradient-on-white-background-removebg-preview-cf937814-0560-4907-bc69-6647d6f1f602.png`
+  — Rebuild trimmed hero glyph (and optional outer white removal if you replace
+    with a white-canvas PNG): `python3 scripts/process_sunset_glyph.py`
+  — App URL: `/icons/weather/sunset-glyph.png` (wired in hero.js).
+
+Moon phase pack (hero moonrise glyph):
+  public/assets/sky/moon/phase-0.png … phase-7.png
+  — Eight buckets aligned with `getMoonPhaseIndex8()` in `public/js/lib/moon-phase.js`
+    (0 new → 7 waning crescent). Files are PNG (`phase-0.png` … `phase-7.png`); URLs in
+    `MOON_PHASE_ICON_URLS`. See `ATTRIBUTION.txt` if assets trace to prior Wikimedia work.
+  — Hero sizing: slightly larger than other astro glyphs via `.hero-moon-phases-icon`
+    in `public/styles.css`.
+
+-------------------------------------------------------------------
+Download rule
+-------------------------------------------------------------------
+
+1. Identify the seven rows in section A (plus B if needed).
+2. From Flaticon, choose *one* icon per filename; download that asset only.
+3. Save under public/icons/weather/ using the exact filenames above.
+4. Keep Flaticon attribution per their license (footer or README).
+
+No other weather icon files are required for California coverage tied to
+this API for the last few years: floods/AR → rain; mountain snow → snow;
+tstorms/hail → storm; freezing precipitation in the model → same as rain
+bucket for icon purposes.

@@ -1,0 +1,13 @@
+services:
+  dashboard:
+    build: .
+    ports:
+      - "${HOST_PORT:-8787}:3000"
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+    # Host tree wins over image layers so new icons / calendar JSON apply without `compose build`.
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src

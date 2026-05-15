@@ -1,0 +1,2 @@
+Planet hero icons in this folder (mercury.webp, venus.png, mars.png, jupiter.png, saturn.png)
+are used for the sky-events hero strip. Paths are centralized in src/lib/planet-icons.js.
