@@ -558,8 +558,8 @@ body.dashy {
 }
 
 .chat-sidebar {
-  flex: 0 0 clamp(260px, 52vw, 800px);
-  width: clamp(260px, 52vw, 800px);
+  flex: 0 0 clamp(260px, min(92vw, 104vw), 1600px);
+  width: clamp(260px, min(92vw, 104vw), 1600px);
   max-width: 100%;
   min-height: 0;
   display: flex;

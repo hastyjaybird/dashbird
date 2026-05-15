@@ -81,10 +81,10 @@ function normalizeStreamDeltaContent(raw) {
 
 const CHAT_WIDTH_LS = 'dashbird-chat-width-px';
 const CHAT_WIDTH_MIN = 260;
-const CHAT_WIDTH_DEFAULT = 680;
+const CHAT_WIDTH_DEFAULT = 1360;
 
 function maxChatWidthPx() {
-  return Math.min(960, Math.max(CHAT_WIDTH_MIN, Math.floor(window.innerWidth * 0.62)));
+  return Math.min(1600, Math.max(CHAT_WIDTH_MIN, Math.floor(window.innerWidth * 0.92)));
 }
 
 function clampChatWidthPx(px) {
