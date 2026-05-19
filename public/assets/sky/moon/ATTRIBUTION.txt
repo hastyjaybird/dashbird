@@ -1,14 +1,41 @@
-Moon phase icons (phase-0.png … phase-7.png)
-=============================================
+moonnow.png (hero “moon now” glyph)
+===================================
 
-The app loads eight PNGs from `public/assets/sky/moon/phase-{0..7}.png`
-(see `MOON_PHASE_ICON_URLS` in `public/js/lib/moon-phase.js`).
+Watercolor-style **circular lunar rainbow / moonbow + waterfall** art (Gemini‑generated raster,
+supplied by the dashboard owner).
 
-If your PNGs are derived from the earlier Wikimedia Commons SVG set
-(“Moon phase 0.svg” … “Moon phase 7.svg”, Daniel Kmiec / User:Dannix,
-CC BY 3.0 — https://creativecommons.org/licenses/by/3.0/deed.en ), retain
-reasonable credit. That SVG set had a blue instructional background
-rectangle removed in-repo before rasterizing or swapping assets.
+`public/js/lib/moon-phase.js` **`moonPhaseIconUrl()`** always loads this asset for the hero moon
+glyph. SunCalc‑derived phase name, illumination % tooltips, and `dataset.moonOctant` / `dataset.moonPngId`
+still reflect the real lunation—they only swap the raster.
 
-If you replaced the art entirely, update this file with your own
-license / attribution as needed.
+To restore octant‑accurate Wikimedia‑style discs, point **`moonPhaseIconUrl`** back at
+`/assets/sky/moon/phase-{n}.png` (see octant table below).
+
+
+Moon phase icons (phase-0.png … phase-7.png) — optional Wikimedia convention
+==============================================================================
+
+Legacy path when not using **`moonnow.png`**:
+
+  • `getMoonPhaseIndex8(date)` → lunation octant 0…7 (SunCalc illumination).
+  • `LUNATION_OCTANT_TO_MOON_PNG_ID[octant]` → which `phase-{id}.png` to load
+    (default: identity so octant `k` uses `phase-k.png`).
+
+Wikimedia Commons convention (Daniel Kmiec / User:Dannix, CC BY 3.0 —
+https://creativecommons.org/licenses/by/3.0/deed.en): raster
+`phase-N.png` should match **Moon_phase_N.svg** meaning:
+
+  N 0 — New moon
+  N 1 — Waxing crescent
+  N 2 — First quarter
+  N 3 — Waxing gibbous
+  N 4 — Full moon
+  N 5 — Waning gibbous
+  N 6 — Last quarter
+  N 7 — Waning crescent
+
+If your PNGs are derived from that SVG set, retain reasonable credit. The
+SVG set often had a blue instructional background removed before
+rasterizing. If you replaced the art entirely, update this file and, if
+file names no longer match octants 0…7, adjust `LUNATION_OCTANT_TO_MOON_PNG_ID`
+only (do not reorder phase labels without updating that map).

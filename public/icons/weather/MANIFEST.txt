@@ -28,6 +28,12 @@ public/js/panels/weather-polygon.js `classify()`). No separate icon is
 used for “wind only” — Open-Meteo does not emit a dedicated wind WW code
 for current conditions in this table.
 
+Hero condition sun (clear / partly / default): raster
+  public/icons/weather/hero-weather-sun.png
+  — Wired in weather-polygon.js as SVG <image> (replaces inline gradient sun).
+  — Replace this file to change the glossy sun art; keep transparency for
+    dark hero chrome.
+
 Wildfire smoke: the WW table above has no distinct “smoke” code. Smoke
 episodes may sometimes resemble fog in modeled `weather_code`, or may not
 map 1:1. If you later add AQI or another field, add a new bucket + file
@@ -52,9 +58,10 @@ Sunset source (authoritative raster):
 
 Moon phase pack (hero moonrise glyph):
   public/assets/sky/moon/phase-0.png … phase-7.png
-  — Eight buckets aligned with `getMoonPhaseIndex8()` in `public/js/lib/moon-phase.js`
-    (0 new → 7 waning crescent). Files are PNG (`phase-0.png` … `phase-7.png`); URLs in
-    `MOON_PHASE_ICON_URLS`. See `ATTRIBUTION.txt` if assets trace to prior Wikimedia work.
+  — Lunation octant from `getMoonPhaseIndex8()` in `public/js/lib/moon-phase.js`
+    (0 new → 7 waning crescent). The PNG on disk is chosen by
+    `moonPngIdForDate()` → `LUNATION_OCTANT_TO_MOON_PNG_ID` (default: octant k → `phase-k.png`).
+    See `ATTRIBUTION.txt` for Wikimedia Moon_phase_N.svg ↔ filename alignment.
   — Hero sizing: slightly larger than other astro glyphs via `.hero-moon-phases-icon`
     in `public/styles.css`.
 

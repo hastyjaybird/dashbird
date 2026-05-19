@@ -1,5 +1,6 @@
 import { refreshOpenRouterLimitMount } from '../lib/openrouter-limit-ring.js';
 import { renderChatRichContent } from '../lib/chat-markdown.js';
+import { beginWaitCursor, endWaitCursor } from '../lib/wait-cursor.js';
 
 /** Avoid `new Error(object)` → "[object Object]" when APIs return structured errors. */
 function stringifyApiDetail(value) {
@@ -49,16 +50,19 @@ function tierHint(usage) {
   return 'standard';
 }
 
-function formatUsageLine(usage, model, requestedModel) {
+function setOpenRouterMetaLines(lineModel, lineMode, usage, model, requestedModel) {
+  lineModel.classList.remove('chat-form__meta-line--busy');
   const m = model || requestedModel || '—';
   const modelLabel = typeof m === 'string' ? m : stringifyApiDetail(m);
-  const parts = [`Model: ${modelLabel}`];
-  if (usage) {
-    parts.push(`Mode: ${tierHint(usage)}`);
-  } else {
-    parts.push('Mode: —');
-  }
-  return parts.join(' · ');
+  lineModel.textContent = `Model: ${modelLabel}`;
+  lineMode.hidden = false;
+  lineMode.textContent = usage ? `Mode: ${tierHint(usage)}` : 'Mode: —';
+}
+
+function setOpenRouterMetaBusy(lineModel, lineMode, message) {
+  lineMode.hidden = true;
+  lineModel.classList.add('chat-form__meta-line--busy');
+  lineModel.textContent = message;
 }
 
 /** OpenRouter / OpenAI-style stream: `delta.content` may be a string or an array of parts. */
@@ -81,10 +85,16 @@ function normalizeStreamDeltaContent(raw) {
 
 const CHAT_WIDTH_LS = 'dashbird-chat-width-px';
 const CHAT_WIDTH_MIN = 260;
-const CHAT_WIDTH_DEFAULT = 1360;
+const CHAT_WIDTH_DEFAULT = 680;
+/** Room for sky + health sidebars and a usable main column. */
+const CHAT_WIDTH_MAIN_FLOOR = 420;
+const CHAT_WIDTH_SIDEBARS_RESERVE = 220;
 
 function maxChatWidthPx() {
-  return Math.min(1600, Math.max(CHAT_WIDTH_MIN, Math.floor(window.innerWidth * 0.92)));
+  const byRatio = Math.floor(window.innerWidth * 0.52);
+  const byRoom = window.innerWidth - CHAT_WIDTH_SIDEBARS_RESERVE - CHAT_WIDTH_MAIN_FLOOR;
+  const cap = Math.min(800, byRatio, byRoom);
+  return Math.max(CHAT_WIDTH_MIN, cap);
 }
 
 function clampChatWidthPx(px) {
@@ -96,7 +106,7 @@ function applyChatWidthPx(aside, px) {
   const w = clampChatWidthPx(px);
   aside.style.setProperty('flex', `0 0 ${w}px`);
   aside.style.setProperty('width', `${w}px`);
-  aside.style.setProperty('max-width', `min(90vw, ${w}px)`);
+  aside.style.setProperty('max-width', `${w}px`);
   return w;
 }
 
@@ -262,16 +272,20 @@ export function mountChat(root, config) {
 
   const metaRow = document.createElement('div');
   metaRow.className = 'chat-form__meta';
-  const lastLine = document.createElement('div');
-  lastLine.className = 'chat-form__meta-line';
-  metaRow.append(lastLine);
+  const lineModel = document.createElement('div');
+  lineModel.className = 'chat-form__meta-line';
+  const lineMode = document.createElement('div');
+  lineMode.className = 'chat-form__meta-line';
+  metaRow.append(lineModel, lineMode);
 
   form.append(ta, metaRow);
 
   const history = [];
   const requestedModel = config?.openrouterModel || 'openrouter/auto';
 
-  lastLine.textContent = formatUsageLine(null, null, requestedModel);
+  /** Last completed reply usage/model (for restoring the meta row after errors). */
+  let metaIdleState = { usage: null, model: null };
+  setOpenRouterMetaLines(lineModel, lineMode, null, null, requestedModel);
 
   const scroll = document.createElement('div');
   scroll.className = 'chat-scroll';
@@ -284,6 +298,15 @@ export function mountChat(root, config) {
   root.append(scroll, footer);
 
   let sending = false;
+  /** Anchor for wait-cursor follower (last click inside composer). */
+  let lastComposerPointer = null;
+  form.addEventListener(
+    'pointerdown',
+    (e) => {
+      lastComposerPointer = e;
+    },
+    true,
+  );
 
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -310,9 +333,9 @@ export function mountChat(root, config) {
 
     sending = true;
     ta.disabled = true;
-    const metaSnapshot = lastLine.textContent;
-    lastLine.classList.add('chat-form__meta-line--busy');
-    lastLine.textContent = 'Connecting to model…';
+    beginWaitCursor(lastComposerPointer);
+    const restoreMeta = { ...metaIdleState };
+    setOpenRouterMetaBusy(lineModel, lineMode, 'Connecting to model…');
     let assistantText = '';
     let lastUsage = null;
     let lastModel = null;
@@ -337,7 +360,7 @@ export function mountChat(root, config) {
         throw new Error(detail || `HTTP ${res.status}`);
       }
 
-      lastLine.textContent = 'Streaming response…';
+      setOpenRouterMetaBusy(lineModel, lineMode, 'Streaming response…');
 
       const reader = res.body?.getReader();
       if (!reader) throw new Error('No response body');
@@ -386,10 +409,11 @@ export function mountChat(root, config) {
         );
       }
 
-      lastLine.textContent = formatUsageLine(lastUsage, lastModel, requestedModel);
+      metaIdleState = { usage: lastUsage, model: lastModel };
+      setOpenRouterMetaLines(lineModel, lineMode, lastUsage, lastModel, requestedModel);
       await refreshOpenRouterLimitMount();
     } catch (e) {
-      lastLine.textContent = metaSnapshot;
+      setOpenRouterMetaLines(lineModel, lineMode, restoreMeta.usage, restoreMeta.model, requestedModel);
       assistantShell.classList.remove('chat-msg--pending');
       assistantShell.replaceChildren();
       const msg =
@@ -399,7 +423,8 @@ export function mountChat(root, config) {
       err.textContent = msg || 'Request failed';
       err.hidden = false;
     } finally {
-      lastLine.classList.remove('chat-form__meta-line--busy');
+      endWaitCursor();
+      lineModel.classList.remove('chat-form__meta-line--busy');
       sending = false;
       ta.disabled = false;
     }

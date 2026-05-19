@@ -1,7 +1,11 @@
 /**
  * Rounded, layered “Fluent / Windows 11–style” weather icons (inspired by common OS weather sets).
  * Drop shadow is applied via CSS on `.fluent-weather-icon`.
+ *
+ * Clear / partly sun disk: raster (`hero-weather-sun.png`) replaces inline SVG gradients.
  */
+const HERO_WEATHER_SUN_SRC = '/icons/weather/hero-weather-sun.png';
+
 function classify(code) {
   const c = Number(code);
   if (c === 0 || c === 1) return 'clear';
@@ -14,47 +18,15 @@ function classify(code) {
   return 'partly';
 }
 
-function safeSuffix(s) {
-  return String(s || 'x').replace(/[^a-zA-Z0-9_-]/g, '') || 'x';
-}
-
-function svg(kind, s) {
-  const sunG = `sun_${s}`;
-  const sunY = `suny_${s}`;
+function svg(kind) {
   switch (kind) {
     case 'clear':
-      return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <radialGradient id="${sunG}" cx="40%" cy="35%" r="65%">
-            <stop offset="0%" stop-color="#FFF9C4"/>
-            <stop offset="45%" stop-color="#FFCA28"/>
-            <stop offset="100%" stop-color="#FFA000"/>
-          </radialGradient>
-          <radialGradient id="${sunY}" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stop-color="#FFE082" stop-opacity="0.55"/>
-            <stop offset="100%" stop-color="#FF8F00" stop-opacity="0"/>
-          </radialGradient>
-        </defs>
-        <circle cx="64" cy="64" r="46" fill="url(#${sunY})"/>
-        <circle cx="64" cy="64" r="30" fill="url(#${sunG})"/>
-        <circle cx="64" cy="64" r="20" fill="#FFFDE7" opacity="0.65"/>
-        <g fill="#FFCA28" opacity="0.95">
-          <circle cx="64" cy="18" r="6"/><circle cx="92" cy="30" r="5.5"/><circle cx="106" cy="58" r="5.5"/>
-          <circle cx="100" cy="90" r="5.5"/><circle cx="64" cy="110" r="6"/><circle cx="28" cy="90" r="5.5"/>
-          <circle cx="22" cy="58" r="5.5"/><circle cx="36" cy="30" r="5.5"/>
-        </g>
+      return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+        <image class="hero-weather-sun-image" href="${HERO_WEATHER_SUN_SRC}" xlink:href="${HERO_WEATHER_SUN_SRC}" x="6" y="6" width="116" height="116" preserveAspectRatio="xMidYMid meet"/>
       </svg>`;
     case 'partly':
-      return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <radialGradient id="${sunG}" cx="40%" cy="35%" r="65%">
-            <stop offset="0%" stop-color="#FFF9C4"/>
-            <stop offset="50%" stop-color="#FFCA28"/>
-            <stop offset="100%" stop-color="#FB8C00"/>
-          </radialGradient>
-        </defs>
-        <circle cx="86" cy="44" r="26" fill="url(#${sunG})"/>
-        <circle cx="86" cy="44" r="17" fill="#FFF9C4" opacity="0.55"/>
+      return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+        <image class="hero-weather-sun-image" href="${HERO_WEATHER_SUN_SRC}" xlink:href="${HERO_WEATHER_SUN_SRC}" x="52" y="10" width="68" height="68" preserveAspectRatio="xMidYMid meet"/>
         <ellipse cx="48" cy="88" rx="40" ry="26" fill="#64B5F6"/>
         <ellipse cx="72" cy="82" rx="44" ry="30" fill="#42A5F5"/>
         <ellipse cx="92" cy="90" rx="28" ry="20" fill="#1E88E5"/>
@@ -99,17 +71,8 @@ function svg(kind, s) {
         <path d="M70 92 Q72 108 66 118" stroke="#81D4FA" stroke-width="7" stroke-linecap="round" fill="none"/>
       </svg>`;
     default: {
-      const pg = `sun_${s}`;
-      return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <radialGradient id="${pg}" cx="40%" cy="35%" r="65%">
-            <stop offset="0%" stop-color="#FFF9C4"/>
-            <stop offset="50%" stop-color="#FFCA28"/>
-            <stop offset="100%" stop-color="#FB8C00"/>
-          </radialGradient>
-        </defs>
-        <circle cx="86" cy="44" r="26" fill="url(#${pg})"/>
-        <circle cx="86" cy="44" r="17" fill="#FFF9C4" opacity="0.55"/>
+      return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+        <image class="hero-weather-sun-image" href="${HERO_WEATHER_SUN_SRC}" xlink:href="${HERO_WEATHER_SUN_SRC}" x="52" y="10" width="68" height="68" preserveAspectRatio="xMidYMid meet"/>
         <ellipse cx="48" cy="88" rx="40" ry="26" fill="#64B5F6"/>
         <ellipse cx="72" cy="82" rx="44" ry="30" fill="#42A5F5"/>
         <ellipse cx="92" cy="90" rx="28" ry="20" fill="#1E88E5"/>
@@ -121,9 +84,9 @@ function svg(kind, s) {
 /** Main condition icon for the hero (large). */
 export function createPolygonWeatherIcon(weatherCode, idSuffix = 'a') {
   const kind = classify(weatherCode);
-  const s = safeSuffix(idSuffix);
   const wrap = document.createElement('div');
   wrap.className = 'fluent-weather-icon poly-weather-icon';
-  wrap.innerHTML = svg(kind, s);
+  if (idSuffix) wrap.dataset.weatherSlot = String(idSuffix);
+  wrap.innerHTML = svg(kind);
   return wrap;
 }

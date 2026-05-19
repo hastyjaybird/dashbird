@@ -5,12 +5,31 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>dashbird</title>
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="modulepreload" href="/js/web-search-boot.js" />
+    <link rel="modulepreload" href="/js/panels/web-search.js" />
+    <link rel="preload" href="/assets/search-brave.png" as="image" />
+    <link rel="preload" href="/assets/search-duckduckgo.png" as="image" />
   </head>
   <body class="dashy">
     <header class="topbar glass" role="banner">
-      <span class="brand">dashbird</span>
+      <div class="topbar__head">
+        <span class="brand">dashbird</span>
+        <nav id="mount-page-tabs" class="topbar__tabs-mount" aria-label="Dashboard pages"></nav>
+      </div>
+      <div
+        id="mount-topbar-context"
+        class="topbar__context"
+        aria-label="Primary location used for NWS, hero clock, sky strip, and primary weather tile"
+      ></div>
     </header>
 
+    <div id="page-settings" class="page-view page-view--settings" hidden>
+      <main class="settings-page" aria-label="Settings">
+        <div id="mount-settings" class="settings-page__body"></div>
+      </main>
+    </div>
+
+    <div id="page-main" class="page-view page-view--main">
     <div class="layout-body">
       <aside class="chat-sidebar" aria-labelledby="h-openrouter-chat">
         <div class="chat-sidebar__inner panel panel--glass">
@@ -31,6 +50,82 @@
 
       <div class="layout-main">
         <main class="dashboard">
+          <div class="row row--web-search">
+            <section
+              class="panel panel--glass panel--web-search"
+              aria-label="Web search"
+            >
+              <div id="mount-web-search" class="panel__body panel__body--web-search">
+                <form class="web-search" autocomplete="off">
+                  <input
+                    id="web-search-input"
+                    type="search"
+                    name="q"
+                    class="web-search__input"
+                    placeholder="Search the web…"
+                    aria-label="Search query"
+                    autofocus
+                  />
+                  <script>
+                    (function () {
+                      if (localStorage.getItem('dashbirdPage') === 'settings') return;
+                      var el = document.getElementById('web-search-input');
+                      if (el) el.focus({ preventScroll: true });
+                    })();
+                  </script>
+                  <div class="web-search__engines" role="group" aria-label="Search engine">
+                    <button
+                      type="button"
+                      class="web-search__engine-btn web-search__engine-btn--active"
+                      data-engine="brave"
+                      aria-label="Brave"
+                      aria-pressed="true"
+                    >
+                      <img
+                        class="web-search__icon"
+                        src="/assets/search-brave.png"
+                        alt=""
+                        width="18"
+                        height="18"
+                        decoding="async"
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      class="web-search__engine-btn"
+                      data-engine="duckduckgo"
+                      aria-label="DuckDuckGo"
+                      aria-pressed="false"
+                    >
+                      <img
+                        class="web-search__icon"
+                        src="/assets/search-duckduckgo.png"
+                        alt=""
+                        width="18"
+                        height="18"
+                        decoding="async"
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      class="web-search__engine-btn"
+                      data-engine="google"
+                      aria-label="Google"
+                      aria-pressed="false"
+                    >
+                      <svg class="web-search__icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                      </svg>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </section>
+          </div>
+
           <div class="row row--hero">
             <section
               class="panel panel--glass panel--hero"
@@ -40,12 +135,12 @@
             </section>
           </div>
 
-          <div class="row row--web-search">
+          <div class="row row--cal-upcoming">
             <section
-              class="panel panel--glass panel--web-search"
-              aria-label="Web search"
+              class="panel panel--glass panel--cal-upcoming"
+              aria-label="Next calendar event"
             >
-              <div id="mount-web-search" class="panel__body panel__body--web-search"></div>
+              <div id="mount-cal-upcoming" class="panel__body panel__body--cal-upcoming"></div>
             </section>
           </div>
 
@@ -74,13 +169,115 @@
               <h2 id="h-calendar">Calendar</h2>
               <div id="mount-calendar" class="panel__body panel__body--calendar"></div>
             </section>
-            <section class="panel panel--glass" aria-labelledby="h-notes">
-              <h2 id="h-notes">Notes</h2>
-              <div id="mount-notes" class="panel__body notes-body"></div>
+            <section class="panel panel--glass panel--tool-library" aria-labelledby="h-tool-library">
+              <h2 id="h-tool-library">Tool Library</h2>
+              <div
+                id="mount-tool-library"
+                class="panel__body panel__body--tool-library"
+                title="Right-click a card to search for alternatives"
+              ></div>
             </section>
           </div>
         </main>
       </div>
+
+      <aside class="sky-sidebar" aria-label="Side widgets">
+        <div class="sky-sidebar__stack">
+          <section
+            class="sky-sidebar__card sky-sidebar__card--todo panel panel--glass"
+            aria-labelledby="h-today-todo"
+          >
+            <h2 id="h-today-todo" class="sky-sidebar__card-heading">Today's To Do</h2>
+            <div
+              id="mount-today-todo"
+              class="sky-sidebar__card-body sky-sidebar__card-body--todo"
+              role="region"
+              aria-labelledby="h-today-todo"
+            ></div>
+          </section>
+          <section
+            class="sky-sidebar__card sky-sidebar__card--sky panel panel--glass"
+            aria-labelledby="h-sky-sidebar"
+          >
+            <h2 id="h-sky-sidebar" class="sky-sidebar__card-heading">Sky &amp; Space</h2>
+            <div
+              id="mount-sky-strip"
+              class="sky-sidebar__card-body sky-sidebar__card-body--sky"
+              role="region"
+              aria-labelledby="h-sky-sidebar"
+            ></div>
+          </section>
+          <section
+            id="earth-sidebar-card"
+            class="sky-sidebar__card sky-sidebar__card--earth panel panel--glass"
+            aria-labelledby="h-earth-sidebar"
+            hidden
+          >
+            <h2 id="h-earth-sidebar" class="sky-sidebar__card-heading">Earth</h2>
+            <div
+              id="mount-earth-strip"
+              class="sky-sidebar__card-body sky-sidebar__card-body--earth"
+              role="region"
+              aria-labelledby="h-earth-sidebar"
+            ></div>
+          </section>
+          <section
+            id="weather-radar-card"
+            class="sky-sidebar__card sky-sidebar__card--radar panel panel--glass"
+            aria-labelledby="h-weather-radar"
+            hidden
+          >
+            <h2 id="h-weather-radar" class="sky-sidebar__card-heading">Weather Radar</h2>
+            <div
+              id="mount-weather-radar"
+              class="sky-sidebar__card-body sky-sidebar__card-body--radar"
+              role="region"
+              aria-labelledby="h-weather-radar"
+            ></div>
+          </section>
+          <section
+            id="magnetosphere-card"
+            class="sky-sidebar__card sky-sidebar__card--magnetosphere panel panel--glass"
+            aria-labelledby="h-magnetosphere"
+            hidden
+          >
+            <h2 id="h-magnetosphere" class="sky-sidebar__card-heading">Magnetosphere</h2>
+            <div
+              id="mount-magnetosphere"
+              class="sky-sidebar__card-body sky-sidebar__card-body--magnetosphere"
+              role="region"
+              aria-labelledby="h-magnetosphere"
+            ></div>
+          </section>
+          <section
+            id="geoelectric-field-card"
+            class="sky-sidebar__card sky-sidebar__card--geoelectric panel panel--glass"
+            aria-labelledby="h-geoelectric-field"
+            hidden
+          >
+            <h2 id="h-geoelectric-field" class="sky-sidebar__card-heading">Geoelectric Field</h2>
+            <div
+              id="mount-geoelectric-field"
+              class="sky-sidebar__card-body sky-sidebar__card-body--geoelectric"
+              role="region"
+              aria-labelledby="h-geoelectric-field"
+            ></div>
+          </section>
+          <section
+            id="market-sidebar-card"
+            class="sky-sidebar__card sky-sidebar__card--market panel panel--glass"
+            aria-labelledby="h-market-sidebar"
+          >
+            <h2 id="h-market-sidebar" class="sky-sidebar__card-heading">Market Watch</h2>
+            <div
+              id="mount-market-watch"
+              class="sky-sidebar__card-body sky-sidebar__card-body--market"
+              role="region"
+              aria-labelledby="h-market-sidebar"
+            ></div>
+          </section>
+        </div>
+      </aside>
 
       <aside
         id="mount-health-sidebar"
@@ -88,6 +285,8 @@
         aria-label="System health"
       ></aside>
     </div>
+    </div>
+    <script type="module" src="/js/web-search-boot.js"></script>
     <script type="module" src="/js/app.js"></script>
   </body>
 </html>

@@ -1,0 +1,31 @@
+{
+  "season": "spring_northbound",
+  "documentation": [
+    "Eastern–central North American northbound (spring / remigration) timing vs latitude.",
+    "Lower latitudes see the first adult movement and breeding expansion from Mexico first; higher latitudes peak later (successive colonization with milkweed flush).",
+    "This table is a dashbird synthesis aligned with Monarch Watch spring migration narrative (March departure from Mexico, northward colonization March–July) — not a primary published latitude grid like the fall table.",
+    "Weather shifts real arrival by ±days to weeks. Western flyway timing may differ."
+  ],
+  "references": [
+    "https://www.monarchwatch.org/migration/",
+    "https://maps.journeynorth.org/"
+  ],
+  "rows": [
+    { "latitude": 19.4, "midpoint": "03-18", "peakStart": "03-08", "peakEnd": "03-28" },
+    { "latitude": 21, "midpoint": "03-22", "peakStart": "03-12", "peakEnd": "04-01" },
+    { "latitude": 23, "midpoint": "03-28", "peakStart": "03-18", "peakEnd": "04-08" },
+    { "latitude": 25, "midpoint": "04-04", "peakStart": "03-24", "peakEnd": "04-14" },
+    { "latitude": 27, "midpoint": "04-12", "peakStart": "04-01", "peakEnd": "04-22" },
+    { "latitude": 29, "midpoint": "04-20", "peakStart": "04-08", "peakEnd": "05-01" },
+    { "latitude": 31, "midpoint": "04-28", "peakStart": "04-16", "peakEnd": "05-10" },
+    { "latitude": 33, "midpoint": "05-07", "peakStart": "04-24", "peakEnd": "05-18" },
+    { "latitude": 35, "midpoint": "05-16", "peakStart": "05-04", "peakEnd": "05-28" },
+    { "latitude": 37, "midpoint": "05-26", "peakStart": "05-14", "peakEnd": "06-06" },
+    { "latitude": 39, "midpoint": "06-04", "peakStart": "05-22", "peakEnd": "06-14" },
+    { "latitude": 41, "midpoint": "06-14", "peakStart": "06-01", "peakEnd": "06-24" },
+    { "latitude": 43, "midpoint": "06-22", "peakStart": "06-10", "peakEnd": "07-03" },
+    { "latitude": 45, "midpoint": "07-02", "peakStart": "06-18", "peakEnd": "07-14" },
+    { "latitude": 47, "midpoint": "07-11", "peakStart": "06-26", "peakEnd": "07-23" },
+    { "latitude": 49, "midpoint": "07-21", "peakStart": "07-06", "peakEnd": "08-01" }
+  ]
+}

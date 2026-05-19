@@ -8,11 +8,16 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "smoke:calendar": "node scripts/smoke-calendar.mjs",
+    "smoke:earth": "node scripts/smoke-earth.mjs"
   },
   "dependencies": {
     "astronomy-engine": "^2.1.19",
     "dotenv": "^16.4.5",
-    "express": "^4.21.0"
+    "express": "^4.21.0",
+    "leaflet": "^1.9.4",
+    "jsfive": "^0.4.0",
+    "rrule": "^2.8.1"
   }
 }

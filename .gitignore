@@ -10,4 +10,19 @@ features.txt
 public/data/bookmarks-personal.json
 public/data/notes.md
 public/data/last-backup.txt
-request.txt
+requests.txt
+data/glm-sprite-events.json
+data/calendar-upcoming-cache.json
+data/usgs-earthquake-pin.json
+data/market-watch-tickers.json
+data/market-watch-settings.json
+data/rain-alert-address.json
+data/secondary-watch-zip.json
+# Live to-do list (CSV persisted by /api/todolist; seed: src/data/todolist.txt)
+data/todolist.txt
+data/geospace-magnetosphere-state.json
+data/fear-greed-last.json
+data/tool-library.json
+data/tool-library-assets/*
+!data/tool-library-assets/.gitkeep
+todolist.txt

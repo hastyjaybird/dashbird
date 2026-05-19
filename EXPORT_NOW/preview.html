@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Dashbird chase cursor preview</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #0a1018;
+        color: #c8d0dc;
+        font-family: system-ui, sans-serif;
+      }
+      .dashbird-check-cursor {
+        position: relative;
+        width: 44px;
+        height: 44px;
+        --wait-dot-1: #ff9b7a;
+        --wait-dot-2: #ffc46e;
+        --wait-dot-3: #fdf08c;
+        --wait-dot-4: #8efcdb;
+        --wait-dot-5: #7bffce;
+        --wait-dot-6: #6ec8ff;
+        --wait-dot-7: #b7a9ff;
+        --wait-dot-8: #ff9dcf;
+      }
+      .dashbird-check-cursor__wheel {
+        position: absolute;
+        inset: 0;
+        animation: dashbird-check-cursor-wheel-spin 1.35s linear infinite;
+      }
+      .dashbird-check-cursor__dot {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 7px;
+        height: 7px;
+        margin: -3.5px 0 0 -3.5px;
+        border-radius: 50%;
+        animation: dashbird-check-dot-chase 1.05s cubic-bezier(0.45, 0.08, 0.25, 1) infinite;
+      }
+      .dashbird-check-cursor__dot:nth-child(1) {
+        transform: rotate(0deg) translateY(-16px);
+        background: var(--wait-dot-1);
+        color: var(--wait-dot-1);
+      }
+      .dashbird-check-cursor__dot:nth-child(2) {
+        transform: rotate(45deg) translateY(-16px);
+        background: var(--wait-dot-2);
+        color: var(--wait-dot-2);
+        animation-delay: -0.13125s;
+      }
+      .dashbird-check-cursor__dot:nth-child(3) {
+        transform: rotate(90deg) translateY(-16px);
+        background: var(--wait-dot-3);
+        color: var(--wait-dot-3);
+        animation-delay: -0.2625s;
+      }
+      .dashbird-check-cursor__dot:nth-child(4) {
+        transform: rotate(135deg) translateY(-16px);
+        background: var(--wait-dot-4);
+        color: var(--wait-dot-4);
+        animation-delay: -0.39375s;
+      }
+      .dashbird-check-cursor__dot:nth-child(5) {
+        transform: rotate(180deg) translateY(-16px);
+        background: var(--wait-dot-5);
+        color: var(--wait-dot-5);
+        animation-delay: -0.525s;
+      }
+      .dashbird-check-cursor__dot:nth-child(6) {
+        transform: rotate(225deg) translateY(-16px);
+        background: var(--wait-dot-6);
+        color: var(--wait-dot-6);
+        animation-delay: -0.65625s;
+      }
+      .dashbird-check-cursor__dot:nth-child(7) {
+        transform: rotate(270deg) translateY(-16px);
+        background: var(--wait-dot-7);
+        color: var(--wait-dot-7);
+        animation-delay: -0.7875s;
+      }
+      .dashbird-check-cursor__dot:nth-child(8) {
+        transform: rotate(315deg) translateY(-16px);
+        background: var(--wait-dot-8);
+        color: var(--wait-dot-8);
+        animation-delay: -0.91875s;
+      }
+      @keyframes dashbird-check-cursor-wheel-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @keyframes dashbird-check-dot-chase {
+        0%,
+        55%,
+        100% {
+          opacity: 0.28;
+        }
+        8% {
+          opacity: 1;
+          box-shadow: 0 0 12px currentColor;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div>
+      <div class="dashbird-check-cursor" aria-hidden="true">
+        <div class="dashbird-check-cursor__wheel">
+          <span class="dashbird-check-cursor__dot"></span>
+          <span class="dashbird-check-cursor__dot"></span>
+          <span class="dashbird-check-cursor__dot"></span>
+          <span class="dashbird-check-cursor__dot"></span>
+          <span class="dashbird-check-cursor__dot"></span>
+          <span class="dashbird-check-cursor__dot"></span>
+          <span class="dashbird-check-cursor__dot"></span>
+          <span class="dashbird-check-cursor__dot"></span>
+        </div>
+      </div>
+      <p style="text-align: center; margin-top: 1.5rem; font-size: 0.9rem">Dashbird chase cursor (web reference)</p>
+    </div>
+  </body>
+</html>
