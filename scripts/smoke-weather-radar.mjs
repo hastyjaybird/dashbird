@@ -22,6 +22,7 @@ if (j.show && j.embed?.url) {
   assert(j.provider === 'windy', `provider ${j.provider}`);
   assert(j.embed.url.includes('embed.windy.com'), j.embed.url);
   assert(j.embed.url.includes('overlay=radar'), j.embed.url);
+  if (j.embed.zip) assert(/^\d{5}$/.test(j.embed.zip), `zip ${j.embed.zip}`);
   const tr = await fetch(j.embed.url);
   assert(tr.ok, `embed page HTTP ${tr.status}`);
   console.log('ok', { provider: j.provider, show: j.show });

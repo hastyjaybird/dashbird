@@ -1,8 +1,8 @@
 /**
  * Weather radar visibility + embed (shared by API route and Settings status).
+ * Map centers on dashboard WEATHER_ZIP (or WEATHER_LAT/LON when ZIP unset).
  */
-import { geocodeAddress } from './geocode-address.js';
-import { loadRainAlertAddress } from './rain-alert-address-store.js';
+import { resolveDashboardWeatherLatLon } from './hero-weather-location.js';
 import {
   precipExpectedWithin24Hours,
   rainImminentWithin2Hours,
@@ -25,18 +25,20 @@ export async function getWeatherRadarStatus() {
     return { ok: true, disabled: true, show: false };
   }
 
-  const address = await loadRainAlertAddress();
-  const geo = await geocodeAddress(address);
-  if (!geo) {
-    return { ok: true, show: false, geocodeError: true, address };
+  const { lat, lon, zip } = await resolveDashboardWeatherLatLon();
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return { ok: true, show: false, geocodeError: true, zip };
   }
 
-  const tz = String(process.env.TZ || 'America/Los_Angeles').trim() || 'America/Los_Angeles';
+  const tz =
+    String(process.env.WEATHER_TIME_ZONE || '').trim() || 'America/Los_Angeles';
   const forceShow = radarForceShow();
   const [rain2h, precip24h] = await Promise.all([
-    rainImminentWithin2Hours(geo.lat, geo.lon, tz),
-    precipExpectedWithin24Hours(geo.lat, geo.lon, tz),
+    rainImminentWithin2Hours(lat, lon, tz),
+    precipExpectedWithin24Hours(lat, lon, tz),
   ]);
+
+  const geo = { lat, lon, zip: zip || null };
 
   if (!forceShow && !precip24h.expected) {
     return {
@@ -44,16 +46,15 @@ export async function getWeatherRadarStatus() {
       show: false,
       precipExpected24h: false,
       imminent: rain2h.imminent,
-      address,
-      geo: { lat: geo.lat, lon: geo.lon, displayName: geo.displayName },
+      geo,
     };
   }
 
-  const embedUrl = buildWindyRadarEmbedUrl(geo.lat, geo.lon);
-  const mapPageUrl = windyMapPageUrl(geo.lat, geo.lon);
+  const embedUrl = buildWindyRadarEmbedUrl(lat, lon);
+  const mapPageUrl = windyMapPageUrl(lat, lon);
   const message =
     forceShow && !precip24h.expected
-      ? 'Radar test mode · centered on rain alert address'
+      ? 'Radar test mode'
       : rain2h.imminent && rain2h.message
         ? rain2h.message
         : precip24h.hoursUntil != null && precip24h.hoursUntil > 0
@@ -66,8 +67,7 @@ export async function getWeatherRadarStatus() {
     precipExpected24h: precip24h.expected,
     imminent: rain2h.imminent,
     testMode: forceShow,
-    address,
-    geo: { lat: geo.lat, lon: geo.lon, displayName: geo.displayName },
+    geo,
     minutesUntil: rain2h.minutesUntil,
     hoursUntilPrecip: precip24h.hoursUntil,
     message,
@@ -75,8 +75,9 @@ export async function getWeatherRadarStatus() {
     embed: {
       url: embedUrl,
       mapPageUrl,
-      lat: geo.lat,
-      lon: geo.lon,
+      lat,
+      lon,
+      zip: zip || null,
     },
   };
 }

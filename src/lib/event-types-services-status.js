@@ -75,7 +75,7 @@ export async function buildServiceEventTypesStatus() {
         types.push({
           id: 'weather_radar',
           active: false,
-          value: 'Could not geocode rain-alert address',
+          value: 'Invalid dashboard weather location',
           liveUrl: getEventTypeLiveUrl('weather_radar'),
         });
       } else if (!radar.show) {
@@ -87,7 +87,7 @@ export async function buildServiceEventTypesStatus() {
         });
       } else {
         const msg = typeof radar.message === 'string' ? radar.message.trim() : '';
-        const loc = radar.geo?.displayName || radar.address || '';
+        const loc = radar.geo?.zip ? `ZIP ${radar.geo.zip}` : '';
         types.push({
           id: 'weather_radar',
           active: true,

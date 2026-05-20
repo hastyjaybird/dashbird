@@ -1,5 +1,4 @@
 const FEED_REFRESH_MS = 10 * 60 * 1000;
-const WINDY_HOME = 'https://www.windy.com/';
 
 /**
  * @param {HTMLElement} hostEl
@@ -7,32 +6,11 @@ const WINDY_HOME = 'https://www.windy.com/';
  */
 function applyEmbed(hostEl, data) {
   const iframe = hostEl.querySelector('.weather-radar__iframe');
-  const cap = hostEl.querySelector('.weather-radar__caption');
   if (!iframe) return;
 
   const embedUrl = typeof data.embed?.url === 'string' ? data.embed.url : '';
   if (embedUrl && iframe.getAttribute('src') !== embedUrl) {
     iframe.src = embedUrl;
-  }
-
-  if (cap) {
-    const msg = typeof data.message === 'string' ? data.message.trim() : '';
-    const href =
-      typeof data.embed?.mapPageUrl === 'string' && /^https?:\/\//i.test(data.embed.mapPageUrl)
-        ? data.embed.mapPageUrl
-        : WINDY_HOME;
-    cap.replaceChildren();
-    if (msg) {
-      cap.append(document.createTextNode(`${msg} · `));
-    }
-    const link = document.createElement('a');
-    link.className = 'weather-radar__map-link';
-    link.href = href;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    link.textContent = 'Windy radar ↗';
-    cap.append(link);
-    cap.hidden = false;
   }
 }
 
@@ -53,11 +31,16 @@ function ensureEmbedDom(hostEl) {
   iframe.allow = 'fullscreen';
   frame.append(iframe);
 
-  const cap = document.createElement('p');
-  cap.className = 'weather-radar__caption';
-  cap.hidden = true;
+  hostEl.replaceChildren(frame);
+}
 
-  hostEl.replaceChildren(frame, cap);
+/**
+ * @param {object} data
+ */
+function radarAriaLabel(data) {
+  const zip = data.embed?.zip || data.geo?.zip;
+  if (zip) return `Live weather radar centered on ZIP ${zip}`;
+  return 'Live weather radar';
 }
 
 /**
@@ -70,11 +53,6 @@ export function mountWeatherRadar(card, mount) {
   const body = document.createElement('div');
   body.className = 'weather-radar__body';
   mount.append(body);
-
-  const status = document.createElement('p');
-  status.className = 'weather-radar__status';
-  status.hidden = true;
-  mount.append(status);
 
   let pollTimer = null;
 
@@ -89,12 +67,10 @@ export function mountWeatherRadar(card, mount) {
       if (!data.show) {
         card.hidden = true;
         body.replaceChildren();
-        status.hidden = true;
         return;
       }
 
       card.hidden = false;
-      status.hidden = true;
 
       let mapHost = body.querySelector('.weather-radar__map-host');
       if (!mapHost) {
@@ -103,19 +79,13 @@ export function mountWeatherRadar(card, mount) {
         body.append(mapHost);
       }
 
-      const msg = typeof data.message === 'string' ? data.message.trim() : '';
       mapHost.setAttribute('role', 'application');
-      mapHost.setAttribute(
-        'aria-label',
-        msg ? `${msg} — Windy radar` : 'Live weather radar from Windy',
-      );
+      mapHost.setAttribute('aria-label', radarAriaLabel(data));
 
       ensureEmbedDom(mapHost);
       applyEmbed(mapHost, data);
     } catch {
       card.hidden = true;
-      status.hidden = true;
-      status.textContent = '';
       body.replaceChildren();
     }
   }
