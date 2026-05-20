@@ -2,6 +2,7 @@
  * Sidebar Air Quality panel: US AQI at WEATHER_ZIP / WEATHER_LAT+LON; PurpleAir map when above threshold.
  */
 import { fetchOpenMeteoCurrentUsAqi, usAqiCategoryStyle } from './dashboard-air-quality.js';
+import { loadAirQualityForceShow } from './air-quality-force-show-store.js';
 import { resolveDashboardWeatherLatLon } from './hero-weather-location.js';
 
 /** Show panel when current US AQI is strictly above this value. */
@@ -26,12 +27,6 @@ function airQualityDisabled(env = process.env) {
   return String(env.AIR_QUALITY || '').trim() === '0';
 }
 
-/** Default on until unset — local testing visibility. */
-function airQualityForceShow(env = process.env) {
-  const v = String(env.AIR_QUALITY_FORCE_SHOW ?? '1').trim().toLowerCase();
-  return v === '1' || v === 'true' || v === 'yes';
-}
-
 /**
  * @returns {Promise<object>}
  */
@@ -40,7 +35,7 @@ export async function getAirQualityPanelPayload() {
     return { ok: true, disabled: true, show: false };
   }
 
-  const forceShow = airQualityForceShow();
+  const forceShow = await loadAirQualityForceShow();
   const { lat, lon, zip } = await resolveDashboardWeatherLatLon();
   const timeZone = (process.env.WEATHER_TIME_ZONE || '').trim() || 'America/Los_Angeles';
   const mapUrl = purpleAirMapEmbedUrl(lat, lon);

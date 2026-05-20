@@ -18,6 +18,7 @@ data/market-watch-tickers.json
 data/market-watch-settings.json
 data/rain-alert-address.json
 data/secondary-watch-zip.json
+data/air-quality-force-show.json
 # Live to-do list (CSV persisted by /api/todolist; seed: src/data/todolist.txt)
 data/todolist.txt
 data/geospace-magnetosphere-state.json
