@@ -142,7 +142,10 @@ export function mountAirQuality(card, mount) {
   refresh();
   pollTimer = setInterval(refresh, POLL_MS);
 
+  window.addEventListener('dashbird-air-quality-refresh', refresh);
+
   return () => {
     if (pollTimer) clearInterval(pollTimer);
+    window.removeEventListener('dashbird-air-quality-refresh', refresh);
   };
 }

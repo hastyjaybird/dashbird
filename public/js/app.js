@@ -5,6 +5,7 @@ import { mountHero } from './panels/hero.js';
 import { mountHealthSidebar } from './panels/health-sidebar.js';
 import { mountCalendarUpcoming } from './panels/calendar-upcoming.js';
 import { mountMarketWatch } from './panels/market-watch.js';
+import { mountAirQuality } from './panels/air-quality.js';
 import { mountWeatherRadar } from './panels/weather-radar.js';
 import { mountGeoelectricField } from './panels/geoelectric-field.js';
 import { mountMagnetosphere } from './panels/magnetosphere.js';
@@ -84,6 +85,10 @@ async function main() {
   mountWeatherRadar(
     document.getElementById('weather-radar-card'),
     document.getElementById('mount-weather-radar'),
+  );
+  mountAirQuality(
+    document.getElementById('air-quality-card'),
+    document.getElementById('mount-air-quality'),
   );
   mountGeoelectricField(
     document.getElementById('geoelectric-field-card'),

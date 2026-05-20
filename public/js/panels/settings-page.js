@@ -87,6 +87,87 @@ function buildRainAlertBlock(root) {
 }
 
 /**
+ * Air Quality panel force-show (main page testing).
+ * @param {HTMLElement} root
+ */
+function buildAirQualityForceShowBlock(root) {
+  const block = document.createElement('section');
+  block.className =
+    'settings-page__config-block panel panel--glass settings-page__air-quality-block';
+  block.setAttribute('aria-labelledby', 'settings-air-quality-heading');
+
+  const h = document.createElement('h2');
+  h.id = 'settings-air-quality-heading';
+  h.className = 'settings-page__block-title';
+  h.textContent = 'Air Quality';
+  block.append(h);
+
+  const hint = document.createElement('p');
+  hint.className = 'settings-page__note settings-page__air-quality-hint';
+  hint.textContent =
+    'When enabled, the Air Quality card appears on the main page even if US AQI is at or below the display threshold.';
+  block.append(hint);
+
+  const label = document.createElement('label');
+  label.className = 'settings-page__checkbox-label';
+  label.htmlFor = 'settings-air-quality-force-show';
+
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.id = 'settings-air-quality-force-show';
+  cb.className = 'settings-page__checkbox';
+
+  label.append(cb, document.createTextNode(' Force show'));
+
+  const msg = document.createElement('p');
+  msg.className = 'settings-page__rain-msg';
+  msg.hidden = true;
+  msg.setAttribute('aria-live', 'polite');
+
+  block.append(label, msg);
+  root.insertBefore(block, root.firstChild);
+
+  fetch('/api/air-quality/force-show', { cache: 'no-store' })
+    .then((r) => r.json())
+    .then((data) => {
+      if (data?.disabled) {
+        cb.disabled = true;
+        hint.textContent = 'Air Quality panel is disabled (AIR_QUALITY=0).';
+        return;
+      }
+      cb.checked = Boolean(data?.forceShow);
+    })
+    .catch(() => {});
+
+  cb.addEventListener('change', async () => {
+    cb.disabled = true;
+    msg.hidden = false;
+    msg.classList.remove('settings-page__rain-msg--err');
+    msg.textContent = 'Saving…';
+    try {
+      const r = await fetch('/api/air-quality/force-show', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ forceShow: cb.checked }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false) {
+        throw new Error(data.error || `HTTP ${r.status}`);
+      }
+      msg.textContent = 'Saved.';
+      window.dispatchEvent(new Event('dashbird-air-quality-refresh'));
+    } catch (e) {
+      msg.classList.add('settings-page__rain-msg--err');
+      msg.textContent =
+        e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Could not save.';
+      cb.checked = !cb.checked;
+    } finally {
+      cb.disabled = false;
+    }
+  });
+}
+
+/**
  * Secondary ZIP for lightning bugs + fall foliage.
  * @param {HTMLElement} root
  */
@@ -365,6 +446,7 @@ export async function mountSettingsPage(mount) {
   if (!mount) return;
 
   const { tbody, status, meta } = buildSettingsShell(mount, WINDOW_HOURS);
+  buildAirQualityForceShowBlock(mount);
   buildSecondaryWatchBlock(mount);
   buildRainAlertBlock(mount);
   mount.setAttribute('aria-busy', 'true');
