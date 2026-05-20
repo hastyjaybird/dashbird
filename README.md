@@ -20,7 +20,27 @@ This repo supersedes the earlier **`homeassistantdashboard`** workspace; the Cur
    docker compose up --build
    ```
 
-3. Open **`http://127.0.0.1:8787/`** (or whatever you set as `HOST_PORT` in `.env`). The container listens on **3000** internally; Compose maps **`HOST_PORT` → 3000**.
+3. Open **`http://127.0.0.1:8787/`** (or whatever you set as `HOST_PORT` in `.env`). The container listens on **3000** internally; Compose publishes **`HOST_PORT` on all host interfaces** (`0.0.0.0`).
+
+### Phone on the same Wi‑Fi
+
+Use your PC’s **LAN IP**, not `127.0.0.1` — on the phone, `127.0.0.1` is the phone itself.
+
+1. With Docker running, print a bookmark URL from the project root:
+
+   ```bash
+   npm run lan-url
+   ```
+
+   Example output: `http://192.168.1.42:8787/`
+
+2. On your phone (same Wi‑Fi, not guest/isolated Wi‑Fi), open that URL in the browser and bookmark it.
+
+3. Optional: set **`DASHBOARD_LAN_ORIGIN`** in `.env` to that same origin (no trailing slash). The system sidebar shows a **Phone (same Wi‑Fi)** link.
+
+**If the page does not load:** allow the port on the host firewall (e.g. `sudo ufw allow 8787/tcp`), confirm phone and PC are on the same subnet, and disable router “AP/client isolation” if enabled.
+
+**Security:** anyone on your LAN who knows the IP can use the dashboard (including chat if OpenRouter is configured). This is intentional for trusted home Wi‑Fi only — do not port-forward to the public internet without authentication.
 
 ### Local Node (without Docker)
 
@@ -37,6 +57,7 @@ Default `PORT` is **3000** when not using Compose.
 |----------|---------|
 | `PORT` | HTTP port inside the container / for `npm start` |
 | `HOST_PORT` | Host port published by Compose (default `8787`) |
+| `DASHBOARD_LAN_ORIGIN` | Optional full origin for sidebar **Phone (same Wi‑Fi)** link; run `npm run lan-url` to discover |
 | `OPENROUTER_API_KEY` | Server-only key for `/api/chat` |
 | `OPENROUTER_MODEL` | Model id (default `openrouter/auto`) |
 | `CALENDAR_EMBED_URL` | Full `src` URL from Google Calendar **Integrate calendar** (iframe embed) |

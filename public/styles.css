@@ -128,6 +128,30 @@ body.dashy {
   border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+.health-sidebar__lan-link {
+  display: block;
+  width: 100%;
+  margin-bottom: 0.35rem;
+  font-size: 0.58rem;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+  color: rgba(180, 220, 255, 0.95);
+}
+
+.health-sidebar__lan-link:hover {
+  text-decoration: underline;
+}
+
+.health-sidebar__lan-link[hidden] {
+  display: none !important;
+}
+
+.health-sidebar--collapsed .health-sidebar__lan-link {
+  font-size: 0.52rem;
+  margin-bottom: 0.25rem;
+}
+
 .health-sidebar__check-row {
   display: flex;
   flex-direction: row;

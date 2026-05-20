@@ -42,7 +42,12 @@ router.get('/', async (req, res) => {
   const calendarEmbedUrl = normalizeCalendarEmbedUrl(process.env.CALENDAR_EMBED_URL);
   const calendarEmbedMisconfigured = calRaw.length > 0 && !calendarEmbedUrl;
 
+  const lanRaw = (process.env.DASHBOARD_LAN_ORIGIN || '').trim();
+  const lanOrigin =
+    lanRaw.startsWith('http://') || lanRaw.startsWith('https://') ? lanRaw.replace(/\/+$/, '') : '';
+
   res.json({
+    lanOrigin,
     calendarEmbedUrl,
     calendarEmbedMisconfigured,
     weatherLat: Number.isFinite(lat) ? lat : DEFAULT_LAT,

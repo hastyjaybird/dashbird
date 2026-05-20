@@ -2,7 +2,7 @@ services:
   dashboard:
     build: .
     ports:
-      - "${HOST_PORT:-8787}:3000"
+      - "0.0.0.0:${HOST_PORT:-8787}:3000"
     env_file:
       - .env
     environment:

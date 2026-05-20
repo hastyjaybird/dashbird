@@ -463,10 +463,16 @@ export function mountHealthSidebar(aside) {
   warnWrap.setAttribute('tabindex', '0');
   warnWrap.setAttribute('aria-label', 'Show connectivity report');
   warnWrap.innerHTML = ICON_WARN_TRI;
+  const lanLink = document.createElement('a');
+  lanLink.className = 'health-sidebar__lan-link';
+  lanLink.hidden = true;
+  lanLink.target = '_blank';
+  lanLink.rel = 'noopener noreferrer';
+
   const checkMeta = document.createElement('div');
   checkMeta.className = 'health-sidebar__check-meta';
   checkRow.append(checkBtn, warnWrap);
-  checkFooter.append(checkRow, checkMeta);
+  checkFooter.append(lanLink, checkRow, checkMeta);
   checkMeta.textContent = '';
 
   inner.append(toggle, metrics, checkFooter);
@@ -605,6 +611,17 @@ export function mountHealthSidebar(aside) {
     ]);
 
     applyBackupFromIso(cfg?.lastBackupAt);
+
+    const lan = typeof cfg?.lanOrigin === 'string' ? cfg.lanOrigin.trim() : '';
+    if (lan) {
+      lanLink.href = lan;
+      lanLink.textContent = 'Phone (same Wi‑Fi)';
+      lanLink.title = lan;
+      lanLink.hidden = false;
+    } else {
+      lanLink.hidden = true;
+      lanLink.removeAttribute('href');
+    }
 
     const j = hr;
     const ping = nr.pingMs;
