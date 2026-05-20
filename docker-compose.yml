@@ -11,3 +11,22 @@ services:
     volumes:
       - ./public:/app/public
       - ./src:/app/src
+
+  # Runs on the host network after dashboard starts; prints the phone URL and refreshes
+  # public/data/phone-lan-url.txt for the sidebar link (gitignored).
+  lan-url:
+    image: node:20-alpine
+    network_mode: host
+    working_dir: /app
+    volumes:
+      - ./src/lib/lan-url.js:/app/src/lib/lan-url.js:ro
+      - ./scripts/print-lan-url.mjs:/app/scripts/print-lan-url.mjs:ro
+      - ./public/data:/app/public/data
+      - ./.env:/app/.env:ro
+    environment:
+      HOST_PORT: ${HOST_PORT:-8787}
+    depends_on:
+      dashboard:
+        condition: service_started
+    command: ['node', 'scripts/print-lan-url.mjs', '--write']
+    restart: 'no'

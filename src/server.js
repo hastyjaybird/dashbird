@@ -1,7 +1,9 @@
 import 'dotenv/config';
 import express from 'express';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { printLanUrl } from './lib/lan-url.js';
 
 import chatRouter from './routes/chat.js';
 import configRouter from './routes/config.js';
@@ -59,4 +61,7 @@ app.use((err, req, res, next) => {
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`dashbird listening on http://0.0.0.0:${port}`);
+  if (!existsSync('/.dockerenv')) {
+    printLanUrl();
+  }
 });

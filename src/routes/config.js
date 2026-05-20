@@ -13,6 +13,19 @@ const root = path.join(__dirname, '..');
 const DEFAULT_LAT = 37.848;
 const DEFAULT_LON = -122.253;
 
+async function readLanOriginFromFile() {
+  try {
+    const fp = path.join(root, 'public/data/phone-lan-url.txt');
+    const raw = (await readFile(fp, 'utf8')).trim();
+    if (raw.startsWith('http://') || raw.startsWith('https://')) {
+      return raw.replace(/\/+$/, '');
+    }
+  } catch {
+    /* missing or unreadable */
+  }
+  return '';
+}
+
 async function readLastBackupFromFile() {
   try {
     const fp = path.join(root, 'public/data/last-backup.txt');
@@ -43,8 +56,11 @@ router.get('/', async (req, res) => {
   const calendarEmbedMisconfigured = calRaw.length > 0 && !calendarEmbedUrl;
 
   const lanRaw = (process.env.DASHBOARD_LAN_ORIGIN || '').trim();
-  const lanOrigin =
+  let lanOrigin =
     lanRaw.startsWith('http://') || lanRaw.startsWith('https://') ? lanRaw.replace(/\/+$/, '') : '';
+  if (!lanOrigin) {
+    lanOrigin = await readLanOriginFromFile();
+  }
 
   res.json({
     lanOrigin,

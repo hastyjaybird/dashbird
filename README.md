@@ -26,17 +26,18 @@ This repo supersedes the earlier **`homeassistantdashboard`** workspace; the Cur
 
 Use your PC’s **LAN IP**, not `127.0.0.1` — on the phone, `127.0.0.1` is the phone itself.
 
-1. With Docker running, print a bookmark URL from the project root:
+After **`docker compose up`** (or `up -d --build`), a **`lan-url`** service runs on the host network, prints the bookmark URL in the compose logs, and writes **`public/data/phone-lan-url.txt`** so the system sidebar can show **Phone (same Wi‑Fi)** without extra config.
 
-   ```bash
-   npm run lan-url
-   ```
+```bash
+docker compose logs lan-url    # re-read the printed URL
+npm run lan-url                # print again from the host (no Docker)
+```
 
-   Example output: `http://192.168.1.42:8787/`
+Example output: `[dashbird] Phone (same Wi-Fi): http://192.168.1.42:8787/`
 
-2. On your phone (same Wi‑Fi, not guest/isolated Wi‑Fi), open that URL in the browser and bookmark it.
+On your phone (same Wi‑Fi, not guest/isolated Wi‑Fi), open that URL and bookmark it.
 
-3. Optional: set **`DASHBOARD_LAN_ORIGIN`** in `.env` to that same origin (no trailing slash). The system sidebar shows a **Phone (same Wi‑Fi)** link.
+Optional: set **`DASHBOARD_LAN_ORIGIN`** in `.env` to override the auto-detected origin (no trailing slash).
 
 **If the page does not load:** allow the port on the host firewall (e.g. `sudo ufw allow 8787/tcp`), confirm phone and PC are on the same subnet, and disable router “AP/client isolation” if enabled.
 

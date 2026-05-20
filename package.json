@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "lan-url": "bash scripts/print-lan-url.sh"
+    "lan-url": "node scripts/print-lan-url.mjs",
+    "lan-url:write": "node scripts/print-lan-url.mjs --write"
   },
   "dependencies": {
     "astronomy-engine": "^2.1.19",

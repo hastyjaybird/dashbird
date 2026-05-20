@@ -10,4 +10,5 @@ features.txt
 public/data/bookmarks-personal.json
 public/data/notes.md
 public/data/last-backup.txt
+public/data/phone-lan-url.txt
 request.txt
