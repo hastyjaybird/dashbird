@@ -1941,6 +1941,16 @@ body.chat-sidebar-resizer--dragging {
   overflow: hidden;
 }
 
+.chat-sidebar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.18);
+}
+
 .chat-sidebar__heading {
   margin: 0;
   padding: 0.55rem 0.75rem;
@@ -1948,9 +1958,48 @@ body.chat-sidebar-resizer--dragging {
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--muted);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.18);
+  border-bottom: 0;
+  background: transparent;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-sidebar__toggle {
+  display: none;
   flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 1.65rem;
+  height: 1.65rem;
+  margin: 0 0.55rem 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.chat-sidebar__toggle::before {
+  content: '';
+  display: block;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  margin-top: -0.15rem;
+  transition: transform 0.15s ease;
+}
+
+.chat-sidebar__toggle[aria-expanded='true']::before {
+  transform: rotate(-135deg);
+  margin-top: 0.1rem;
+}
+
+.chat-sidebar__toggle:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.35);
 }
 
 .chat-sidebar__mount {
@@ -1970,7 +2019,19 @@ body.chat-sidebar-resizer--dragging {
     width: 100%;
     max-width: 100%;
     min-width: 0;
-    padding: 0.35rem clamp(0.75rem, 2.5vw, 2rem) 0.25rem;
+    padding: 0;
+    align-self: stretch;
+  }
+
+  .sky-sidebar--in-main {
+    margin-top: 0.25rem;
+  }
+
+  .sky-sidebar-mobile-host:not([hidden]) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: 100%;
   }
 
   /* Long sky-event lists scroll inside the Sky card without stretching the column. */
@@ -1982,17 +2043,89 @@ body.chat-sidebar-resizer--dragging {
     flex: 0 0 auto !important;
     width: 100% !important;
     max-width: 100%;
-    max-height: min(46vh, 480px);
-    padding: 0.5rem clamp(0.75rem, 2.5vw, 2.5rem) 0;
+    padding: 0.35rem clamp(0.75rem, 2.5vw, 2.5rem) 0;
+    order: -2;
+    z-index: 4;
   }
 
-  .chat-sidebar__inner {
+  .chat-sidebar__toggle {
+    display: flex;
+  }
+
+  .chat-sidebar--collapsed {
+    max-height: none;
+  }
+
+  .chat-sidebar--collapsed .chat-sidebar__inner {
+    min-height: 0;
+    max-height: none;
+  }
+
+  .chat-sidebar--collapsed .chat-sidebar__mount {
+    display: none;
+  }
+
+  .chat-sidebar:not(.chat-sidebar--collapsed) {
+    max-height: min(46vh, 480px);
+  }
+
+  .chat-sidebar:not(.chat-sidebar--collapsed) .chat-sidebar__inner {
     min-height: min(40vh, 400px);
     max-height: min(44vh, 440px);
   }
 
+  .layout-main {
+    order: -1;
+  }
+
   .chat-sidebar-resizer {
     display: none !important;
+  }
+
+  /* Hero: clock band, then Oakland + SF weather icons side by side. */
+  .hero-cluster {
+    flex-direction: column;
+    align-items: center;
+    gap: 0.65rem;
+  }
+
+  .hero-time-row {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+
+  .hero-cities {
+    flex-wrap: nowrap;
+    justify-content: center;
+    gap: 0;
+    width: 100%;
+    max-width: min(100%, 22rem);
+    order: 0;
+  }
+
+  .hero-cities-sep {
+    width: 1px;
+    height: auto;
+    min-height: 3.25rem;
+    margin: 0 0.5rem;
+    align-self: center;
+    background: linear-gradient(
+      to bottom,
+      transparent,
+      rgba(255, 255, 255, 0.22) 12%,
+      rgba(255, 255, 255, 0.22) 88%,
+      transparent
+    );
+  }
+
+  .hero-city {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .hero-city .hero-icon-slot {
+    width: 48px;
+    height: 48px;
   }
 }
 
@@ -2868,21 +3001,12 @@ body.dashy--page-settings .page-view--main {
 
 @media (max-width: 560px) {
   .hero-cities {
-    flex-wrap: wrap;
+    max-width: min(100%, 20rem);
   }
 
-  .hero-cities-sep {
-    width: 100%;
-    height: 1px;
-    min-height: 0;
-    margin: 0.5rem 0;
-    background: linear-gradient(
-      to right,
-      transparent,
-      rgba(255, 255, 255, 0.22) 15%,
-      rgba(255, 255, 255, 0.22) 85%,
-      transparent
-    );
+  .hero-city .hero-icon-slot {
+    width: 44px;
+    height: 44px;
   }
 }
 
