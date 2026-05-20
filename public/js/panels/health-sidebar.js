@@ -2,14 +2,14 @@ import {
   refreshOpenRouterLimitMount,
   setOpenRouterLimitMount,
 } from '../lib/openrouter-limit-ring.js';
+import { beginWaitCursor, endWaitCursor } from '../lib/wait-cursor.js';
+import { attachDashbirdHoverTip } from '../lib/dashbird-hover-tip.js';
+import { standaloneWarnExclamationSvgHtml } from '../lib/standalone-warn-exclamation.js';
 
 const LS_KEY = 'dashbirdHealthCollapsed';
 
 const RING_SIZE = 34;
 const RING_STROKE = 3;
-
-const ICON_WARN_TRI =
-  '<svg class="health-check-warn__tri" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="#e8b935" stroke="rgba(0,0,0,0.35)" stroke-width="0.35" d="M12 3 1 21h22L12 3zm0 3.9L18.2 19H5.8L12 6.9z"/><path fill="#1a1410" d="M11 15h2v3h-2v-3zm0-5.5h2v3.5h-2V9.5z"/></svg>';
 
 const ICON_OK_CHECK =
   '<svg class="health-check-modal__okicon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="#5cdd7a" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>';
@@ -57,14 +57,13 @@ function pctLabel(pct) {
 /**
  * @param {HTMLElement} wrap
  * @param {number|null} pct 0–100 fill
- * @param {string} _unusedTitle
  * @param {string|null|undefined} centerText
  * @param {'net'|undefined} ringVariant
  * @param {{ uploadMbps?: number|null, downloadMbps?: number|null, phaseUpload?: boolean }|null} [netOpts]
  *        When `ringVariant === 'net'` and set, center shows one rate (same type size as other rings);
  *        tailed upload/download arrow sits outside the ring to the right (alternates every 10s).
  */
-function renderRing(wrap, pct, _unusedTitle, centerText, ringVariant, netOpts = null) {
+function renderRing(wrap, pct, centerText, ringVariant, netOpts = null) {
   wrap.replaceChildren();
   const p = pct == null || Number.isNaN(pct) ? 0 : Math.min(100, Math.max(0, pct));
   const size = RING_SIZE;
@@ -234,54 +233,25 @@ function setRowTip(row, name, body) {
   row.dataset.healthTipBody = encodeURIComponent((body || '').slice(0, 2800));
 }
 
-function tipFromTarget(aside, target) {
-  if (!(target instanceof Element)) return null;
-  const direct = target.closest('[data-health-tip-name]');
-  if (direct && aside.contains(direct)) return direct;
-  const row = target.closest('.health-metric');
-  if (row && aside.contains(row)) {
-    const inner = row.querySelector('[data-health-tip-name]');
-    if (inner) return inner;
-    if (row.dataset.healthTipName) return row;
+/** Standalone caution mark; hover shows `dashbird-health-tip` payload (same mechanism as row tips). */
+function syncSidebarWarnBadge(row, show, name, detailText) {
+  const cls = 'dashbird-status-warn-badge';
+  row.classList.toggle('health-metric--status-alert', Boolean(show));
+  if (!show) {
+    row.querySelector(`.${cls}`)?.remove();
+    return;
   }
-  const bk = target.closest('.health-backup-row');
-  if (bk && aside.contains(bk) && bk.dataset.healthTipName) return bk;
-  return null;
-}
-
-function positionTip(tip, clientX, clientY) {
-  const pad = 12;
-  let left = clientX + pad;
-  let top = clientY + pad;
-  const rect = tip.getBoundingClientRect();
-  if (left + rect.width > window.innerWidth - 8) left = window.innerWidth - rect.width - 8;
-  if (top + rect.height > window.innerHeight - 8) top = window.innerHeight - rect.height - 8;
-  tip.style.left = `${Math.max(8, left)}px`;
-  tip.style.top = `${Math.max(8, top)}px`;
-}
-
-function showHealthTip(tipEl, clientX, clientY, src) {
-  const name = src.dataset.healthTipName;
-  if (!name) return;
-  let body = '';
-  try {
-    body = src.dataset.healthTipBody ? decodeURIComponent(src.dataset.healthTipBody) : '';
-  } catch {
-    body = '';
+  let badge = row.querySelector(`.${cls}`);
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = cls;
+    badge.innerHTML = standaloneWarnExclamationSvgHtml({ width: 14, height: 14 });
+    badge.setAttribute('role', 'img');
+    row.appendChild(badge);
   }
-  tipEl.replaceChildren();
-  const title = document.createElement('div');
-  title.className = 'dashbird-health-tip__title';
-  title.textContent = name;
-  tipEl.append(title);
-  if (body) {
-    const detail = document.createElement('div');
-    detail.className = 'dashbird-health-tip__detail';
-    detail.textContent = body;
-    tipEl.append(detail);
-  }
-  tipEl.hidden = false;
-  positionTip(tipEl, clientX, clientY);
+  badge.setAttribute('aria-label', `${name}: issue — hover for details`);
+  badge.dataset.healthTipName = name;
+  badge.dataset.healthTipBody = encodeURIComponent(String(detailText || '').slice(0, 2800));
 }
 
 /**
@@ -332,7 +302,7 @@ function openCheckReportModal(j) {
     li.className = 'health-check-modal__issue';
     const icon = document.createElement('span');
     icon.className = 'health-check-modal__issue-icon';
-    icon.innerHTML = ICON_WARN_TRI;
+    icon.innerHTML = standaloneWarnExclamationSvgHtml({ width: 18, height: 18 });
     const text = document.createElement('div');
     text.className = 'health-check-modal__issue-text';
     const strong = document.createElement('strong');
@@ -432,7 +402,7 @@ export function mountHealthSidebar(aside) {
     phaseUpload: true,
   };
   function paintNetRingFromState() {
-    renderRing(ringNet, netRingState.pingFill, '', null, 'net', {
+    renderRing(ringNet, netRingState.pingFill, null, 'net', {
       uploadMbps: netRingState.uploadMbps,
       downloadMbps: netRingState.downloadMbps,
       phaseUpload: netRingState.phaseUpload,
@@ -462,13 +432,12 @@ export function mountHealthSidebar(aside) {
   warnWrap.setAttribute('role', 'button');
   warnWrap.setAttribute('tabindex', '0');
   warnWrap.setAttribute('aria-label', 'Show connectivity report');
-  warnWrap.innerHTML = ICON_WARN_TRI;
+  warnWrap.innerHTML = standaloneWarnExclamationSvgHtml({ width: 18, height: 18 });
   const lanLink = document.createElement('a');
   lanLink.className = 'health-sidebar__lan-link';
   lanLink.hidden = true;
   lanLink.target = '_blank';
   lanLink.rel = 'noopener noreferrer';
-
   const checkMeta = document.createElement('div');
   checkMeta.className = 'health-sidebar__check-meta';
   checkRow.append(checkBtn, warnWrap);
@@ -479,35 +448,10 @@ export function mountHealthSidebar(aside) {
   aside.replaceChildren(inner);
 
   setOpenRouterLimitMount(ringOr);
-  refreshOpenRouterLimitMount();
 
   let lastCheckPayload = null;
 
-  aside.addEventListener(
-    'pointerenter',
-    (e) => {
-      const src = tipFromTarget(aside, e.target);
-      if (!src) return;
-      showHealthTip(tipHost, e.clientX, e.clientY, src);
-    },
-    true,
-  );
-
-  aside.addEventListener('pointermove', (e) => {
-    if (tipHost.hidden) return;
-    const src = tipFromTarget(aside, e.target);
-    if (!src) {
-      tipHost.hidden = true;
-      return;
-    }
-    positionTip(tipHost, e.clientX, e.clientY);
-  });
-
-  aside.addEventListener('pointerleave', (e) => {
-    const rel = e.relatedTarget;
-    if (rel && aside.contains(rel)) return;
-    tipHost.hidden = true;
-  });
+  attachDashbirdHoverTip(aside, tipHost);
 
   function loadCollapsed() {
     return localStorage.getItem(LS_KEY) === '1';
@@ -521,15 +465,20 @@ export function mountHealthSidebar(aside) {
       collapsed ? 'Expand system health panel' : 'Collapse system health panel',
     );
     metrics.setAttribute('aria-hidden', collapsed ? 'true' : 'false');
+    checkBtn.hidden = collapsed;
     localStorage.setItem(LS_KEY, collapsed ? '1' : '0');
   }
 
   setCollapsed(loadCollapsed());
   toggle.addEventListener('click', () => setCollapsed(!aside.classList.contains('health-sidebar--collapsed')));
 
-  async function runConnectivityCheck() {
+  async function runConnectivityCheck(ev) {
     checkBtn.disabled = true;
     checkBtn.textContent = '…';
+
+    const pe = ev && typeof ev.clientX === 'number' ? ev : null;
+    beginWaitCursor(pe);
+
     try {
       const r = await fetch('/api/dashboard-check', { method: 'POST' });
       let j = await r.json().catch(() => ({}));
@@ -561,11 +510,12 @@ export function mountHealthSidebar(aside) {
       lastCheckPayload = { ok: false, results: [], error: msg };
       openCheckReportModal(lastCheckPayload);
     } finally {
+      endWaitCursor();
       checkBtn.disabled = false;
       checkBtn.textContent = 'check';
     }
   }
-  checkBtn.addEventListener('click', runConnectivityCheck);
+  checkBtn.addEventListener('click', (e) => runConnectivityCheck(e));
 
   function openLastReport() {
     if (lastCheckPayload) openCheckReportModal(lastCheckPayload);
@@ -595,6 +545,7 @@ export function mountHealthSidebar(aside) {
     setRowTip(backupRowEl, 'Last backup', b.title);
     const ariaMain = b.showInfinityIcon ? 'No last backup date (unbounded)' : b.main;
     backupRowEl.setAttribute('aria-label', [ariaMain, b.sub].filter(Boolean).join(' '));
+    return b;
   }
 
   async function refresh() {
@@ -610,7 +561,20 @@ export function mountHealthSidebar(aside) {
         .catch(() => ({})),
     ]);
 
-    applyBackupFromIso(cfg?.lastBackupAt);
+    const bMeta = applyBackupFromIso(cfg?.lastBackupAt);
+    const backupWarn =
+      Boolean(bMeta.showInfinityIcon) || (bMeta.main === '?' && bMeta.sub === 'bad date');
+    syncSidebarWarnBadge(
+      backupRowEl,
+      backupWarn,
+      'Backup',
+      [
+        bMeta.title,
+        backupWarn && bMeta.showInfinityIcon ? 'Configure LAST_BACKUP_AT in .env or public/data/last-backup.txt (ISO 8601).' : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+    );
 
     const lan = typeof cfg?.lanOrigin === 'string' ? cfg.lanOrigin.trim() : '';
     if (lan) {
@@ -629,6 +593,7 @@ export function mountHealthSidebar(aside) {
     netRingState.pingFill = pingFill;
     netRingState.uploadMbps = nr.uploadMbps;
     netRingState.downloadMbps = nr.downloadMbps;
+
     const pingTitleParts = [];
     if (ping != null && Number.isFinite(ping)) {
       pingTitleParts.push(
@@ -647,6 +612,14 @@ export function mountHealthSidebar(aside) {
     paintNetRingFromState();
     setRowTip(networkRowEl, 'Network', pingTitleParts.join('\n'));
 
+    const pingBad = ping == null || !Number.isFinite(ping);
+    syncSidebarWarnBadge(
+      networkRowEl,
+      pingBad,
+      'Network',
+      pingBad ? `Latency probe failed.\n\n${pingTitleParts.join('\n')}` : '',
+    );
+
     const tC = j.temperatureC;
     const tSrc = j.temperatureSource === 'gpu' ? 'GPU' : j.temperatureSource === 'cpu' ? 'CPU' : '';
     const tips = Array.isArray(j.diagnostics?.tips) ? j.diagnostics.tips : [];
@@ -659,8 +632,11 @@ export function mountHealthSidebar(aside) {
     }
     const tCenter =
       tC != null && Number.isFinite(Number(tC)) ? `${Math.round(Number(tC))}°` : '—';
-    renderRing(ringTemp, j.temperaturePercent, '', tCenter);
+    renderRing(ringTemp, j.temperaturePercent, tCenter);
     setRowTip(rowTemp, 'Temperature', tTitleParts.join('\n'));
+
+    /** No “!” pill when readings are missing — empty ring + “—” is enough. */
+    syncSidebarWarnBadge(rowTemp, false);
 
     const mem = j.memory;
     if (mem) {
@@ -671,14 +647,18 @@ export function mountHealthSidebar(aside) {
       const parts = [`RAM used: ${mem.memUsedPercent.toFixed(0)}%.`, `Pressure index: ${mem.pressurePercent.toFixed(0)}%.`];
       if (avail != null && total) parts.push(`Available: ${formatKiB(avail)} / ${formatKiB(total)}.`);
       if (swT > 0) parts.push(`Swap: ${formatKiB(swU)} / ${formatKiB(swT)} (${mem.swapUsedPercent.toFixed(0)}%).`);
-      renderRing(ringRam, mem.pressurePercent, '', undefined);
+      renderRing(ringRam, mem.pressurePercent, undefined);
       setRowTip(rowRam, 'Host RAM & swap', parts.join('\n'));
     } else {
-      renderRing(ringRam, null, '', undefined);
+      renderRing(ringRam, null, undefined);
       setRowTip(rowRam, 'Host RAM & swap', 'Memory stats unavailable.');
     }
 
-    await refreshOpenRouterLimitMount();
+    /** No “!” pill when memory stats are missing. */
+    syncSidebarWarnBadge(rowRam, false);
+
+    const orDisp = await refreshOpenRouterLimitMount();
+    rowOr.classList.toggle('health-metric--status-alert', orDisp?.mode === 'error');
   }
 
   paintNetRingFromState();

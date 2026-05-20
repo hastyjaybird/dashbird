@@ -1,0 +1,152 @@
+{
+  "documentation": [
+    "Curated public records for non-airline aircraft commonly associated with the Oakland / East Bay area.",
+    "Used to label live ADS-B matches (OpenSky). Not a complete fleet list; equipment notes cite journalism, OEM specs, or agency disclosures.",
+    "Aircraft rows may include callsign (exact ADS-B match), icao24, or nNumber.",
+    "Cell-site simulator (StingRay) references describe historical or shared county agreements — not live detection."
+  ],
+  "references": [
+    "https://oaklandprivacy.org/surveillance-equipment-of-some-bay-area-law-enforcement-aircraft/",
+    "https://www.vice.com/en/article/mgxbwy/oakland-police-cell-simulator-agreement",
+    "https://opensky-network.org/",
+    "https://www.flightradar24.com/"
+  ],
+  "aircraft": [
+    {
+      "icao24": "a662b8",
+      "nNumber": "N510PD",
+      "label": "Oakland Police heli",
+      "category": "police",
+      "operator": "City of Oakland Police Dept",
+      "equipment": "MD 500E · FLIR 8500 thermal / auto-track (Oakland Privacy, 2020)",
+      "notes": "OPD air unit; frequently circled protests per local reporting."
+    },
+    {
+      "nNumber": "N220PD",
+      "label": "Oakland Police heli",
+      "category": "police",
+      "operator": "City of Oakland Police Dept",
+      "equipment": "MD 369E · FLIR 8500 (installed 2016 per Oakland Privacy)",
+      "notes": "Second OPD ship; observed over San Leandro / Oakland protest routes."
+    },
+    {
+      "icao24": "adc5fe",
+      "nNumber": "N996PD",
+      "label": "East Bay Regional Parks police heli",
+      "category": "police",
+      "operator": "East Bay Regional Park District Police",
+      "equipment": "AS350B2 · FLIR U8500XRLP (Oakland Privacy)",
+      "notes": "Seen over Oakland during 2020 protest coverage."
+    },
+    {
+      "icao24": "a9a2f1",
+      "nNumber": "N708PD",
+      "label": "East Bay Regional Parks police heli",
+      "category": "police",
+      "operator": "East Bay Regional Park District Police",
+      "equipment": "AS350B3 · FLIR 8500, SX-16 searchlight, rescue pod (Oakland Privacy)",
+      "notes": ""
+    },
+    {
+      "icao24": "a6d4f2",
+      "nNumber": "N5525U",
+      "label": "Alameda Co. Sheriff surveillance plane",
+      "category": "police",
+      "operator": "Alameda Co. Sheriff's Office",
+      "equipment": "Cessna U206G · FLIR 8500, AVR8000 DVR, microwave downlink (Oakland Privacy)",
+      "notes": "Fixed-wing observation platform."
+    },
+    {
+      "icao24": "a092fe",
+      "nNumber": "N137HP",
+      "label": "CHP",
+      "category": "police",
+      "operator": "CHP",
+      "equipment": "GA8 · Wescam MX-15, direction finder, scanner (Oakland Privacy)",
+      "notes": "Observed circling Oakland protests June 2020."
+    },
+    {
+      "icao24": "a4c4b8",
+      "nNumber": "N408CC",
+      "label": "Contra Costa Co. Sheriff heli",
+      "category": "police",
+      "operator": "Contra Costa Co. Sheriff",
+      "equipment": "Bell 407 · FLIR Star Safire 380-HDc, ARS-600 (Oakland Privacy)",
+      "notes": "Often transits regional airspace."
+    },
+    {
+      "icao24": "a4c82a",
+      "nNumber": "N408PD",
+      "label": "San Jose Police heli",
+      "category": "police",
+      "operator": "San Jose Police Dept",
+      "equipment": "AS350B3 · Wescam MX-10, searchlight, loudspeaker (Oakland Privacy)",
+      "notes": "Bay Area mutual-aid overflights possible."
+    },
+    {
+      "nNumber": "N11TV",
+      "label": "News heli",
+      "category": "news",
+      "operator": "Bay Area news pool / contractors",
+      "equipment": "Typical ENG ship; verify tail on day of flight (FAA registry).",
+      "notes": "News helis rotate; match callsign or N-number live."
+    },
+    {
+      "nNumber": "N831LS",
+      "label": "Air ambulance",
+      "category": "medical",
+      "icon": "medical_helicopter",
+      "operator": "REACH Air Medical Services",
+      "equipment": "Heli · air ambulance · hospital transfers in Bay Area.",
+      "notes": "Classify by callsign REACH* when present."
+    },
+    {
+      "callsign": "REH32",
+      "label": "Air ambulance",
+      "category": "medical",
+      "icon": "medical_helicopter",
+      "operator": "REACH Air Medical Services",
+      "equipment": "Heli · air ambulance",
+      "notes": "Medical transport; REACH callsign family (also see REACH* prefix hints)."
+    },
+    {
+      "callsign": "REACH32",
+      "label": "Air ambulance",
+      "category": "medical",
+      "icon": "medical_helicopter",
+      "operator": "REACH Air Medical Services",
+      "equipment": "Heli · air ambulance",
+      "notes": "Medical transport; same operator as REH32-style fleet IDs."
+    },
+    {
+      "callsign": "N312RX",
+      "nNumber": "N312RX",
+      "label": "Air ambulance",
+      "category": "medical",
+      "icon": "medical_helicopter",
+      "equipment": "Heli · air ambulance",
+      "notes": "Medical helicopter; N-number often used as ADS-B callsign."
+    }
+  ],
+  "callsignHints": [
+    { "pattern": "REACH", "category": "medical", "label": "Air ambulance" },
+    { "pattern": "LIFEFLIGHT", "category": "medical", "label": "Air ambulance" },
+    { "pattern": "MED", "category": "medical", "label": "Medical flight" },
+    { "pattern": "NPD", "category": "police", "label": "Police heli" },
+    { "pattern": "PD", "category": "police", "label": "Police" },
+    { "pattern": "HP", "category": "police", "label": "CHP" },
+    { "pattern": "TV", "category": "news", "label": "News" },
+    { "pattern": "KTVU", "category": "news", "label": "News" },
+    { "pattern": "KPIX", "category": "news", "label": "News" },
+    { "pattern": "KGO", "category": "news", "label": "News" },
+    { "pattern": "FIRE", "category": "fire", "label": "Fire dept heli" },
+    { "pattern": "CG", "category": "fire", "label": "Coast Guard" }
+  ],
+  "technologyNotes": [
+    {
+      "topic": "Cell-site simulator (StingRay-class)",
+      "summary": "Oakland PD retired its own 2G-era StingRay in 2013; a 2016 MOU allowed limited access to an Alameda County DA cell-site simulator for search/rescue and fugitive cases (Vice / public records). This is not detectable via ADS-B.",
+      "sources": ["https://www.vice.com/en/article/mgxbwy/oakland-police-cell-simulator-agreement"]
+    }
+  ]
+}

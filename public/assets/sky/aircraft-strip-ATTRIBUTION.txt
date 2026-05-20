@@ -1,0 +1,3 @@
+Aircraft strip icon (aircraft-strip.png), Sky & Space ADS-B rows:
+User-provided Cessna-style illustration (removebg preview), used with permission for this dashboard.
+Medical helicopters use medical-helicopter-strip.png instead.

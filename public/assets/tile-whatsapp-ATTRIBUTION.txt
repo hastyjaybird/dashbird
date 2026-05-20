@@ -1,0 +1,3 @@
+WhatsApp logo (`tile-whatsapp.svg`): Wikimedia Commons,
+https://commons.wikimedia.org/wiki/File:WhatsApp.svg
+Used for bookmark tile display.

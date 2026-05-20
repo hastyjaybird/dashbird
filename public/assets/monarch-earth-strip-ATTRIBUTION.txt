@@ -1,0 +1,1 @@
+Monarch Earth-strip icon (`monarch-earth-strip.png`): user-supplied monarch butterfly illustration for the Earth sidebar migration rows.

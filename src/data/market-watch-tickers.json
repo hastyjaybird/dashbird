@@ -1,0 +1,10 @@
+{
+  "tickers": [
+    { "label": "USNQX", "symbol": "USNQX" },
+    { "label": "USPRX", "symbol": "USPRX" },
+    { "label": "USSPX", "symbol": "USSPX" },
+    { "label": "ARKQ", "symbol": "ARKQ" },
+    { "label": "VTWV", "symbol": "VTWV" },
+    { "label": "NTR", "symbol": "NTR" }
+  ]
+}

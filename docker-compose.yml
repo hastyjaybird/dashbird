@@ -5,12 +5,27 @@ services:
       - "0.0.0.0:${HOST_PORT:-8787}:3000"
     env_file:
       - .env
-    environment:
-      PORT: "3000"
     # Host tree wins over image layers so new icons / calendar JSON apply without `compose build`.
     volumes:
       - ./public:/app/public
       - ./src:/app/src
+      - ./data:/app/data
+      # Linux: .desktop entries + ~/Applications AppImages for /api/open-desktop/* tiles
+      - /usr/share/applications:/usr/share/applications:ro
+      - ${LOCAL_APPLICATIONS_DIR:-${HOME}/.local/share/applications}:/root/.local/share/applications:ro
+      - ${HOST_APPLICATIONS_DIR:-${HOME}/Applications}:/host/Applications:ro
+      - /run/user/${UID:-1000}/bus:/run/user/1000/bus
+      - /run/user/${UID:-1000}:/run/user/1000
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    environment:
+      PORT: "3000"
+      HOME: /root
+      HOST_APPLICATIONS_DIR: /host/Applications
+      HOST_HOME: ${HOME}
+      DASHBOARD_HOST_UID: ${UID:-1000}
+      DISPLAY: ${DISPLAY:-:0}
+      XDG_RUNTIME_DIR: /run/user/1000
+      DBUS_SESSION_BUS_ADDRESS: ${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/1000/bus}
 
   # Runs on the host network after dashboard starts; prints the phone URL and refreshes
   # public/data/phone-lan-url.txt for the sidebar link (gitignored).

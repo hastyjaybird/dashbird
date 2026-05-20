@@ -1,0 +1,167 @@
+{
+  "defaultRefUrl": "https://wildlife.ca.gov/Conservation/Fishes/Salmon-Steelhead",
+  "sites": [
+    {
+      "name": "Lagunitas Creek (Marin coho)",
+      "lat": 38.018,
+      "lon": -122.731,
+      "runs": [
+        {
+          "label": "Salmon — coho (Lagunitas)",
+          "activeMonths": [11, 12, 1],
+          "peakDescription": "Typical adult return Nov–Jan (weather-dependent)",
+          "refUrl": "https://www.nps.gov/goga/learn/nature/coho-salmon.htm"
+        }
+      ]
+    },
+    {
+      "name": "Tomales Bay tributaries",
+      "lat": 38.12,
+      "lon": -122.89,
+      "runs": [
+        {
+          "label": "Salmon — coho / steelhead (coastal)",
+          "activeMonths": [12, 1, 2, 3],
+          "peakDescription": "Winter steelhead & late coho Dec–Mar (variable)",
+          "refUrl": "https://wildlife.ca.gov/Conservation/Fishes/Salmon-Steelhead"
+        }
+      ]
+    },
+    {
+      "name": "Napa River system",
+      "lat": 38.22,
+      "lon": -122.27,
+      "runs": [
+        {
+          "label": "Salmon — Chinook (fall near Bay)",
+          "activeMonths": [9, 10, 11, 12],
+          "peakDescription": "Fall Chinook passing toward Valley Sep–Dec",
+          "refUrl": "https://wildlife.ca.gov/Conservation/Fishes/Salmon-Steelhead"
+        }
+      ]
+    },
+    {
+      "name": "Petaluma River / Sonoma Creek",
+      "lat": 38.23,
+      "lon": -122.63,
+      "runs": [
+        {
+          "label": "Salmon — steelhead (coastal lowlands)",
+          "activeMonths": [12, 1, 2, 3],
+          "peakDescription": "Winter steelhead window Dec–Mar",
+          "refUrl": "https://wildlife.ca.gov/Conservation/Fishes/Salmon-Steelhead"
+        }
+      ]
+    },
+    {
+      "name": "Sacramento–San Joaquin Delta",
+      "lat": 38.02,
+      "lon": -121.85,
+      "runs": [
+        {
+          "label": "Salmon — fall Chinook (Delta migration)",
+          "activeMonths": [9, 10, 11, 12],
+          "peakDescription": "Fall-run moving through Delta toward tributaries",
+          "refUrl": "https://wildlife.ca.gov/Conservation/Fishes/Salmon-Steelhead"
+        },
+        {
+          "label": "Salmon — spring-run / late fall (lower river)",
+          "activeMonths": [4, 5, 6, 10, 11],
+          "peakDescription": "Spring ascent Apr–Jun; late fall Oct–Nov",
+          "refUrl": "https://imap.cbr.washington.edu/sacramento/"
+        }
+      ]
+    },
+    {
+      "name": "Mokelumne River (lower)",
+      "lat": 38.12,
+      "lon": -121.62,
+      "runs": [
+        {
+          "label": "Salmon — fall Chinook / hatchery returns",
+          "activeMonths": [10, 11, 12],
+          "peakDescription": "Fall Chinook concentration Oct–Dec",
+          "refUrl": "https://wildlife.ca.gov/Conservation/Fishes/Salmon-Steelhead"
+        }
+      ]
+    },
+    {
+      "name": "Russian River (lower)",
+      "lat": 38.45,
+      "lon": -122.86,
+      "runs": [
+        {
+          "label": "Salmon — steelhead / Chinook (river)",
+          "activeMonths": [10, 11, 12, 1, 2, 3],
+          "peakDescription": "Chinook late fall; steelhead winter",
+          "refUrl": "https://wildlife.ca.gov/Conservation/Fishes/Salmon-Steelhead"
+        }
+      ]
+    },
+    {
+      "name": "American River (lower)",
+      "lat": 38.58,
+      "lon": -121.5,
+      "runs": [
+        {
+          "label": "Salmon — fall Chinook (American)",
+          "activeMonths": [10, 11, 12],
+          "peakDescription": "Fall Chinook Oct–Dec (hydrology-dependent)",
+          "refUrl": "https://wildlife.ca.gov/Conservation/Fishes/Salmon-Steelhead"
+        }
+      ]
+    },
+    {
+      "name": "San Lorenzo River (steelhead)",
+      "lat": 36.978,
+      "lon": -122.028,
+      "runs": [
+        {
+          "label": "Salmon — steelhead (central coast)",
+          "activeMonths": [12, 1, 2, 3],
+          "peakDescription": "Winter steelhead Dec–Mar",
+          "refUrl": "https://wildlife.ca.gov/Conservation/Fishes/Salmon-Steelhead"
+        }
+      ]
+    },
+    {
+      "name": "Klamath River mouth (North Coast)",
+      "lat": 41.595,
+      "lon": -124.084,
+      "runs": [
+        {
+          "label": "Salmon — fall Chinook (Klamath)",
+          "activeMonths": [8, 9, 10, 11],
+          "peakDescription": "Fall Chinook migration Aug–Nov",
+          "refUrl": "https://wildlife.ca.gov/Conservation/Fishes/Salmon-Steelhead"
+        }
+      ]
+    },
+    {
+      "name": "Columbia River (Astoria area)",
+      "lat": 46.187,
+      "lon": -123.83,
+      "runs": [
+        {
+          "label": "Salmon — Chinook / coho (Columbia)",
+          "activeMonths": [8, 9, 10, 11, 12],
+          "peakDescription": "Multi-run fishery late summer through fall",
+          "refUrl": "https://wdfw.wa.gov/fishing/regulations/salmon"
+        }
+      ]
+    },
+    {
+      "name": "Skagit River (lower)",
+      "lat": 48.42,
+      "lon": -122.34,
+      "runs": [
+        {
+          "label": "Salmon — Chinook / coho / chum (Skagit)",
+          "activeMonths": [9, 10, 11, 12],
+          "peakDescription": "Strong fall returns Sep–Dec",
+          "refUrl": "https://wdfw.wa.gov/fishing/regulations/salmon"
+        }
+      ]
+    }
+  ]
+}

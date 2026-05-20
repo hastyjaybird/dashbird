@@ -1,0 +1,63 @@
+{
+  "references": [
+    "https://www.farmersalmanac.com/fireflies-weather",
+    "https://news.vt.edu/articles/2024/05/firefly_extinction_expert.html",
+    "https://www.whro.org/news/local-news/2024-06-27/lightning-bugs-face-threats-says-virginia-tech-scientist-heres-how-to-help-them"
+  ],
+  "documentation": [
+    "Eastern US lightning-bug (firefly) evening display season by latitude.",
+    "seasonStart: first widespread displays; peakStart–peakEnd: best viewing; seasonEnd: last common displays.",
+    "Synthesis from Farmers' Almanac (typically third week of May–third week of June) and Virginia Tech extension (Virginia peak late May–early June). Weather shifts timing by days to weeks."
+  ],
+  "rows": [
+    {
+      "latitude": 45,
+      "seasonStart": "06-10",
+      "peakStart": "06-22",
+      "peakEnd": "07-08",
+      "seasonEnd": "07-25"
+    },
+    {
+      "latitude": 42,
+      "seasonStart": "06-03",
+      "peakStart": "06-15",
+      "peakEnd": "07-01",
+      "seasonEnd": "07-18"
+    },
+    {
+      "latitude": 39,
+      "seasonStart": "05-25",
+      "peakStart": "06-06",
+      "peakEnd": "06-22",
+      "seasonEnd": "07-08"
+    },
+    {
+      "latitude": 37,
+      "seasonStart": "05-18",
+      "peakStart": "05-28",
+      "peakEnd": "06-12",
+      "seasonEnd": "06-28"
+    },
+    {
+      "latitude": 35,
+      "seasonStart": "05-12",
+      "peakStart": "05-22",
+      "peakEnd": "06-08",
+      "seasonEnd": "06-22"
+    },
+    {
+      "latitude": 33,
+      "seasonStart": "05-05",
+      "peakStart": "05-18",
+      "peakEnd": "06-02",
+      "seasonEnd": "06-18"
+    },
+    {
+      "latitude": 31,
+      "seasonStart": "04-28",
+      "peakStart": "05-10",
+      "peakEnd": "05-28",
+      "seasonEnd": "06-12"
+    }
+  ]
+}

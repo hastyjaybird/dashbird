@@ -1,0 +1,31 @@
+{
+  "season": "fall_southbound",
+  "documentation": [
+    "Eastern–central North American southbound monarch migration.",
+    "Each row is approximate peak abundance timing versus latitude.",
+    "Values are reproducible summaries from the widely cited Monarch Watch / tag-recovery migration model (tabular form appears in Monarch Watch FAQs and regional migration guides — e.g. Texas Entomology fall peak synopsis). Western flyway (typically west of ~114° W) runs on a different coastline calendar; interpolate this table cautiously.",
+    "This file is NOT a biological guarantee; weather shifts local arrival by ±days to weeks annually."
+  ],
+  "references": [
+    "https://www.monarchwatch.org/migration/",
+    "https://maps.journeynorth.org/"
+  ],
+  "rows": [
+    { "latitude": 49, "midpoint": "08-26", "peakStart": "08-18", "peakEnd": "08-30" },
+    { "latitude": 47, "midpoint": "09-01", "peakStart": "08-24", "peakEnd": "09-05" },
+    { "latitude": 45, "midpoint": "09-06", "peakStart": "08-29", "peakEnd": "09-10" },
+    { "latitude": 43, "midpoint": "09-11", "peakStart": "09-03", "peakEnd": "09-15" },
+    { "latitude": 41, "midpoint": "09-16", "peakStart": "09-08", "peakEnd": "09-20" },
+    { "latitude": 39, "midpoint": "09-22", "peakStart": "09-14", "peakEnd": "09-26" },
+    { "latitude": 37, "midpoint": "09-27", "peakStart": "09-19", "peakEnd": "10-01" },
+    { "latitude": 35, "midpoint": "10-02", "peakStart": "09-24", "peakEnd": "10-06" },
+    { "latitude": 33, "midpoint": "10-07", "peakStart": "09-29", "peakEnd": "10-11" },
+    { "latitude": 31, "midpoint": "10-12", "peakStart": "10-04", "peakEnd": "10-16" },
+    { "latitude": 29, "midpoint": "10-18", "peakStart": "10-10", "peakEnd": "10-22" },
+    { "latitude": 27, "midpoint": "10-23", "peakStart": "10-15", "peakEnd": "10-27" },
+    { "latitude": 25, "midpoint": "10-28", "peakStart": "10-20", "peakEnd": "11-01" },
+    { "latitude": 23, "midpoint": "11-04", "peakStart": "10-27", "peakEnd": "11-08" },
+    { "latitude": 21, "midpoint": "11-11", "peakStart": "11-03", "peakEnd": "11-15" },
+    { "latitude": 19.4, "midpoint": "11-18", "peakStart": "11-10", "peakEnd": "11-22" }
+  ]
+}

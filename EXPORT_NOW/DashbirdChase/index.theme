@@ -1,0 +1,5 @@
+[Icon Theme]
+Name=DashbirdChase
+Comment=Dashbird split-complementary chase loader (from dashbird wait cursor)
+Inherits=Adwaita
+Example=DashbirdChase

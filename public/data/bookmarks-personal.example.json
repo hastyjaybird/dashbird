@@ -1,8 +1,23 @@
 {
   "sections": [
     {
-      "title": "Bookmarks",
-      "items": [{ "word": "Example", "href": "https://example.com/" }]
+      "title": "Tools",
+      "items": [
+        { "word": "Example tool", "href": "https://example.com/" },
+        { "word": "Cursor", "href": "cursor://" },
+        {
+          "word": "Kdenlive",
+          "href": "/api/open-desktop/kdenlive",
+          "title": "Local AppImage in ~/Applications (or set KDENLIVE_APPIMAGE in .env)"
+        }
+      ]
+    },
+    {
+      "title": "AI",
+      "items": [
+        { "word": "OpenRouter", "href": "https://openrouter.ai/" },
+        { "word": "Gemini", "href": "https://gemini.google.com/" }
+      ]
     }
   ]
 }

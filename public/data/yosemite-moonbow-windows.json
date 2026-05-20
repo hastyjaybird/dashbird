@@ -1,0 +1,9 @@
+{
+  "referenceUrl": "https://www.yosemitemoonbow.com/",
+  "sourceNote": "Seasonal prediction windows for Lower Yosemite Fall moonbows (full-moon + spray). Update each year from yosemitemoonbow.com / photographer forecasts.",
+  "windows": [
+    { "start": "2026-03-31", "end": "2026-04-04", "label": "Late March / early April" },
+    { "start": "2026-04-29", "end": "2026-05-05", "label": "Late April / early May" },
+    { "start": "2026-05-28", "end": "2026-06-03", "label": "Late May (often strongest flow)" }
+  ]
+}

@@ -1,0 +1,1 @@
+Earthquake map-pin icon (`earth-earthquake-pin.png`): user-supplied stock artwork (Dreamstime / remove.bg); used for the Earth sidebar USGS weekly earthquake row.

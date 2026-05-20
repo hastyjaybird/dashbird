@@ -91,7 +91,7 @@ export function mergeNakedEyePlanetsWithComputed(
       const startsAt = new Date(firstMs).toISOString();
       const endsAt = new Date(lastMs + STEP_MS).toISOString();
       const magStr = Number.isFinite(bestMag) ? bestMag.toFixed(1) : '—';
-      const detailLine = `Peak ${Math.round(peakAlt)}°, mag ${magStr}`;
+      const detailLine = `Peak ${Math.round(peakAlt)}° · Mag ${magStr}`;
 
       added.push({
         id: `planet-${row.key}-${dayKey}`,
@@ -102,6 +102,7 @@ export function mergeNakedEyePlanetsWithComputed(
         startsAt,
         endsAt,
         peakAt: null,
+        magnitude: bestMag,
         detailLine,
         source:
           'Positions & magnitudes: Astronomy Engine (Don Cross, MIT). Rules: Sun more than ~6° below the horizon, planet above a minimum altitude, brightness within naked-eye limits for Mercury–Saturn.',
@@ -112,7 +113,73 @@ export function mergeNakedEyePlanetsWithComputed(
     return base;
   }
 
-  const merged = [...added, ...base];
-  merged.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
-  return merged;
+  // Brighter planets first (lower apparent magnitude = brighter).
+  added.sort((a, b) => (a.magnitude ?? 99) - (b.magnitude ?? 99));
+
+  const rest = [...base].sort(
+    (a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime(),
+  );
+  return [...added, ...rest];
+}
+
+/**
+ * Best altitude / magnitude per naked-eye planet in the hero window (for settings).
+ * @param {number} lat
+ * @param {number} lon
+ * @param {Date} now
+ * @param {number} windowMs
+ * @param {string} timeZone
+ */
+export function snapshotNakedEyePlanets(
+  lat,
+  lon,
+  now = new Date(),
+  windowMs = 24 * 60 * 60 * 1000,
+  timeZone = 'America/Los_Angeles',
+) {
+  const { lat: la, lon: lo } = clampLatLon(lat, lon);
+  const observer = new Observer(la, lo, 80);
+  const t0 = now.getTime();
+  const t1 = t0 + windowMs;
+  const parts = [];
+
+  try {
+    for (const row of NAKED_EYE) {
+      let peakAlt = -90;
+      let bestMag = Infinity;
+      let anyNight = false;
+
+      for (let t = t0; t <= t1; t += STEP_MS) {
+        const date = new Date(t);
+        if (sunAltitudeDeg(Body.Sun, observer, date) > NIGHT_SUN_ALT_DEG) continue;
+        anyNight = true;
+        const { alt, mag } = planetAltMag(row.body, observer, date);
+        peakAlt = Math.max(peakAlt, alt);
+        if (Number.isFinite(mag)) bestMag = Math.min(bestMag, mag);
+      }
+
+      if (!anyNight || peakAlt < 0) {
+        parts.push(`${row.label}: not up in civil night`);
+        continue;
+      }
+
+      const magStr = Number.isFinite(bestMag) ? bestMag.toFixed(1) : '—';
+      const qualifies =
+        peakAlt >= row.minAltDeg && Number.isFinite(bestMag) && bestMag <= row.maxMag;
+      const tag = qualifies ? 'strip-eligible' : 'below strip rules';
+      parts.push(`${row.label}: ${Math.round(peakAlt)}° · mag ${magStr} (${tag})`);
+    }
+  } catch (err) {
+    return {
+      value: `Computation failed (${err?.message || err})`,
+      dataSource:
+        'Astronomy Engine at WEATHER_LAT/LON — civil night, min altitude, and per-planet magnitude limits.',
+    };
+  }
+
+  return {
+    value: parts.length ? parts.join(' · ') : 'No planets computed',
+    dataSource:
+      'Astronomy Engine (MIT) at WEATHER_LAT/LON — Mercury–Saturn when civil night, altitude, and brightness rules pass.',
+  };
 }

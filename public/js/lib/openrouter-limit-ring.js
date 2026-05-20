@@ -1,4 +1,5 @@
 import { getOpenRouterLimitDisplay } from './openrouter-summary.js';
+import { standaloneWarnExclamationSvgHtml } from './standalone-warn-exclamation.js';
 
 /** Mount element for the limit ring; set by health sidebar. */
 let mountEl = null;
@@ -69,6 +70,20 @@ function renderOpenRouterLimit(wrap, display) {
     wrap.appendChild(cap);
     return;
   }
+  if (display.mode === 'error') {
+    const badge = document.createElement('span');
+    badge.className = 'dashbird-status-warn-badge or-limit-warn-badge';
+    badge.innerHTML = standaloneWarnExclamationSvgHtml({ width: 16, height: 16 });
+    badge.setAttribute('role', 'img');
+    badge.setAttribute(
+      'aria-label',
+      `OpenRouter limit unavailable: ${String(display.message || '').slice(0, 240)}`,
+    );
+    badge.dataset.healthTipName = 'OpenRouter';
+    badge.dataset.healthTipBody = encodeURIComponent(String(display.message || '').slice(0, 2400));
+    wrap.appendChild(badge);
+    return;
+  }
   const p = document.createElement('p');
   p.className = 'or-limit-fallback muted';
   p.textContent = display.message;
@@ -77,16 +92,24 @@ function renderOpenRouterLimit(wrap, display) {
   wrap.appendChild(p);
 }
 
+/**
+ * Refresh OpenRouter donut / fallback in the sidebar mount.
+ * @returns {object | null}
+ */
 export async function refreshOpenRouterLimitMount() {
-  if (!mountEl) return;
+  if (!mountEl) return null;
+  /** @type {{ mode: string, message?: string, pct?: number, title?: string }} */
+  let display;
   try {
     const r = await fetch('/api/openrouter/summary');
     const j = await r.json().catch(() => ({}));
-    renderOpenRouterLimit(mountEl, getOpenRouterLimitDisplay(j));
+    display = getOpenRouterLimitDisplay(j);
+    renderOpenRouterLimit(mountEl, display);
   } catch (e) {
-    renderOpenRouterLimit(mountEl, {
-      mode: 'error',
-      message: `OpenRouter: error (${e.message})`,
-    });
+    const em = e && typeof e === 'object' && 'message' in e ? String(/** @type {{ message: unknown }} */ (e).message) : String(e);
+    const msg = `OpenRouter: error (${em})`;
+    display = { mode: 'error', message: msg };
+    renderOpenRouterLimit(mountEl, display);
   }
+  return display;
 }

@@ -1,0 +1,3 @@
+Facebook icon (`tile-facebook.svg`): Wikimedia Commons,
+https://commons.wikimedia.org/wiki/File:2023_Facebook_icon.svg
+Used for bookmark tile display.

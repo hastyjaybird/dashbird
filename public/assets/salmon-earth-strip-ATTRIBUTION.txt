@@ -1,0 +1,1 @@
+Salmon Earth-strip icon (`salmon-earth-strip.png`): user-supplied illustration (vector-style seafood / salmon graphic), copied into this repo for the dashboard Earth row.

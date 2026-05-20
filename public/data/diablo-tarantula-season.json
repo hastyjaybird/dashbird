@@ -1,0 +1,14 @@
+{
+  "referenceUrl": "https://www.ebparks.org/parks/mt_diablo",
+  "regionLabel": "Mount Diablo and nearby East Bay hills",
+  "anchorLat": 37.8817,
+  "anchorLon": -121.9141,
+  "radiusMilesDefault": 60,
+  "recurrence": {
+    "startMonth": 9,
+    "startDay": 8,
+    "endMonth": 10,
+    "endDay": 26
+  },
+  "sourceNote": "Male California ebony / brown tarantulas (Aphonopelma) wander seeking mates; peak mid-September–mid-October on Diablo. Dates are a static regional guide—check EBRPD / news for the current year."
+}

@@ -1,16 +1,30 @@
 import { createPolygonWeatherIcon } from './weather-polygon.js';
 import { createMoonPhaseGlyph } from '../lib/moon-phase.js';
-import {
-  describeWeather,
-  fetchCurrentWeather,
-  fetchAstronomyForHero,
-} from './weather-data.js';
+import { describeWeather, fetchCurrentWeather } from './weather-data.js';
+import { detailLineWithSkyHarvestLicenseHint } from '../lib/resource-license-hint.js';
+import { standaloneWarnExclamationSvgHtml } from '../lib/standalone-warn-exclamation.js';
 
-const TZ = 'America/Los_Angeles';
+const FALLBACK_TZ = 'America/Los_Angeles';
+/** Matches server OpenSky cache (src/lib/aircraft-nearby.js CACHE_MS). */
+const SKY_STRIP_POLL_MS = 90_000;
 
 const HERO_SUNSET_SRC = '/icons/weather/sunset-glyph.png';
+const YOSEMITE_MOONBOW_STRIP_SRC = '/assets/earth-moonbow-strip.png';
 
-/** Phase-accurate moon disc (SVG — no external strip asset). */
+function buildYosemiteMoonbowSkyGlyph() {
+  const wrap = document.createElement('span');
+  wrap.className = 'hero-astro-glyph hero-astro-glyph--img earth-moonbow-glyph';
+  wrap.setAttribute('aria-hidden', 'true');
+  const img = document.createElement('img');
+  img.src = YOSEMITE_MOONBOW_STRIP_SRC;
+  img.alt = '';
+  img.decoding = 'async';
+  img.loading = 'lazy';
+  wrap.appendChild(img);
+  return wrap;
+}
+
+/** Moon disc from SunCalc phase + `/assets/sky/moon/phase-*.png` icons. */
 function buildHeroMoonGlyph(date) {
   const wrap = createMoonPhaseGlyph(date);
   wrap.classList.add(
@@ -34,45 +48,113 @@ function buildHeroSunsetGlyph() {
   return wrap;
 }
 
-function formatTime12h(d) {
+function formatTime12h(d, timeZone) {
+  const tz = typeof timeZone === 'string' && timeZone.trim() !== '' ? timeZone.trim() : FALLBACK_TZ;
   return d.toLocaleTimeString('en-US', {
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,
+    timeZone: tz,
   });
 }
 
-function formatDateLong(d) {
+function formatDateLong(d, timeZone) {
+  const tz = typeof timeZone === 'string' && timeZone.trim() !== '' ? timeZone.trim() : FALLBACK_TZ;
   return d.toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'long',
     day: 'numeric',
+    timeZone: tz,
   });
 }
 
-function formatSunsetLabel(iso) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
+/** Next moon line: month + day, no weekday or year (e.g. `May 17`). */
+function formatCaptionDateNoYear(d, timeZone) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '';
+  const tz = typeof timeZone === 'string' && timeZone.trim() !== '' ? timeZone.trim() : FALLBACK_TZ;
+  return d.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: tz,
+  });
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** Next-precip line: raindrop icon + caption (empty `line` clears the node). */
+function fillHeroPrecipLine(container, line) {
+  const s = String(line ?? '').trim();
+  container.replaceChildren();
+  if (!s) return;
+  const drop = document.createElement('span');
+  drop.className = 'hero-date-precip__drop';
+  drop.setAttribute('aria-hidden', 'true');
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '13');
+  svg.setAttribute('height', '13');
+  const path = document.createElementNS(SVG_NS, 'path');
+  path.setAttribute('d', 'M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0L12 2.69z');
+  path.setAttribute('fill', 'currentColor');
+  svg.appendChild(path);
+  drop.appendChild(svg);
+  const cap = document.createElement('span');
+  cap.className = 'hero-date-precip__text';
+  cap.textContent = s;
+  container.append(drop, cap);
+}
+
+function hasFiveDigitWeatherZip(config) {
+  const z = String(config?.weatherZip ?? '')
+    .trim()
+    .replace(/\D/g, '');
+  return z.length === 5;
+}
+
+/** UV under sunset time: one small line, e.g. "UV 2 · Low" (ZIP-gated in mountHero). */
+function buildSunUvWrap(uvIndex) {
+  const n = Math.round(Number(uvIndex));
+  const lab = uvBandLabel(uvIndex);
+  const wrap = document.createElement('div');
+  wrap.className = 'hero-sun-uv-wrap';
+  wrap.textContent = lab ? `UV ${n} · ${lab}` : `UV ${n}`;
+  return wrap;
+}
+
+/** Open-Meteo / WHO-style UV index band label. */
+function uvBandLabel(uv) {
+  const x = Number(uv);
+  if (!Number.isFinite(x)) return '';
+  if (x < 3) return 'Low';
+  if (x < 6) return 'Moderate';
+  if (x < 8) return 'High';
+  if (x < 11) return 'Very high';
+  return 'Extreme';
+}
+
+function formatLaTime12h(d, timeZone) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '—';
+  const tz = typeof timeZone === 'string' && timeZone.trim() !== '' ? timeZone.trim() : FALLBACK_TZ;
   return d.toLocaleTimeString('en-US', {
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,
-    timeZone: TZ,
+    timeZone: tz,
   });
 }
 
-/** Next moonrise: local time only (no weekday). */
-function formatMoonriseLabel(iso) {
-  if (!iso) return '—';
-  const d = new Date(iso);
+/** Next moonrise: local time only (no weekday). `when` = epoch ms or ISO string. */
+function formatMoonriseLabel(when, timeZone) {
+  if (when == null) return '—';
+  const d = typeof when === 'number' ? new Date(when) : new Date(String(when));
   if (Number.isNaN(d.getTime())) return '—';
+  const tz = typeof timeZone === 'string' && timeZone.trim() !== '' ? timeZone.trim() : FALLBACK_TZ;
   const timeStr = (
     d.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
-      timeZone: TZ,
+      timeZone: tz,
     }) || ''
   ).trim();
   return timeStr || '—';
@@ -88,6 +170,32 @@ function cardinalFromDeg(fromDeg) {
   const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
   const i = Math.round(fromDeg / 45) % 8;
   return dirs[i];
+}
+
+/**
+ * EPA US AQI warning tiers for glyph color (matches Open-Meteo US AQI).
+ * @returns {{ key: string, label: string } | null} null when good — no caution icon.
+ */
+function aqiWarnBand(aqi) {
+  const n = Math.round(Number(aqi));
+  if (!Number.isFinite(n) || n <= 50) return null;
+  if (n <= 100) return { key: 'yellow', label: 'Air quality caution: moderate' };
+  if (n <= 150) return { key: 'orange', label: 'Air quality caution: unhealthy for sensitive groups' };
+  if (n <= 200) return { key: 'red', label: 'Air quality caution: unhealthy' };
+  if (n <= 300) return { key: 'purple', label: 'Air quality caution: very unhealthy' };
+  return { key: 'purple', label: 'Air quality caution: hazardous' };
+}
+
+/** Exclamation glyph after `AQI ##` matching severity (yellow → orange → red → purple). */
+function buildAqiWarnGlyph(aqi) {
+  const band = aqiWarnBand(aqi);
+  if (!band) return null;
+  const holder = document.createElement('span');
+  holder.className = `hero-city-aqi-warn hero-city-aqi-warn--${band.key}`;
+  holder.setAttribute('role', 'img');
+  holder.setAttribute('aria-label', band.label);
+  holder.innerHTML = standaloneWarnExclamationSvgHtml({ width: 12, height: 12 });
+  return holder;
 }
 
 function createWindDisplay(towardDeg, windMph, fromDeg) {
@@ -173,17 +281,66 @@ function fillCityWeather({ tempEl, iconSlot, descEl, metaEl }, w, idSuffix) {
 
   metaEl.replaceChildren();
   const toward = windTowardDeg(w.windDirectionFromDeg);
-  if (toward != null || w.windMph != null) {
+  const hasWind = toward != null || w.windMph != null;
+  if (hasWind) {
     metaEl.appendChild(createWindDisplay(toward, w.windMph, w.windDirectionFromDeg));
+  }
+  const aqi = w.usAqi != null && Number.isFinite(Number(w.usAqi)) ? Math.round(Number(w.usAqi)) : null;
+  if (aqi != null) {
+    if (hasWind) {
+      const sep = document.createElement('span');
+      sep.className = 'hero-weather-meta-sep';
+      sep.setAttribute('aria-hidden', 'true');
+      sep.textContent = ' · ';
+      metaEl.appendChild(sep);
+    }
+    const aqiWrap = document.createElement('span');
+    aqiWrap.className = 'hero-city-aqi-wrap';
+    const numEl = document.createElement('span');
+    numEl.className = 'hero-city-aqi';
+    numEl.textContent = `AQI ${aqi}`;
+    aqiWrap.appendChild(numEl);
+    const warn = buildAqiWarnGlyph(aqi);
+    if (warn) aqiWrap.appendChild(warn);
+    metaEl.appendChild(aqiWrap);
   }
 
   iconSlot.replaceChildren(createPolygonWeatherIcon(w.code, idSuffix));
 }
 
+/** Next moon phase caption under moonrise (`Full Moon: May 17` or `New Moon: Jun 15`). */
+function buildMoonFlankItem(moonGlyph, moonriseLabel, moonPhaseCaption) {
+  const item = document.createElement('div');
+  item.className = 'hero-astro-item hero-astro-item--moon-flank';
+  const g = document.createElement('div');
+  g.className = 'hero-astro-glyph-wrap';
+  g.appendChild(moonGlyph);
+  const text = document.createElement('div');
+  text.className = 'hero-astro-text';
+  const t1 = document.createElement('span');
+  t1.className = 'hero-astro-title';
+  t1.textContent = 'Moonrise';
+  const t2 = document.createElement('div');
+  t2.className = 'hero-astro-time';
+  const rise =
+    moonriseLabel != null && String(moonriseLabel).trim() !== '' ? String(moonriseLabel).trim() : '—';
+  t2.textContent = rise;
+  text.append(t1, t2);
+  if (moonPhaseCaption != null && String(moonPhaseCaption).trim() !== '') {
+    const cap = document.createElement('div');
+    cap.className = 'hero-caption-text hero-moon-next-full';
+    cap.textContent = String(moonPhaseCaption).trim();
+    text.appendChild(cap);
+  }
+  item.append(g, text);
+  return item;
+}
+
 /**
  * @param {string} [linkHref] If set (https? only), row is an external link (e.g. ISS → Spot the Station).
+ * @param {string} [captionText] Optional second line (same scale as city weather description).
  */
-function buildAstroItem(glyphEl, title, timeText, linkHref) {
+export function buildAstroItem(glyphEl, title, timeText, linkHref, captionText) {
   const href =
     typeof linkHref === 'string' && /^https?:\/\//i.test(linkHref.trim())
       ? linkHref.trim()
@@ -210,12 +367,38 @@ function buildAstroItem(glyphEl, title, timeText, linkHref) {
     t2.textContent = timeText;
     text.appendChild(t2);
   }
+  if (captionText != null && String(captionText).trim() !== '') {
+    const cap = document.createElement('div');
+    cap.className = 'hero-caption-text';
+    cap.textContent = String(captionText).trim();
+    text.appendChild(cap);
+  }
   item.append(g, text);
   return item;
 }
 
-function formatSkyEventLine(startIso, endIso, peakIso, now = new Date()) {
-  const nowMs = now.getTime();
+function formatSkyEventUntilEnd(endIso, timeZone) {
+  const tz = typeof timeZone === 'string' && timeZone.trim() !== '' ? timeZone.trim() : FALLBACK_TZ;
+  const e = endIso != null && endIso !== '' ? new Date(endIso) : null;
+  if (!e || Number.isNaN(e.getTime())) return '—';
+  const d = e.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    timeZone: tz,
+  });
+  const t = e.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: tz,
+  });
+  return `Until ${d} · ${t}`;
+}
+
+function formatSkyEventLine(startIso, endIso, peakIso, now, timeZone) {
+  const tz = typeof timeZone === 'string' && timeZone.trim() !== '' ? timeZone.trim() : FALLBACK_TZ;
+  const nowMs = (now instanceof Date ? now : new Date()).getTime();
   const s = new Date(startIso);
   if (Number.isNaN(s.getTime())) return '—';
   const sMs = s.getTime();
@@ -231,13 +414,13 @@ function formatSkyEventLine(startIso, endIso, peakIso, now = new Date()) {
       weekday: 'short',
       month: 'short',
       day: 'numeric',
-      timeZone: TZ,
+      timeZone: tz,
     });
     const t = p.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
-      timeZone: TZ,
+      timeZone: tz,
     });
     return `${d} · ${t} (peak)`;
   }
@@ -247,13 +430,13 @@ function formatSkyEventLine(startIso, endIso, peakIso, now = new Date()) {
       weekday: 'short',
       month: 'short',
       day: 'numeric',
-      timeZone: TZ,
+      timeZone: tz,
     });
     const t2 = e.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
-      timeZone: TZ,
+      timeZone: tz,
     });
     return `Until ${d2} · ${t2}`;
   }
@@ -262,37 +445,54 @@ function formatSkyEventLine(startIso, endIso, peakIso, now = new Date()) {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
-    timeZone: TZ,
+    timeZone: tz,
   });
   const t1 = s.toLocaleTimeString('en-US', {
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,
-    timeZone: TZ,
+    timeZone: tz,
   });
   if (eMs == null || eMs === sMs) return `${d1} · ${t1}`;
-  const d1c = s.toLocaleDateString('en-CA', { timeZone: TZ });
-  const d2c = e.toLocaleDateString('en-CA', { timeZone: TZ });
+  const d1c = s.toLocaleDateString('en-CA', { timeZone: tz });
+  const d2c = e.toLocaleDateString('en-CA', { timeZone: tz });
   const t2 = e.toLocaleTimeString('en-US', {
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,
-    timeZone: TZ,
+    timeZone: tz,
   });
   if (d1c === d2c) return `${d1} · ${t1} – ${t2}`;
   const d2 = e.toLocaleDateString('en-US', {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
-    timeZone: TZ,
+    timeZone: tz,
   });
   return `${d1} ${t1} → ${d2} ${t2}`;
+}
+
+const SKY_AIRCRAFT_ICON = '/assets/sky/aircraft-strip.png';
+const SKY_MEDICAL_HELICOPTER_ICON = '/assets/sky/medical-helicopter-strip.png';
+
+/**
+ * @param {object} ev
+ * @param {object} meta
+ */
+function skyEventIconSrc(ev, meta) {
+  if (ev.type === 'aircraft') {
+    if (ev.aircraftMedicalHelicopter) return SKY_MEDICAL_HELICOPTER_ICON;
+    return SKY_AIRCRAFT_ICON;
+  }
+  return meta.icon;
 }
 
 function buildSkyEventGlyph(iconSrc, eventType) {
   const wrap = document.createElement('span');
   wrap.className = 'hero-astro-glyph hero-astro-glyph--img';
   if (eventType === 'aurora') wrap.classList.add('hero-astro-glyph--aurora');
+  if (iconSrc === SKY_AIRCRAFT_ICON) wrap.classList.add('sky-aircraft-glyph');
+  if (iconSrc === SKY_MEDICAL_HELICOPTER_ICON) wrap.classList.add('sky-medical-helicopter-glyph');
   if (!iconSrc) {
     wrap.textContent = '◆';
     wrap.setAttribute('aria-hidden', 'true');
@@ -308,62 +508,193 @@ function buildSkyEventGlyph(iconSrc, eventType) {
   return wrap;
 }
 
-function fillSkyEventStrip(container) {
-  container.className = 'hero-astro-middle';
-  container.setAttribute('aria-label', 'Sky and space events in the next day');
-  fetch('/api/sky-events?windowHours=24', { cache: 'no-store' })
-    .then((r) => (r.ok ? r.json() : null))
-    .then((j) => {
-      container.replaceChildren();
-      if (!j?.ok || !Array.isArray(j.active)) return;
-      if (j.active.length === 0) {
-        const p = document.createElement('p');
-        p.className = 'hero-sky-empty';
-        p.textContent = 'No sky events in the next 24 hours.';
-        container.appendChild(p);
-        return;
-      }
-      const max = 6;
-      for (let i = 0; i < Math.min(j.active.length, max); i++) {
-        const ev = j.active[i];
-        const meta = ev.typeMeta || {};
-        const glyph = buildSkyEventGlyph(meta.icon, ev.type);
-        const shortTitle = (meta.label || '').trim() || ev.title || 'Event';
-        let line = null;
-        if (ev.type === 'supermoon') {
-          line = null;
-        } else if (typeof ev.detailLine === 'string' && ev.detailLine.trim() !== '') {
-          line = ev.detailLine.trim();
-        } else {
-          line = formatSkyEventLine(ev.startsAt, ev.endsAt, ev.peakAt, new Date());
-        }
-        const linkHref = typeof meta.forecastUrl === 'string' ? meta.forecastUrl : '';
-        const item = buildAstroItem(glyph, shortTitle, line, linkHref);
-        if (ev.source) item.title = ev.source;
-        else if (linkHref) item.title = 'Open sighting forecast (new tab)';
-        container.appendChild(item);
-      }
-    })
-    .catch(() => {
-      container.replaceChildren();
-    });
+/**
+ * @param {HTMLElement} container
+ * @param {object | null} j
+ * @param {object | null} moonJ
+ * @param {string} tz
+ */
+/**
+ * @param {object} ev
+ * @param {string} tz
+ */
+function appendSkyStripRow(container, ev, tz) {
+  const meta = ev.typeMeta || {};
+  const glyph = buildSkyEventGlyph(skyEventIconSrc(ev, meta), ev.type);
+  const shortTitle =
+    ev.type === 'aircraft'
+      ? (ev.title || meta.label || 'Aircraft nearby').trim()
+      : (meta.label || '').trim() || ev.title || 'Event';
+  let line = null;
+  if (ev.type === 'supermoon') {
+    line = null;
+  } else if (ev.type === 'meteor' || ev.type === 'comet') {
+    line = formatSkyEventUntilEnd(ev.endsAt, tz);
+  } else if (typeof ev.detailLine === 'string' && ev.detailLine.trim() !== '') {
+    line = ev.detailLine.trim();
+  } else {
+    line = formatSkyEventLine(ev.startsAt, ev.endsAt, ev.peakAt, new Date(), tz);
+  }
+  if (line != null && String(line).trim() !== '') {
+    line = detailLineWithSkyHarvestLicenseHint(line, ev);
+  }
+  const linkHref =
+    (typeof ev.forecastUrl === 'string' && ev.forecastUrl.trim()) ||
+    (typeof meta.forecastUrl === 'string' ? meta.forecastUrl : '');
+  const item = buildAstroItem(glyph, shortTitle, line, linkHref);
+  if (ev.source) item.title = ev.source;
+  else if (linkHref) item.title = 'Open sighting forecast (new tab)';
+  container.appendChild(item);
 }
 
-export function mountHero(root, config) {
+function renderSkyEventStrip(container, j, moonJ, tz) {
+  container.replaceChildren();
+  const skyActive = j?.ok && Array.isArray(j.active) ? j.active : [];
+  const aircraftRows = skyActive.filter((ev) => ev && ev.type === 'aircraft');
+  const planetRows = skyActive.filter((ev) => ev && ev.type === 'planet');
+  const otherRows = skyActive.filter(
+    (ev) => ev && ev.type !== 'aircraft' && ev.type !== 'planet',
+  );
+  const moonbows =
+    moonJ?.ok && Array.isArray(moonJ.items)
+      ? moonJ.items.filter((x) => x && String(x.earthType || '') === 'yosemite_moonbow')
+      : [];
+
+  if (aircraftRows.length === 0 && planetRows.length === 0 && otherRows.length === 0 && moonbows.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'hero-sky-empty';
+    p.textContent = 'No sky events in the next 24 hours (or 3-day ISS / satellite pass window).';
+    container.appendChild(p);
+    return;
+  }
+
+  const maxCalendarRows = moonbows.length > 0 ? 5 : 6;
+  for (let p = 0; p < planetRows.length; p++) {
+    appendSkyStripRow(container, planetRows[p], tz);
+  }
+  const otherSlots = Math.max(0, maxCalendarRows - planetRows.length);
+  for (let i = 0; i < Math.min(otherRows.length, otherSlots); i++) {
+    appendSkyStripRow(container, otherRows[i], tz);
+  }
+
+  for (let m = 0; m < moonbows.length; m++) {
+    const mb = moonbows[m];
+    const glyph = buildYosemiteMoonbowSkyGlyph();
+    const title = (mb.label || '').trim() || 'Yosemite moonbow';
+    const lineRaw =
+      typeof mb.detailLine === 'string' && mb.detailLine.trim() !== '' ? mb.detailLine.trim() : '';
+    const linkHref =
+      typeof mb.forecastUrl === 'string' && /^https?:\/\//i.test(mb.forecastUrl.trim())
+        ? mb.forecastUrl.trim()
+        : '';
+    const item = buildAstroItem(glyph, title, lineRaw || null, linkHref);
+    item.title =
+      'Yosemite moonbow: static prediction window from public/data (update yearly); opens yosemitemoonbow.com (new tab)';
+    container.appendChild(item);
+  }
+
+  for (let a = 0; a < aircraftRows.length; a++) {
+    appendSkyStripRow(container, aircraftRows[a], tz);
+  }
+}
+
+/**
+ * @param {HTMLElement} container
+ * @param {string} tz
+ * @param {object | null} moonJ Yosemite moonbow payload (fetched once per page open).
+ */
+async function refreshSkyEventStrip(container, tz, moonJ) {
+  const j = await fetch('/api/sky-events?windowHours=24', { cache: 'no-store' }).then((r) =>
+    r.ok ? r.json() : null,
+  );
+  renderSkyEventStrip(container, j, moonJ, tz);
+}
+
+function fillSkyEventStrip(container, timeZone) {
+  const tz = typeof timeZone === 'string' && timeZone.trim() !== '' ? timeZone.trim() : FALLBACK_TZ;
+  container.className = 'hero-astro-middle';
+  container.setAttribute(
+    'aria-label',
+    'Sky & space: calendar events in the next 24 hours; ISS, satellite train, and launch passes within 3 days with look direction; aircraft nearby when in range (refreshes about every 90 seconds); optional annular-eclipse row from live NASA tables when the next land annularity is within ~6 months; Yosemite moonbow when active',
+  );
+
+  if (container._skyStripPollTimer) {
+    clearInterval(container._skyStripPollTimer);
+    container._skyStripPollTimer = null;
+  }
+
+  let hasRendered = false;
+  /** @type {object | null} */
+  let moonJ = null;
+  const moonbowPromise = fetch('/api/yosemite-moonbow', { cache: 'no-store' })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {
+      moonJ = j;
+      return j;
+    })
+    .catch(() => null);
+
+  /**
+   * @param {boolean} waitForMoonbow
+   */
+  const tick = (waitForMoonbow = false) => {
+    const run = async () => {
+      if (waitForMoonbow) await moonbowPromise;
+      await refreshSkyEventStrip(container, tz, moonJ);
+    };
+    run()
+      .then(() => {
+        hasRendered = true;
+      })
+      .catch(() => {
+        if (!hasRendered) container.replaceChildren();
+      });
+  };
+
+  tick(true);
+  container._skyStripPollTimer = setInterval(() => tick(false), SKY_STRIP_POLL_MS);
+}
+
+/**
+ * @param {HTMLElement} root
+ * @param {object} config
+ * @param {{ skyStripMount?: HTMLElement | null, renderSkyStrip?: boolean }} [options]
+ *   When `renderSkyStrip` is false, sky / space rows are not shown. Otherwise `skyStripMount` targets the sidebar; if omitted, rows render inside the hero.
+ */
+export function mountHero(root, config, options = {}) {
+  const renderSkyStrip = options?.renderSkyStrip !== false;
+  const skyStripMount = options?.skyStripMount ?? null;
+  const displayTz =
+    typeof config.weatherTimeZone === 'string' && config.weatherTimeZone.trim() !== ''
+      ? config.weatherTimeZone.trim()
+      : FALLBACK_TZ;
+
   root.replaceChildren();
 
   const cluster = document.createElement('div');
   cluster.className = 'hero-cluster';
 
-  const timeCol = document.createElement('div');
-  timeCol.className = 'hero-col hero-col--time';
+  const timeRow = document.createElement('div');
+  timeRow.className = 'hero-time-row';
 
   const clockEl = document.createElement('div');
   clockEl.className = 'hero-clock';
   const dateEl = document.createElement('div');
   dateEl.className = 'hero-date';
+  const precipEl = document.createElement('div');
+  precipEl.className = 'hero-date-precip';
+  precipEl.setAttribute('aria-live', 'polite');
 
-  timeCol.append(clockEl, dateEl);
+  const timeStack = document.createElement('div');
+  timeStack.className = 'hero-time-stack';
+  timeStack.append(clockEl, dateEl, precipEl);
+
+  const sunBlock = document.createElement('div');
+  sunBlock.className = 'hero-astro-end hero-astro-end--flank hero-astro-end--sun';
+  const moonBlock = document.createElement('div');
+  moonBlock.className = 'hero-astro-end hero-astro-end--flank hero-astro-end--moon';
+
+  timeRow.append(sunBlock, timeStack, moonBlock);
 
   const citiesWrap = document.createElement('div');
   citiesWrap.className = 'hero-cities';
@@ -376,33 +707,36 @@ export function mountHero(root, config) {
 
   citiesWrap.append(oak.col, sep, sf.col);
 
-  const astro = document.createElement('div');
-  astro.className = 'hero-astro';
+  let astro = null;
+  if (renderSkyStrip) {
+    if (skyStripMount) {
+      fillSkyEventStrip(skyStripMount, displayTz);
+    } else {
+      astro = document.createElement('div');
+      astro.className = 'hero-astro';
 
-  const astroInner = document.createElement('div');
-  astroInner.className = 'hero-astro-inner';
+      const astroInner = document.createElement('div');
+      astroInner.className = 'hero-astro-inner';
 
-  const sunBlock = document.createElement('div');
-  sunBlock.className = 'hero-astro-end';
-  const middle = document.createElement('div');
-  fillSkyEventStrip(middle);
-  const moonBlock = document.createElement('div');
-  moonBlock.className = 'hero-astro-end';
+      const middle = document.createElement('div');
+      fillSkyEventStrip(middle, displayTz);
 
-  astroInner.append(sunBlock, middle, moonBlock);
-  astro.append(astroInner);
+      astroInner.append(middle);
+      astro.append(astroInner);
+    }
+  }
 
   const loading = document.createElement('p');
   loading.className = 'hero-loading';
   loading.textContent = 'Loading weather…';
 
-  cluster.append(timeCol, citiesWrap, astro, loading);
+  cluster.append(timeRow, citiesWrap, ...(astro ? [astro] : []), loading);
   root.appendChild(cluster);
 
   const tick = () => {
     const now = new Date();
-    clockEl.textContent = formatTime12h(now);
-    dateEl.textContent = formatDateLong(now);
+    clockEl.textContent = formatTime12h(now, displayTz);
+    dateEl.textContent = formatDateLong(now, displayTz);
   };
   tick();
   setInterval(tick, 1000);
@@ -412,32 +746,105 @@ export function mountHero(root, config) {
   const sfLat = config.sfWeatherLat;
   const sfLon = config.sfWeatherLon;
 
-  fetchAstronomyForHero(oakLat, oakLon)
-    .then((a) => {
-      const moonDate = a.moonrise ? new Date(a.moonrise) : new Date();
-      sunBlock.replaceChildren(
-        buildAstroItem(buildHeroSunsetGlyph(), 'Sunset', formatSunsetLabel(a.sunset)),
-      );
-      moonBlock.replaceChildren(
-        buildAstroItem(buildHeroMoonGlyph(moonDate), 'Moonrise', formatMoonriseLabel(a.moonrise)),
-      );
-    })
-    .catch(() => {
-      sunBlock.replaceChildren(
-        buildAstroItem(buildHeroSunsetGlyph(), 'Sunset', '—'),
-      );
-      moonBlock.replaceChildren(
-        buildAstroItem(buildHeroMoonGlyph(new Date()), 'Moonrise', '—'),
-      );
-    });
+  const astroQs = new URLSearchParams({
+    lat: String(oakLat),
+    lon: String(oakLon),
+  });
 
-  Promise.all([fetchCurrentWeather(oakLat, oakLon), fetchCurrentWeather(sfLat, sfLon)])
-    .then(([wOak, wSf]) => {
+  Promise.all([
+    fetch(`/api/hero-astronomy?${astroQs}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+    fetchCurrentWeather(oakLat, oakLon).catch(() => null),
+    fetchCurrentWeather(sfLat, sfLon).catch(() => null),
+    fetch('/api/rain-alert', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((d) => (d?.imminent && d?.message ? String(d.message) : '')),
+  ])
+    .then(([a, wOak, wSf, precipLine]) => {
       loading.remove();
-      fillCityWeather(oak, wOak, 'oak');
-      fillCityWeather(sf, wSf, 'sf');
+      fillHeroPrecipLine(precipEl, typeof precipLine === 'string' ? precipLine : '');
+      const refreshRain = () => {
+        fetch('/api/rain-alert', { cache: 'no-store' })
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null)
+          .then((d) => {
+            fillHeroPrecipLine(
+              precipEl,
+              d?.imminent && d?.message ? String(d.message) : '',
+            );
+          });
+      };
+      setInterval(refreshRain, 2 * 60 * 1000);
+      if (wOak) fillCityWeather(oak, wOak, 'oak');
+      if (wSf) fillCityWeather(sf, wSf, 'sf');
+
+      const zipOk = hasFiveDigitWeatherZip(config);
+
+      if (!a || a.ok === false) {
+        sunBlock.replaceChildren(
+          buildAstroItem(buildHeroSunsetGlyph(), 'Sunset', '—', '', ''),
+        );
+        moonBlock.replaceChildren(
+          buildMoonFlankItem(buildHeroMoonGlyph(new Date()), '—', ''),
+        );
+        return;
+      }
+
+      const sunsetMs = a.sunsetEpochMs;
+      const moonMs = a.moonriseEpochMs;
+      const sunsetAt =
+        typeof sunsetMs === 'number' && Number.isFinite(sunsetMs) ? new Date(sunsetMs) : null;
+      const astroTz =
+        typeof a.timeZone === 'string' && a.timeZone.trim() !== '' ? a.timeZone.trim() : displayTz;
+      const nwsLink =
+        typeof a.nwsMapClickUrl === 'string' && /^https?:\/\//i.test(a.nwsMapClickUrl.trim())
+          ? a.nwsMapClickUrl.trim()
+          : typeof config.nwsMapClickUrl === 'string' && /^https?:\/\//i.test(config.nwsMapClickUrl.trim())
+            ? config.nwsMapClickUrl.trim()
+            : '';
+      const showNextNew = a.moonCaptionShowsNextNewMoon === true;
+      const capMs = showNextNew ? a.nextNewMoonEpochMs : a.nextFullMoonEpochMs;
+      const capDate =
+        typeof capMs === 'number' && Number.isFinite(capMs) ? new Date(capMs) : null;
+      const moonCaption =
+        capDate && !Number.isNaN(capDate.getTime())
+          ? `${showNextNew ? 'New Moon:' : 'Full Moon:'} ${formatCaptionDateNoYear(capDate, astroTz)}`
+          : '';
+
+      const sunItem = buildAstroItem(
+        buildHeroSunsetGlyph(),
+        'Sunset',
+        formatLaTime12h(sunsetAt, astroTz),
+        nwsLink,
+        '',
+      );
+      const textCol = sunItem.querySelector('.hero-astro-text');
+      const timeEl = textCol?.querySelector('.hero-astro-time');
+      if (
+        timeEl &&
+        zipOk &&
+        wOak &&
+        wOak.uvIndex != null &&
+        Number.isFinite(Number(wOak.uvIndex))
+      ) {
+        timeEl.after(buildSunUvWrap(wOak.uvIndex));
+      }
+      if (nwsLink) {
+        sunItem.title = 'National Weather Service — point forecast (opens in new tab)';
+      }
+      sunBlock.replaceChildren(sunItem);
+
+      moonBlock.replaceChildren(
+        buildMoonFlankItem(
+          buildHeroMoonGlyph(new Date()),
+          formatMoonriseLabel(moonMs, astroTz),
+          moonCaption,
+        ),
+      );
     })
     .catch((e) => {
-      loading.textContent = `Weather unavailable: ${e.message}`;
+      loading.textContent = `Weather or astronomy unavailable: ${e.message}`;
     });
 }

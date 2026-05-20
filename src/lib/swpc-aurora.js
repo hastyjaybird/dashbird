@@ -6,7 +6,7 @@
  *
  * Recommended source for a simple “likelihood” band: **NOAA SWPC** (same feeds).
  * Consumer sites rarely expose a stable JSON for GPS %; we map SWPC metrics to
- * Low / Medium / High / Very high for the hero strip.
+ * Low / Med / High / Very high for the hero strip.
  *
  * Oakland (94608) is far equatorward of the typical auroral oval; Ovation values
  * are usually ~0% with only extreme storms raising them. Clouds/moon not modeled.
@@ -154,7 +154,7 @@ export function computeAuroraLikelihood(ovationPct, kp, lat) {
 
   const idx = Math.min(3, Math.max(kpT, ovT));
   const keys = ['low', 'medium', 'high', 'very_high'];
-  const labels = ['Low', 'Medium', 'High', 'Very high'];
+  const labels = ['Low', 'Med', 'High', 'Very high'];
   return { tier: idx, key: keys[idx], label: labels[idx] };
 }
 
@@ -212,11 +212,9 @@ export async function mergeAuroraWithSwpc(
   }
 
   const pct = Math.round(Math.min(100, Math.max(0, snap.ovationPct)));
-  const kpStr =
-    snap.kp >= 9 ? snap.kp.toFixed(0) : snap.kp >= 1 ? snap.kp.toFixed(1) : snap.kp.toFixed(2);
 
   const likelihood = computeAuroraLikelihood(snap.ovationPct, snap.kp, lat);
-  /** Hero strip: omit aurora unless likelihood is Medium or higher (tier ≥ 1). */
+  /** Hero strip: omit aurora unless likelihood is Med or higher (tier ≥ 1). */
   if (likelihood.tier < 1) {
     return without;
   }
@@ -228,7 +226,7 @@ export async function mergeAuroraWithSwpc(
     ? '94608 / Oakland'
     : (locationLabel.split(',')[0] || 'Oakland').trim();
 
-  const detailLine = `Likelihood: ${likelihood.label} · Kp ${kpStr} · Ovation ~${pct}%`;
+  const detailLine = `Likelihood: ${likelihood.label} · Ovation ~${pct}%`;
 
   const synthetic = {
     id: 'swpc-aurora-oakland-today',
@@ -245,4 +243,35 @@ export async function mergeAuroraWithSwpc(
   const merged = [synthetic, ...without];
   merged.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
   return merged;
+}
+
+/**
+ * Live Ovation + Kp at (lat, lon) for settings (always returned).
+ * @param {number} lat
+ * @param {number} lon
+ */
+export async function snapshotAuroraLive(lat, lon) {
+  try {
+    const snap = await fetchOvationAndKp({ lat, lon });
+    const pct = Math.round(Math.min(100, Math.max(0, snap.ovationPct)));
+    const likelihood = computeAuroraLikelihood(snap.ovationPct, snap.kp, lat);
+    const kpStr =
+      typeof snap.kp === 'number' && Number.isFinite(snap.kp)
+        ? snap.kp >= 1
+          ? snap.kp.toFixed(1)
+          : snap.kp.toFixed(2)
+        : '—';
+    return {
+      stripActive: likelihood.tier >= 1,
+      value: `Likelihood: ${likelihood.label} · Ovation ~${pct}% · Kp ${kpStr}`,
+      dataSource: `NOAA SWPC ovation_aurora_latest.json + planetary_k_index_1m.json at ${lat.toFixed(2)}°, ${lon.toFixed(2)}° (WEATHER_LAT/LON). Strip active when likelihood is Med or higher; calendar aurora rows ignored when live fetch succeeds.`,
+    };
+  } catch (err) {
+    return {
+      stripActive: false,
+      value: `Unavailable (${err?.message || err})`,
+      dataSource:
+        'NOAA SWPC Ovation + planetary K (fetch failed); calendar aurora rows may apply if present.',
+    };
+  }
 }
