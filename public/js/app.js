@@ -13,6 +13,7 @@ import { mountSettingsPage } from './panels/settings-page.js';
 import { mountToolLibrary } from './panels/tool-library.js';
 import { mountEarthStrip } from './panels/earth-events.js';
 import { mountTodayTodo } from './panels/today-todo.js';
+import { initSkySidebarPlacement } from './layout-mobile.js';
 
 async function loadConfig() {
   const r = await fetch('/api/config');
@@ -118,6 +119,7 @@ async function main() {
   if (healthAside) mountHealthSidebar(healthAside);
 
   mountChat(document.getElementById('mount-chat'), config);
+  initSkySidebarPlacement();
 }
 
 main().catch((e) => {

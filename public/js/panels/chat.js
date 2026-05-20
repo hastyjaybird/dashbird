@@ -84,6 +84,7 @@ function normalizeStreamDeltaContent(raw) {
 }
 
 const CHAT_WIDTH_LS = 'dashbird-chat-width-px';
+const CHAT_COLLAPSED_LS = 'dashbird-chat-collapsed';
 const CHAT_WIDTH_MIN = 260;
 const CHAT_WIDTH_DEFAULT = 680;
 /** Room for sky + health sidebars and a usable main column. */
@@ -174,6 +175,53 @@ export function mountChat(root, config) {
       }
       syncResizerVisibility();
       mq.addEventListener('change', syncResizerVisibility);
+
+      const mobileMq = window.matchMedia('(max-width: 900px)');
+      const collapseToggle = chatAside.querySelector('.chat-sidebar__toggle');
+      const chatMount = chatAside.querySelector('.chat-sidebar__mount');
+
+      function loadChatCollapsed() {
+        const stored = localStorage.getItem(CHAT_COLLAPSED_LS);
+        if (stored === '0') return false;
+        if (stored === '1') return true;
+        return true;
+      }
+
+      function setChatCollapsed(collapsed) {
+        chatAside.classList.toggle('chat-sidebar--collapsed', collapsed);
+        if (collapseToggle) {
+          collapseToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+          collapseToggle.setAttribute(
+            'aria-label',
+            collapsed ? 'Expand OpenRouter chat' : 'Collapse OpenRouter chat',
+          );
+        }
+        if (chatMount) chatMount.setAttribute('aria-hidden', collapsed ? 'true' : 'false');
+        if (mobileMq.matches) {
+          localStorage.setItem(CHAT_COLLAPSED_LS, collapsed ? '1' : '0');
+        }
+      }
+
+      function syncChatCollapseUi() {
+        const onMobile = mobileMq.matches;
+        if (collapseToggle) {
+          collapseToggle.hidden = !onMobile;
+          collapseToggle.setAttribute('aria-hidden', onMobile ? 'false' : 'true');
+        }
+        if (!onMobile) {
+          chatAside.classList.remove('chat-sidebar--collapsed');
+          if (chatMount) chatMount.removeAttribute('aria-hidden');
+          if (collapseToggle) collapseToggle.setAttribute('aria-expanded', 'true');
+          return;
+        }
+        setChatCollapsed(loadChatCollapsed());
+      }
+
+      syncChatCollapseUi();
+      mobileMq.addEventListener('change', syncChatCollapseUi);
+      collapseToggle?.addEventListener('click', () => {
+        setChatCollapsed(!chatAside.classList.contains('chat-sidebar--collapsed'));
+      });
 
       let dragStartX = 0;
       let dragStartW = 0;

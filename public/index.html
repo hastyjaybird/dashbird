@@ -33,7 +33,16 @@
     <div class="layout-body">
       <aside class="chat-sidebar" aria-labelledby="h-openrouter-chat">
         <div class="chat-sidebar__inner panel panel--glass">
-          <h2 id="h-openrouter-chat" class="chat-sidebar__heading">OpenRouter Chat</h2>
+          <div class="chat-sidebar__header">
+            <h2 id="h-openrouter-chat" class="chat-sidebar__heading">OpenRouter Chat</h2>
+            <button
+              type="button"
+              class="chat-sidebar__toggle"
+              aria-expanded="false"
+              aria-controls="mount-chat"
+              aria-label="Expand OpenRouter chat"
+            ></button>
+          </div>
           <div id="mount-chat" class="chat-sidebar__mount"></div>
         </div>
       </aside>
@@ -177,6 +186,7 @@
                 title="Right-click a card to search for alternatives"
               ></div>
             </section>
+            <div id="sky-sidebar-mobile-host" class="sky-sidebar-mobile-host" hidden></div>
           </div>
         </main>
       </div>
