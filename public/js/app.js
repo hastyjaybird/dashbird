@@ -1,23 +1,82 @@
-import { mountCalendar } from './panels/calendar.js';
-import { mountBookmarkGrid } from './panels/bookmarks.js';
-import { mountChat } from './panels/chat.js';
-import { mountHero } from './panels/hero.js';
-import { mountHealthSidebar } from './panels/health-sidebar.js';
-import { mountCalendarUpcoming } from './panels/calendar-upcoming.js';
-import { mountMarketWatch } from './panels/market-watch.js';
-import { mountWeatherRadar } from './panels/weather-radar.js';
-import { mountGeoelectricField } from './panels/geoelectric-field.js';
-import { mountMagnetosphere } from './panels/magnetosphere.js';
 import { mountPageTabs } from './panels/page-tabs.js';
-import { mountSettingsPage } from './panels/settings-page.js';
-import { mountToolLibrary } from './panels/tool-library.js';
-import { mountEarthStrip } from './panels/earth-events.js';
-import { mountTodayTodo } from './panels/today-todo.js';
+
+const CONFIG_CACHE_KEY = 'dashbird-config-v2';
+const CONFIG_CACHE_MAX_MS = 6 * 60 * 60 * 1000;
+const CALENDAR_CACHE_KEY = 'dashbird-cal-upcoming-v1';
+
+function readTimedCache(key, maxAgeMs) {
+  try {
+    const raw = localStorage.getItem(key) || sessionStorage.getItem(key);
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    if (!cached?.at || !cached.payload) return null;
+    if (Date.now() - cached.at > maxAgeMs) return null;
+    return cached.payload;
+  } catch {
+    return null;
+  }
+}
+
+function writeTimedCache(key, payload) {
+  try {
+    localStorage.setItem(key, JSON.stringify({ at: Date.now(), payload }));
+  } catch {
+    try {
+      sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), payload }));
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function loadCachedConfig() {
+  return readTimedCache(CONFIG_CACHE_KEY, CONFIG_CACHE_MAX_MS);
+}
 
 async function loadConfig() {
   const r = await fetch('/api/config');
   if (!r.ok) throw new Error('config failed');
-  return r.json();
+  const config = await r.json();
+  writeTimedCache(CONFIG_CACHE_KEY, config);
+  return config;
+}
+
+function preloadCalendarUpcoming() {
+  return fetch('/api/calendar/upcoming', { cache: 'no-store' })
+    .then((r) => r.json())
+    .catch(() => null);
+}
+
+function readCalendarUpcomingCache() {
+  try {
+    const raw = sessionStorage.getItem(CALENDAR_CACHE_KEY);
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    if (!cached?.at || !Array.isArray(cached.events)) return null;
+    return {
+      ok: true,
+      events: cached.events,
+      timeZone: cached.timeZone,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function onIdle(fn, timeout = 1200) {
+  if ('requestIdleCallback' in window) {
+    window.requestIdleCallback(fn, { timeout });
+    return;
+  }
+  window.setTimeout(fn, 0);
+}
+
+function runSoon(fn) {
+  window.setTimeout(fn, 0);
+}
+
+function reportPanelError(name, error) {
+  console.warn(`dashbird: failed to mount ${name}`, error);
 }
 
 /**
@@ -50,6 +109,7 @@ function mountTopbarContext(el, config) {
 }
 
 let settingsLoaded = false;
+let settingsLoading = false;
 
 function showPage(page) {
   const main = document.getElementById('page-main');
@@ -57,67 +117,157 @@ function showPage(page) {
   const isSettings = page === 'settings';
   if (main) main.hidden = isSettings;
   if (settings) settings.hidden = !isSettings;
-  if (isSettings && !settingsLoaded) {
-    settingsLoaded = true;
-    mountSettingsPage(document.getElementById('mount-settings'));
+  if (isSettings && !settingsLoaded && !settingsLoading) {
+    settingsLoading = true;
+    import('./panels/settings-page.js')
+      .then(({ mountSettingsPage }) => {
+        settingsLoaded = true;
+        mountSettingsPage(document.getElementById('mount-settings'));
+      })
+      .catch((error) => {
+        reportPanelError('settings', error);
+        const root = document.getElementById('mount-settings');
+        if (root) root.innerHTML = '<p class="err">Failed to load settings.</p>';
+      })
+      .finally(() => {
+        settingsLoading = false;
+      });
   }
 }
 
 async function main() {
   mountPageTabs(document.getElementById('mount-page-tabs'), { onChange: showPage });
 
-  const calendarUpcomingPromise = fetch('/api/calendar/upcoming', { cache: 'no-store' })
-    .then((r) => r.json())
-    .catch(() => null);
+  const cachedConfig = loadCachedConfig();
+  if (cachedConfig) mountTopbarContext(document.getElementById('mount-topbar-context'), cachedConfig);
 
-  const config = await loadConfig();
+  const configPromise = loadConfig();
+  configPromise
+    .then((freshConfig) => mountTopbarContext(document.getElementById('mount-topbar-context'), freshConfig))
+    .catch((error) => {
+      if (cachedConfig) reportPanelError('fresh config', error);
+    });
 
-  mountTopbarContext(document.getElementById('mount-topbar-context'), config);
+  const calendarUpcomingPromise = preloadCalendarUpcoming();
+  const config = cachedConfig || (await configPromise);
 
-  const skyStripMount = document.getElementById('mount-sky-strip');
-  mountHero(document.getElementById('mount-hero'), config, {
-    renderSkyStrip: true,
-    skyStripMount,
+  const heroPromise = import('./panels/hero.js')
+    .then(({ mountHero }) => {
+      mountHero(document.getElementById('mount-hero'), config, {
+        renderSkyStrip: true,
+        skyStripMount: document.getElementById('mount-sky-strip'),
+      });
+    })
+    .catch((error) => reportPanelError('hero', error));
+
+  const calendarUpcomingMount = document.getElementById('mount-cal-upcoming');
+  const cachedCalendar = readCalendarUpcomingCache();
+  import('./panels/calendar-upcoming.js')
+    .then(async ({ mountCalendarUpcoming }) => {
+      if (!calendarUpcomingMount) return;
+      mountCalendarUpcoming(calendarUpcomingMount, config, {
+        prefetched: cachedCalendar || (await calendarUpcomingPromise),
+      });
+    })
+    .catch((error) => reportPanelError('calendar upcoming', error));
+
+  await heroPromise;
+
+  runSoon(() => {
+    import('./panels/bookmarks.js')
+      .then(({ mountBookmarkGrid }) =>
+        Promise.all([
+          mountBookmarkGrid(
+            document.getElementById('mount-bookmarks-personal'),
+            '/data/bookmarks-personal.json',
+            'Add tiles in public/data/bookmarks-personal.json (up to 9).',
+          ),
+          mountBookmarkGrid(
+            document.getElementById('mount-bookmarks-work'),
+            '/data/bookmarks-work.json',
+            'Add tiles in public/data/bookmarks-work.json.',
+          ),
+        ]),
+      )
+      .catch((error) => reportPanelError('bookmarks', error));
   });
-  mountEarthStrip(document.getElementById('mount-earth-strip'));
 
-  mountWeatherRadar(
-    document.getElementById('weather-radar-card'),
-    document.getElementById('mount-weather-radar'),
-  );
-  mountGeoelectricField(
-    document.getElementById('geoelectric-field-card'),
-    document.getElementById('mount-geoelectric-field'),
-  );
-  mountMagnetosphere(
-    document.getElementById('magnetosphere-card'),
-    document.getElementById('mount-magnetosphere'),
-  );
-  mountMarketWatch(document.getElementById('mount-market-watch'));
-  mountTodayTodo(document.getElementById('mount-today-todo'));
+  runSoon(() => {
+    import('./panels/today-todo.js')
+      .then(({ mountTodayTodo }) => mountTodayTodo(document.getElementById('mount-today-todo')))
+      .catch((error) => reportPanelError('today todo', error));
+  });
 
-  const calUpcomingMount = document.getElementById('mount-cal-upcoming');
-  const prefetchedCalendar = await calendarUpcomingPromise;
-  if (calUpcomingMount) mountCalendarUpcoming(calUpcomingMount, config, { prefetched: prefetchedCalendar });
+  runSoon(() => {
+    import('./panels/earth-events.js')
+      .then(({ mountEarthStrip }) => mountEarthStrip(document.getElementById('mount-earth-strip')))
+      .catch((error) => reportPanelError('earth strip', error));
+  });
 
-  await mountBookmarkGrid(
-    document.getElementById('mount-bookmarks-personal'),
-    '/data/bookmarks-personal.json',
-    'Add tiles in public/data/bookmarks-personal.json (up to 9).',
-  );
-  await mountBookmarkGrid(
-    document.getElementById('mount-bookmarks-work'),
-    '/data/bookmarks-work.json',
-    'Add tiles in public/data/bookmarks-work.json.',
-  );
+  runSoon(() => {
+    import('./panels/market-watch.js')
+      .then(({ mountMarketWatch }) => mountMarketWatch(document.getElementById('mount-market-watch')))
+      .catch((error) => reportPanelError('market watch', error));
+  });
 
-  mountCalendar(document.getElementById('mount-calendar'), config);
-  mountToolLibrary(document.getElementById('mount-tool-library'));
+  onIdle(() => {
+    import('./panels/chat.js')
+      .then(({ mountChat }) => mountChat(document.getElementById('mount-chat'), config))
+      .catch((error) => reportPanelError('chat', error));
+  }, 900);
 
-  const healthAside = document.getElementById('mount-health-sidebar');
-  if (healthAside) mountHealthSidebar(healthAside);
+  onIdle(() => {
+    import('./panels/weather-radar.js')
+      .then(({ mountWeatherRadar }) =>
+        mountWeatherRadar(
+          document.getElementById('weather-radar-card'),
+          document.getElementById('mount-weather-radar'),
+        ),
+      )
+      .catch((error) => reportPanelError('weather radar', error));
+  }, 1200);
 
-  mountChat(document.getElementById('mount-chat'), config);
+  onIdle(() => {
+    import('./panels/geoelectric-field.js')
+      .then(({ mountGeoelectricField }) =>
+        mountGeoelectricField(
+          document.getElementById('geoelectric-field-card'),
+          document.getElementById('mount-geoelectric-field'),
+        ),
+      )
+      .catch((error) => reportPanelError('geoelectric field', error));
+  }, 1400);
+
+  onIdle(() => {
+    import('./panels/magnetosphere.js')
+      .then(({ mountMagnetosphere }) =>
+        mountMagnetosphere(
+          document.getElementById('magnetosphere-card'),
+          document.getElementById('mount-magnetosphere'),
+        ),
+      )
+      .catch((error) => reportPanelError('magnetosphere', error));
+  }, 1600);
+
+  onIdle(() => {
+    import('./panels/calendar.js')
+      .then(({ mountCalendar }) => mountCalendar(document.getElementById('mount-calendar'), config))
+      .catch((error) => reportPanelError('calendar', error));
+  }, 1800);
+
+  onIdle(() => {
+    import('./panels/tool-library.js')
+      .then(({ mountToolLibrary }) => mountToolLibrary(document.getElementById('mount-tool-library')))
+      .catch((error) => reportPanelError('tool library', error));
+  }, 2200);
+
+  onIdle(() => {
+    const healthAside = document.getElementById('mount-health-sidebar');
+    if (!healthAside) return;
+    import('./panels/health-sidebar.js')
+      .then(({ mountHealthSidebar }) => mountHealthSidebar(healthAside))
+      .catch((error) => reportPanelError('health sidebar', error));
+  }, 2500);
 }
 
 main().catch((e) => {

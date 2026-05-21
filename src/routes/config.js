@@ -14,6 +14,11 @@ const router = Router();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
+const CONFIG_CACHE_MS = 5 * 60 * 1000;
+
+let cachedConfig = null;
+let cachedConfigAt = 0;
+let configInFlight = null;
 
 async function readLastBackupFromFile() {
   try {
@@ -29,7 +34,7 @@ async function readLastBackupFromFile() {
   }
 }
 
-router.get('/', async (req, res) => {
+async function buildConfigPayload() {
   const { lat, lon, zip: weatherZip } = await resolveDashboardWeatherLatLon();
   const sfLat = parseFloat(process.env.SF_WEATHER_LAT ?? '37.7749');
   const sfLon = parseFloat(process.env.SF_WEATHER_LON ?? '-122.4194');
@@ -58,7 +63,7 @@ router.get('/', async (req, res) => {
   const calendarIcalUrl = resolveGoogleCalendarIcalUrl();
   const calendarWeekUrl = calendarEmbedUrl ? calendarWeekUrlFromEmbed(calendarEmbedUrl) : '';
 
-  res.json({
+  return {
     calendarEmbedUrl,
     calendarEmbedMisconfigured,
     calendarIcalConfigured: calendarIcalUrl.length > 0,
@@ -73,7 +78,46 @@ router.get('/', async (req, res) => {
     locationLabel: process.env.DASHBOARD_LOCATION_LABEL || 'Oakland, CA · 94608',
     openrouterModel: process.env.OPENROUTER_MODEL || 'openrouter/auto',
     lastBackupAt,
-  });
+  };
+}
+
+async function getConfigPayload() {
+  const now = Date.now();
+  if (cachedConfig && now - cachedConfigAt < CONFIG_CACHE_MS) {
+    return { payload: cachedConfig, cache: 'hit' };
+  }
+
+  const hadCache = Boolean(cachedConfig);
+  if (!configInFlight) {
+    configInFlight = buildConfigPayload()
+      .then((payload) => {
+        cachedConfig = payload;
+        cachedConfigAt = Date.now();
+        return payload;
+      })
+      .finally(() => {
+        configInFlight = null;
+      });
+  }
+
+  const payload = await configInFlight;
+  return { payload, cache: hadCache ? 'refresh' : 'miss' };
+}
+
+router.get('/', async (req, res, next) => {
+  res.setHeader('Cache-Control', 'private, max-age=60, stale-while-revalidate=300');
+  try {
+    const { payload, cache } = await getConfigPayload();
+    res.setHeader('X-Dashbird-Config-Cache', cache);
+    res.json(payload);
+  } catch (err) {
+    if (cachedConfig) {
+      res.setHeader('X-Dashbird-Config-Cache', 'stale-if-error');
+      res.json(cachedConfig);
+      return;
+    }
+    next(err);
+  }
 });
 
 export default router;
