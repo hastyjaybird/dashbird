@@ -2723,6 +2723,107 @@ body.dashy--page-settings .page-view--main {
   padding: 0.85rem 1rem;
 }
 
+.loading-note,
+.chat-placeholder {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.loading-note--compact {
+  font-size: 0.68rem;
+}
+
+.hero-placeholder {
+  display: flex;
+  min-height: 9.5rem;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  text-align: center;
+}
+
+.hero-placeholder__time {
+  font-size: clamp(2.25rem, 6vw, 3.4rem);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+  color: var(--text);
+}
+
+.hero-placeholder__date,
+.hero-placeholder__cities {
+  color: var(--muted);
+}
+
+.hero-placeholder__cities {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.35rem 1rem;
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.bookmark-placeholder-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.bookmark-placeholder-grid span,
+.health-placeholder span {
+  display: block;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.08),
+    rgba(255, 255, 255, 0.16),
+    rgba(255, 255, 255, 0.08)
+  );
+  background-size: 220% 100%;
+  animation: dashbird-placeholder-shimmer 1.3s ease-in-out infinite;
+}
+
+.bookmark-placeholder-grid span {
+  height: 2.2rem;
+}
+
+.health-placeholder {
+  display: flex;
+  min-height: 8rem;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.55rem 0.45rem;
+}
+
+.health-placeholder span {
+  width: 2.25rem;
+  height: 2.25rem;
+  margin: 0 auto;
+}
+
+@keyframes dashbird-placeholder-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -120% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bookmark-placeholder-grid span,
+  .health-placeholder span {
+    animation: none;
+  }
+}
+
 .panel__body--hero {
   padding: 1.25rem 1.5rem 1.4rem;
 }

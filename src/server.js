@@ -53,17 +53,61 @@ const leafletDir = path.join(root, 'node_modules', 'leaflet', 'dist');
 const app = express();
 const port = Number(process.env.PORT) || 3000;
 
+function setPublicCacheHeaders(res, filePath) {
+  const rel = path.relative(publicDir, filePath).replace(/\\/g, '/');
+  const ext = path.extname(filePath).toLowerCase();
+
+  if (rel === 'index.html' || ext === '.html') {
+    res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+    return;
+  }
+
+  if (rel.startsWith('data/')) {
+    res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+    return;
+  }
+
+  if (ext === '.js' || ext === '.css') {
+    res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=86400');
+    return;
+  }
+
+  if (
+    [
+      '.avif',
+      '.gif',
+      '.ico',
+      '.jpg',
+      '.jpeg',
+      '.png',
+      '.svg',
+      '.webp',
+      '.woff',
+      '.woff2',
+    ].includes(ext)
+  ) {
+    res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
+    return;
+  }
+
+  res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+}
+
 app.use(
   express.static(publicDir, {
     extensions: ['html'],
-    /** Revalidate on reload so icon/calendar/asset edits show up without fighting the disk cache. */
-    setHeaders(res) {
-      res.setHeader('Cache-Control', 'no-cache, must-revalidate');
-    },
+    setHeaders: setPublicCacheHeaders,
   }),
 );
 app.use('/docs', express.static(docsDir));
-app.use('/vendor/leaflet', express.static(leafletDir));
+app.use(
+  '/vendor/leaflet',
+  express.static(leafletDir, {
+    setHeaders(res) {
+      res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
+    },
+  }),
+);
 
 app.use('/api/config', configRouter);
 app.use('/api/chat', chatRouter);

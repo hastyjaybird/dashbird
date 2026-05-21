@@ -4,9 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>dashbird</title>
+    <link rel="preload" href="/assets/dashboard-bg.jpg" as="image" fetchpriority="high" />
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="modulepreload" href="/js/app.js" />
     <link rel="modulepreload" href="/js/web-search-boot.js" />
     <link rel="modulepreload" href="/js/panels/web-search.js" />
+    <link rel="modulepreload" href="/js/panels/hero.js" />
+    <link rel="modulepreload" href="/js/panels/calendar-upcoming.js" />
     <link rel="preload" href="/assets/search-brave.png" as="image" />
     <link rel="preload" href="/assets/search-duckduckgo.png" as="image" />
   </head>
@@ -34,7 +38,9 @@
       <aside class="chat-sidebar" aria-labelledby="h-openrouter-chat">
         <div class="chat-sidebar__inner panel panel--glass">
           <h2 id="h-openrouter-chat" class="chat-sidebar__heading">OpenRouter Chat</h2>
-          <div id="mount-chat" class="chat-sidebar__mount"></div>
+          <div id="mount-chat" class="chat-sidebar__mount">
+            <div class="chat-placeholder" role="status">Loading chat...</div>
+          </div>
         </div>
       </aside>
 
@@ -131,7 +137,16 @@
               class="panel panel--glass panel--hero"
               aria-label="Time, location, and weather"
             >
-              <div id="mount-hero" class="panel__body panel__body--hero"></div>
+              <div id="mount-hero" class="panel__body panel__body--hero">
+                <div class="hero-placeholder" role="status" aria-label="Loading time and weather">
+                  <div class="hero-placeholder__time">--:--</div>
+                  <div class="hero-placeholder__date">Loading dashboard...</div>
+                  <div class="hero-placeholder__cities">
+                    <span>Oakland</span>
+                    <span>San Francisco</span>
+                  </div>
+                </div>
+              </div>
             </section>
           </div>
 
@@ -140,7 +155,15 @@
               class="panel panel--glass panel--cal-upcoming"
               aria-label="Next calendar event"
             >
-              <div id="mount-cal-upcoming" class="panel__body panel__body--cal-upcoming"></div>
+              <div id="mount-cal-upcoming" class="panel__body panel__body--cal-upcoming">
+                <div class="cal-upcoming cal-upcoming--placeholder" role="status">
+                  <div class="cal-upcoming__main">
+                    <span class="cal-upcoming__label">Next on calendar</span>
+                    <div class="cal-upcoming__title">Loading...</div>
+                    <div class="cal-upcoming__when">Checking calendar feed</div>
+                  </div>
+                </div>
+              </div>
             </section>
           </div>
 
@@ -152,11 +175,19 @@
                   <div class="bookmarks-mega__columns">
                     <div class="bookmarks-mega__col">
                       <h3 id="h-personal" class="bookmarks-mega__col-title">Personal</h3>
-                      <div id="mount-bookmarks-personal" class="panel__body panel__body--bookmarks"></div>
+                      <div id="mount-bookmarks-personal" class="panel__body panel__body--bookmarks">
+                        <div class="bookmark-placeholder-grid" aria-hidden="true">
+                          <span></span><span></span><span></span>
+                        </div>
+                      </div>
                     </div>
                     <div class="bookmarks-mega__col">
                       <h3 id="h-admin" class="bookmarks-mega__col-title">Admin</h3>
-                      <div id="mount-bookmarks-work" class="panel__body panel__body--bookmarks"></div>
+                      <div id="mount-bookmarks-work" class="panel__body panel__body--bookmarks">
+                        <div class="bookmark-placeholder-grid" aria-hidden="true">
+                          <span></span><span></span><span></span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -167,7 +198,9 @@
           <div class="row row--stack">
             <section class="panel panel--glass panel--calendar" aria-labelledby="h-calendar">
               <h2 id="h-calendar">Calendar</h2>
-              <div id="mount-calendar" class="panel__body panel__body--calendar"></div>
+              <div id="mount-calendar" class="panel__body panel__body--calendar">
+                <p class="loading-note">Loading calendar...</p>
+              </div>
             </section>
             <section class="panel panel--glass panel--tool-library" aria-labelledby="h-tool-library">
               <h2 id="h-tool-library">Tool Library</h2>
@@ -175,7 +208,9 @@
                 id="mount-tool-library"
                 class="panel__body panel__body--tool-library"
                 title="Right-click a card to search for alternatives"
-              ></div>
+              >
+                <p class="loading-note">Loading tools...</p>
+              </div>
             </section>
           </div>
         </main>
@@ -193,7 +228,9 @@
               class="sky-sidebar__card-body sky-sidebar__card-body--todo"
               role="region"
               aria-labelledby="h-today-todo"
-            ></div>
+            >
+              <p class="loading-note loading-note--compact">Loading...</p>
+            </div>
           </section>
           <section
             class="sky-sidebar__card sky-sidebar__card--sky panel panel--glass"
@@ -205,7 +242,9 @@
               class="sky-sidebar__card-body sky-sidebar__card-body--sky"
               role="region"
               aria-labelledby="h-sky-sidebar"
-            ></div>
+            >
+              <p class="loading-note loading-note--compact">Checking sky events...</p>
+            </div>
           </section>
           <section
             id="earth-sidebar-card"
@@ -274,7 +313,9 @@
               class="sky-sidebar__card-body sky-sidebar__card-body--market"
               role="region"
               aria-labelledby="h-market-sidebar"
-            ></div>
+            >
+              <p class="loading-note loading-note--compact">Loading market...</p>
+            </div>
           </section>
         </div>
       </aside>
@@ -283,7 +324,11 @@
         id="mount-health-sidebar"
         class="health-sidebar"
         aria-label="System health"
-      ></aside>
+      >
+        <div class="health-placeholder panel panel--glass" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+      </aside>
     </div>
     </div>
     <script type="module" src="/js/web-search-boot.js"></script>
