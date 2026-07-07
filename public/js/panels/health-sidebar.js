@@ -5,6 +5,8 @@ import {
 import { beginWaitCursor, endWaitCursor } from '../lib/wait-cursor.js';
 import { attachDashbirdHoverTip } from '../lib/dashbird-hover-tip.js';
 import { standaloneWarnExclamationSvgHtml } from '../lib/standalone-warn-exclamation.js';
+import { setVisibleInterval } from '../lib/page-visibility.js';
+import { debugLog } from '../lib/debugLog.js';
 
 const LS_KEY = 'dashbirdHealthCollapsed';
 
@@ -18,8 +20,6 @@ const ICON_OK_CHECK =
 const ICON_OPENROUTER = `<svg class="health-metric__icon" viewBox="0 0 24 24" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="6.75" width="13" height="11" rx="3.5" fill="none"/><circle cx="9.45" cy="12.2" r="1.4" fill="currentColor" stroke="none"/><circle cx="14.55" cy="12.2" r="1.4" fill="currentColor" stroke="none"/><path d="M8.35 6.75L6.85 3.85M15.65 6.75L17.15 3.85"/></svg>`;
 
 const ICON_NET = `<svg class="health-metric__icon" viewBox="0 0 24 24" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="M 4.8 13.2 A 7.2 7.2 0 0 0 19.2 13.2" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" opacity="0.88"/><path d="M 12 13 L 16.2 7.8" stroke="currentColor" stroke-width="1.85" stroke-linecap="round"/><circle cx="12" cy="13" r="1.35" fill="currentColor"/></svg>`;
-
-const ICON_THERM = `<svg class="health-metric__icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M15 13V5c0-1.66-1.34-3-3-3S9 3.34 9 5v8c-1.21.91-2 2.37-2 4 0 2.76 2.24 5 5 5s5-2.24 5-5c0-1.63-.79-3.09-2-4zm-4-8c0-.55.45-1 1-1s1 .45 1 1h-1v1h1v2h-1v1h1v2h-2V5z"/></svg>`;
 
 const ICON_RAM = `<svg class="health-metric__icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M17 3H7c-1.1 0-2 .9-2 2v14l4-2 4 2 4-2 4 2V5c0-1.1-.9-2-2-2zm0 12.97l-2-1.15-2 1.15V5h4v10.97z"/></svg>`;
 
@@ -391,7 +391,6 @@ export function mountHealthSidebar(aside) {
 
   const ringOr = document.createElement('div');
   const ringNet = document.createElement('div');
-  const ringTemp = document.createElement('div');
   const ringRam = document.createElement('div');
 
   const netRingState = {
@@ -411,12 +410,11 @@ export function mountHealthSidebar(aside) {
 
   const rowOr = metricRow(ICON_OPENROUTER, ringOr);
   const networkRowEl = buildNetworkRow(ringNet);
-  const rowTemp = metricRow(ICON_THERM, ringTemp);
   const rowRam = metricRow(ICON_RAM, ringRam);
   const backupParts = buildBackupRow();
   const backupRowEl = backupParts.row;
 
-  metrics.append(rowOr, networkRowEl, rowTemp, rowRam, backupRowEl);
+  metrics.append(rowOr, networkRowEl, rowRam, backupRowEl);
 
   const checkFooter = document.createElement('div');
   checkFooter.className = 'health-sidebar__check-footer';
@@ -620,24 +618,6 @@ export function mountHealthSidebar(aside) {
       pingBad ? `Latency probe failed.\n\n${pingTitleParts.join('\n')}` : '',
     );
 
-    const tC = j.temperatureC;
-    const tSrc = j.temperatureSource === 'gpu' ? 'GPU' : j.temperatureSource === 'cpu' ? 'CPU' : '';
-    const tips = Array.isArray(j.diagnostics?.tips) ? j.diagnostics.tips : [];
-    const tTitleParts = [];
-    if (tC != null) {
-      tTitleParts.push(`Reading: ${Number(tC).toFixed(0)}°C (${tSrc || 'sensor'}).`);
-    } else {
-      tTitleParts.push('No temperature reading.');
-      if (tips.length) tTitleParts.push(...tips);
-    }
-    const tCenter =
-      tC != null && Number.isFinite(Number(tC)) ? `${Math.round(Number(tC))}°` : '—';
-    renderRing(ringTemp, j.temperaturePercent, tCenter);
-    setRowTip(rowTemp, 'Temperature', tTitleParts.join('\n'));
-
-    /** No “!” pill when readings are missing — empty ring + “—” is enough. */
-    syncSidebarWarnBadge(rowTemp, false);
-
     const mem = j.memory;
     if (mem) {
       const avail = mem.memAvailableKiB;
@@ -663,9 +643,17 @@ export function mountHealthSidebar(aside) {
 
   paintNetRingFromState();
   refresh();
-  setInterval(() => {
+  setVisibleInterval(() => {
     netRingState.phaseUpload = !netRingState.phaseUpload;
     paintNetRingFromState();
   }, 10_000);
-  setInterval(refresh, 4000);
+  setVisibleInterval(refresh, 12_000);
+  // #region agent log
+  debugLog({
+    location: 'health-sidebar.js:mount',
+    message: 'Health sidebar polling (12s, pauses when tab hidden)',
+    hypothesisId: 'H5',
+    data: { refreshMs: 12000 },
+  });
+  // #endregion
 }

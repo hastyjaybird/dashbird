@@ -1,0 +1,46 @@
+# Production stack for Hetzner Cloud (or any VPS with a public domain).
+# Usage: docker compose -f docker-compose.hetzner.yml up -d --build
+#
+# Requires .env with at least DASHBOARD_DOMAIN, CADDY_EMAIL, OPENROUTER_API_KEY.
+# See deploy/env.hetzner.example and docs/deploy-hetzner.md.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}
+      CADDY_EMAIL: ${CADDY_EMAIL:?Set CADDY_EMAIL in .env}
+      DASHBOARD_BASIC_AUTH_USER: ${DASHBOARD_BASIC_AUTH_USER:-}
+      DASHBOARD_BASIC_AUTH_HASH: ${DASHBOARD_BASIC_AUTH_HASH:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      dashboard:
+        condition: service_started
+
+  dashboard:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    expose:
+      - '3000'
+    environment:
+      PORT: '3000'
+      NODE_ENV: production
+    volumes:
+      - ./public:/app/public
+      - ./src:/app/src
+      - dashbird_data:/app/data
+
+volumes:
+  caddy_data:
+  caddy_config:
+  dashbird_data:
