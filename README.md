@@ -43,10 +43,6 @@ Optional: set **`DASHBOARD_LAN_ORIGIN`** in `.env` to override the auto-detected
 
 **Security:** anyone on your LAN who knows the IP can use the dashboard (including chat if OpenRouter is configured). This is intentional for trusted home Wi‑Fi only — do not port-forward to the public internet without authentication.
 
-### Hetzner Cloud (VPS)
-
-To run on a public server with HTTPS, see **[docs/deploy-hetzner.md](docs/deploy-hetzner.md)**. Use `docker compose -f docker-compose.hetzner.yml up -d --build` with a domain, Caddy TLS, and HTTP basic auth.
-
 ### Local Node (without Docker)
 
 ```bash
