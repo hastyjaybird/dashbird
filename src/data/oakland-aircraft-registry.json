@@ -3,7 +3,7 @@
     "Curated public records for non-airline aircraft commonly associated with the Oakland / East Bay area.",
     "Used to label live ADS-B matches (OpenSky). Not a complete fleet list; equipment notes cite journalism, OEM specs, or agency disclosures.",
     "Aircraft rows may include callsign (exact ADS-B match), icao24, or nNumber.",
-    "Cell-site simulator (StingRay) references describe historical or shared county agreements — not live detection."
+    "Cell-site simulator (StingRay) references describe historical or shared county agreements \u2014 not live detection."
   ],
   "references": [
     "https://oaklandprivacy.org/surveillance-equipment-of-some-bay-area-law-enforcement-aircraft/",
@@ -18,7 +18,7 @@
       "label": "Oakland Police heli",
       "category": "police",
       "operator": "City of Oakland Police Dept",
-      "equipment": "MD 500E · FLIR 8500 thermal / auto-track (Oakland Privacy, 2020)",
+      "equipment": "MD 500E \u00b7 FLIR 8500 thermal / auto-track (Oakland Privacy, 2020)",
       "notes": "OPD air unit; frequently circled protests per local reporting."
     },
     {
@@ -26,7 +26,7 @@
       "label": "Oakland Police heli",
       "category": "police",
       "operator": "City of Oakland Police Dept",
-      "equipment": "MD 369E · FLIR 8500 (installed 2016 per Oakland Privacy)",
+      "equipment": "MD 369E \u00b7 FLIR 8500 (installed 2016 per Oakland Privacy)",
       "notes": "Second OPD ship; observed over San Leandro / Oakland protest routes."
     },
     {
@@ -35,7 +35,7 @@
       "label": "East Bay Regional Parks police heli",
       "category": "police",
       "operator": "East Bay Regional Park District Police",
-      "equipment": "AS350B2 · FLIR U8500XRLP (Oakland Privacy)",
+      "equipment": "AS350B2 \u00b7 FLIR U8500XRLP (Oakland Privacy)",
       "notes": "Seen over Oakland during 2020 protest coverage."
     },
     {
@@ -44,7 +44,7 @@
       "label": "East Bay Regional Parks police heli",
       "category": "police",
       "operator": "East Bay Regional Park District Police",
-      "equipment": "AS350B3 · FLIR 8500, SX-16 searchlight, rescue pod (Oakland Privacy)",
+      "equipment": "AS350B3 \u00b7 FLIR 8500, SX-16 searchlight, rescue pod (Oakland Privacy)",
       "notes": ""
     },
     {
@@ -53,7 +53,7 @@
       "label": "Alameda Co. Sheriff surveillance plane",
       "category": "police",
       "operator": "Alameda Co. Sheriff's Office",
-      "equipment": "Cessna U206G · FLIR 8500, AVR8000 DVR, microwave downlink (Oakland Privacy)",
+      "equipment": "Cessna U206G \u00b7 FLIR 8500, AVR8000 DVR, microwave downlink (Oakland Privacy)",
       "notes": "Fixed-wing observation platform."
     },
     {
@@ -62,7 +62,7 @@
       "label": "CHP",
       "category": "police",
       "operator": "CHP",
-      "equipment": "GA8 · Wescam MX-15, direction finder, scanner (Oakland Privacy)",
+      "equipment": "GA8 \u00b7 Wescam MX-15, direction finder, scanner (Oakland Privacy)",
       "notes": "Observed circling Oakland protests June 2020."
     },
     {
@@ -71,7 +71,7 @@
       "label": "Contra Costa Co. Sheriff heli",
       "category": "police",
       "operator": "Contra Costa Co. Sheriff",
-      "equipment": "Bell 407 · FLIR Star Safire 380-HDc, ARS-600 (Oakland Privacy)",
+      "equipment": "Bell 407 \u00b7 FLIR Star Safire 380-HDc, ARS-600 (Oakland Privacy)",
       "notes": "Often transits regional airspace."
     },
     {
@@ -80,7 +80,7 @@
       "label": "San Jose Police heli",
       "category": "police",
       "operator": "San Jose Police Dept",
-      "equipment": "AS350B3 · Wescam MX-10, searchlight, loudspeaker (Oakland Privacy)",
+      "equipment": "AS350B3 \u00b7 Wescam MX-10, searchlight, loudspeaker (Oakland Privacy)",
       "notes": "Bay Area mutual-aid overflights possible."
     },
     {
@@ -97,7 +97,7 @@
       "category": "medical",
       "icon": "medical_helicopter",
       "operator": "REACH Air Medical Services",
-      "equipment": "Heli · air ambulance · hospital transfers in Bay Area.",
+      "equipment": "Heli \u00b7 air ambulance \u00b7 hospital transfers in Bay Area.",
       "notes": "Classify by callsign REACH* when present."
     },
     {
@@ -106,7 +106,7 @@
       "category": "medical",
       "icon": "medical_helicopter",
       "operator": "REACH Air Medical Services",
-      "equipment": "Heli · air ambulance",
+      "equipment": "Heli \u00b7 air ambulance",
       "notes": "Medical transport; REACH callsign family (also see REACH* prefix hints)."
     },
     {
@@ -115,7 +115,7 @@
       "category": "medical",
       "icon": "medical_helicopter",
       "operator": "REACH Air Medical Services",
-      "equipment": "Heli · air ambulance",
+      "equipment": "Heli \u00b7 air ambulance",
       "notes": "Medical transport; same operator as REH32-style fleet IDs."
     },
     {
@@ -124,29 +124,124 @@
       "label": "Air ambulance",
       "category": "medical",
       "icon": "medical_helicopter",
-      "equipment": "Heli · air ambulance",
+      "equipment": "Heli \u00b7 air ambulance",
       "notes": "Medical helicopter; N-number often used as ADS-B callsign."
+    },
+    {
+      "nNumber": "N64087",
+      "label": "Flight training / local",
+      "category": "private",
+      "equipment": "Cessna",
+      "notes": "Flight training & local ops"
+    },
+    {
+      "nNumber": "N65647",
+      "label": "Flight school / rental",
+      "category": "private",
+      "operator": "North Coast Air",
+      "equipment": "Cessna",
+      "notes": "Flight school and aircraft rental service"
+    },
+    {
+      "nNumber": "N24998",
+      "label": "Flight school / rental",
+      "category": "private",
+      "operator": "OR AIRPLANE & HELI",
+      "equipment": "Cessna",
+      "notes": "Flight school and aircraft rental service"
+    },
+    {
+      "nNumber": "N605WM",
+      "label": "Flight training / rental",
+      "category": "private",
+      "equipment": "Cessna",
+      "notes": "Flight training and rentals"
+    },
+    {
+      "nNumber": "N8877E",
+      "label": "Flight training / rental",
+      "category": "private",
+      "equipment": "Piper",
+      "notes": "Flight training and rentals"
+    },
+    {
+      "nNumber": "N42SL",
+      "label": "News heli",
+      "category": "news",
+      "icon": "helicopter",
+      "equipment": "Helicopter",
+      "notes": "News"
     }
   ],
   "callsignHints": [
-    { "pattern": "REACH", "category": "medical", "label": "Air ambulance" },
-    { "pattern": "LIFEFLIGHT", "category": "medical", "label": "Air ambulance" },
-    { "pattern": "MED", "category": "medical", "label": "Medical flight" },
-    { "pattern": "NPD", "category": "police", "label": "Police heli" },
-    { "pattern": "PD", "category": "police", "label": "Police" },
-    { "pattern": "HP", "category": "police", "label": "CHP" },
-    { "pattern": "TV", "category": "news", "label": "News" },
-    { "pattern": "KTVU", "category": "news", "label": "News" },
-    { "pattern": "KPIX", "category": "news", "label": "News" },
-    { "pattern": "KGO", "category": "news", "label": "News" },
-    { "pattern": "FIRE", "category": "fire", "label": "Fire dept heli" },
-    { "pattern": "CG", "category": "fire", "label": "Coast Guard" }
+    {
+      "pattern": "REACH",
+      "category": "medical",
+      "label": "Air ambulance"
+    },
+    {
+      "pattern": "LIFEFLIGHT",
+      "category": "medical",
+      "label": "Air ambulance"
+    },
+    {
+      "pattern": "MED",
+      "category": "medical",
+      "label": "Medical flight"
+    },
+    {
+      "pattern": "NPD",
+      "category": "police",
+      "label": "Police heli"
+    },
+    {
+      "pattern": "PD",
+      "category": "police",
+      "label": "Police"
+    },
+    {
+      "pattern": "HP",
+      "category": "police",
+      "label": "CHP"
+    },
+    {
+      "pattern": "TV",
+      "category": "news",
+      "label": "News"
+    },
+    {
+      "pattern": "KTVU",
+      "category": "news",
+      "label": "News"
+    },
+    {
+      "pattern": "KPIX",
+      "category": "news",
+      "label": "News"
+    },
+    {
+      "pattern": "KGO",
+      "category": "news",
+      "label": "News"
+    },
+    {
+      "pattern": "FIRE",
+      "category": "fire",
+      "label": "Fire dept heli"
+    },
+    {
+      "pattern": "CG",
+      "category": "fire",
+      "label": "Coast Guard"
+    }
   ],
   "technologyNotes": [
     {
       "topic": "Cell-site simulator (StingRay-class)",
       "summary": "Oakland PD retired its own 2G-era StingRay in 2013; a 2016 MOU allowed limited access to an Alameda County DA cell-site simulator for search/rescue and fugitive cases (Vice / public records). This is not detectable via ADS-B.",
-      "sources": ["https://www.vice.com/en/article/mgxbwy/oakland-police-cell-simulator-agreement"]
+      "sources": [
+        "https://www.vice.com/en/article/mgxbwy/oakland-police-cell-simulator-agreement"
+      ]
     }
   ]
 }

@@ -302,7 +302,7 @@ export function lookupMonarchAllPhenology(opts) {
     y,
     doy,
     western,
-    'Monarch Watch–style fall (southbound) latitude × calendar table (dashbird JSON)',
+    'Fall migration table (dashbird JSON)',
     'fall_southbound',
   );
 
@@ -312,7 +312,7 @@ export function lookupMonarchAllPhenology(opts) {
     y,
     doy,
     western,
-    'Spring (northbound) latitude × calendar model (dashbird synthesis; see Monarch Watch migration narrative)',
+    'Spring migration table (dashbird JSON)',
     'spring_northbound',
   );
 

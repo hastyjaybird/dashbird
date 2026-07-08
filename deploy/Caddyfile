@@ -2,14 +2,6 @@
 # Env vars are injected by docker-compose.hetzner.yml (Caddy {$VAR} syntax).
 
 {$DASHBOARD_DOMAIN} {
-	email {$CADDY_EMAIL}
-
-	@protected {
-		expression {env.DASHBOARD_BASIC_AUTH_HASH} != ""
-	}
-	basicauth @protected {
-		{$DASHBOARD_BASIC_AUTH_USER} {$DASHBOARD_BASIC_AUTH_HASH}
-	}
-
+	encode zstd gzip
 	reverse_proxy dashboard:3000
 }

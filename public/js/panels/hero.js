@@ -473,7 +473,7 @@ function formatSkyEventLine(startIso, endIso, peakIso, now, timeZone) {
 }
 
 const SKY_AIRCRAFT_ICON = '/assets/sky/aircraft-strip.png';
-const SKY_MEDICAL_HELICOPTER_ICON = '/assets/sky/medical-helicopter-strip.png';
+const SKY_HELICOPTER_ICON = '/assets/sky/medical-helicopter-strip.png';
 
 /**
  * @param {object} ev
@@ -481,7 +481,7 @@ const SKY_MEDICAL_HELICOPTER_ICON = '/assets/sky/medical-helicopter-strip.png';
  */
 function skyEventIconSrc(ev, meta) {
   if (ev.type === 'aircraft') {
-    if (ev.aircraftMedicalHelicopter) return SKY_MEDICAL_HELICOPTER_ICON;
+    if (ev.aircraftHelicopter || ev.aircraftMedicalHelicopter) return SKY_HELICOPTER_ICON;
     return SKY_AIRCRAFT_ICON;
   }
   return meta.icon;
@@ -492,7 +492,7 @@ function buildSkyEventGlyph(iconSrc, eventType) {
   wrap.className = 'hero-astro-glyph hero-astro-glyph--img';
   if (eventType === 'aurora') wrap.classList.add('hero-astro-glyph--aurora');
   if (iconSrc === SKY_AIRCRAFT_ICON) wrap.classList.add('sky-aircraft-glyph');
-  if (iconSrc === SKY_MEDICAL_HELICOPTER_ICON) wrap.classList.add('sky-medical-helicopter-glyph');
+  if (iconSrc === SKY_HELICOPTER_ICON) wrap.classList.add('sky-helicopter-glyph');
   if (!iconSrc) {
     wrap.textContent = '◆';
     wrap.setAttribute('aria-hidden', 'true');

@@ -160,6 +160,98 @@ export function isMedicalHelicopter(reg, adsbCategory) {
   return Number(adsbCategory) === 8;
 }
 
+/**
+ * Sky strip glyph: registry `icon` helicopter / medical_helicopter, or medical heli rules.
+ * @param {object} reg
+ * @param {number | null | undefined} adsbCategory
+ */
+export function isStripHelicopter(reg, adsbCategory) {
+  const icon = String(reg?.icon || '').trim();
+  if (icon === 'helicopter' || icon === 'medical_helicopter') return true;
+  return isMedicalHelicopter(reg, adsbCategory);
+}
+
+const GENERIC_AIRCRAFT_LABELS = new Set(['Aircraft', 'Light aircraft', 'Rotorcraft']);
+
+/**
+ * @param {string} s
+ */
+function subtitleNormalize(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/**
+ * True when label and notes repeat the same gist (e.g. "Flight training / local" + "Flight training & local ops").
+ * @param {string} label
+ * @param {string} notes
+ */
+function subtitleLabelNotesOverlap(label, notes) {
+  const a = subtitleNormalize(label);
+  const b = subtitleNormalize(notes);
+  if (!a || !b) return false;
+  if (a === b || a.startsWith(b) || b.startsWith(a)) return true;
+  const aw = a.split(/\s+/).filter(Boolean);
+  const bw = b.split(/\s+/).filter(Boolean);
+  return aw.length >= 2 && bw.length >= 2 && aw[0] === bw[0] && aw[1] === bw[1];
+}
+
+const ALTITUDE_MI_THRESHOLD_FT = 800;
+
+/**
+ * @param {number} altFt
+ * @returns {string | null}
+ */
+export function formatAircraftAltitude(altFt) {
+  const ft = Math.round(Number(altFt));
+  if (!Number.isFinite(ft)) return null;
+  if (ft > ALTITUDE_MI_THRESHOLD_FT) {
+    const mi = Math.round((ft / 5280) * 10) / 10;
+    return `${mi} mi alt`;
+  }
+  return `${ft.toLocaleString('en-US')} ft`;
+}
+
+/**
+ * Registry-backed subtitle for sky strip and Settings when aircraft are active.
+ * @param {object} ac
+ * @param {{ includeDistance?: boolean, heading?: string | null, omitTail?: boolean }} [opts]
+ */
+export function formatAircraftRegistrySubtitle(ac, opts = {}) {
+  const includeDistance = opts.includeDistance !== false;
+  const bits = [];
+  const tail = ac.nNumber ? String(ac.nNumber).trim().toUpperCase() : null;
+  const label = String(ac.label || '').trim();
+  const notes = ac.notes ? String(ac.notes).trim() : '';
+  const showLabel =
+    label && !GENERIC_AIRCRAFT_LABELS.has(label) && !(notes && subtitleLabelNotesOverlap(label, notes));
+  if (tail && !opts.omitTail) bits.push(tail);
+  if (showLabel) bits.push(label);
+  if (includeDistance && Number.isFinite(Number(ac.distMi))) bits.push(`${ac.distMi} mi`);
+  const altLabel = formatAircraftAltitude(ac.altFt);
+  if (altLabel) bits.push(altLabel);
+  if (opts.heading) bits.push(`heading ${opts.heading}`);
+  if (ac.equipment) bits.push(String(ac.equipment).trim());
+  if (ac.operator) bits.push(String(ac.operator).trim());
+  if (notes) bits.push(notes);
+  if (bits.length) return bits.join(' · ');
+  const cat =
+    {
+      police: 'Police',
+      fire: 'Fire',
+      medical: 'Medical',
+      news: 'News media',
+      government: 'Government',
+      private: 'General aviation',
+      unknown: 'Aircraft',
+    }[ac.category] || 'Aircraft';
+  return includeDistance && Number.isFinite(Number(ac.distMi))
+    ? `${cat} · ${ac.distMi} mi`
+    : cat;
+}
+
 function lookupRegistry(p) {
   const list = Array.isArray(registry.aircraft) ? registry.aircraft : [];
   const icao = String(p.icao24 || '').toLowerCase();
@@ -318,6 +410,7 @@ export async function fetchAircraftNearbyLive(now = new Date()) {
       label: reg.label || 'Aircraft',
       category: reg.category || 'unknown',
       medicalHelicopter: isMedicalHelicopter(reg, st.category),
+      helicopter: isStripHelicopter(reg, st.category),
       operator: reg.operator || '',
       equipment: reg.equipment || '',
       notes: reg.notes || '',
@@ -368,21 +461,12 @@ export async function snapshotAircraftNearby(now = new Date()) {
     };
   }
 
-  const CATEGORY = {
-    police: 'Police',
-    fire: 'Fire',
-    medical: 'Medical',
-    news: 'News media',
-    government: 'Government',
-    private: 'General aviation',
-    unknown: 'Aircraft',
-  };
   const summary = live.aircraft
     .slice(0, 4)
     .map((a) => {
-      const cat = CATEGORY[a.category] || 'Aircraft';
       const cs = String(a.callsign || a.nNumber || '').trim().toUpperCase() || a.icao24;
-      return `Aircraft ${cs} · ${cat} · ${a.distMi} mi`;
+      const sub = formatAircraftRegistrySubtitle(a, { omitTail: Boolean(a.nNumber) });
+      return `Aircraft ${cs} — ${sub}`;
     })
     .join('; ');
 

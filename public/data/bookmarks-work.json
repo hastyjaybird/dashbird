@@ -3,32 +3,74 @@
     {
       "title": "Utilities",
       "items": [
-        { "word": "Keep", "href": "https://keep.google.com/" },
-        { "word": "Calendar", "href": "https://calendar.google.com/" },
-        { "word": "Maps", "href": "https://maps.google.com/" },
+        {
+          "word": "Keep",
+          "href": "https://keep.google.com/"
+        },
+        {
+          "word": "Calendar",
+          "href": "https://calendar.google.com/"
+        },
+        {
+          "word": "Maps",
+          "href": "https://maps.google.com/"
+        },
         {
           "word": "Drive",
           "href": "https://drive.google.com/",
           "icon": "/assets/tile-google-drive.svg"
         },
-        { "word": "Gemini", "href": "https://gemini.google.com/" },
-        { "word": "Perplexity", "href": "https://www.perplexity.ai/" }
+        {
+          "word": "Claude",
+          "href": "https://claude.ai/"
+        }
       ]
     },
     {
       "title": "Clients",
       "items": [
-        { "word": "Teams", "href": "https://teams.microsoft.com/" },
-        { "word": "PREB", "href": "https://energia.pr.gov/en" },
-        { "word": "Outlook", "href": "https://outlook.office.com/mail/" }
+        {
+          "word": "Teams",
+          "href": "https://teams.microsoft.com/",
+          "icon": "/assets/tile-microsoft-teams.png"
+        },
+        {
+          "word": "PREB",
+          "href": "https://maxetaenergy.sharepoint.com/:x:/r/sites/TDOMAOversight/_layouts/15/doc2.aspx?sourcedoc=%7B52DCFEBD-C38D-44D7-9F1E-90BC5BEC5E85%7D&file=LUMA%20T%26D%20OVERSIGHT-%20Status%20of%20Deliverables.xlsx&action=default&mobileredirect=true",
+          "icon": "/assets/tile-sharepoint.png"
+        },
+        {
+          "word": "PREB Invoice",
+          "href": "https://docs.google.com/spreadsheets/d/1yLHYbEXhC54rQ45eTabpzEHN4Ga48Cun0RaKIGz8x9k/edit?usp=drive_web&ouid=117019381733075313745",
+          "icon": "/assets/tile-google-drive.svg"
+        },
+        {
+          "word": "Rate Order",
+          "href": "https://rocompliance.maxetaenergy.com/",
+          "icon": "/assets/tile-maxeta.png"
+        },
+        {
+          "word": "Outlook",
+          "href": "https://outlook.office.com/mail/",
+          "icon": "/assets/tile-microsoft-outlook.png"
+        }
       ]
     },
     {
       "title": "Community",
       "items": [
-        { "word": "Coda", "href": "https://coda.io/" },
-        { "word": "Slack", "href": "https://slack.com/" },
-        { "word": "Discord", "href": "https://discord.com/" }
+        {
+          "word": "Coda",
+          "href": "https://coda.io/"
+        },
+        {
+          "word": "Slack",
+          "href": "https://slack.com/"
+        },
+        {
+          "word": "Discord",
+          "href": "https://discord.com/"
+        }
       ]
     },
     {
@@ -38,16 +80,35 @@
           "word": "Finance",
           "href": "https://www.google.com/finance/"
         },
-        { "word": "USAA", "href": "https://www.usaa.com/" },
-        { "word": "Vanguard", "href": "https://investor.vanguard.com/" },
-        { "word": "Xero", "href": "https://go.xero.com/" },
+        {
+          "word": "USAA",
+          "href": "https://www.usaa.com/"
+        },
+        {
+          "word": "Vanguard",
+          "href": "https://investor.vanguard.com/"
+        },
+        {
+          "word": "Xero",
+          "href": "https://go.xero.com/"
+        },
         {
           "word": "BSB",
           "href": "https://beneficialstatebank.com/"
         },
-        { "word": "Lili", "href": "https://lili.co/" },
-        { "word": "Venmo", "href": "https://venmo.com/" },
-        { "word": "PayPal", "href": "https://www.paypal.com/" }
+        {
+          "word": "Found",
+          "href": "https://my.found.com",
+          "icon": "/assets/tile-found.png"
+        },
+        {
+          "word": "Venmo",
+          "href": "https://venmo.com/"
+        },
+        {
+          "word": "PayPal",
+          "href": "https://www.paypal.com/"
+        }
       ]
     },
     {
@@ -57,14 +118,26 @@
           "word": "Kaiser",
           "href": "https://healthy.kaiserpermanente.org/northern-california/front-door"
         },
-        { "word": "FasTrak", "href": "https://www.bayareafastrak.org/" },
-        { "word": "CA DMV", "href": "https://www.dmv.ca.gov/" },
+        {
+          "word": "FasTrak",
+          "href": "https://www.bayareafastrak.org/"
+        },
+        {
+          "word": "CA DMV",
+          "href": "https://www.dmv.ca.gov/"
+        },
         {
           "word": "Play",
           "href": "https://play.google.com/store/account"
         },
-        { "word": "CoveredCA", "href": "https://www.coveredca.com/" },
-        { "word": "DentaQuest", "href": "https://www.dentaquest.com/" }
+        {
+          "word": "CoveredCA",
+          "href": "https://www.coveredca.com/"
+        },
+        {
+          "word": "DentaQuest",
+          "href": "https://www.dentaquest.com/"
+        }
       ]
     }
   ]

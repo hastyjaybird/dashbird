@@ -54,13 +54,27 @@ const leafletDir = path.join(root, 'node_modules', 'leaflet', 'dist');
 
 const app = express();
 const port = Number(process.env.PORT) || 3000;
+const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
 
 app.use(
   express.static(publicDir, {
     extensions: ['html'],
-    /** Revalidate on reload so icon/calendar/asset edits show up without fighting the disk cache. */
-    setHeaders(res) {
-      res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+    /**
+     * Local/dev: always revalidate so edits show up immediately.
+     * Production: short-lived cache for static assets to reduce repeat RTT on remote hosts.
+     */
+    setHeaders(res, filePath) {
+      const p = String(filePath || '').toLowerCase();
+      if (!isProd) {
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+        return;
+      }
+      const isHtml = p.endsWith('.html');
+      if (isHtml) {
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+        return;
+      }
+      res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=60');
     },
   }),
 );

@@ -1,16 +1,22 @@
 ---
-description: Restart Docker Compose after editing this project
+description: Clean-restart Docker Compose after editing dashbird
 alwaysApply: true
 ---
 
 # Docker after changes
 
-Whenever you modify files in this repository as part of the work (code, static assets, Docker config, env examples, etc.), **restart the stack** from the project root so the running container matches the tree:
+Whenever you modify files in this repository as part of the work (code, static assets, Docker config, env examples, etc.), **clean-restart the stack** from the project root so the running container matches the tree. Do this **after** your edits for that turn are done, not only when the user asks.
+
+Run this exact sequence (full recycle, not `up` alone):
 
 ```bash
-cd /home/jaybird/jayprograms/dashbird && docker compose up -d --build && docker compose logs lan-url
+cd /home/jaybird/jayprograms/dashbird && docker compose down && docker compose up -d --build && docker compose logs lan-url
 ```
 
-The `lan-url` service prints the same-Wi-Fi phone URL automatically after the stack starts.
+- `down` stops and removes containers so stale state does not linger.
+- `up -d --build` rebuilds images when needed and starts detached.
+- `lan-url` logs print the same-Wi-Fi phone URL for bookmarking.
 
-Use `docker compose down && docker compose up -d --build` if a full recycle is needed. Do this **after** your edits for that turn are done, not only on request.
+If `down` fails because nothing was running, continue with `up -d --build` and `logs lan-url`.
+
+Skip the restart only when the change cannot affect the running stack (e.g. docs-only with no runtime impact) — when in doubt, run the clean restart.

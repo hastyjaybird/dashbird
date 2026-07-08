@@ -134,6 +134,7 @@ router.get('/', async (req, res) => {
           aircraftCategory: ev.type === 'aircraft' ? ev.aircraftCategory ?? null : null,
           aircraftMedicalHelicopter:
             ev.type === 'aircraft' ? ev.aircraftMedicalHelicopter === true : false,
+          aircraftHelicopter: ev.type === 'aircraft' ? ev.aircraftHelicopter === true : false,
           typeMeta,
         };
       }),

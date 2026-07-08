@@ -160,21 +160,48 @@ body.dashy {
   width: 100%;
 }
 
-.weather-radar__frame {
+.weather-radar__tile-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--rv-cols, 1), 1fr);
+  gap: 1px;
   width: 100%;
   border-radius: 8px;
   overflow: hidden;
   background: #0a0f18;
   border: 1px solid rgba(120, 150, 200, 0.18);
+  aspect-ratio: 1;
+  max-height: min(52vw, 280px);
 }
 
-.weather-radar__iframe {
-  display: block;
+.weather-radar__tile-cell {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 1;
+  background: #1a2332;
+}
+
+.weather-radar__basemap-img,
+.weather-radar__tile-img {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: min(52vw, 280px);
-  min-height: 220px;
-  border: 0;
-  background: #0a0f18;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(var(--rv-crop-scale, 1));
+  transform-origin: var(--rv-origin-x, 50%) var(--rv-origin-y, 50%);
+}
+
+.weather-radar__tile-img {
+  pointer-events: none;
+}
+
+.weather-radar__link-fallback {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.weather-radar__link-fallback a {
+  color: var(--accent-2, #8eb8ff);
 }
 
 .weather-radar__caption {
@@ -1694,7 +1721,6 @@ body.dashbird-check-busy * {
   justify-content: center;
   padding: 1rem;
   background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(4px);
 }
 
 .health-check-modal__panel {
@@ -2033,10 +2059,12 @@ body.chat-sidebar-resizer--dragging {
 }
 
 .topbar.glass {
-  background: rgba(8, 12, 20, 0.35);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background:
+    linear-gradient(180deg, rgba(14, 20, 32, 0.92), rgba(10, 15, 24, 0.88));
   border-bottom: 1px solid var(--glass-border);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.28),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .topbar__context {
@@ -2710,12 +2738,17 @@ body.dashy--page-settings .page-view--main {
 }
 
 .panel--glass {
-  background: var(--glass-bg);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background:
+    linear-gradient(
+      160deg,
+      rgba(18, 26, 40, 0.9) 0%,
+      rgba(12, 19, 30, 0.86) 55%,
+      rgba(10, 16, 26, 0.9) 100%
+    );
   border: 1px solid var(--glass-border);
   box-shadow:
-    0 4px 24px rgba(0, 0, 0, 0.35),
+    0 10px 28px rgba(0, 0, 0, 0.36),
+    0 1px 0 rgba(255, 255, 255, 0.04),
     inset 0 1px 0 var(--glass-highlight);
 }
 
@@ -3291,12 +3324,14 @@ body.dashy--page-settings .page-view--main {
   object-fit: contain;
 }
 
-/* Medical helicopter (REACH / air ambulance) — public/assets/sky/medical-helicopter-strip.png */
+/* Helicopter (news, medical, registry icon) — public/assets/sky/medical-helicopter-strip.png */
+.hero-astro-glyph--img.sky-helicopter-glyph,
 .hero-astro-glyph--img.sky-medical-helicopter-glyph {
   width: 44px;
   height: 32px;
 }
 
+.hero-astro-glyph--img.sky-helicopter-glyph img,
 .hero-astro-glyph--img.sky-medical-helicopter-glyph img {
   width: 40px;
   height: 28px;
@@ -3651,9 +3686,14 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
   color-scheme: dark;
 }
 
-/* Matches body.dashy while Google loads; embed URL bgcolor/color are forced server-side in calendar-embed.js. */
+/* Google embed has no dark mode; invert light canvas to match body.dashy (#0a1018). */
+.calendar-frame--google {
+  background: #0a1018;
+}
+
 .calendar-frame--google .calendar-frame__iframe {
   background-color: #0a1018;
+  filter: invert(1) hue-rotate(180deg) contrast(0.92) brightness(0.96);
 }
 
 .chat-root {

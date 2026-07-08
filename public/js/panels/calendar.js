@@ -23,18 +23,18 @@ export function mountCalendar(root, config) {
   iframe.className = 'calendar-frame__iframe';
   iframe.setAttribute('loading', 'lazy');
   iframe.referrerPolicy = 'no-referrer-when-downgrade';
-  iframe.style.backgroundColor = '#0a1018';
-
   const frame = document.createElement('div');
   frame.className = 'calendar-frame';
+  let isGoogle = false;
   try {
     const host = new URL(url).hostname.toLowerCase();
-    if (host === 'calendar.google.com' || host === 'www.google.com' || host === 'google.com') {
-      frame.classList.add('calendar-frame--google');
-    }
+    isGoogle =
+      host === 'calendar.google.com' || host === 'www.google.com' || host === 'google.com';
+    if (isGoogle) frame.classList.add('calendar-frame--google');
   } catch {
     /* ignore */
   }
+  iframe.style.backgroundColor = isGoogle ? '#ffffff' : '#0a1018';
   frame.appendChild(iframe);
   root.appendChild(frame);
 }

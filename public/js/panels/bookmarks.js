@@ -8,26 +8,55 @@ function hostnameFromHref(href) {
   return '';
 }
 
-function faviconUrl(href) {
-  const host = hostnameFromHref(href);
-  if (!host) return '';
-  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`;
-}
+/** Prefer this registrable domain when fetching a favicon (aliases). */
+const FAVICON_HOST_ALIAS = {
+  'my.found.com': 'found.com',
+  'investor.vanguard.com': 'vanguard.com',
+  'go.xero.com': 'xero.com',
+  'healthy.kaiserpermanente.org': 'kaiserpermanente.org',
+  'www.bayareafastrak.org': 'bayareafastrak.org',
+  'play.google.com': 'google.com',
+  'messages.google.com': 'google.com',
+  'mail.google.com': 'google.com',
+  'news.google.com': 'google.com',
+  'www.google.com': 'google.com',
+  'maxetaenergy.sharepoint.com': 'sharepoint.com',
+  'rocompliance.maxetaenergy.com': 'maxetaenergy.com',
+};
+
+/** Local brand tiles (company logos). */
+const HOST_TILE = {
+  'keep.google.com': '/assets/tile-google-keep.png',
+  'calendar.google.com': '/assets/tile-google-calendar.png',
+  'drive.google.com': '/assets/tile-google-drive.svg',
+  'docs.google.com': '/assets/tile-google-drive.svg',
+  'teams.microsoft.com': '/assets/tile-microsoft-teams.png',
+  'outlook.office.com': '/assets/tile-microsoft-outlook.png',
+  'sharepoint.com': '/assets/tile-sharepoint.png',
+  'maxetaenergy.com': '/assets/tile-maxeta.png',
+  'rocompliance.maxetaenergy.com': '/assets/tile-maxeta.png',
+  'found.com': '/assets/tile-found.png',
+  'fetlife.com': '/assets/tile-fetlife.png',
+  'web.whatsapp.com': '/assets/tile-whatsapp.svg',
+  'whatsapp.com': '/assets/tile-whatsapp.svg',
+  'facebook.com': '/assets/tile-facebook.svg',
+};
 
 /** Files were once mis-suffixed `.png` but are WebP; fix old bookmark `icon` paths. */
 function normalizeTileIconPath(p) {
   const s = String(p).trim();
   if (s === '/assets/tile-google-messages.png') return '/assets/tile-google-messages.webp';
   if (s === '/assets/tile-cursor.png') return '/assets/tile-cursor.webp';
+  if (/tile-gemini|tile-perplexity/i.test(s)) return '';
   return s;
 }
 
 function explicitBookmarkIcon(row) {
   if (!row.icon || typeof row.icon !== 'string') return null;
-  const s = row.icon.trim();
+  const s = normalizeTileIconPath(row.icon.trim());
   if (!s) return null;
   if (/tile-android-messages/i.test(s)) return '/assets/tile-google-messages.webp';
-  return normalizeTileIconPath(s);
+  return s;
 }
 
 function isGoogleMessagesHttpUrl(href) {
@@ -41,6 +70,31 @@ function isGoogleMessagesHttpUrl(href) {
   }
 }
 
+function faviconHostForHref(href) {
+  const raw = hostnameFromHref(href).toLowerCase();
+  if (!raw) return '';
+  const bare = raw.replace(/^www\./, '');
+  return FAVICON_HOST_ALIAS[raw] || FAVICON_HOST_ALIAS[bare] || bare;
+}
+
+function googleFaviconUrl(domain) {
+  if (!domain) return '';
+  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=128`;
+}
+
+function duckDuckGoIconUrl(domain) {
+  if (!domain) return '';
+  return `https://icons.duckduckgo.com/ip3/${encodeURIComponent(domain)}.ico`;
+}
+
+function tileForHost(host) {
+  if (!host) return '';
+  const h = host.toLowerCase().replace(/^www\./, '');
+  if (HOST_TILE[h]) return HOST_TILE[h];
+  if (HOST_TILE[`www.${h}`]) return HOST_TILE[`www.${h}`];
+  return '';
+}
+
 function iconSrc(row) {
   const explicit = explicitBookmarkIcon(row);
   if (explicit) return explicit;
@@ -49,14 +103,24 @@ function iconSrc(row) {
   if (/^cursor:/i.test(h)) return '/assets/tile-cursor.webp';
   if (/^command:/i.test(h)) return '/assets/tile-cursor.webp';
   if (/^signal:/i.test(h)) return '/assets/tile-signal.svg';
-  if (/^https?:\/\/drive\.google\.com\/?/i.test(h)) return '/assets/tile-google-drive.svg';
-  if (/^https?:\/\/(www\.)?calendar\.google\.com\/?/i.test(h)) return '/assets/tile-google-calendar.png';
-  if (/^https?:\/\/(www\.)?keep\.google\.com\/?/i.test(h)) return '/assets/tile-google-keep.png';
+  if (/^https?:\/\/drive\.google\.com/i.test(h)) return '/assets/tile-google-drive.svg';
+  if (/^https?:\/\/docs\.google\.com\/spreadsheets/i.test(h)) return '/assets/tile-google-drive.svg';
+  if (/^https?:\/\/teams\.microsoft\.com/i.test(h)) return '/assets/tile-microsoft-teams.png';
+  if (/^https?:\/\/(www\.)?outlook\.office\.com/i.test(h)) return '/assets/tile-microsoft-outlook.png';
+  if (/sharepoint\.com/i.test(h)) return '/assets/tile-sharepoint.png';
+  if (/^https?:\/\/rocompliance\.maxetaenergy\.com/i.test(h)) return '/assets/tile-maxeta.png';
+  if (/^https?:\/\/(www\.)?calendar\.google\.com/i.test(h)) return '/assets/tile-google-calendar.png';
+  if (/^https?:\/\/(www\.)?keep\.google\.com/i.test(h)) return '/assets/tile-google-keep.png';
   if (isGoogleMessagesHttpUrl(h)) return '/assets/tile-google-messages.webp';
-  if (/^https?:\/\/(www\.)?fetlife\.com\/?/i.test(h)) return '/assets/tile-fetlife.png';
-  if (/^https?:\/\/(web\.)?whatsapp\.com\/?/i.test(h)) return '/assets/tile-whatsapp.svg';
-  if (/^https?:\/\/(www\.)?facebook\.com\/?/i.test(h)) return '/assets/tile-facebook.svg';
-  return faviconUrl(h);
+  if (/^https?:\/\/(www\.)?fetlife\.com/i.test(h)) return '/assets/tile-fetlife.png';
+  if (/^https?:\/\/(web\.)?whatsapp\.com/i.test(h)) return '/assets/tile-whatsapp.svg';
+  if (/^https?:\/\/(www\.)?facebook\.com/i.test(h)) return '/assets/tile-facebook.svg';
+  if (/^https?:\/\/my\.found\.com/i.test(h)) return '/assets/tile-found.png';
+
+  const host = faviconHostForHref(h);
+  const local = tileForHost(host) || tileForHost(hostnameFromHref(h));
+  if (local) return local;
+  return googleFaviconUrl(host);
 }
 
 function isLocalLaunchHref(href) {
@@ -92,8 +156,20 @@ function createTile(row) {
     icon.alt = '';
     icon.decoding = 'async';
     icon.loading = 'lazy';
+    icon.referrerPolicy = 'no-referrer';
     icon.src = src;
     icon.addEventListener('error', () => {
+      if (icon.dataset.fallback === 'ddg') {
+        icon.replaceWith(fallbackGlyph(row.word));
+        return;
+      }
+      const host = faviconHostForHref(row.href);
+      const ddg = duckDuckGoIconUrl(host);
+      if (ddg && icon.src !== ddg) {
+        icon.dataset.fallback = 'ddg';
+        icon.src = ddg;
+        return;
+      }
       icon.replaceWith(fallbackGlyph(row.word));
     });
     a.appendChild(icon);

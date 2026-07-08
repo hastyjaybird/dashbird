@@ -1,13 +1,17 @@
 /**
  * Weather radar visibility + embed (shared by API route and Settings status).
  */
-import { geocodeAddress } from './geocode-address.js';
-import { loadRainAlertAddress } from './rain-alert-address-store.js';
+import { resolveDashboardWeatherLatLon } from './hero-weather-location.js';
 import {
   precipExpectedWithin24Hours,
   rainImminentWithin2Hours,
 } from './rain-imminent.js';
-import { buildWindyRadarEmbedUrl, windyMapPageUrl } from './weather-radar-windy.js';
+import {
+  buildRadarTilePayload,
+  fetchRainViewerFrames,
+  mapZoomForRadiusMi,
+  RADAR_RADIUS_MI,
+} from './weather-radar-rainviewer.js';
 
 export function radarDisabled() {
   return String(process.env.WEATHER_RADAR || '').trim() === '0';
@@ -25,11 +29,12 @@ export async function getWeatherRadarStatus() {
     return { ok: true, disabled: true, show: false };
   }
 
-  const address = await loadRainAlertAddress();
-  const geo = await geocodeAddress(address);
-  if (!geo) {
-    return { ok: true, show: false, geocodeError: true, address };
-  }
+  const dash = await resolveDashboardWeatherLatLon();
+  const geo = {
+    lat: dash.lat,
+    lon: dash.lon,
+    displayName: dash.zip ? `ZIP ${dash.zip}` : 'Dashboard coordinates',
+  };
 
   const tz = String(process.env.TZ || 'America/Los_Angeles').trim() || 'America/Los_Angeles';
   const forceShow = radarForceShow();
@@ -44,21 +49,49 @@ export async function getWeatherRadarStatus() {
       show: false,
       precipExpected24h: false,
       imminent: rain2h.imminent,
-      address,
+      zip: dash.zip,
       geo: { lat: geo.lat, lon: geo.lon, displayName: geo.displayName },
     };
   }
 
-  const embedUrl = buildWindyRadarEmbedUrl(geo.lat, geo.lon);
-  const mapPageUrl = windyMapPageUrl(geo.lat, geo.lon);
   const message =
     forceShow && !precip24h.expected
-      ? 'Radar test mode · centered on rain alert address'
+      ? `Radar test mode · ${RADAR_RADIUS_MI} mi radius from dashboard ZIP`
       : rain2h.imminent && rain2h.message
         ? rain2h.message
         : precip24h.hoursUntil != null && precip24h.hoursUntil > 0
           ? `Precipitation possible in ~${precip24h.hoursUntil} hours`
           : 'Precipitation possible in the next 24 hours';
+
+  const mapZoom = mapZoomForRadiusMi(geo.lat, RADAR_RADIUS_MI);
+  const mapPageUrl = `https://www.rainviewer.com/map.html?loc=${geo.lat.toFixed(4)},${geo.lon.toFixed(4)},${mapZoom}`;
+
+  const rv = await fetchRainViewerFrames();
+  if (!rv) {
+    return {
+      ok: true,
+      show: true,
+      precipExpected24h: precip24h.expected,
+      imminent: rain2h.imminent,
+      testMode: forceShow,
+      zip: dash.zip,
+      geo: { lat: geo.lat, lon: geo.lon, displayName: geo.displayName },
+      minutesUntil: rain2h.minutesUntil,
+      hoursUntilPrecip: precip24h.hoursUntil,
+      message,
+      provider: 'link',
+      embed: { mapPageUrl, lat: geo.lat, lon: geo.lon, radiusMi: RADAR_RADIUS_MI },
+      radarUnavailable: true,
+    };
+  }
+
+  const radar = buildRadarTilePayload({
+    lat: geo.lat,
+    lon: geo.lon,
+    host: rv.host,
+    frames: rv.frames,
+    radiusMi: RADAR_RADIUS_MI,
+  });
 
   return {
     ok: true,
@@ -66,17 +99,13 @@ export async function getWeatherRadarStatus() {
     precipExpected24h: precip24h.expected,
     imminent: rain2h.imminent,
     testMode: forceShow,
-    address,
+    zip: dash.zip,
     geo: { lat: geo.lat, lon: geo.lon, displayName: geo.displayName },
     minutesUntil: rain2h.minutesUntil,
     hoursUntilPrecip: precip24h.hoursUntil,
     message,
-    provider: 'windy',
-    embed: {
-      url: embedUrl,
-      mapPageUrl,
-      lat: geo.lat,
-      lon: geo.lon,
-    },
+    provider: 'rainviewer',
+    embed: { mapPageUrl, lat: geo.lat, lon: geo.lon, radiusMi: RADAR_RADIUS_MI },
+    radar,
   };
 }

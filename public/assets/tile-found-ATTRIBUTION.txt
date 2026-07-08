@@ -1,0 +1,1 @@
+Found logo (`tile-found.png`): fetched from Google favicon service for found.com (my.found.com banking).

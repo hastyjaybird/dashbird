@@ -30,8 +30,17 @@ In Hetzner Cloud Console:
 - **Type**: CX22 (2 vCPU, 4 GB) or CX11 for light use.
 - **Networking**: IPv4 (+ IPv6 if you want AAAA).
 - **SSH key**: add yours at create time.
+- **Name**: follow `docs/naming-system.md` (for Dashbird: `personal-dashbird-prod-01`).
 
 Note the **public IP**.
+
+### Naming and DNS standards
+
+- Server naming: `<scope>-<app>-<env>-<nn>` (Dashbird: `personal-dashbird-prod-01`).
+- Dashbird is a Tier 3 private app (auth required).
+- Domain convention:
+  - Preferred personal pattern: `dashbird.<personal-domain>`
+  - Optional brand-hosted private pattern: `private-dashbird.corvidaestudio.com`
 
 ## 2. DNS
 

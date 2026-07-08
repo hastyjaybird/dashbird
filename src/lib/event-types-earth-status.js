@@ -225,7 +225,7 @@ export async function buildEarthAndMoonbowEventTypes(options = {}) {
     category: 'Earth',
     active: springActive,
     value: monarchValue(monarch.spring, 'Spring'),
-    dataSource: 'src/data/monarch-spring-migration-peaks.json (static latitude × date lookup)',
+    dataSource: 'monarch-spring-migration-peaks.json · latitude × date',
   });
   rows.push({
     id: 'monarch_fall',
@@ -233,7 +233,7 @@ export async function buildEarthAndMoonbowEventTypes(options = {}) {
     category: 'Earth',
     active: fallActive,
     value: monarchValue(monarch.fall, 'Fall'),
-    dataSource: 'src/data/monarch-fall-migration-peaks.json (static latitude × date lookup)',
+    dataSource: 'monarch-fall-migration-peaks.json · latitude × date',
   });
 
   if (String(process.env.EARTH_DIABLO_TARANTULA || '').trim() === '0') {

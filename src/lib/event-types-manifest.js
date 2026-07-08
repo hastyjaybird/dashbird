@@ -76,7 +76,7 @@ export const SKY_TYPE_DATA_SOURCES = {
   starlink: 'Curated rows in sky-events-calendar.json; 3-day heads-up + look direction; strip only when startsAt is after sunset and before sunrise at WEATHER_LAT/LON.',
   rocket: 'Curated rows in sky-events-calendar.json (launch schedules); 3-day heads-up + look direction; strip only when startsAt is after sunset and before sunrise at WEATHER_LAT/LON.',
   aircraft:
-    'OpenSky within AIRCRAFT_WATCH_RADIUS_MI of rain-alert address; excludes airlines and alt <50 ft; strip row only when a match is in range. SKY_AIRCRAFT_NEARBY=0 disables.',
+    'OpenSky within AIRCRAFT_WATCH_RADIUS_MI of rain-alert address; tail labels from src/data/oakland-aircraft-registry.json (nNumber / icao24 / callsign). Excludes airlines and alt <50 ft. SKY_AIRCRAFT_NEARBY=0 disables.',
 };
 
 /** Earth + moonbow rows (order preserved for Settings table). */
@@ -98,13 +98,13 @@ export const EARTH_EVENT_MANIFEST = [
     id: 'monarch_spring',
     label: 'Monarchs (northbound)',
     category: 'Earth',
-    dataSource: 'src/data/monarch-spring-migration-peaks.json (static latitude × date lookup)',
+    dataSource: 'monarch-spring-migration-peaks.json · latitude × date',
   },
   {
     id: 'monarch_fall',
     label: 'Monarchs (southbound)',
     category: 'Earth',
-    dataSource: 'src/data/monarch-fall-migration-peaks.json (static latitude × date lookup)',
+    dataSource: 'monarch-fall-migration-peaks.json · latitude × date',
   },
   {
     id: 'diablo_tarantula',

@@ -1,0 +1,41 @@
+# Dashbird — reduce Cursor indexing / Agent context on generated & local data
+
+# Dependencies
+node_modules/
+.pnpm-store/
+.yarn/
+
+# Build output
+dist/
+build/
+out/
+.next/
+coverage/
+
+# Caches & logs
+.cache/
+.npm/
+*.log
+
+# Secrets (Cursor also defaults these; explicit for Agent)
+.env
+.env.*
+!.env.example
+
+# Local/runtime data (mirrors .gitignore)
+data/
+public/data/bookmarks-personal.json
+public/data/notes.md
+public/data/last-backup.txt
+public/data/phone-lan-url.txt
+request.txt
+requests.txt
+todolist.txt
+features.txt
+
+# Export bundles & scratch
+EXPORT_NOW/
+.tmp-pw/
+
+# OS
+.DS_Store

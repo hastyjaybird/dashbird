@@ -14,11 +14,10 @@ function primaryMonarchRef() {
   return MONARCH_REFERENCE_URLS[0] || 'https://www.monarchwatch.org/migration/';
 }
 
-function clusteringDetailLine(summary, locationLabel, westSuffix, migrationPhrase) {
-  const mid = summary.midLabel ? `modeled midpoint ${summary.midLabel}` : 'modeled midpoint';
+function clusteringDetailLine(summary) {
+  const mid = summary.midLabel ? `Mid ${summary.midLabel}` : '';
   const pct = formatMonarchLikelihoodSubtext(summary);
-  const pctBit = pct ? ` · ${pct}` : '';
-  return `${mid}${pctBit} · ${locationLabel} · static ${migrationPhrase} lookup (not live counts).${westSuffix}`.trim();
+  return [mid, pct].filter(Boolean).join(' · ');
 }
 
 /**
@@ -33,12 +32,12 @@ function peakPresenceDetailLine(summary) {
 /**
  * @param {object} seasonSummary
  */
-function appendSeasonEarthItems(items, seasonSummary, locationLabel, west, ref, labelPrefix, migrationPhrase, typePrefix) {
+function appendSeasonEarthItems(items, seasonSummary, ref, labelPrefix, typePrefix) {
   if (seasonSummary.status === 'clustering') {
     items.push({
       earthType: `${typePrefix}_clustering`,
       label: `${labelPrefix} — clustering likely`,
-      detailLine: clusteringDetailLine(seasonSummary, locationLabel, west, migrationPhrase),
+      detailLine: clusteringDetailLine(seasonSummary),
       forecastUrl: ref,
     });
   } else if (seasonSummary.status === 'peak_presence') {
@@ -54,23 +53,20 @@ function appendSeasonEarthItems(items, seasonSummary, locationLabel, west, ref, 
 /**
  * @param {object} seasonSummary
  */
-function appendSeasonEarthItemsInactive(items, seasonSummary, locationLabel, west, ref, labelPrefix, migrationPhrase, typePrefix) {
+function appendSeasonEarthItemsInactive(items, seasonSummary, ref, labelPrefix, typePrefix) {
   const pl = Number(seasonSummary.peakLikelihood) || 0;
   const cl = Number(seasonSummary.clusteringLikelihood) || 0;
   const win = seasonSummary.peakWindowLabel ? String(seasonSummary.peakWindowLabel) : '';
   const mid = seasonSummary.midLabel ? String(seasonSummary.midLabel) : '';
-  const src = seasonSummary.source ? String(seasonSummary.source) : '';
   const detailParts = [
-    `Below strip threshold (peak ${pl}%, cluster ${cl}%)`,
-    mid ? `midpoint ~${mid}` : null,
-    win ? `typical window ${win}` : null,
-    locationLabel,
-    src ? `(${src})` : null,
+    `Below threshold (peak ${pl}%, cluster ${cl}%)`,
+    mid ? `~${mid}` : null,
+    win || null,
   ].filter(Boolean);
   items.push({
     earthType: `${typePrefix}_inactive`,
     label: `${labelPrefix} — not in high-likelihood window`,
-    detailLine: `${detailParts.join(' · ')}${west}`.replace(/\s+/g, ' ').trim(),
+    detailLine: detailParts.join(' · '),
     forecastUrl: ref,
   });
 }
@@ -99,32 +95,19 @@ router.get('/', async (req, res) => {
     /** @type {Array<{ earthType: string, label: string, detailLine: string, forecastUrl?: string }>} */
     const items = [];
 
-    const west =
-      fall.westernFlywayNote || spring.westernFlywayNote
-        ? ' Western flyway: dates are less exact than inland/eastern corridors.'
-        : '';
     const ref = primaryMonarchRef();
     const debug = isEarthDebugShowInactive();
 
-    function appendSeason(summary, labelPrefix, migrationPhrase, typePrefix) {
+    function appendSeason(summary, labelPrefix, typePrefix) {
       if (summary.status === 'clustering' || summary.status === 'peak_presence') {
-        appendSeasonEarthItems(items, summary, locationLabel, west, ref, labelPrefix, migrationPhrase, typePrefix);
+        appendSeasonEarthItems(items, summary, ref, labelPrefix, typePrefix);
       } else if (debug) {
-        appendSeasonEarthItemsInactive(
-          items,
-          summary,
-          locationLabel,
-          west,
-          ref,
-          labelPrefix,
-          migrationPhrase,
-          typePrefix,
-        );
+        appendSeasonEarthItemsInactive(items, summary, ref, labelPrefix, typePrefix);
       }
     }
 
-    appendSeason(spring, 'Monarchs (northbound)', 'spring (northbound)', 'monarch_spring');
-    appendSeason(fall, 'Monarchs (southbound)', 'fall (southbound)', 'monarch_fall');
+    appendSeason(spring, 'Monarchs (northbound)', 'monarch_spring');
+    appendSeason(fall, 'Monarchs (southbound)', 'monarch_fall');
 
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.json({

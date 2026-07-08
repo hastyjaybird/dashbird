@@ -4,6 +4,8 @@ Local **homepage dashboard** (Dashy-inspired glass UI): full-width photo backgro
 
 Post–v1 integrations (Vikunja, Google Keep, optional Home Assistant proxy) live in [`docs/v2-roadmap.md`](docs/v2-roadmap.md).
 
+Cross-project naming standards (local folders, repos, servers, domains) live in [`docs/naming-system.md`](docs/naming-system.md).
+
 This repo supersedes the earlier **`homeassistantdashboard`** workspace; the Cursor plan was merged here under the name **dashbird** (see `~/.cursor/plans/local_firefox_dashboard_26fbbff8.plan.md` if you still have it).
 
 ## Quick start

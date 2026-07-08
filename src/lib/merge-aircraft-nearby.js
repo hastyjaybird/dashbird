@@ -1,14 +1,4 @@
-import { fetchAircraftNearbyLive } from './aircraft-nearby.js';
-
-const CATEGORY_TITLE = {
-  police: 'Police',
-  fire: 'Fire',
-  medical: 'Medical',
-  news: 'News media',
-  government: 'Government',
-  private: 'General aviation',
-  unknown: 'Aircraft',
-};
+import { fetchAircraftNearbyLive, formatAircraftRegistrySubtitle } from './aircraft-nearby.js';
 
 /**
  * @param {number | null | undefined} trackDeg true track (degrees, 0 = north)
@@ -19,13 +9,6 @@ export function headingCompass(trackDeg) {
   const d = ((Number(trackDeg) % 360) + 360) % 360;
   const labels = ['N', 'E', 'S', 'W'];
   return labels[Math.floor((d + 45) / 90) % 4];
-}
-
-/**
- * @param {object} ac
- */
-function categoryLabel(ac) {
-  return CATEGORY_TITLE[ac.category] || 'Aircraft';
 }
 
 /**
@@ -50,17 +33,10 @@ function titleFor(ac) {
  * @param {object} ac
  */
 function detailFor(ac) {
-  const hdg = headingCompass(ac.trackDeg);
-  const label = String(ac.label || '').trim();
-  const bits = [
-    label && label !== 'Aircraft' && label !== 'Light aircraft' ? label : categoryLabel(ac),
-    `${ac.distMi} mi`,
-    hdg ? `heading ${hdg}` : null,
-    ac.operator ? ac.operator : null,
-    ac.equipment ? ac.equipment : null,
-    ac.notes ? ac.notes : null,
-  ].filter(Boolean);
-  return bits.join(' · ');
+  return formatAircraftRegistrySubtitle(ac, {
+    omitTail: Boolean(ac.nNumber || ac.callsign),
+    heading: headingCompass(ac.trackDeg),
+  });
 }
 
 /**
@@ -96,6 +72,7 @@ export async function mergeAircraftNearby(active, now = new Date()) {
       forecastUrl: ac.fr24Url,
       aircraftCategory: ac.category,
       aircraftMedicalHelicopter: Boolean(ac.medicalHelicopter),
+      aircraftHelicopter: Boolean(ac.helicopter),
       callsign: formatCallsign(ac),
       icao24: ac.icao24,
     });

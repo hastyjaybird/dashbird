@@ -1,7 +1,7 @@
 import { mountCalendar } from './panels/calendar.js';
 import { mountBookmarkGrid } from './panels/bookmarks.js';
-import { mountChat } from './panels/chat.js';
 import { mountHero } from './panels/hero.js';
+import { debugLog } from './lib/debugLog.js';
 import { mountHealthSidebar } from './panels/health-sidebar.js';
 import { mountCalendarUpcoming } from './panels/calendar-upcoming.js';
 import { mountMarketWatch } from './panels/market-watch.js';
@@ -96,20 +96,29 @@ async function main() {
   mountMarketWatch(document.getElementById('mount-market-watch'));
   mountTodayTodo(document.getElementById('mount-today-todo'));
 
-  const calUpcomingMount = document.getElementById('mount-cal-upcoming');
-  const prefetchedCalendar = await calendarUpcomingPromise;
-  if (calUpcomingMount) mountCalendarUpcoming(calUpcomingMount, config, { prefetched: prefetchedCalendar });
-
-  await mountBookmarkGrid(
+  const bookmarksPersonalPromise = mountBookmarkGrid(
     document.getElementById('mount-bookmarks-personal'),
     '/data/bookmarks-personal.json',
     'Add tiles in public/data/bookmarks-personal.json (up to 9).',
   );
-  await mountBookmarkGrid(
+  const bookmarksWorkPromise = mountBookmarkGrid(
     document.getElementById('mount-bookmarks-work'),
     '/data/bookmarks-work.json',
     'Add tiles in public/data/bookmarks-work.json.',
   );
+
+  const calUpcomingMount = document.getElementById('mount-cal-upcoming');
+  if (calUpcomingMount) {
+    calendarUpcomingPromise
+      .then((prefetchedCalendar) => {
+        mountCalendarUpcoming(calUpcomingMount, config, { prefetched: prefetchedCalendar });
+      })
+      .catch(() => {
+        mountCalendarUpcoming(calUpcomingMount, config, { prefetched: null });
+      });
+  }
+
+  await Promise.allSettled([bookmarksPersonalPromise, bookmarksWorkPromise]);
 
   mountCalendar(document.getElementById('mount-calendar'), config);
   mountToolLibrary(document.getElementById('mount-tool-library'));
@@ -117,7 +126,14 @@ async function main() {
   const healthAside = document.getElementById('mount-health-sidebar');
   if (healthAside) mountHealthSidebar(healthAside);
 
-  mountChat(document.getElementById('mount-chat'), config);
+  // #region agent log
+  debugLog({
+    location: 'app.js:main',
+    message: 'dashbird boot complete (chat sidebar removed)',
+    hypothesisId: 'H2',
+    data: { panels: 'no-chat' },
+  });
+  // #endregion
 }
 
 main().catch((e) => {

@@ -19,7 +19,7 @@ function buildRainAlertBlock(root) {
   const hint = document.createElement('p');
   hint.className = 'settings-page__note settings-page__rain-hint';
   hint.textContent =
-    'Used for “Rain expected in N minutes” (next 2 hours) and the Weather Radar map (~5 mi around this point). Radar shows only when precipitation is expected in the next 24 hours.';
+    'Used for “Rain expected in N minutes” (next 2 hours). Weather Radar is centered on dashboard ZIP (WEATHER_ZIP) with a 5 mi radius and shows only when precipitation is expected in the next 24 hours.';
   block.append(hint);
 
   const label = document.createElement('label');

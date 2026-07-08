@@ -222,9 +222,9 @@ function earthItemTooltip(earthType, ev) {
   const t = String(earthType || '');
   if (t.startsWith('monarch_')) {
     if (t.endsWith('_inactive')) {
-      return 'Monarch model below strip threshold (debug: EARTH_DEBUG_SHOW_INACTIVE); static lookup; opens reference (new tab)';
+      return 'Below strip threshold (debug). Static latitude × date lookup.';
     }
-    return 'Latitude × date monarch migration models (spring northbound + fall southbound; static lookup); opens reference (new tab)';
+    return 'Monarch migration by latitude and date (static lookup).';
   }
   if (t.startsWith('salmon_run')) {
     if (t === 'salmon_run_offseason') {

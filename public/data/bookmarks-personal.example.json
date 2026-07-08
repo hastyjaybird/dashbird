@@ -3,8 +3,14 @@
     {
       "title": "Tools",
       "items": [
-        { "word": "Example tool", "href": "https://example.com/" },
-        { "word": "Cursor", "href": "cursor://" },
+        {
+          "word": "Example tool",
+          "href": "https://example.com/"
+        },
+        {
+          "word": "Cursor",
+          "href": "cursor://"
+        },
         {
           "word": "Kdenlive",
           "href": "/api/open-desktop/kdenlive",
@@ -15,8 +21,18 @@
     {
       "title": "AI",
       "items": [
-        { "word": "OpenRouter", "href": "https://openrouter.ai/" },
-        { "word": "Gemini", "href": "https://gemini.google.com/" }
+        {
+          "word": "OpenRouter",
+          "href": "https://openrouter.ai/"
+        },
+        {
+          "word": "Gemini",
+          "href": "https://gemini.google.com/"
+        },
+        {
+          "word": "Claude",
+          "href": "https://claude.ai/"
+        }
       ]
     }
   ]

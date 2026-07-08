@@ -8,10 +8,11 @@ function isGoogleCalendarEmbedUrl(url) {
   return path.includes('/calendar/') && path.includes('/embed');
 }
 
+/** Light canvas for embed; `.calendar-frame--google` inverts it to match `#0a1018`. */
+const GOOGLE_EMBED_CANVAS = '#ffffff';
+
 /**
- * Match dashbird glass/dark UI: week view, dark canvas, hide duplicate embed title.
- * Always sets bgcolor to the dashboard base (#0a1018) so pasted embed URLs that include
- * Google’s default white canvas are overridden (Google still may render a lighter UI for some accounts).
+ * Match dashbird glass/dark UI: week view, light embed canvas (inverted in CSS), hide duplicate title.
  * @param {URL} url
  */
 function applyGoogleCalendarEmbedDefaults(url) {
@@ -20,7 +21,7 @@ function applyGoogleCalendarEmbedDefaults(url) {
   if (mode == null || mode === '') {
     url.searchParams.set('mode', 'WEEK');
   }
-  url.searchParams.set('bgcolor', '#0a1018');
+  url.searchParams.set('bgcolor', GOOGLE_EMBED_CANVAS);
   if (!url.searchParams.has('showTitle')) {
     url.searchParams.set('showTitle', '0');
   }
@@ -29,7 +30,7 @@ function applyGoogleCalendarEmbedDefaults(url) {
 /**
  * Normalize CALENDAR_EMBED_URL from .env: trim, strip wrapping quotes,
  * extract src= from a pasted iframe snippet, validate as http(s) URL.
- * For Google Calendar embeds: adds mode=WEEK, forces bgcolor to the dashboard base (#0a1018), and sets showTitle=0 when omitted.
+ * For Google Calendar embeds: adds mode=WEEK, forces a light bgcolor (inverted to dark in CSS), and sets showTitle=0 when omitted.
  * @param {string|undefined} raw
  * @returns {string} usable iframe src or ''
  */
