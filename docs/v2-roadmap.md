@@ -1,48 +1,63 @@
 # V2 roadmap — deferred integrations
 
-This repo is **dashbird** (renamed from the earlier **homeassistantdashboard** workspace; the recovered Cursor plan lives at `~/.cursor/plans/local_firefox_dashboard_26fbbff8.plan.md`).
+This repo is **dashbird**. This file lists **post–v1** work.
 
-**V1 scope** is defined in the Cursor plan *Local homepage dashboard* (project **dashbird**) for this workspace. This file lists **post–v1** work only.
+Cross-reference: v1 ships the dashboard shell and core panels; v2 items mount into existing layout slots where noted.
 
-Cross-reference: implement v1 first so the routes and panel modules described here mount cleanly.
+---
+
+## Scope guardrails
+
+- **Chat** — out of scope for this dashboard repo.
+- **CompHealth** — separate project; not built here.
+- **Hetzner / public VPS** — out of scope; dashbird stays **local LAN only**.
+- **Desktop protocol tiles** (`cursor://`, local app launchers) — out of scope; bookmarks are web URLs only.
 
 ---
 
 ## V2 features (planned)
 
-Current scope guardrails:
-- Chat is out of scope for this dashboard repo.
-- CompHealth is out of scope for this repo and tracked as a separate project concern.
-
 ### 1. Vikunja-backed todos
 
-- **Server:** `GET/POST/PATCH/DELETE` proxy under `/api/vikunja/*` (or `/api/todos/*` forwarding to Vikunja) with `VIKUNJA_BASE_URL` + token only in server env.
-- **Client:** todo panel module — lists, subtasks, statuses, drag-and-drop reorder **as supported by Vikunja’s REST API** at implementation time.
-- **Why v2:** multi-step UI + API mapping; v1 should ship the dashboard layout and core panels first without blocking on Vikunja semantics.
+- **Server:** `GET/POST/PATCH/DELETE` proxy under `/api/vikunja/*` with `VIKUNJA_BASE_URL` + token in server env only.
+- **Client:** todo panel — lists, subtasks, statuses, drag-and-drop as supported by Vikunja’s REST API at build time.
 
 ### 2. Google Keep snippets
 
-- **Server:** OAuth2 (refresh token on disk or secret mount), call official [Google Keep API](https://developers.google.com/workspace/keep/api/guides) `notes.list` (read-only scope per current Google docs), short TTL cache, `GET /api/keep/summary` returning a small list (e.g. 3–5 notes: pinned first, then recent).
+- **Server:** OAuth2 refresh token, `GET /api/keep/summary` (read-only, short TTL cache).
 - **Client:** small card widget; no Google tokens in the browser.
-- **Why v2:** consumer `@gmail.com` eligibility and OAuth consent are **high risk**; spike without holding v1 hostage.
 
-### 3. Optional expansions (still v2 or later)
+### 3. House Hunter (realtor / housing search)
 
-- **Home Assistant REST proxy** — `/api/home-assistant/*` with long-lived token in env; a few entity tiles on the same page as the rest of the dashboard.
-- **Optional assistant controls** — tier → model map file, local spend caps, optional LiteLLM/Bifrost upstream swap (same OpenAI wire format).
-- **AI provider pluggability (post-OpenRouter baseline)** — keep OpenRouter as default for now; evaluate/add direct provider adapters (for example OpenAI/Anthropic) behind one internal interface.
-- **Cybersecurity plan** — create and maintain a lightweight security plan for this repo (threat model, secret handling rules, dependency/update cadence, incident response checklist, and periodic scan cadence).
-- **Snyk billing/admin check** — verify account plan/usage visibility and set a recurring billing review checkpoint (outside app runtime, project-admin task).
+- **UI slot today:** topbar tab + `public/js/panels/house-hunter.js` — **visual placeholder only** (layout cue, not a shipped feature).
+- **V2 build:** criteria doc (must-haves, price, commute), listing sources (Redfin, Zillow, LoopNet, etc.) via official APIs or authorized exports — not brittle scraping.
+
+### 4. Events
+
+- **UI slot today:** left sidebar card `Events` — **visual placeholder only**.
+- **V2 build:** criteria doc, curated sources (Meetup, Eventbrite, local calendars), thumbs up/down + optional feedback window, preference store and ranking.
+
+### 5. Personal / local news
+
+- **UI slot today:** left sidebar card `Local News` — **visual placeholder only**.
+- **V2 build:** personal/local feed with the same preference-learning pattern as Events.
+
+### 6. Optional expansions (v2 or later)
+
+- **Home Assistant REST proxy** — `/api/home-assistant/*` with long-lived token in env.
+- **Optional assistant controls** — tier → model map, spend caps, optional LiteLLM/Bifrost upstream.
+- **AI provider pluggability** — OpenRouter stays default for now; evaluate direct OpenAI/Anthropic adapters behind one internal interface.
+- **Cybersecurity audit program** — recurring audit using the stack in [`docs/security-plan.md`](security-plan.md): `npm audit`, Dependabot (if enabled), Semgrep or equivalent static analysis, Cursor security review on meaningful diffs, and documented triage/fix cadence. **Billing/tooling decisions for commercial scanners are settled** — execute the audit plan, don’t re-litigate vendor billing.
 
 ---
 
 ## What v1 must do so v2 is cheap
 
-1. **Single Node entrypoint** — register routes in a small router module so new mounts are `app.use('/api/vikunja', vikunjaRouter)` style, not tangled in one file.
-2. **Front-end as modules** — e.g. one JS module per panel (`calendar`, `weather`, `bookmarks`, `notes`, `tool-library`); add `todos.js` / `keep.js` in v2 without rewriting the shell.
-3. **Shared fetch helper** — all API calls to same origin `/api/...` so adding proxies does not change CORS story.
-4. **Env-only secrets pattern** — establish `.env.example` with placeholders for `VIKUNJA_*`, `GOOGLE_*` / token paths **documented but unused** in v1 if desired.
-5. **Compose volume hooks** — optional `./secrets:/run/secrets:ro` pattern in README for OAuth refresh files in v2.
+1. **Single Node entrypoint** — small router modules (`app.use('/api/vikunja', …)`).
+2. **Front-end as modules** — one JS file per panel; add `todos.js` / `keep.js` without rewriting the shell.
+3. **Shared fetch helper** — same-origin `/api/...` only.
+4. **Env-only secrets** — `.env.example` documents unused v2 placeholders.
+5. **Compose volume hooks** — optional `./secrets:/run/secrets:ro` for OAuth refresh files in v2.
 
 ---
 
@@ -75,9 +90,11 @@ flowchart LR
 
 ---
 
-## Out of scope even for v2 (unless you explicitly reopen)
+## Out of scope even for v2 (unless explicitly reopened)
 
-- **Chat surfaces** in this dashboard (separate project concern if reintroduced later).
-- **CompHealth-specific workflows or integrations** in this repo.
-- **Embedding or executing Lovelace YAML / HACS card bundles** inside this app (different runtime; see main plan comparison).
-- **Re-implementing Home Assistant** inside this repo.
+- Chat surfaces in this dashboard.
+- CompHealth workflows in this repo.
+- Hetzner / public cloud deployment for dashbird.
+- Desktop app launch / `cursor://` / local protocol bookmark tiles.
+- Embedding or executing Lovelace YAML / HACS card bundles inside this app.
+- Re-implementing Home Assistant inside this repo.

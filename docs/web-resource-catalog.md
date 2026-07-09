@@ -76,14 +76,17 @@ Per resource: `off` | `updown` | `change` (reachability + optional content finge
 
 ## Dashbird implementation status
 
-Shipped in this repo (works on **local JSON** until Supabase env is set):
+**Supabase catalog project is live** (Jul 9 2026): `https://caeuclotjiacctqmmllg.supabase.co` — migrations applied, seed run (~63 `web_resources`). Local JSON remains fallback if env is unset.
 
-- Schema: `supabase/migrations/001_web_catalog.sql`
+Shipped in this repo:
+
+- Schema: `supabase/migrations/001_web_catalog.sql`, `002_web_catalog_favorite.sql`
 - Store + interchange: `src/lib/web-catalog-*.js`
 - API: `/api/web-catalog` (list/filter, CRUD, export/import, review, jobs, watch, promote)
 - Background: watch poller + discovery worker started from `src/server.js`
-- Tool Library UI: token search, status chips, Review queue, Export, right-click → background alternatives
+- Tool Library UI: token search, favorites, status chips, Review queue, Import, Export, **Find alt** (background discovery), Enter-to-search-online, Playwright thumbnails when needed
+- Pricing enrichment: `Free` / `Free / $X/mo` (no “freemium”); trial-only → cheapest paid tier
 - Seed: `npm run catalog:migrate` (tools + bookmarks → catalog)
 - Dual-write: new tools also upsert into the catalog
 
-**Next for you:** create the web-catalog Supabase project, apply the migration, set `WEB_CATALOG_SUPABASE_*` in `.env`, re-run `catalog:migrate`.
+**Still open (cross-project):** portfolio proficient-tools lens on this same catalog.

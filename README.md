@@ -1,16 +1,21 @@
 # dashbird
 
-Local **homepage dashboard** (Dashy-inspired glass UI): full-width photo background, a **hero** cluster (12-hour clock, Open-Meteo weather with low-poly SVG icons), **Personal** and **Admin** tile grids (favicon + one word), Google Calendar, and plain-text notes.
+Local **homepage dashboard** (Dashy-inspired glass UI): hero weather/clock, bookmark tiles, Google Calendar, tool library, sky/earth sidebars, and plain-text notes. Runs on your home network via Docker Compose.
 
-Post–v1 integrations (Vikunja, Google Keep, optional Home Assistant proxy) live in [`docs/v2-roadmap.md`](docs/v2-roadmap.md).
+Planning and deferred work: [`docs/v2-roadmap.md`](docs/v2-roadmap.md)  
+Security operating plan: [`docs/security-plan.md`](docs/security-plan.md)  
+Cross-project naming: [`docs/naming-system.md`](docs/naming-system.md)
 
-Cross-project naming standards (local folders, repos, servers, domains) live in [`docs/naming-system.md`](docs/naming-system.md).
+## Current product truth
 
-Current product truth:
-- Chat is not in current dashboard scope.
-- CompHealth work is out of scope for this repo (handled as a separate project concern).
+- **Local LAN only** — trusted home Wi‑Fi; do not port-forward to the public internet.
+- **No login/password** on the dashboard itself for this deployment model (network boundary is your LAN; see security plan).
+- **Chat** is out of scope for this repo.
+- **CompHealth** is a separate project concern (not in this repo).
+- **House Hunter**, **Events**, and **Local News** appear in the UI as **visual placeholders only** — not shipped features. Real development is tracked in the v2 roadmap.
+- **OpenRouter** is the current AI enrichment provider (tool library ratings fallback); other providers are v2.
 
-This repo supersedes the earlier **`homeassistantdashboard`** workspace; the Cursor plan was merged here under the name **dashbird** (see `~/.cursor/plans/local_firefox_dashboard_26fbbff8.plan.md` if you still have it).
+This repo supersedes the earlier **`homeassistantdashboard`** workspace.
 
 ## Quick start
 
@@ -26,32 +31,26 @@ This repo supersedes the earlier **`homeassistantdashboard`** workspace; the Cur
    docker compose up --build
    ```
 
-3. Open **`http://127.0.0.1:8787/`** (or whatever you set as `HOST_PORT` in `.env`). The container listens on **3000** internally; Compose publishes **`HOST_PORT` on all host interfaces** (`0.0.0.0`).
+3. Open **`http://127.0.0.1:8787/`** (or `HOST_PORT` from `.env`). The container listens on **3000** internally; Compose publishes **`HOST_PORT` on all host interfaces** (`0.0.0.0`).
 
 ### Phone on the same Wi‑Fi
 
-Use your PC’s **LAN IP**, not `127.0.0.1` — on the phone, `127.0.0.1` is the phone itself.
+Use your PC’s **LAN IP**, not `127.0.0.1`.
 
-After **`docker compose up`** (or `up -d --build`), a **`lan-url`** service runs on the host network, prints the bookmark URL in the compose logs, and writes **`public/data/phone-lan-url.txt`** so the system sidebar can show **Phone (same Wi‑Fi)** without extra config.
+After **`docker compose up`**, the **`lan-url`** service prints a bookmark URL in compose logs and writes **`public/data/phone-lan-url.txt`**.
 
 ```bash
-docker compose logs lan-url    # re-read the printed URL
-npm run lan-url                # print again from the host (no Docker)
+docker compose logs lan-url
+npm run lan-url
 ```
 
-Example output: `[dashbird] Phone (same Wi-Fi): http://192.168.1.42:8787/`
-
-On your phone (same Wi‑Fi, not guest/isolated Wi‑Fi), open that URL and bookmark it.
+Example: `[dashbird] Phone (same Wi-Fi): http://192.168.1.42:8787/`
 
 Optional: set **`DASHBOARD_LAN_ORIGIN`** in `.env` to override the auto-detected origin (no trailing slash).
 
-**If the page does not load:** allow the port on the host firewall (e.g. `sudo ufw allow 8787/tcp`), confirm phone and PC are on the same subnet, and disable router “AP/client isolation” if enabled.
+**If the page does not load:** allow the port on the host firewall (e.g. `sudo ufw allow 8787/tcp`), confirm phone and PC share a subnet, and disable router AP/client isolation if enabled.
 
-**Security:** anyone on your LAN who knows the IP can use the dashboard. This is intentional for trusted home Wi‑Fi only — do not port-forward to the public internet without authentication.
-
-### Hetzner Cloud (VPS)
-
-To run on a public server with HTTPS, see **[docs/deploy-hetzner.md](docs/deploy-hetzner.md)**. Use `docker compose -f docker-compose.hetzner.yml up -d --build` with a domain, Caddy TLS, and HTTP basic auth.
+**Security:** anyone on your LAN who knows the IP can open the dashboard. That is acceptable for trusted home Wi‑Fi only. Do not expose this port to the internet.
 
 ### Local Node (without Docker)
 
@@ -62,93 +61,92 @@ npm start
 
 Default `PORT` is **3000** when not using Compose.
 
+## Layout (current UI)
+
+- **Top bar:** brand, page tabs (main dashboard, House Hunter placeholder, Settings), live location context (GPS-first).
+- **Main column:** web search, hero, bookmarks, calendar, tool library, notes.
+- **Left sidebar (life):** Events and Local News **placeholders** (visual cues; v2 roadmap).
+- **Right sidebar (sky):** Today’s To Do, Sky & Space, Earth, weather radar, magnetosphere, geoelectric field, market watch.
+
+House Hunter is a separate topbar page — also a **placeholder** until v2.
+
 ## Configuration
 
 | Variable | Purpose |
 |----------|---------|
 | `PORT` | HTTP port inside the container / for `npm start` |
 | `HOST_PORT` | Host port published by Compose (default `8787`) |
-| `DASHBOARD_LAN_ORIGIN` | Optional full origin for sidebar **Phone (same Wi‑Fi)** link; run `npm run lan-url` to discover |
-| `CALENDAR_EMBED_URL` | Full `src` URL from Google Calendar **Integrate calendar** (iframe embed) |
-| `WEATHER_LAT` / `WEATHER_LON` | Open-Meteo coordinates (defaults: **Oakland, CA 94608**) |
-| `DASHBOARD_LOCATION_LABEL` | Reserved for future use (the hero no longer shows a location line under the date) |
+| `DASHBOARD_LAN_ORIGIN` | Optional full origin for phone/LAN bookmark link |
+| `GOOGLE_CALENDAR_ICAL_URL` | Public iCal URL (Settings / calendar panel) |
+| `WEATHER_LAT` / `WEATHER_LON` | Fallback coordinates when GPS is denied |
 | `SF_WEATHER_LAT` / `SF_WEATHER_LON` | Second city in hero (default San Francisco) |
-| `LAST_BACKUP_AT` | Optional ISO time for **“days since last backup”** in the right system sidebar (overrides file below) |
+| `OPENROUTER_API_KEY` | Optional; tool library AI rating fallback |
 
-Commented **v2** placeholders are listed in [`.env.example`](.env.example).
+Commented placeholders are listed in [`.env.example`](.env.example).
 
-## Last backup (system sidebar)
+## Product backlog
 
-Set **`LAST_BACKUP_AT`** in `.env` to an ISO timestamp, **or** put a single ISO line in [`public/data/last-backup.txt`](public/data/last-backup.txt) (first non-`#` line wins if env is empty). The **right system sidebar** shows **days since last backup** (full calendar days since that time) with a short tooltip for the exact timestamp.
+Tracked in [`docs/v2-roadmap.md`](docs/v2-roadmap.md), including:
 
-## Layout
-
-The main column uses the **full browser width** with responsive side padding (`clamp`), so laptop windows are not locked to a narrow max-width.
-
-## Product backlog (from `features.txt`)
-
-Not implemented yet; tracked for future work:
-
-- Life-goals / refocus panel (financial, housing, music, friends, schedule, events).
-- Agent daily-ops status (fed by a separate orchestrator).
-- Private cycle / “bioclock” notes (local-only, no third party).
-- Persistent “Amazon package arrived” banner (external email agent later).
-- Google Keep–style sync (see [`docs/v2-roadmap.md`](docs/v2-roadmap.md) for Keep as v2).
+- Vikunja todos, Google Keep, Home Assistant proxy
+- **House Hunter**, **Events**, **Local News** (real builds — UI slots exist as placeholders)
+- Life-goals / refocus panel, agent daily-ops, bioclock notes, Amazon package banner
+- Cybersecurity audit cadence (see security plan)
+- Optional AI provider pluggability beyond OpenRouter
 
 ## Browser home / new tab
 
-Use your browser’s settings to set **home page** and/or **custom new tab URL** to this app’s origin (for example `http://127.0.0.1:8787/`). The app uses normal **HTTPS/HTTP** APIs only—no Firefox-only APIs and no requirement for extensions.
+Set your browser home page or custom new tab URL to this app’s origin (e.g. `http://127.0.0.1:8787/`).
 
 ## Editing tiles and notes
 
-- **Personal** tiles: [`public/data/bookmarks-personal.json`](public/data/bookmarks-personal.json) — object with a `sections` array. Each section has `title` and `items` (`word`, `href`, optional `icon`, optional `title` for native tooltip). Sections render as collapsible groups (**first section open** by default). **`cursor://` and `signal://`** open the desktop handlers; other links open in a new tab.
-- **Admin** tiles: [`public/data/bookmarks-work.json`](public/data/bookmarks-work.json) — same `sections` / `items` shape; sections render as collapsible groups (first open by default).
-- **Background image**: [`public/assets/dashboard-bg.jpg`](public/assets/dashboard-bg.jpg) (replace this file to change the wallpaper).
-- Notes: [`public/data/notes.md`](public/data/notes.md) (shown as plain text).
+- **Personal** tiles: [`public/data/bookmarks-personal.json`](public/data/bookmarks-personal.json)
+- **Admin** tiles: [`public/data/bookmarks-work.json`](public/data/bookmarks-work.json)
+- **Background:** [`public/assets/dashboard-bg.jpg`](public/assets/dashboard-bg.jpg)
+- **Notes:** [`public/data/notes.md`](public/data/notes.md)
 
-Docker Compose mounts **`./public`** and **`./src`** into the container, so new sky icons, `sky-events-calendar.json`, and panel JS match the repo without `docker compose build` (restart or refresh is enough). Static responses use **`Cache-Control: no-cache, must-revalidate`** and **`GET /api/sky-events`** uses **`no-store`**, so a normal reload picks up icon URL changes; use a hard refresh if a tab was open for a long time. After **server** or **dependency** changes, run **`docker compose up --build`** again.
+Bookmark links are normal **https://** URLs opened in a new tab.
+
+Docker Compose mounts **`./public`** and **`./src`**, so static/panel changes often need only a refresh. After server or dependency changes, run **`docker compose up --build`**.
+
+## Validation
+
+```bash
+npm run smoke:core
+```
+
+Core checks: OpenRouter health, tool ratings, Atlantic storm watch, weather radar.
 
 ## Tool Library ratings telemetry
 
-`GET /api/tool-library/ratings` emits structured console events with `sourceUsed`, `nullRating`, and `latencyMs`. `GET /api/tool-library/ratings/debug` exposes lightweight in-memory counters for local debugging.
+`GET /api/tool-library/ratings` logs structured events (`sourceUsed`, `nullRating`, `latencyMs`).  
+`GET /api/tool-library/ratings/debug` exposes in-memory counters for local debugging.
 
-## Architecture (v1)
+## Architecture
 
 - **Express** serves `public/` and [`docs/`](docs/) at **`/docs/...`**.
-- **Panels** are ES modules under [`public/js/panels/`](public/js/panels/) (one file per area), loaded from [`public/js/app.js`](public/js/app.js).
-- **APIs**: `GET /api/config`, **`GET /api/sky-events`** (hero “sky sights” rows from [`src/data/sky-events-calendar.json`](src/data/sky-events-calendar.json); optional `?windowHours=24`), **`501`** stubs: `/api/vikunja/*`, `/api/home-assistant/*` for v2.
+- **Panels** are ES modules under [`public/js/panels/`](public/js/panels/), loaded from [`public/js/app.js`](public/js/app.js).
+- **APIs:** `GET /api/config`, `GET /api/sky-events`, `GET /api/openrouter/health`, tool library routes, web catalog routes; **`501`** stubs for `/api/vikunja/*`, `/api/home-assistant/*` (v2).
 
-### Sky event types and reference websites
+### Location and weather
 
-Sky rows come from **hand-edited** [`src/data/sky-events-calendar.json`](src/data/sky-events-calendar.json), except: **geomagnetic storm (G-scale)** — the server calls **NOAA SWPC** [`noaa-scales.json`](https://services.swpc.noaa.gov/products/noaa-scales.json) (today’s **`"0"`** geomagnetic **G** value) **and** [`planetary_k_index_1m.json`](https://services.swpc.noaa.gov/json/planetary_k_index_1m.json); the geomagnetic strip row appears only when **G≥2 on the NOAA geomagnetic scale** *or* **planetary estimated Kp reaches the G2 tier** (~**Kp 6−**, numeric floor **≈ 5.67**). Calendar `geomagnetic` rows are dropped in favour of these live merges. Storm **S**‑scale proton flux (**GOES** ≥10 MeV) is **no longer** substituted for geomagnetic (**G**)—they are distinct NOAA axes. **Aurora** — the server calls **SWPC** [`ovation_aurora_latest.json`](https://services.swpc.noaa.gov/json/ovation_aurora_latest.json) and [`planetary_k_index_1m.json`](https://services.swpc.noaa.gov/json/planetary_k_index_1m.json), bilinear-samples Ovation at **`WEATHER_LAT` / `WEATHER_LON`** (94608 defaults in `.env`), and replaces calendar `aurora` rows with one **“today”** row (`America/Los_Angeles` day bounds). The subtitle shows **Low / Medium / High / Very high** from `computeAuroraLikelihood` in [`src/lib/swpc-aurora.js`](src/lib/swpc-aurora.js) (latitude-aware Kp + Ovation); not clouds/moon. The app **does not** otherwise call the sites in the table on a schedule; update the JSON when you refresh passes, showers, etc. **ISS pass** and **Satellite flare** rows use optional `forecastUrl` in the same file so the hero can open the primary site in a new tab. Hero **weather** and **sunrise/sunset** use live [Open-Meteo](https://api.open-meteo.com/) requests from the browser when the page loads; weather/rain location is **GPS-first** (prompted per user/device/browser), with fallback to configured coordinates when location permission is denied or unavailable; **moonrise** is computed locally (SunCalc).
+Hero weather and rain alert are **GPS-first** (prompt per user/device/browser), with fallback to `WEATHER_ZIP` / `WEATHER_LAT`+`WEATHER_LON` when permission is denied.
 
-Earth row behavior is strict: Atlantic storm rows only appear for **Atlantic Category 1+** systems with projected land impact. The Puerto Rico risk marker appears only when that projected-impact signal includes Puerto Rico risk.
+### Earth strip (strict)
 
+Atlantic storm rows appear only for **Atlantic Category 1+** systems with **projected land impact** in NHC advisory text. Puerto Rico risk uses a `!` marker when advisory text indicates hit or near-pass.
 
-| Event (hero label) | Primary website (curation / forecast) |
-|--------------------|----------------------------------------|
-| Aurora | Live **Ovation + Kp** from [SWPC JSON](https://services.swpc.noaa.gov/json/) at **`WEATHER_LAT` / `WEATHER_LON`** (94608 defaults); [30-minute aurora forecast (SWPC)](https://www.swpc.noaa.gov/products/aurora-30-minute-forecast) |
-| Geomagnetic | [NOAA SWPC — NOAA Scales](https://www.swpc.noaa.gov/products/noaa-scales) — geomagnetic (**G**) row when **today’s NOAA G≥2** *or* **planetary Kp≥G2 tier** (~6− per SWPC Kp coding); not GOES proton (S‑scale) |
-| Lunar eclipse | [Time and Date — eclipses](https://www.timeanddate.com/eclipse/) (see also [NASA JPL skywatching](https://solarsystem.nasa.gov/skywatching/home/) in calendar `sources`) |
-| Solar eclipse | [Time and Date — eclipses](https://www.timeanddate.com/eclipse/) (see also [NASA JPL skywatching](https://solarsystem.nasa.gov/skywatching/home/) in calendar `sources`) |
-| Comet | [NASA JPL — What’s Up / skywatching](https://solarsystem.nasa.gov/skywatching/home/) (see also [In-The-Sky.org](https://in-the-sky.org/) in calendar `sources`) |
-| Supermoon | Curated public lists (e.g. NASA Science, Sky at Night, Time and Date); see `meta.window_policy` in the calendar JSON — not every full moon qualifies |
-| Meteor shower | [AMS meteor shower calendar](https://www.amsmeteors.org/meteor-showers/meteor-shower-calendar/) (peaks & moon) and [IMO calendar](https://www.imo.net/resources/calendar/) — calendar JSON uses **`startsAt`/`endsAt` = peak night only** (see `meta.meteor_range_policy`) |
-| ISS pass | [NASA Spot the Station](https://spotthestation.nasa.gov/) |
-| Satellite flare | [Heavens-Above](https://www.heavens-above.com/) |
-| Satellite train | [Heavens-Above](https://www.heavens-above.com/) |
-| Rocket launch | [SpaceLaunchSchedule](https://www.spacelaunchschedule.com/) and [NASA TV / nasalive](https://www.nasa.gov/nasalive/) for live coverage |
-| Rainbow | No dedicated URL in the calendar; use weather (same hero stack: **Open-Meteo** on load; optional human check [weather.gov](https://www.weather.gov/)) plus sun-low geometry |
+### Sky events
 
-The calendar `sources` array also lists [SpaceWeatherLive](https://www.spaceweatherlive.com/) for aurora / geomagnetic / solar context alongside NOAA.
+Hand-edited [`src/data/sky-events-calendar.json`](src/data/sky-events-calendar.json) plus live merges (geomagnetic, aurora, etc.). See existing calendar `sources` and NOAA/SWPC endpoints in that file.
 
-### Connectivity check (right sidebar)
+### Developer connectivity checks
 
-The **Check all** button at the bottom of the system sidebar runs **`POST /api/dashboard-check`**: **`/api/sky-events`** (live SWPC including NOAA scales + Ovation/Kp paths used there), Open-Meteo for both hero cities, **`CALENDAR_EMBED_URL`** when set, HTTP(S) **bookmark** tiles (skips `cursor://` / `signal://`), **`public/data/notes.md`**, and internal **`/api/*`** probes. If anything fails, a **yellow warning triangle** appears next to the button; **hover** it for a plain-text list of what failed. When you add a new outbound connector or API, update **`src/lib/dashboard-check.js`** (checklist in that file’s header).
+`POST /api/dashboard-check` and `src/lib/dashboard-check.js` remain for automated probes during development/smoke workflows — not exposed as an end-user “system sidebar” UI.
 
 ## Home Assistant / Lovelace vs this app
 
-You can still set the browser home URL to your **Home Assistant Lovelace** dashboard if entity control and community cards are the main goal. **dashbird** is a small, separate page for mixed “browser life” widgets (hero weather, sky & space sidebar, bookmarks, calendar, tool library, notes); see the plan file above for the full comparison.
+You can still set browser home to **Home Assistant Lovelace** for entity control. **dashbird** is a separate mixed “browser life” dashboard (weather, sky/earth, bookmarks, calendar, tools, notes).
 
 ## License
 

@@ -84,11 +84,11 @@ If using brand DNS for private tools, isolate with clear naming:
 
 Map each project to a tier before deployment.
 
-## 7) Dashbird Defaults
+## 7) Dashbird defaults
 
-Dashbird is permanently a personal private tool:
-- Folder root: `projects/personal`
+Dashbird is a personal private tool, **local LAN only** for this project:
+- Folder root: `projects/personal` (or current workspace path)
 - Repo name: `dashbird`
-- Server naming scope: `personal-*`
-- Require auth in cloud deployments (session cookie + password)
+- Deployment: Docker Compose on home network — **no public VPS / Hetzner** in active scope
+- Access control: trusted LAN boundary; **no dashboard login** in the current model (do not port-forward to the internet)
 
