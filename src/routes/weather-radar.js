@@ -3,7 +3,7 @@ import { getWeatherRadarStatus, radarDisabled } from '../lib/weather-radar-statu
 
 const router = Router();
 
-router.get('/', async (_req, res) => {
+router.get('/', async (req, res) => {
   try {
     if (radarDisabled()) {
       res.setHeader('Cache-Control', 'private, max-age=300');
@@ -11,7 +11,11 @@ router.get('/', async (_req, res) => {
       return;
     }
 
-    const payload = await getWeatherRadarStatus();
+    const payload = await getWeatherRadarStatus({
+      lat: req.query?.lat,
+      lon: req.query?.lon,
+      label: req.query?.label,
+    });
     if (!payload.ok) {
       res.status(500).json({ ok: false, error: payload.error || 'radar_failed' });
       return;

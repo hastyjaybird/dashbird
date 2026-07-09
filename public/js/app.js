@@ -1,18 +1,9 @@
 import { mountCalendar } from './panels/calendar.js';
 import { mountBookmarkGrid } from './panels/bookmarks.js';
-import { mountHero } from './panels/hero.js';
-import { debugLog } from './lib/debugLog.js';
-import { mountHealthSidebar } from './panels/health-sidebar.js';
 import { mountCalendarUpcoming } from './panels/calendar-upcoming.js';
-import { mountMarketWatch } from './panels/market-watch.js';
-import { mountWeatherRadar } from './panels/weather-radar.js';
-import { mountGeoelectricField } from './panels/geoelectric-field.js';
-import { mountMagnetosphere } from './panels/magnetosphere.js';
 import { mountPageTabs } from './panels/page-tabs.js';
 import { mountSettingsPage } from './panels/settings-page.js';
-import { mountToolLibrary } from './panels/tool-library.js';
-import { mountEarthStrip } from './panels/earth-events.js';
-import { mountTodayTodo } from './panels/today-todo.js';
+import { debugLog } from './lib/debugLog.js';
 
 async function loadConfig() {
   const r = await fetch('/api/config');
@@ -21,19 +12,16 @@ async function loadConfig() {
 }
 
 /**
- * Primary dashboard point: ZIP (if set) else lat/lon; IANA zone for hero clock / sky strip / NWS sunset.
+ * Header top-right: live device place when GPS is allowed, else server WEATHER_ZIP/lat/lon.
+ * @param {HTMLElement | null} el
+ * @param {{ shortLabel?: string, timeZone?: string, source?: string, label?: string }} place
  */
-function mountTopbarContext(el, config) {
-  if (!el || !config) return;
-  const zipRaw = config.weatherZip != null ? String(config.weatherZip).trim() : '';
-  const lat = Number(config.weatherLat);
-  const lon = Number(config.weatherLon);
-  const tz = (config.weatherTimeZone || '').trim() || '—';
+function renderTopbarContext(el, place) {
+  if (!el || !place) return;
 
-  const locationLine =
-    zipRaw.length > 0
-      ? zipRaw
-      : `Lat/Lon ${Number.isFinite(lat) ? lat.toFixed(3) : '—'}, ${Number.isFinite(lon) ? lon.toFixed(3) : '—'}`;
+  const tz = (place.timeZone || '').trim() || '—';
+  const loc = (place.shortLabel || '').trim() || '—';
+  const live = place.source === 'device';
 
   el.replaceChildren();
   const lineTz = document.createElement('span');
@@ -42,11 +30,12 @@ function mountTopbarContext(el, config) {
 
   const lineLoc = document.createElement('span');
   lineLoc.className = 'topbar__context-line topbar__context-loc';
-  lineLoc.textContent = locationLine;
+  lineLoc.textContent = live ? `${loc} · live` : loc;
 
   el.append(lineTz, lineLoc);
-  el.title =
-    'Primary coordinates and timezone from server config (WEATHER_ZIP or WEATHER_LAT/LON; WEATHER_TIME_ZONE or NWS). Oakland weather tile and SF tile use their own points.';
+  el.title = live
+    ? `Your current location (${place.label || loc}). Rain alert uses this point.`
+    : 'Server default location (WEATHER_ZIP). Allow location in the browser for live updates.';
 }
 
 let settingsLoaded = false;
@@ -63,16 +52,42 @@ function showPage(page) {
   }
 }
 
-async function main() {
-  mountPageTabs(document.getElementById('mount-page-tabs'), { onChange: showPage });
+function markPriorityReady() {
+  document.body.classList.add('dashy--priority-ready');
+}
 
-  const calendarUpcomingPromise = fetch('/api/calendar/upcoming', { cache: 'no-store' })
-    .then((r) => r.json())
-    .catch(() => null);
+/**
+ * Weather, sidebars, tool library — parsed and mounted after search/bookmarks/calendar.
+ * @param {object} config
+ */
+async function mountDeferredPanels(config) {
+  const [
+    { mountHero },
+    { mountEarthStrip },
+    { mountWeatherRadar },
+    { mountGeoelectricField },
+    { mountMagnetosphere },
+    { mountMarketWatch },
+    { mountTodayTodo },
+    { mountToolLibrary },
+    { startDeviceLocation, subscribeDevicePlace },
+  ] = await Promise.all([
+    import('./panels/hero.js'),
+    import('./panels/earth-events.js'),
+    import('./panels/weather-radar.js'),
+    import('./panels/geoelectric-field.js'),
+    import('./panels/magnetosphere.js'),
+    import('./panels/market-watch.js'),
+    import('./panels/today-todo.js'),
+    import('./panels/tool-library.js'),
+    import('./lib/device-location.js'),
+  ]);
 
-  const config = await loadConfig();
-
-  mountTopbarContext(document.getElementById('mount-topbar-context'), config);
+  const topbarEl = document.getElementById('mount-topbar-context');
+  startDeviceLocation(config).then((place) => {
+    if (place) renderTopbarContext(topbarEl, place);
+  });
+  subscribeDevicePlace((place) => renderTopbarContext(topbarEl, place));
 
   const skyStripMount = document.getElementById('mount-sky-strip');
   mountHero(document.getElementById('mount-hero'), config, {
@@ -95,6 +110,23 @@ async function main() {
   );
   mountMarketWatch(document.getElementById('mount-market-watch'));
   mountTodayTodo(document.getElementById('mount-today-todo'));
+  mountToolLibrary(document.getElementById('mount-tool-library'));
+
+  document.body.classList.add('dashy--deferred-ready');
+  for (const el of document.querySelectorAll('.boot-deferred[aria-busy]')) {
+    el.removeAttribute('aria-busy');
+  }
+
+  debugLog({
+    location: 'app.js:mountDeferredPanels',
+    message: 'dashbird deferred panels mounted',
+    hypothesisId: 'H2',
+    data: { panels: 'deferred-complete' },
+  });
+}
+
+async function main() {
+  mountPageTabs(document.getElementById('mount-page-tabs'), { onChange: showPage });
 
   const bookmarksPersonalPromise = mountBookmarkGrid(
     document.getElementById('mount-bookmarks-personal'),
@@ -107,33 +139,29 @@ async function main() {
     'Add tiles in public/data/bookmarks-work.json.',
   );
 
+  const config = await loadConfig();
+
   const calUpcomingMount = document.getElementById('mount-cal-upcoming');
   if (calUpcomingMount) {
-    calendarUpcomingPromise
-      .then((prefetchedCalendar) => {
-        mountCalendarUpcoming(calUpcomingMount, config, { prefetched: prefetchedCalendar });
-      })
-      .catch(() => {
-        mountCalendarUpcoming(calUpcomingMount, config, { prefetched: null });
-      });
+    mountCalendarUpcoming(calUpcomingMount, config, {});
   }
 
-  await Promise.allSettled([bookmarksPersonalPromise, bookmarksWorkPromise]);
-
   mountCalendar(document.getElementById('mount-calendar'), config);
-  mountToolLibrary(document.getElementById('mount-tool-library'));
 
-  const healthAside = document.getElementById('mount-health-sidebar');
-  if (healthAside) mountHealthSidebar(healthAside);
+  markPriorityReady();
 
-  // #region agent log
-  debugLog({
-    location: 'app.js:main',
-    message: 'dashbird boot complete (chat sidebar removed)',
-    hypothesisId: 'H2',
-    data: { panels: 'no-chat' },
+  void Promise.allSettled([bookmarksPersonalPromise, bookmarksWorkPromise]);
+
+  const scheduleDeferred =
+    typeof requestIdleCallback === 'function'
+      ? (fn) => requestIdleCallback(() => fn(), { timeout: 1200 })
+      : (fn) => setTimeout(fn, 0);
+
+  scheduleDeferred(() => {
+    mountDeferredPanels(config).catch((e) => {
+      console.error('Deferred panels failed:', e);
+    });
   });
-  // #endregion
 }
 
 main().catch((e) => {

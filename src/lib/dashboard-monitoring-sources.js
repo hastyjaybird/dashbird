@@ -17,7 +17,8 @@ export const DASHBOARD_MONITORING_SOURCES = [
     id: 'hero_weather',
     group: 'Hero & weather',
     label: 'Hero weather tiles (Oakland + San Francisco)',
-    source: 'Open-Meteo forecast API (api.open-meteo.com/v1/forecast)',
+    source:
+      '/api/hero-weather — Open-Meteo forecast (cached) with NWS station observations fallback',
   },
   {
     id: 'hero_aqi',
@@ -30,13 +31,13 @@ export const DASHBOARD_MONITORING_SOURCES = [
     group: 'Hero & weather',
     label: 'Rain expected in N minutes (hero)',
     source:
-      'Open-Meteo minutely_15 at Settings rain-alert address (Nominatim geocode); 2h horizon',
+      'Open-Meteo minutely_15 at live GPS when available, else dashboard WEATHER_ZIP; 2h horizon',
   },
   {
     id: 'market_fear_greed',
     group: 'Earth',
-    label: 'Market Watch — CNN Fear & Greed',
-    source: 'CNN Business production.dataviz.cnn.io Fear & Greed JSON',
+    label: 'Market Watch — CNN F&G Index',
+    source: 'CNN Business production.dataviz.cnn.io F&G Index JSON',
   },
   {
     id: 'firefly_season',
@@ -184,18 +185,6 @@ export const DASHBOARD_MONITORING_SOURCES = [
     group: 'Calendar & notes',
     label: 'Notes panel',
     source: 'public/data/notes.md (local file)',
-  },
-  {
-    id: 'openrouter_chat',
-    group: 'OpenRouter',
-    label: 'Chat responses',
-    source: 'OpenRouter API via server proxy (/api/chat; OPENROUTER_API_KEY)',
-  },
-  {
-    id: 'openrouter_limits',
-    group: 'OpenRouter',
-    label: 'Usage limit ring (health sidebar)',
-    source: 'OpenRouter API /api/openrouter/summary',
   },
 ];
 

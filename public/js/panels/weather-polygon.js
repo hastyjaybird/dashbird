@@ -2,9 +2,15 @@
  * Rounded, layered “Fluent / Windows 11–style” weather icons (inspired by common OS weather sets).
  * Drop shadow is applied via CSS on `.fluent-weather-icon`.
  *
- * Clear / partly sun disk: raster (`hero-weather-sun.png`) replaces inline SVG gradients.
+ * Condition image assets (clear/partly/cloudy/fog) are loaded from `/icons/weather`.
  */
-const HERO_WEATHER_SUN_SRC = '/icons/weather/hero-weather-sun.png';
+const HERO_WEATHER_CLEAR_SRC = '/icons/weather/clear.png';
+const HERO_WEATHER_PARTLY_SRC = '/icons/weather/partly.png';
+const HERO_WEATHER_CLOUDY_SRC = '/icons/weather/cloudy.png';
+const HERO_WEATHER_FOG_SRC = '/icons/weather/fog.png';
+const HERO_WEATHER_RAIN_SRC = '/icons/weather/rain.png';
+const HERO_WEATHER_STORM_SRC = '/icons/weather/storm.png';
+const HERO_WEATHER_HEAT_ADVISORY_SRC = '/icons/weather/heat-advisory.png';
 
 function classify(code) {
   const c = Number(code);
@@ -18,42 +24,48 @@ function classify(code) {
   return 'partly';
 }
 
+function imageSvg(src, inset = 8) {
+  const pad = Math.max(0, Math.min(40, Number(inset) || 0));
+  const side = 128 - pad * 2;
+  return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <image href="${src}" xlink:href="${src}" x="${pad}" y="${pad}" width="${side}" height="${side}" preserveAspectRatio="xMidYMid meet"/>
+  </svg>`;
+}
+
+function fogImageSvg(src) {
+  return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <image href="${src}" xlink:href="${src}" x="-3" y="-3" width="134" height="134" preserveAspectRatio="xMidYMid meet"/>
+  </svg>`;
+}
+
+/** Clear sun asset is wide (178×148); use full viewBox width — no inset padding. */
+function clearImageSvg(src) {
+  return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <image href="${src}" xlink:href="${src}" x="0" y="6" width="128" height="116" preserveAspectRatio="xMidYMid meet"/>
+  </svg>`;
+}
+
+/** Partly cloudy still leads with the sun — lighter inset than other conditions. */
+function partlyImageSvg(src) {
+  return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <image href="${src}" xlink:href="${src}" x="2" y="4" width="124" height="120" preserveAspectRatio="xMidYMid meet"/>
+  </svg>`;
+}
+
 function svg(kind) {
   switch (kind) {
+    case 'heat_advisory':
+      return imageSvg(HERO_WEATHER_HEAT_ADVISORY_SRC, 10);
     case 'clear':
-      return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-        <image class="hero-weather-sun-image" href="${HERO_WEATHER_SUN_SRC}" xlink:href="${HERO_WEATHER_SUN_SRC}" x="6" y="6" width="116" height="116" preserveAspectRatio="xMidYMid meet"/>
-      </svg>`;
+      return clearImageSvg(HERO_WEATHER_CLEAR_SRC);
     case 'partly':
-      return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-        <image class="hero-weather-sun-image" href="${HERO_WEATHER_SUN_SRC}" xlink:href="${HERO_WEATHER_SUN_SRC}" x="52" y="10" width="68" height="68" preserveAspectRatio="xMidYMid meet"/>
-        <ellipse cx="48" cy="88" rx="40" ry="26" fill="#64B5F6"/>
-        <ellipse cx="72" cy="82" rx="44" ry="30" fill="#42A5F5"/>
-        <ellipse cx="92" cy="90" rx="28" ry="20" fill="#1E88E5"/>
-      </svg>`;
+      return partlyImageSvg(HERO_WEATHER_PARTLY_SRC);
     case 'cloudy':
-      return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-        <ellipse cx="44" cy="72" rx="42" ry="28" fill="#64B5F6"/>
-        <ellipse cx="78" cy="64" rx="46" ry="32" fill="#42A5F5"/>
-        <ellipse cx="96" cy="78" rx="30" ry="22" fill="#1E88E5"/>
-      </svg>`;
+      return imageSvg(HERO_WEATHER_CLOUDY_SRC, 10);
     case 'fog':
-      return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-        <ellipse cx="64" cy="58" rx="48" ry="26" fill="#64B5F6"/>
-        <ellipse cx="72" cy="52" rx="40" ry="22" fill="#90CAF9"/>
-        <rect x="8" y="86" width="112" height="8" rx="4" fill="#B3E5FC" opacity="0.85"/>
-        <rect x="16" y="100" width="96" height="7" rx="3.5" fill="#E1F5FE" opacity="0.7"/>
-        <rect x="24" y="112" width="80" height="6" rx="3" fill="#B2EBF2" opacity="0.55"/>
-      </svg>`;
+      return fogImageSvg(HERO_WEATHER_FOG_SRC);
     case 'rain':
-      return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-        <ellipse cx="52" cy="58" rx="44" ry="30" fill="#5C6BC0"/>
-        <ellipse cx="80" cy="52" rx="42" ry="30" fill="#3949AB"/>
-        <ellipse cx="96" cy="66" rx="26" ry="20" fill="#283593"/>
-        <path d="M36 92 Q38 108 32 118" stroke="#81D4FA" stroke-width="9" stroke-linecap="round" fill="none"/>
-        <path d="M58 90 Q60 106 54 118" stroke="#4FC3F7" stroke-width="9" stroke-linecap="round" fill="none"/>
-        <path d="M80 92 Q82 108 76 118" stroke="#B3E5FC" stroke-width="9" stroke-linecap="round" fill="none"/>
-      </svg>`;
+      return imageSvg(HERO_WEATHER_RAIN_SRC, 10);
     case 'snow':
       return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
         <ellipse cx="56" cy="56" rx="44" ry="30" fill="#5C6BC0"/>
@@ -63,27 +75,16 @@ function svg(kind) {
         <circle cx="86" cy="96" r="6" fill="#B3E5FC"/>
       </svg>`;
     case 'storm':
-      return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-        <ellipse cx="54" cy="56" rx="46" ry="32" fill="#4A148C"/>
-        <ellipse cx="84" cy="50" rx="40" ry="30" fill="#6A1B9A"/>
-        <ellipse cx="100" cy="64" rx="22" ry="18" fill="#311B92"/>
-        <path d="M52 78 L44 102 H58 L50 118 L72 88 H56 L64 78 Z" fill="#FFEB3B" stroke="#F9A825" stroke-width="1.5" stroke-linejoin="round"/>
-        <path d="M70 92 Q72 108 66 118" stroke="#81D4FA" stroke-width="7" stroke-linecap="round" fill="none"/>
-      </svg>`;
+      return imageSvg(HERO_WEATHER_STORM_SRC, 10);
     default: {
-      return `<svg class="fluent-svg" viewBox="0 0 128 128" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-        <image class="hero-weather-sun-image" href="${HERO_WEATHER_SUN_SRC}" xlink:href="${HERO_WEATHER_SUN_SRC}" x="52" y="10" width="68" height="68" preserveAspectRatio="xMidYMid meet"/>
-        <ellipse cx="48" cy="88" rx="40" ry="26" fill="#64B5F6"/>
-        <ellipse cx="72" cy="82" rx="44" ry="30" fill="#42A5F5"/>
-        <ellipse cx="92" cy="90" rx="28" ry="20" fill="#1E88E5"/>
-      </svg>`;
+      return imageSvg(HERO_WEATHER_PARTLY_SRC, 10);
     }
   }
 }
 
 /** Main condition icon for the hero (large). */
-export function createPolygonWeatherIcon(weatherCode, idSuffix = 'a') {
-  const kind = classify(weatherCode);
+export function createPolygonWeatherIcon(weatherCode, idSuffix = 'a', options = {}) {
+  const kind = options?.heatAdvisory ? 'heat_advisory' : classify(weatherCode);
   const wrap = document.createElement('div');
   wrap.className = 'fluent-weather-icon poly-weather-icon';
   if (idSuffix) wrap.dataset.weatherSlot = String(idSuffix);

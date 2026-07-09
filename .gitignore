@@ -27,4 +27,6 @@ data/fear-greed-last.json
 data/tool-library.json
 data/tool-library-assets/*
 !data/tool-library-assets/.gitkeep
+data/web-catalog.json
+data/web-catalog.json.tmp
 todolist.txt

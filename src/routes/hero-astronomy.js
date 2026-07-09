@@ -7,9 +7,13 @@ const router = Router();
 router.get('/', async (req, res) => {
   const qLat = parseFloat(String(req.query.lat ?? ''));
   const qLon = parseFloat(String(req.query.lon ?? ''));
-  const resolved = await resolveDashboardWeatherLatLon();
-  const lat = Number.isFinite(qLat) ? qLat : resolved.lat;
-  const lon = Number.isFinite(qLon) ? qLon : resolved.lon;
+  let lat = qLat;
+  let lon = qLon;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    const resolved = await resolveDashboardWeatherLatLon();
+    if (!Number.isFinite(lat)) lat = resolved.lat;
+    if (!Number.isFinite(lon)) lon = resolved.lon;
+  }
 
   try {
     const { sunsetEpochMs, moonriseEpochMs, nextFullMoonEpochMs, nextNewMoonEpochMs, moonCaptionShowsNextNewMoon, timeZone, nwsForecastUrl, nwsMapClickUrl, nwsPointsUrl } =

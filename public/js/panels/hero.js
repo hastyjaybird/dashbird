@@ -3,6 +3,7 @@ import { createMoonPhaseGlyph } from '../lib/moon-phase.js';
 import { describeWeather, fetchCurrentWeather } from './weather-data.js';
 import { detailLineWithSkyHarvestLicenseHint } from '../lib/resource-license-hint.js';
 import { standaloneWarnExclamationSvgHtml } from '../lib/standalone-warn-exclamation.js';
+import { rainAlertQueryString, subscribeDevicePlace } from '../lib/device-location.js';
 
 const FALLBACK_TZ = 'America/Los_Angeles';
 /** Matches server OpenSky cache (src/lib/aircraft-nearby.js CACHE_MS). */
@@ -272,7 +273,13 @@ function buildCityBlock(cityLabel) {
   return { col, tempEl, iconSlot, descEl, metaEl };
 }
 
-function fillCityWeather({ tempEl, iconSlot, descEl, metaEl }, w, idSuffix) {
+/**
+ * @param {{ tempEl: HTMLElement, iconSlot: HTMLElement, descEl: HTMLElement, metaEl: HTMLElement }} cityEls
+ * @param {any} w
+ * @param {string} idSuffix
+ * @param {{ heatAdvisory?: boolean }} [iconOptions]
+ */
+function fillCityWeather({ tempEl, iconSlot, descEl, metaEl }, w, idSuffix, iconOptions = {}) {
   const t = Math.round(w.tempF);
   tempEl.textContent = `${t}°`;
   const feel = w.apparentF != null ? Math.round(w.apparentF) : t;
@@ -291,7 +298,7 @@ function fillCityWeather({ tempEl, iconSlot, descEl, metaEl }, w, idSuffix) {
       const sep = document.createElement('span');
       sep.className = 'hero-weather-meta-sep';
       sep.setAttribute('aria-hidden', 'true');
-      sep.textContent = ' · ';
+      sep.textContent = '·';
       metaEl.appendChild(sep);
     }
     const aqiWrap = document.createElement('span');
@@ -305,7 +312,23 @@ function fillCityWeather({ tempEl, iconSlot, descEl, metaEl }, w, idSuffix) {
     metaEl.appendChild(aqiWrap);
   }
 
-  iconSlot.replaceChildren(createPolygonWeatherIcon(w.code, idSuffix));
+  iconSlot.replaceChildren(createPolygonWeatherIcon(w.code, idSuffix, iconOptions));
+}
+
+/**
+ * Weather authority memo check (NWS active alerts for point).
+ * @returns {Promise<{ heatAdvisory: boolean }>}
+ */
+async function fetchWeatherAuthorityMemo(lat, lon, zip) {
+  const qs = new URLSearchParams({ lat: String(lat), lon: String(lon) });
+  const z = String(zip || '')
+    .trim()
+    .replace(/\D/g, '');
+  if (z.length === 5) qs.set('zip', z);
+  const r = await fetch(`/api/weather-authority-memos?${qs.toString()}`, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const j = await r.json();
+  return { heatAdvisory: j?.ok === true && j?.heatAdvisory === true };
 }
 
 /** Next moon phase caption under moonrise (`Full Moon: May 17` or `New Moon: Jun 15`). */
@@ -639,7 +662,14 @@ function fillSkyEventStrip(container, timeZone) {
    */
   const tick = (waitForMoonbow = false) => {
     const run = async () => {
-      if (waitForMoonbow) await moonbowPromise;
+      if (waitForMoonbow) {
+        const skyPromise = fetch('/api/sky-events?windowHours=24', { cache: 'no-store' }).then((r) =>
+          r.ok ? r.json() : null,
+        );
+        const [, skyJ] = await Promise.all([moonbowPromise, skyPromise]);
+        renderSkyEventStrip(container, skyJ, moonJ, tz);
+        return;
+      }
       await refreshSkyEventStrip(container, tz, moonJ);
     };
     run()
@@ -751,33 +781,36 @@ export function mountHero(root, config, options = {}) {
     lon: String(oakLon),
   });
 
+  const fetchRainAlert = () =>
+    fetch(`/api/rain-alert${rainAlertQueryString()}`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+
   Promise.all([
     fetch(`/api/hero-astronomy?${astroQs}`)
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null),
     fetchCurrentWeather(oakLat, oakLon).catch(() => null),
     fetchCurrentWeather(sfLat, sfLon).catch(() => null),
-    fetch('/api/rain-alert', { cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null)
-      .then((d) => (d?.imminent && d?.message ? String(d.message) : '')),
+    fetchWeatherAuthorityMemo(oakLat, oakLon, config.weatherZip).catch(() => ({ heatAdvisory: false })),
+    fetchRainAlert().then((d) => (d?.imminent && d?.message ? String(d.message) : '')),
   ])
-    .then(([a, wOak, wSf, precipLine]) => {
+    .then(([a, wOak, wSf, memo, precipLine]) => {
       loading.remove();
       fillHeroPrecipLine(precipEl, typeof precipLine === 'string' ? precipLine : '');
       const refreshRain = () => {
-        fetch('/api/rain-alert', { cache: 'no-store' })
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null)
-          .then((d) => {
-            fillHeroPrecipLine(
-              precipEl,
-              d?.imminent && d?.message ? String(d.message) : '',
-            );
-          });
+        fetchRainAlert().then((d) => {
+          fillHeroPrecipLine(
+            precipEl,
+            d?.imminent && d?.message ? String(d.message) : '',
+          );
+        });
       };
       setInterval(refreshRain, 2 * 60 * 1000);
-      if (wOak) fillCityWeather(oak, wOak, 'oak');
+      subscribeDevicePlace(() => {
+        refreshRain();
+      });
+      if (wOak) fillCityWeather(oak, wOak, 'oak', { heatAdvisory: memo?.heatAdvisory === true });
       if (wSf) fillCityWeather(sf, wSf, 'sf');
 
       const zipOk = hasFiveDigitWeatherZip(config);

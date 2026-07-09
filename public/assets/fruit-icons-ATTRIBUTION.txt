@@ -1,0 +1,36 @@
+Fruit icons:
+- /public/assets/fruit-apple.png
+- /public/assets/fruit-pear.png
+- /public/assets/fruit-peach.png
+- /public/assets/fruit-plum.png
+- /public/assets/fruit-fig.png
+- /public/assets/fruit-loquat.png
+- /public/assets/fruit-blackberry.png
+
+Loquat source:
+- User-provided illustration from ~/Pictures/Screenshot from 2026-07-08 16-55-36.png
+- White background removed for Earth strip use
+
+Pear source:
+- User-provided illustration from ~/Pictures/Screenshot from 2026-07-08 16-57-58.png
+- White background removed for Earth strip use
+
+Plum source:
+- User-provided illustration from ~/Pictures/Screenshot from 2026-07-08 16-59-22.png
+- White background removed for Earth strip use
+
+Fig source:
+- User-provided illustration from ~/Pictures/Screenshot from 2026-07-08 17-00-32.png
+- White background removed for Earth strip use
+
+Apple source:
+- User-provided illustration from ~/Pictures/Screenshot from 2026-07-08 17-01-59.png
+- Checkerboard/white background removed for Earth strip use
+
+Peach source:
+- User-provided illustration from ~/Pictures/Screenshot from 2026-07-08 17-06-09.png
+- White background removed for Earth strip use
+
+Blackberry source:
+- User-provided illustration from ~/Pictures/Screenshot from 2026-07-08 17-09-43.png
+- White background removed for Earth strip use

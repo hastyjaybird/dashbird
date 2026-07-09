@@ -13,6 +13,7 @@ import { resolveDashboardWeatherLatLon } from '../lib/hero-weather-location.js';
 import { mergeSightingHeadsUp } from '../lib/sky-sighting-heads-up.js';
 import { mergeAircraftNearby } from '../lib/merge-aircraft-nearby.js';
 import { sortSkyStripWithPlanetsFirst } from '../lib/sky-strip-order.js';
+import { mergeEclipseHeadsUp } from '../lib/sky-eclipse-heads-up.js';
 
 const HERO_TZ = 'America/Los_Angeles';
 
@@ -60,6 +61,7 @@ router.get('/', async (req, res) => {
       HERO_TZ,
     );
     active = await mergeAnnularEclipseLiveRows(active, now);
+    active = mergeEclipseHeadsUp(active, data.events, now, windowMs);
     active = mergeSightingHeadsUp(active, data.events, now, windowMs, HERO_TZ, {
       lat,
       lon,

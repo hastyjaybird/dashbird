@@ -2,117 +2,68 @@ const WINDOW_HOURS = 24;
 const GROUPS = ['Sky & space', 'Earth', 'Market & weather'];
 
 /**
- * Rain alert street address (hero line + radar center).
- * @param {HTMLElement} root
+ * Collapsible settings section (open by default).
+ * @param {{ title: string, headingId: string, className?: string, open?: boolean }} opts
+ * @returns {{ details: HTMLDetailsElement, body: HTMLDivElement, summary: HTMLElement }}
  */
-function buildRainAlertBlock(root) {
-  const block = document.createElement('section');
-  block.className = 'settings-page__config-block panel panel--glass settings-page__rain-block';
-  block.setAttribute('aria-labelledby', 'settings-rain-heading');
+function createCollapsibleSection({ title, headingId, className = '', open = true }) {
+  const details = document.createElement('details');
+  details.className = `settings-page__config-block panel panel--glass settings-page__section${
+    className ? ` ${className}` : ''
+  }`;
+  details.open = open !== false;
 
-  const h = document.createElement('h2');
-  h.id = 'settings-rain-heading';
-  h.className = 'settings-page__block-title';
-  h.textContent = 'Rain alert & Radar';
-  block.append(h);
+  const summary = document.createElement('summary');
+  summary.className = 'settings-page__block-title settings-page__section-summary';
+  summary.id = headingId;
+  summary.textContent = title;
+  details.append(summary);
 
-  const hint = document.createElement('p');
-  hint.className = 'settings-page__note settings-page__rain-hint';
-  hint.textContent =
-    'Used for “Rain expected in N minutes” (next 2 hours). Weather Radar is centered on dashboard ZIP (WEATHER_ZIP) with a 5 mi radius and shows only when precipitation is expected in the next 24 hours.';
-  block.append(hint);
+  const body = document.createElement('div');
+  body.className = 'settings-page__config-block-inner settings-page__section-body';
+  details.append(body);
 
-  const label = document.createElement('label');
-  label.className = 'settings-page__rain-label';
-  label.htmlFor = 'settings-rain-address';
-  label.textContent = 'Street address';
-  block.append(label);
-
-  const input = document.createElement('textarea');
-  input.id = 'settings-rain-address';
-  input.className = 'settings-page__rain-input';
-  input.rows = 2;
-  input.spellcheck = false;
-  input.autocomplete = 'street-address';
-  block.append(input);
-
-  const actions = document.createElement('div');
-  actions.className = 'settings-page__rain-actions';
-
-  const saveBtn = document.createElement('button');
-  saveBtn.type = 'button';
-  saveBtn.className = 'settings-page__rain-save';
-  saveBtn.textContent = 'Save address';
-
-  const msg = document.createElement('p');
-  msg.className = 'settings-page__rain-msg';
-  msg.hidden = true;
-  msg.setAttribute('aria-live', 'polite');
-
-  actions.append(saveBtn, msg);
-  block.append(actions);
-  root.insertBefore(block, root.firstChild);
-
-  fetch('/api/rain-alert/address', { cache: 'no-store' })
-    .then((r) => r.json())
-    .then((data) => {
-      if (data?.address) input.value = String(data.address);
-    })
-    .catch(() => {});
-
-  saveBtn.addEventListener('click', async () => {
-    saveBtn.disabled = true;
-    msg.hidden = false;
-    msg.classList.remove('settings-page__rain-msg--err');
-    msg.textContent = 'Saving…';
-    try {
-      const r = await fetch('/api/rain-alert/address', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address: input.value }),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok || data.ok === false) {
-        throw new Error(data.error || `HTTP ${r.status}`);
-      }
-      msg.textContent = 'Saved.';
-    } catch (e) {
-      msg.classList.add('settings-page__rain-msg--err');
-      msg.textContent =
-        e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Could not save.';
-    } finally {
-      saveBtn.disabled = false;
-    }
-  });
+  return { details, body, summary };
 }
 
 /**
  * Secondary ZIP for lightning bugs + fall foliage.
+ * Shows the stored ZIP; “Change secondary ZIP” reveals the editor.
  * @param {HTMLElement} root
  */
 function buildSecondaryWatchBlock(root) {
-  const block = document.createElement('section');
-  block.className =
-    'settings-page__config-block panel panel--glass settings-page__secondary-block';
-  block.setAttribute('aria-labelledby', 'settings-secondary-heading');
+  const { details: block, body } = createCollapsibleSection({
+    title: 'Secondary ZIP',
+    headingId: 'settings-secondary-heading',
+    className: 'settings-page__secondary-block',
+  });
 
-  const h = document.createElement('h2');
-  h.id = 'settings-secondary-heading';
-  h.className = 'settings-page__block-title';
-  h.textContent = 'Secondary location (ZIP)';
-  block.append(h);
+  const currentRow = document.createElement('p');
+  currentRow.className = 'settings-page__secondary-current';
+  const currentLabel = document.createElement('span');
+  currentLabel.className = 'settings-page__secondary-current-label';
+  currentLabel.textContent = 'Stored ZIP: ';
+  const currentValue = document.createElement('strong');
+  currentValue.className = 'settings-page__secondary-current-value';
+  currentValue.textContent = '…';
+  currentRow.append(currentLabel, currentValue);
+  body.append(currentRow);
 
-  const hint = document.createElement('p');
-  hint.className = 'settings-page__note settings-page__secondary-hint';
-  hint.textContent =
-    'Lightning-bug season (Farmers’ Almanac / Virginia Tech) shows on Earth strip 7 days before start through season end. Fall foliage (USA-NPN) uses a 21-day heads-up before start, peak, and end.';
-  block.append(hint);
+  const changeBtn = document.createElement('button');
+  changeBtn.type = 'button';
+  changeBtn.className = 'settings-page__rain-save settings-page__secondary-change';
+  changeBtn.textContent = 'Change secondary ZIP';
+  body.append(changeBtn);
+
+  const editor = document.createElement('div');
+  editor.className = 'settings-page__secondary-editor';
+  editor.hidden = true;
 
   const label = document.createElement('label');
   label.className = 'settings-page__rain-label';
   label.htmlFor = 'settings-secondary-zip';
   label.textContent = 'US ZIP code';
-  block.append(label);
+  editor.append(label);
 
   const input = document.createElement('input');
   input.id = 'settings-secondary-zip';
@@ -122,7 +73,7 @@ function buildSecondaryWatchBlock(root) {
   input.maxLength = 10;
   input.spellcheck = false;
   input.autocomplete = 'postal-code';
-  block.append(input);
+  editor.append(input);
 
   const actions = document.createElement('div');
   actions.className = 'settings-page__rain-actions';
@@ -132,21 +83,56 @@ function buildSecondaryWatchBlock(root) {
   saveBtn.className = 'settings-page__rain-save';
   saveBtn.textContent = 'Save ZIP';
 
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'settings-page__secondary-cancel';
+  cancelBtn.textContent = 'Cancel';
+
   const msg = document.createElement('p');
   msg.className = 'settings-page__rain-msg';
   msg.hidden = true;
   msg.setAttribute('aria-live', 'polite');
 
-  actions.append(saveBtn, msg);
-  block.append(actions);
-  root.insertBefore(block, root.firstChild);
+  actions.append(saveBtn, cancelBtn, msg);
+  editor.append(actions);
+  body.append(editor);
+
+  const firstSection = root.querySelector('.settings-page__section');
+  if (firstSection) root.insertBefore(block, firstSection);
+  else root.append(block);
+
+  /** @type {string} */
+  let storedZip = '';
+
+  function showEditor(open) {
+    editor.hidden = !open;
+    changeBtn.hidden = open;
+    if (open) {
+      input.value = storedZip;
+      input.focus();
+      input.select();
+    }
+    msg.hidden = true;
+    msg.textContent = '';
+  }
+
+  changeBtn.addEventListener('click', () => showEditor(true));
+  cancelBtn.addEventListener('click', () => showEditor(false));
 
   fetch('/api/secondary-watch/zip', { cache: 'no-store' })
     .then((r) => r.json())
     .then((data) => {
-      if (data?.zip) input.value = String(data.zip);
+      if (data?.zip) {
+        storedZip = String(data.zip);
+        currentValue.textContent = storedZip;
+        input.value = storedZip;
+      } else {
+        currentValue.textContent = '—';
+      }
     })
-    .catch(() => {});
+    .catch(() => {
+      currentValue.textContent = '—';
+    });
 
   saveBtn.addEventListener('click', async () => {
     saveBtn.disabled = true;
@@ -163,7 +149,10 @@ function buildSecondaryWatchBlock(root) {
       if (!r.ok || data.ok === false) {
         throw new Error(data.error || `HTTP ${r.status}`);
       }
+      storedZip = String(data.zip || input.value).replace(/\D/g, '').slice(0, 5);
+      currentValue.textContent = storedZip || '—';
       msg.textContent = 'Saved.';
+      showEditor(false);
     } catch (e) {
       msg.classList.add('settings-page__rain-msg--err');
       msg.textContent =
@@ -175,12 +164,20 @@ function buildSecondaryWatchBlock(root) {
 }
 
 /**
- * @param {HTMLElement} root
- * @param {number} windowHours
+ * @param {string} group
+ * @returns {string}
  */
-function buildSettingsShell(root, windowHours) {
+function groupHeadingId(group) {
+  return `settings-events-${group.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+}
+
+/**
+ * @param {HTMLElement} root
+ * @param {number} _windowHours
+ */
+function buildSettingsShell(root, _windowHours) {
   root.replaceChildren();
-  root.className = 'settings-page__inner';
+  root.className = 'settings-page__body settings-page__inner';
 
   const status = document.createElement('p');
   status.className = 'settings-page__load-status';
@@ -188,41 +185,44 @@ function buildSettingsShell(root, windowHours) {
   status.textContent = 'Loading event types…';
   root.append(status);
 
-  const block = document.createElement('section');
-  block.className = 'settings-page__config-block panel panel--glass';
-  block.setAttribute('aria-labelledby', 'settings-event-types-heading');
+  /** @type {Map<string, HTMLTableSectionElement>} */
+  const tbodyByGroup = new Map();
 
-  const h = document.createElement('h2');
-  h.id = 'settings-event-types-heading';
-  h.className = 'settings-page__block-title';
-  h.textContent = 'Event types';
-  block.append(h);
+  for (const group of GROUPS) {
+    const { details, body } = createCollapsibleSection({
+      title: group,
+      headingId: groupHeadingId(group),
+      className: 'settings-page__events-block',
+    });
 
-  const table = document.createElement('table');
-  table.className = 'settings-page__table settings-page__table--events';
+    const table = document.createElement('table');
+    table.className = 'settings-page__table settings-page__table--events';
+    table.setAttribute('aria-labelledby', groupHeadingId(group));
 
-  const thead = document.createElement('thead');
-  const hr = document.createElement('tr');
-  for (const label of ['Category', 'Event type', 'Value', 'Active', 'Data source', 'Live feed']) {
-    const th = document.createElement('th');
-    th.scope = 'col';
-    th.textContent = label;
-    hr.append(th);
+    const thead = document.createElement('thead');
+    const hr = document.createElement('tr');
+    for (const label of ['Event type', 'Value', 'Active', 'Data source', 'Live feed']) {
+      const th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = label;
+      hr.append(th);
+    }
+    thead.append(hr);
+    table.append(thead);
+
+    const tbody = document.createElement('tbody');
+    table.append(tbody);
+    body.append(table);
+    root.append(details);
+    tbodyByGroup.set(group, tbody);
   }
-  thead.append(hr);
-  table.append(thead);
-
-  const tbody = document.createElement('tbody');
-  table.append(tbody);
-  block.append(table);
-  root.append(block);
 
   const meta = document.createElement('p');
   meta.className = 'settings-page__note';
   meta.hidden = true;
   root.append(meta);
 
-  return { tbody, status, meta, table };
+  return { tbodyByGroup, status, meta };
 }
 
 /**
@@ -252,24 +252,23 @@ function buildLiveFeedCell(url) {
 }
 
 /**
- * @param {HTMLTableSectionElement} tbody
+ * @param {Map<string, HTMLTableSectionElement>} tbodyByGroup
  * @param {Array<{ id: string, label: string, category?: string, dataSource?: string, liveUrl?: string | null }>} types
  */
-function populatePendingRows(tbody, types) {
-  tbody.replaceChildren();
+function populatePendingRows(tbodyByGroup, types) {
   /** @type {Map<string, HTMLTableRowElement>} */
   const rowById = new Map();
 
   for (const group of GROUPS) {
+    const tbody = tbodyByGroup.get(group);
+    if (!tbody) continue;
+    tbody.replaceChildren();
     const rows = types.filter((t) => (t.category || '') === group);
     for (const row of rows) {
       const tr = document.createElement('tr');
       tr.className = 'settings-page__row--pending';
       tr.dataset.eventId = row.id;
-
-      const tdCat = document.createElement('td');
-      tdCat.className = 'settings-page__category';
-      tdCat.textContent = group;
+      tr.dataset.category = group;
 
       const tdType = document.createElement('td');
       tdType.className = 'settings-page__type-label';
@@ -289,7 +288,7 @@ function populatePendingRows(tbody, types) {
 
       const tdLive = buildLiveFeedCell(row.liveUrl);
 
-      tr.append(tdCat, tdType, tdVal, tdActive, tdSrc, tdLive);
+      tr.append(tdType, tdVal, tdActive, tdSrc, tdLive);
       tbody.append(tr);
       rowById.set(row.id, tr);
     }
@@ -364,9 +363,8 @@ async function fetchEventTypesPart(part, windowHours) {
 export async function mountSettingsPage(mount) {
   if (!mount) return;
 
-  const { tbody, status, meta } = buildSettingsShell(mount, WINDOW_HOURS);
+  const { tbodyByGroup, status, meta } = buildSettingsShell(mount, WINDOW_HOURS);
   buildSecondaryWatchBlock(mount);
-  buildRainAlertBlock(mount);
   mount.setAttribute('aria-busy', 'true');
 
   /** @type {Map<string, HTMLTableRowElement>} */
@@ -409,10 +407,7 @@ export async function mountSettingsPage(mount) {
   }
 
   function startLiveFetches(rowMap) {
-    const skyIds = [...rowMap.keys()].filter((id) => {
-      const tr = rowMap.get(id);
-      return tr?.querySelector('.settings-page__category')?.textContent === 'Sky & space';
-    });
+    const skyIds = [...rowMap.keys()].filter((id) => rowMap.get(id)?.dataset.category === 'Sky & space');
     const earthCoreIds = [
       'yosemite_moonbow',
       'usa_npn_spring',
@@ -427,6 +422,7 @@ export async function mountSettingsPage(mount) {
       'fall_foliage_season',
     ];
     const slowIds = ['usgs_quake_week', 'goes_glm_lightning', 'goes_glm_sprite'];
+    const serviceIds = ['fear_greed_index', 'weather_radar'];
 
     fetchEventTypesPart('sky', WINDOW_HOURS)
       .then((data) => applyTypeUpdates(rowMap, data.types))
@@ -455,7 +451,7 @@ export async function mountSettingsPage(mount) {
       if (!manifestR.ok || manifest.ok === false || !Array.isArray(manifest.types)) {
         throw new Error(manifest.error || `Manifest HTTP ${manifestR.status}`);
       }
-      rowById = populatePendingRows(tbody, manifest.types);
+      rowById = populatePendingRows(tbodyByGroup, manifest.types);
       refreshStatus();
       startLiveFetches(rowById);
     })

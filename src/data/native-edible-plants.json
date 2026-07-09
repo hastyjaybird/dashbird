@@ -8,27 +8,28 @@
       "plants": [
         {
           "label": "Miner's lettuce (Claytonia perfoliata)",
-          "activeMonths": [1, 2, 3, 4, 5],
-          "peakDescription": "Cool-season greens; peak late winter–spring",
-          "refUrl": "https://calscape.org/claytonia-perfoliata-(miner-s-lettuce)"
+          "activeMonths": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "peakDescription": "Cool-season greens; peak late winter\u2013spring",
+          "refUrl": "https://calscape.org/claytonia-perfoliata-(miner-s-lettuce)",
+          "humanEdible": true
         },
         {
           "label": "California blackberry (Rubus ursinus)",
-          "activeMonths": [6, 7, 8, 9],
+          "activeMonths": [
+            6,
+            7,
+            8,
+            9
+          ],
           "peakDescription": "Wild berries; timing varies with summer heat",
-          "refUrl": "https://calscape.org/rubus-ursinus-(california-blackberry)"
-        },
-        {
-          "label": "Toyon / Christmas berry (Heteromeles arbutifolia)",
-          "activeMonths": [11, 12, 1],
-          "peakDescription": "Red berries late fall–winter; verify ID vs toxic lookalikes",
-          "refUrl": "https://calscape.org/heteromeles-arbutifolia-(toyon)"
-        },
-        {
-          "label": "Coffeeberry (Frangula californica)",
-          "activeMonths": [7, 8, 9, 10],
-          "peakDescription": "Ripening fruit mid-summer into fall",
-          "refUrl": "https://calscape.org/frangula-californica-(coffeeberry)"
+          "refUrl": "https://calscape.org/rubus-ursinus-(california-blackberry)",
+          "humanEdible": true
         }
       ]
     },
@@ -39,21 +40,48 @@
       "plants": [
         {
           "label": "Prickly pear (Opuntia spp., native / naturalized complex)",
-          "activeMonths": [6, 7, 8, 9, 10],
+          "activeMonths": [
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
           "peakDescription": "Pads & fruit in warm months; glochids require care",
-          "refUrl": "https://calscape.org/Opuntia-(Prickly-Pear)"
+          "refUrl": "https://calscape.org/Opuntia-(Prickly-Pear)",
+          "humanEdible": true
         },
         {
           "label": "California sagebrush (Artemisia californica)",
-          "activeMonths": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+          "activeMonths": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12
+          ],
           "peakDescription": "Aromatic culinary herb year-round; light use",
-          "refUrl": "https://calscape.org/artemisia-californica-(california-sagebrush)"
+          "refUrl": "https://calscape.org/artemisia-californica-(california-sagebrush)",
+          "humanEdible": true
         },
         {
           "label": "Elderberry (Sambucus nigra ssp. caerulea / mexicana complex)",
-          "activeMonths": [6, 7, 8, 9],
+          "activeMonths": [
+            6,
+            7,
+            8,
+            9
+          ],
           "peakDescription": "Berries only when fully ripe; cook; toxic unripe/green parts",
-          "refUrl": "https://calscape.org/sambucus-nigra-ssp-caerulea-(blue-elderberry)"
+          "refUrl": "https://calscape.org/sambucus-nigra-ssp-caerulea-(blue-elderberry)",
+          "humanEdible": true
         }
       ]
     },
@@ -64,15 +92,27 @@
       "plants": [
         {
           "label": "Lemonade berry (Rhus integrifolia)",
-          "activeMonths": [5, 6, 7, 8],
-          "peakDescription": "Sour fruit late spring–summer",
-          "refUrl": "https://calscape.org/rhus-integrifolia-(lemonade-berry)"
+          "activeMonths": [
+            5,
+            6,
+            7,
+            8
+          ],
+          "peakDescription": "Sour fruit late spring\u2013summer",
+          "refUrl": "https://calscape.org/rhus-integrifolia-(lemonade-berry)",
+          "humanEdible": true
         },
         {
           "label": "Prickly pear (Opuntia littoralis / complex)",
-          "activeMonths": [6, 7, 8, 9],
+          "activeMonths": [
+            6,
+            7,
+            8,
+            9
+          ],
           "peakDescription": "Warm-season fruit; handle glochids",
-          "refUrl": "https://calscape.org/opuntia-littoralis-(coastal-prickly-pear)"
+          "refUrl": "https://calscape.org/opuntia-littoralis-(coastal-prickly-pear)",
+          "humanEdible": true
         }
       ]
     },
@@ -83,21 +123,38 @@
       "plants": [
         {
           "label": "Oregon grape (Mahonia aquifolium)",
-          "activeMonths": [7, 8, 9, 10],
-          "peakDescription": "Sour berries late summer–fall; jelly/cooked uses",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=MAAQ"
+          "activeMonths": [
+            7,
+            8,
+            9,
+            10
+          ],
+          "peakDescription": "Sour berries late summer\u2013fall; jelly/cooked uses",
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=MAAQ",
+          "humanEdible": true
         },
         {
-          "label": "Miner’s lettuce (Claytonia perfoliata)",
-          "activeMonths": [2, 3, 4, 5],
+          "label": "Miner\u2019s lettuce (Claytonia perfoliata)",
+          "activeMonths": [
+            2,
+            3,
+            4,
+            5
+          ],
           "peakDescription": "Spring greens in moist shady spots",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=CLPE2"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=CLPE2",
+          "humanEdible": true
         },
         {
           "label": "Blackcap raspberry (Rubus leucodermis)",
-          "activeMonths": [6, 7, 8],
+          "activeMonths": [
+            6,
+            7,
+            8
+          ],
           "peakDescription": "Summer berries in sunnier openings",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=RULE"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=RULE",
+          "humanEdible": true
         }
       ]
     },
@@ -108,21 +165,38 @@
       "plants": [
         {
           "label": "Salal (Gaultheria shallon)",
-          "activeMonths": [7, 8, 9, 10],
-          "peakDescription": "Dark berries late summer–fall",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=GASH"
+          "activeMonths": [
+            7,
+            8,
+            9,
+            10
+          ],
+          "peakDescription": "Dark berries late summer\u2013fall",
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=GASH",
+          "humanEdible": true
         },
         {
           "label": "Red huckleberry (Vaccinium parvifolium)",
-          "activeMonths": [6, 7, 8, 9],
+          "activeMonths": [
+            6,
+            7,
+            8,
+            9
+          ],
           "peakDescription": "Berries in forest edge; timing varies by site",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=VAPA"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=VAPA",
+          "humanEdible": true
         },
         {
-          "label": "Miner’s lettuce (Claytonia perfoliata)",
-          "activeMonths": [3, 4, 5],
+          "label": "Miner\u2019s lettuce (Claytonia perfoliata)",
+          "activeMonths": [
+            3,
+            4,
+            5
+          ],
           "peakDescription": "Cool wet spring window",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=CLPE2"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=CLPE2",
+          "humanEdible": true
         }
       ]
     },
@@ -133,15 +207,26 @@
       "plants": [
         {
           "label": "Saguaro fruit (Carnegiea gigantea)",
-          "activeMonths": [5, 6, 7],
+          "activeMonths": [
+            5,
+            6,
+            7
+          ],
           "peakDescription": "Brief early-summer harvest where permitted (permits / tribal rules)",
-          "refUrl": "https://www.nps.gov/sagu/learn/nature/saguaro-fruit-harvest.htm"
+          "refUrl": "https://www.nps.gov/sagu/learn/nature/saguaro-fruit-harvest.htm",
+          "humanEdible": true
         },
         {
           "label": "Prickly pear (Opuntia engelmannii / complex)",
-          "activeMonths": [6, 7, 8, 9],
+          "activeMonths": [
+            6,
+            7,
+            8,
+            9
+          ],
           "peakDescription": "Pads & fruit monsoon season; glochids",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=OPEN"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=OPEN",
+          "humanEdible": true
         }
       ]
     },
@@ -152,15 +237,23 @@
       "plants": [
         {
           "label": "Wild strawberry (Fragaria virginiana)",
-          "activeMonths": [6, 7],
-          "peakDescription": "Small berries early–mid summer at elevation",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=FRVI"
+          "activeMonths": [
+            6,
+            7
+          ],
+          "peakDescription": "Small berries early\u2013mid summer at elevation",
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=FRVI",
+          "humanEdible": true
         },
         {
           "label": "Serviceberry / juneberry (Amelanchier alnifolia)",
-          "activeMonths": [6, 7],
+          "activeMonths": [
+            6,
+            7
+          ],
           "peakDescription": "Ripening drupes early summer",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=AMAL"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=AMAL",
+          "humanEdible": true
         }
       ]
     },
@@ -171,15 +264,25 @@
       "plants": [
         {
           "label": "Dewberry (Rubus trivialis)",
-          "activeMonths": [4, 5, 6],
-          "peakDescription": "Spring–early summer trailing blackberries",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=RUTR"
+          "activeMonths": [
+            4,
+            5,
+            6
+          ],
+          "peakDescription": "Spring\u2013early summer trailing blackberries",
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=RUTR",
+          "humanEdible": true
         },
         {
           "label": "Texas persimmon (Diospyros texana)",
-          "activeMonths": [7, 8, 9],
+          "activeMonths": [
+            7,
+            8,
+            9
+          ],
           "peakDescription": "Black fruits when fully soft",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=DITE"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=DITE",
+          "humanEdible": true
         }
       ]
     },
@@ -190,21 +293,34 @@
       "plants": [
         {
           "label": "Wild raspberry (Rubus idaeus var. strigosus)",
-          "activeMonths": [7, 8],
+          "activeMonths": [
+            7,
+            8
+          ],
           "peakDescription": "Summer berries in openings",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=RUIDS"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=RUIDS",
+          "humanEdible": true
         },
         {
           "label": "Serviceberry (Amelanchier spp.)",
-          "activeMonths": [6, 7],
+          "activeMonths": [
+            6,
+            7
+          ],
           "peakDescription": "Early summer fruit; species complex",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=AMAL2"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=AMAL2",
+          "humanEdible": true
         },
         {
           "label": "Wild grape (Vitis riparia)",
-          "activeMonths": [8, 9, 10],
-          "peakDescription": "Fruit late summer–fall when ripe",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=VIRI"
+          "activeMonths": [
+            8,
+            9,
+            10
+          ],
+          "peakDescription": "Fruit late summer\u2013fall when ripe",
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=VIRI",
+          "humanEdible": true
         }
       ]
     },
@@ -215,21 +331,34 @@
       "plants": [
         {
           "label": "Black raspberry (Rubus occidentalis)",
-          "activeMonths": [7, 8],
+          "activeMonths": [
+            7,
+            8
+          ],
           "peakDescription": "Mid-summer berries",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=RUOC"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=RUOC",
+          "humanEdible": true
         },
         {
           "label": "Pawpaw (Asimina triloba)",
-          "activeMonths": [9, 10],
-          "peakDescription": "Custard-apple fruit late summer–fall (southern range edge)",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=ASTR"
+          "activeMonths": [
+            9,
+            10
+          ],
+          "peakDescription": "Custard-apple fruit late summer\u2013fall (southern range edge)",
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=ASTR",
+          "humanEdible": true
         },
         {
           "label": "Wild grape (Vitis riparia)",
-          "activeMonths": [8, 9, 10],
+          "activeMonths": [
+            8,
+            9,
+            10
+          ],
           "peakDescription": "Riverbanks and fencerows",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=VIRI"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=VIRI",
+          "humanEdible": true
         }
       ]
     },
@@ -240,21 +369,35 @@
       "plants": [
         {
           "label": "Blackberry (Rubus allegheniensis / spp.)",
-          "activeMonths": [6, 7, 8],
+          "activeMonths": [
+            6,
+            7,
+            8
+          ],
           "peakDescription": "Summer bramble fruit",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=RUAL"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=RUAL",
+          "humanEdible": true
         },
         {
           "label": "Pawpaw (Asimina triloba)",
-          "activeMonths": [9, 10],
+          "activeMonths": [
+            9,
+            10
+          ],
           "peakDescription": "Soft fruit when aromatic",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=ASTR"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=ASTR",
+          "humanEdible": true
         },
         {
           "label": "Ramps / wild leek (Allium tricoccum)",
-          "activeMonths": [3, 4, 5],
-          "peakDescription": "Spring ephemeral; many areas restrict harvest — check regs",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=ALTR2"
+          "activeMonths": [
+            3,
+            4,
+            5
+          ],
+          "peakDescription": "Spring ephemeral; many areas restrict harvest \u2014 check regs",
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=ALTR2",
+          "humanEdible": true
         }
       ]
     },
@@ -265,21 +408,34 @@
       "plants": [
         {
           "label": "Beach plum (Prunus maritima)",
-          "activeMonths": [8, 9],
+          "activeMonths": [
+            8,
+            9
+          ],
           "peakDescription": "Coastal dunes; fruit late summer",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=PRMA2"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=PRMA2",
+          "humanEdible": true
         },
         {
           "label": "Black huckleberry (Gaylussacia baccata)",
-          "activeMonths": [7, 8],
+          "activeMonths": [
+            7,
+            8
+          ],
           "peakDescription": "Mid-summer berries acidic soils",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=GABA"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=GABA",
+          "humanEdible": true
         },
         {
-          "label": "Wineberry (Rubus phoenicolasius) — introduced",
-          "activeMonths": [6, 7, 8],
+          "label": "Wineberry (Rubus phoenicolasius) \u2014 introduced",
+          "activeMonths": [
+            6,
+            7,
+            8
+          ],
           "peakDescription": "Invasive but commonly mapped; tart berries summer",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=RUPH"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=RUPH",
+          "humanEdible": true
         }
       ]
     },
@@ -290,21 +446,35 @@
       "plants": [
         {
           "label": "Muscadine / scuppernong (Vitis rotundifolia)",
-          "activeMonths": [8, 9, 10],
-          "peakDescription": "Thick-skinned grapes late summer–fall",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=VIRO"
+          "activeMonths": [
+            8,
+            9,
+            10
+          ],
+          "peakDescription": "Thick-skinned grapes late summer\u2013fall",
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=VIRO",
+          "humanEdible": true
         },
         {
           "label": "Blackberry (Rubus spp.)",
-          "activeMonths": [6, 7, 8],
+          "activeMonths": [
+            6,
+            7,
+            8
+          ],
           "peakDescription": "Summer brambles",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=RUBUS"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=RUBUS",
+          "humanEdible": true
         },
         {
           "label": "Pawpaw (Asimina triloba)",
-          "activeMonths": [8, 9],
+          "activeMonths": [
+            8,
+            9
+          ],
           "peakDescription": "Fruit when soft and fragrant",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=ASTR"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=ASTR",
+          "humanEdible": true
         }
       ]
     },
@@ -315,15 +485,36 @@
       "plants": [
         {
           "label": "Cocoplum (Chrysobalanus icaco)",
-          "activeMonths": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+          "activeMonths": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12
+          ],
           "peakDescription": "White/purple coastal fruit; check land status",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=CHIC"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=CHIC",
+          "humanEdible": true
         },
         {
           "label": "Sea grape (Coccoloba uvifera)",
-          "activeMonths": [7, 8, 9, 10, 11],
+          "activeMonths": [
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
           "peakDescription": "Ripening clusters late summer into fall",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=COUV"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=COUV",
+          "humanEdible": true
         }
       ]
     },
@@ -334,21 +525,34 @@
       "plants": [
         {
           "label": "Salal (Gaultheria shallon)",
-          "activeMonths": [7, 8, 9],
+          "activeMonths": [
+            7,
+            8,
+            9
+          ],
           "peakDescription": "Coastal forest berries",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=GASH"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=GASH",
+          "humanEdible": true
         },
         {
           "label": "Alaska blueberry (Vaccinium alaskaense)",
-          "activeMonths": [7, 8],
+          "activeMonths": [
+            7,
+            8
+          ],
           "peakDescription": "Short summer berry window",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=VAAL"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=VAAL",
+          "humanEdible": true
         },
         {
           "label": "Highbush cranberry (Viburnum edule)",
-          "activeMonths": [8, 9],
+          "activeMonths": [
+            8,
+            9
+          ],
           "peakDescription": "Late-season tart fruit",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=VIED"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=VIED",
+          "humanEdible": true
         }
       ]
     },
@@ -359,15 +563,24 @@
       "plants": [
         {
           "label": "Lowbush cranberry / lingonberry-type harvest (Vaccinium vitis-idaea)",
-          "activeMonths": [8, 9],
+          "activeMonths": [
+            8,
+            9
+          ],
           "peakDescription": "Tundra/edge fruit; very short season",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=VIVI"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=VIVI",
+          "humanEdible": true
         },
         {
           "label": "Crowberry (Empetrum nigrum)",
-          "activeMonths": [7, 8, 9],
+          "activeMonths": [
+            7,
+            8,
+            9
+          ],
           "peakDescription": "Small berries; boreal moor",
-          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=EMNI"
+          "refUrl": "https://plants.usda.gov/home/plantProfile?symbol=EMNI",
+          "humanEdible": true
         }
       ]
     }

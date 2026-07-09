@@ -31,7 +31,7 @@ const HOST_TILE = {
   'drive.google.com': '/assets/tile-google-drive.svg',
   'docs.google.com': '/assets/tile-google-drive.svg',
   'teams.microsoft.com': '/assets/tile-microsoft-teams.png',
-  'outlook.office.com': '/assets/tile-microsoft-outlook.png',
+  'outlook.office.com': '/assets/tile-microsoft-outlook.svg',
   'sharepoint.com': '/assets/tile-sharepoint.png',
   'maxetaenergy.com': '/assets/tile-maxeta.png',
   'rocompliance.maxetaenergy.com': '/assets/tile-maxeta.png',
@@ -40,6 +40,8 @@ const HOST_TILE = {
   'web.whatsapp.com': '/assets/tile-whatsapp.svg',
   'whatsapp.com': '/assets/tile-whatsapp.svg',
   'facebook.com': '/assets/tile-facebook.svg',
+  'chat.co': '/assets/tile-maxeta.png',
+  'energia.pr.gov': '/assets/tile-preb.png',
 };
 
 /** Files were once mis-suffixed `.png` but are WebP; fix old bookmark `icon` paths. */
@@ -96,6 +98,10 @@ function tileForHost(host) {
 }
 
 function iconSrc(row) {
+  const word = String(row?.word || '').trim().toLowerCase();
+  if (word === 'rate order' || word === 'rateorder') return '/assets/tile-maxeta.png';
+  if (word === 'preb') return '/assets/tile-preb.png';
+
   const explicit = explicitBookmarkIcon(row);
   if (explicit) return explicit;
 
@@ -106,7 +112,7 @@ function iconSrc(row) {
   if (/^https?:\/\/drive\.google\.com/i.test(h)) return '/assets/tile-google-drive.svg';
   if (/^https?:\/\/docs\.google\.com\/spreadsheets/i.test(h)) return '/assets/tile-google-drive.svg';
   if (/^https?:\/\/teams\.microsoft\.com/i.test(h)) return '/assets/tile-microsoft-teams.png';
-  if (/^https?:\/\/(www\.)?outlook\.office\.com/i.test(h)) return '/assets/tile-microsoft-outlook.png';
+  if (/^https?:\/\/(www\.)?outlook\.office\.com/i.test(h)) return '/assets/tile-microsoft-outlook.svg';
   if (/sharepoint\.com/i.test(h)) return '/assets/tile-sharepoint.png';
   if (/^https?:\/\/rocompliance\.maxetaenergy\.com/i.test(h)) return '/assets/tile-maxeta.png';
   if (/^https?:\/\/(www\.)?calendar\.google\.com/i.test(h)) return '/assets/tile-google-calendar.png';
@@ -116,6 +122,8 @@ function iconSrc(row) {
   if (/^https?:\/\/(web\.)?whatsapp\.com/i.test(h)) return '/assets/tile-whatsapp.svg';
   if (/^https?:\/\/(www\.)?facebook\.com/i.test(h)) return '/assets/tile-facebook.svg';
   if (/^https?:\/\/my\.found\.com/i.test(h)) return '/assets/tile-found.png';
+  if (/^https?:\/\/(www\.)?chat\.co\/?/i.test(h)) return '/assets/tile-maxeta.png';
+  if (/^https?:\/\/(www\.)?energia\.pr\.gov(\/|$)/i.test(h)) return '/assets/tile-preb.png';
 
   const host = faviconHostForHref(h);
   const local = tileForHost(host) || tileForHost(hostnameFromHref(h));
@@ -189,7 +197,50 @@ function createTile(row) {
   return a;
 }
 
+const BOOKMARK_CACHE_PREFIX = 'dashbird-bookmarks-v1:';
+const BOOKMARK_CACHE_MAX_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** @param {string} dataPath */
+function readBookmarkCache(dataPath) {
+  try {
+    const raw = sessionStorage.getItem(BOOKMARK_CACHE_PREFIX + dataPath);
+    if (!raw) return null;
+    const j = JSON.parse(raw);
+    if (!j?.at || j.payload == null) return null;
+    if (Date.now() - j.at > BOOKMARK_CACHE_MAX_MS) return null;
+    return j.payload;
+  } catch {
+    return null;
+  }
+}
+
+/** @param {string} dataPath @param {unknown} payload */
+function writeBookmarkCache(dataPath, payload) {
+  try {
+    sessionStorage.setItem(
+      BOOKMARK_CACHE_PREFIX + dataPath,
+      JSON.stringify({ at: Date.now(), payload }),
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function showBookmarkSkeleton(root, count = 6) {
+  root.replaceChildren();
+  const grid = document.createElement('div');
+  grid.className = 'bookmark-section-grid bookmark-section-grid--skeleton';
+  grid.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < count; i += 1) {
+    const tile = document.createElement('div');
+    tile.className = 'bookmark-tile bookmark-tile--skeleton';
+    grid.appendChild(tile);
+  }
+  root.appendChild(grid);
+}
+
 function mountSections(root, data, emptyHint) {
+  root.replaceChildren();
   if (!data.sections || !Array.isArray(data.sections)) {
     root.innerHTML = `<p class="muted">${emptyHint}</p>`;
     return;
@@ -198,7 +249,19 @@ function mountSections(root, data, emptyHint) {
   let visibleSectionIndex = 0;
   for (const sec of data.sections) {
     if (!sec || typeof sec.title !== 'string' || !Array.isArray(sec.items)) continue;
-    const items = sec.items.filter((row) => row && typeof row.href === 'string' && row.word != null);
+    let items = sec.items.filter((row) => row && typeof row.href === 'string' && row.word != null);
+    const isClientsSection = /client/i.test(sec.title);
+    const hasChatCo = items.some((row) => /https?:\/\/(www\.)?chat\.co\/?/i.test(String(row.href || '')));
+    if (isClientsSection && !hasChatCo) {
+      items = items.concat([
+        {
+          word: 'chat.co',
+          href: 'https://www.chat.co/',
+          title: 'chat.co',
+          icon: '/assets/tile-chatco.ico',
+        },
+      ]);
+    }
     if (items.length === 0) continue;
     any = true;
 
@@ -231,29 +294,15 @@ function mountSections(root, data, emptyHint) {
  * @param {string} dataPath
  * @param {string} emptyHint
  */
-export async function mountBookmarkGrid(root, dataPath, emptyHint) {
-  root.dataset.bookmarkPath = dataPath;
-  root.replaceChildren();
-  const r = await fetch(dataPath, { cache: 'no-store' });
-  if (!r.ok) {
-    root.innerHTML = `<p class="muted">${emptyHint}</p>`;
-    return;
-  }
-  let data;
-  try {
-    data = await r.json();
-  } catch {
-    root.innerHTML = '<p class="muted">Invalid JSON in bookmark file.</p>';
-    return;
-  }
-
+function mountBookmarkPayload(root, data, emptyHint) {
   if (data && Array.isArray(data.sections)) {
     mountSections(root, data, emptyHint);
-    return;
+    return true;
   }
 
   /* Legacy: flat array of { word, href } */
   if (Array.isArray(data) && data.length > 0) {
+    root.replaceChildren();
     const grid = document.createElement('div');
     grid.className = 'bookmark-section-grid';
     for (const row of data) {
@@ -265,8 +314,42 @@ export async function mountBookmarkGrid(root, dataPath, emptyHint) {
     } else {
       root.appendChild(grid);
     }
-    return;
+    return true;
   }
 
-  root.innerHTML = `<p class="muted">${emptyHint}</p>`;
+  return false;
+}
+
+export async function mountBookmarkGrid(root, dataPath, emptyHint) {
+  if (!root) return;
+  root.dataset.bookmarkPath = dataPath;
+
+  const cached = readBookmarkCache(dataPath);
+  if (cached) {
+    mountBookmarkPayload(root, cached, emptyHint);
+  } else {
+    showBookmarkSkeleton(root);
+  }
+
+  try {
+    const r = await fetch(dataPath, { cache: 'no-store' });
+    if (!r.ok) {
+      if (!cached) root.innerHTML = `<p class="muted">${emptyHint}</p>`;
+      return;
+    }
+    let data;
+    try {
+      data = await r.json();
+    } catch {
+      if (!cached) root.innerHTML = '<p class="muted">Invalid JSON in bookmark file.</p>';
+      return;
+    }
+
+    writeBookmarkCache(dataPath, data);
+    if (!mountBookmarkPayload(root, data, emptyHint) && !cached) {
+      root.innerHTML = `<p class="muted">${emptyHint}</p>`;
+    }
+  } catch {
+    if (!cached) root.innerHTML = `<p class="muted">${emptyHint}</p>`;
+  }
 }

@@ -10,11 +10,6 @@
         {
           "word": "Cursor",
           "href": "cursor://"
-        },
-        {
-          "word": "Kdenlive",
-          "href": "/api/open-desktop/kdenlive",
-          "title": "Local AppImage in ~/Applications (or set KDENLIVE_APPIMAGE in .env)"
         }
       ]
     },

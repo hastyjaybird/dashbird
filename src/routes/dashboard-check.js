@@ -4,7 +4,7 @@ import { runDashboardChecks } from '../lib/dashboard-check.js';
 const router = Router();
 
 /**
- * POST /api/dashboard-check — run connectivity checks (bookmarks, OpenRouter, sky-events, etc.).
+ * POST /api/dashboard-check — run connectivity checks (bookmarks, sky-events, etc.).
  * Triggered from the health sidebar; extend checks in src/lib/dashboard-check.js.
  */
 router.post('/', async (_req, res) => {

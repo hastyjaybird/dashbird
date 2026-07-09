@@ -1,5 +1,6 @@
 /**
- * Rain-alert street address (persisted). Used for 2h precip + radar center.
+ * Rain-alert street address (persisted). Used by aircraft-nearby and legacy clients;
+ * hero rain alert prefers live GPS / dashboard WEATHER_ZIP.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';

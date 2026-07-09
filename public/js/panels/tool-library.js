@@ -11,13 +11,16 @@ let activeCategoryFilters = new Set();
 /** @type {Set<string>} */
 let activeOsFilters = new Set();
 let searchQuery = '';
+let repairAttempted = false;
 
 function collectOsOptions(list) {
   const set = new Set();
   for (const t of list) {
     for (const os of t.operatingSystems || []) {
       const s = String(os || '').trim();
-      if (s) set.add(s);
+      if (!s) continue;
+      if (/^mac\s*os$/i.test(s) || /^macos$/i.test(s)) continue;
+      set.add(s);
     }
   }
   return [...set].sort((a, b) => a.localeCompare(b));
@@ -36,18 +39,48 @@ function stars(n) {
   return '★'.repeat(full) + (half ? '½' : '') + '☆'.repeat(5 - full - half);
 }
 
+function normalizePricingText(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+  const s = raw.toLowerCase();
+  if (/\bfree\b/.test(s) && (/\bopen[-\s]?source\b/.test(s) || /\bpersonal use\b/.test(s))) {
+    return 'Free';
+  }
+  if (/\bfree\b/.test(s)) return 'Free';
+  return raw;
+}
+
+function ratingLabel(tool) {
+  const source = String(tool?.ratingSource || '').trim();
+  const rating = Number(tool?.rating);
+  if (!source || !Number.isFinite(rating)) return '';
+  return [stars(rating), rating.toFixed(1)].join(' ');
+}
+
+function pricingBadgeText(tool) {
+  const lowestTier = normalizePricingText(tool?.pricing?.lowestTier);
+  if (lowestTier && !/^(unknown|--|n\/a|na|none)$/i.test(lowestTier)) return lowestTier;
+  const summary = normalizePricingText(tool?.pricing?.summary);
+  if (summary) return summary;
+  const bestUsedFor = normalizePricingText(tool?.bestUsedFor);
+  if (bestUsedFor.includes('Free')) return 'Free';
+  const model = normalizePricingText(tool?.pricing?.model);
+  return /^unknown$/i.test(model) ? '' : model;
+}
+
 function filteredTools(list) {
   const q = searchQuery.trim().toLowerCase();
+  const tokens = q.split(/\s+/).filter(Boolean);
   return list.filter((t) => {
     if (activeCategoryFilters.size) {
-      const cats = t.categories || [];
+      const cats = [...(t.categories || []), ...(t.tags || [])];
       if (!cats.some((c) => activeCategoryFilters.has(c))) return false;
     }
     if (activeOsFilters.size) {
       const oss = t.operatingSystems || [];
       if (!oss.some((o) => activeOsFilters.has(o))) return false;
     }
-    if (!q) return true;
+    if (!tokens.length) return true;
     const blob = [
       t.name,
       t.bestUsedFor,
@@ -56,12 +89,27 @@ function filteredTools(list) {
       t.pricing?.lowestTier,
       ...(t.features || []),
       ...(t.categories || []),
+      ...(t.tags || []),
+      ...(t.kindHints || []),
       ...(t.operatingSystems || []),
     ]
       .join(' ')
       .toLowerCase();
-    return blob.includes(q);
+    return tokens.every((tok) => blob.includes(tok));
   });
+}
+
+function statusChip(tool) {
+  if (!tool.watchEnabled && tool.watchMode === 'off') return null;
+  const st = String(tool.lastStatus || 'pending').toLowerCase();
+  const chip = el('span');
+  chip.className = `tool-library__status-chip tool-library__status-chip--${st}`;
+  chip.textContent =
+    st === 'up' ? 'up' : st === 'down' ? 'down' : tool.watchEnabled ? 'watch' : st;
+  if (tool.lastCheckedAt) {
+    chip.title = `Last checked ${tool.lastCheckedAt}`;
+  }
+  return chip;
 }
 
 function renderFilterGroup(container, label, values, activeSet) {
@@ -116,7 +164,7 @@ function buildToolCard(card, tool) {
   card.className = 'tool-library__card';
   if (selected) card.classList.add('tool-library__card--selected');
   card.dataset.toolId = tool.id;
-  card.title = 'Right-click: search for alternatives';
+  card.title = 'Click to open · Right-click queues background alternatives search';
 
   const pick = el('input');
   pick.type = 'checkbox';
@@ -159,31 +207,48 @@ function buildToolCard(card, tool) {
   title.rel = 'noopener noreferrer';
   title.textContent = tool.name || tool.url;
   logoRow.append(title);
+  const chip = statusChip(tool);
+  if (chip) logoRow.append(chip);
 
   const meta = el('p');
   meta.className = 'tool-library__card-meta';
-  const tier = tool.pricing?.lowestTier || tool.pricing?.model || '';
-  const priceBit = tier ? String(tier) : '';
-  meta.textContent = [stars(tool.rating), Number(tool.rating).toFixed(1), priceBit]
-    .filter(Boolean)
-    .join(' · ');
+  const priceBit = pricingBadgeText(tool);
+  const ratingBit = ratingLabel(tool);
+  meta.textContent = [ratingBit, priceBit].filter(Boolean).join(' · ');
+
+  const categories = (tool.categories || []).map((c) => String(c || '').trim()).filter(Boolean);
+  let catRow = null;
+  if (categories.length) {
+    catRow = el('div');
+    catRow.className = 'tool-library__card-cats';
+    for (const cat of categories.slice(0, 3)) {
+      const tag = el('span');
+      tag.className = 'tool-library__card-cat';
+      tag.textContent = cat;
+      catRow.append(tag);
+    }
+  }
 
   const blurb = el('p');
   blurb.className = 'tool-library__card-blurb';
   const bestForText =
     typeof tool.bestUsedFor === 'string' && tool.bestUsedFor.trim()
       ? tool.bestUsedFor.trim()
-      : truncate(tool.pricing?.summary, 72);
+      : truncate(tool.pricing?.summary, 120);
   if (bestForText) {
-    blurb.textContent = truncate(bestForText, 72);
+    blurb.textContent = truncate(bestForText, 120);
   } else {
     blurb.hidden = true;
   }
 
-  card.append(pick, snap, logoRow, meta, blurb);
+  card.append(pick, snap, logoRow, meta, ...(catRow ? [catRow] : []), blurb);
+  card.addEventListener('click', (e) => {
+    if (e.target.closest('input, a, button, label, .tool-library__card-cats')) return;
+    window.open(siteUrl, '_blank', 'noopener,noreferrer');
+  });
   card.addEventListener('contextmenu', (e) => {
     e.preventDefault();
-    openAlternativesModal(tool);
+    queueAlternativesJob(tool, card.closest('.tool-library'));
   });
 }
 
@@ -221,15 +286,58 @@ function updateDeleteBtn(root) {
 async function refresh(root) {
   const status = root.querySelector('.tool-library__status');
   try {
-    const r = await fetch('/api/tool-library', { cache: 'no-store' });
+    const [r, cr] = await Promise.all([
+      fetch('/api/tool-library', { cache: 'no-store' }),
+      fetch('/api/web-catalog?project=dashbird&kind=tool', { cache: 'no-store' }).catch(() => null),
+    ]);
     const data = await r.json();
     if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
-    tools = Array.isArray(data.tools) ? data.tools : [];
+    const byUrl = new Map();
+    for (const t of Array.isArray(data.tools) ? data.tools : []) {
+      byUrl.set(String(t.url || '').toLowerCase(), t);
+    }
+    if (cr && cr.ok) {
+      const cdata = await cr.json();
+      for (const t of Array.isArray(cdata.tools) ? cdata.tools : []) {
+        const key = String(t.url || '').toLowerCase();
+        if (!byUrl.has(key)) byUrl.set(key, t);
+        else {
+          const prev = byUrl.get(key);
+          byUrl.set(key, {
+            ...prev,
+            ...t,
+            id: prev.id,
+            catalogId: t.catalogId || t.id,
+            watchEnabled: t.watchEnabled ?? prev.watchEnabled,
+            watchMode: t.watchMode ?? prev.watchMode,
+            lastStatus: t.lastStatus ?? prev.lastStatus,
+            lastCheckedAt: t.lastCheckedAt ?? prev.lastCheckedAt,
+          });
+        }
+      }
+    }
+    tools = [...byUrl.values()];
     categories = Array.isArray(data.categories) ? data.categories : [];
+    for (const t of tools) {
+      for (const c of t.categories || t.tags || []) {
+        if (c && !categories.includes(c)) categories.push(c);
+      }
+    }
+    categories.sort((a, b) => a.localeCompare(b));
+    if (!repairAttempted) {
+      repairAttempted = true;
+      fetch('/api/tool-library/tools/repair-assets', { method: 'POST' })
+        .then((rr) => rr.json())
+        .then(async (repair) => {
+          if (repair?.repaired > 0) await refresh(root);
+        })
+        .catch(() => {});
+    }
     if (status) status.hidden = true;
     renderSidebar(root);
     renderGrid(root);
     updateDeleteBtn(root);
+    refreshReview(root);
   } catch (e) {
     if (status) {
       status.hidden = false;
@@ -249,7 +357,7 @@ function openAddModal(root) {
   const hint = el('p');
   hint.className = 'tool-library__modal-hint';
   hint.textContent =
-    'Type a tool name (e.g. Fusion 360) or paste its homepage URL. Details are auto-filled via OpenRouter (OPENROUTER_API_KEY required).';
+    'Paste the tool homepage URL to add it. Metadata is derived from the page title/description.';
   const input = el('input');
   input.type = 'text';
   input.className = 'tool-library__modal-input';
@@ -299,6 +407,130 @@ function openAddModal(root) {
   input.focus();
 }
 
+async function ensureCatalogId(tool) {
+  if (tool.catalogId) return tool.catalogId;
+  // Sync tool URL into catalog so discovery jobs have a resource id
+  const r = await fetch('/api/web-catalog/resources', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      url: tool.url || tool.website,
+      title: tool.name,
+      summary: tool.bestUsedFor || '',
+      kind_hints: ['tool'],
+      tags: tool.categories || [],
+      project: 'dashbird',
+      section: 'Tools',
+      legacy_tool_id: tool.id,
+      logo_url: tool.logoUrl || null,
+      snapshot_url: tool.snapshotUrl || null,
+      operating_systems: tool.operatingSystems || [],
+      rating: tool.rating,
+      rating_source: tool.ratingSource,
+      pricing: tool.pricing || {},
+    }),
+  });
+  const data = await r.json();
+  if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+  tool.catalogId = data.resource?.id;
+  return tool.catalogId;
+}
+
+async function queueAlternativesJob(tool, root) {
+  const status = root?.querySelector('.tool-library__status');
+  try {
+    if (status) {
+      status.hidden = false;
+      status.textContent = `Queuing alternatives search for ${tool.name}…`;
+    }
+    const resourceId = await ensureCatalogId(tool);
+    const r = await fetch('/api/web-catalog/jobs/alternatives', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resourceId }),
+    });
+    const data = await r.json();
+    if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+    if (status) {
+      status.textContent = `Searching alternatives for ${tool.name} in the background — check Review when ready.`;
+      setTimeout(() => {
+        if (status.textContent.includes('background')) status.hidden = true;
+      }, 5000);
+    }
+    refreshReview(root);
+  } catch (e) {
+    if (status) {
+      status.hidden = false;
+      status.textContent = e?.message || 'Could not queue alternatives job';
+    }
+  }
+}
+
+async function refreshReview(root) {
+  const wrap = root?.querySelector('.tool-library__review');
+  const list = root?.querySelector('.tool-library__review-list');
+  const heading = root?.querySelector('.tool-library__review-heading');
+  if (!wrap || !list) return;
+  try {
+    const r = await fetch('/api/web-catalog/review?status=pending', { cache: 'no-store' });
+    const data = await r.json();
+    if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+    const items = Array.isArray(data.items) ? data.items : [];
+    list.replaceChildren();
+    if (heading) heading.textContent = items.length ? `Review (${items.length})` : 'Review';
+    wrap.hidden = items.length === 0;
+    for (const item of items) {
+      const row = el('div');
+      row.className = 'tool-library__review-row';
+      const body = el('div');
+      body.className = 'tool-library__review-body';
+      const name = el('strong');
+      name.textContent = item.candidate_title || item.candidate_url;
+      const meta = el('p');
+      meta.className = 'tool-library__review-meta';
+      meta.textContent = item.reason || item.candidate_summary || item.candidate_url;
+      body.append(name, meta);
+      const actions = el('div');
+      actions.className = 'tool-library__review-actions';
+      const approve = el('button');
+      approve.type = 'button';
+      approve.className = 'tool-library__btn tool-library__btn--primary';
+      approve.textContent = 'Add';
+      const reject = el('button');
+      reject.type = 'button';
+      reject.className = 'tool-library__btn';
+      reject.textContent = 'Skip';
+      approve.addEventListener('click', async () => {
+        approve.disabled = true;
+        reject.disabled = true;
+        await fetch(`/api/web-catalog/review/${encodeURIComponent(item.id)}/resolve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'approved' }),
+        });
+        await refresh(root);
+        await refreshReview(root);
+      });
+      reject.addEventListener('click', async () => {
+        approve.disabled = true;
+        reject.disabled = true;
+        await fetch(`/api/web-catalog/review/${encodeURIComponent(item.id)}/resolve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'rejected' }),
+        });
+        await refreshReview(root);
+      });
+      actions.append(approve, reject);
+      row.append(body, actions);
+      list.append(row);
+    }
+  } catch {
+    wrap.hidden = true;
+  }
+}
+
+/** Legacy sync alternatives modal (kept for import-batch from older flows). */
 async function openAlternativesModal(tool) {
   const backdrop = el('div');
   backdrop.className = 'tool-library__modal-backdrop';
@@ -362,8 +594,14 @@ async function openAlternativesModal(tool) {
     const data = await r.json();
     if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
     list.replaceChildren();
-    msg.textContent = 'Ranked by rating (current tool included). Check rows to add to toolbox.';
-    for (const row of data.ranked || []) {
+    const ranked = data.ranked || [];
+    if (!ranked.length) {
+      msg.textContent = 'No new alternatives found (web search returned no tools outside your toolbox).';
+      addBtn.disabled = true;
+      return;
+    }
+    msg.textContent = 'Web-discovered alternatives not already in your toolbox. Check rows to add.';
+    for (const row of ranked) {
       rowById.set(row.tempId, row);
       const item = el('div');
       item.className = 'tool-library__alt-row';
@@ -376,9 +614,16 @@ async function openAlternativesModal(tool) {
       const body = el('div');
       body.className = 'tool-library__alt-body';
       const name = el('strong');
-      name.textContent = row.isOriginal ? `${row.name} (current)` : row.name;
+      name.textContent = row.name;
       const meta = el('span');
-      meta.textContent = ` · ${stars(row.rating)} ${row.rating} · ${row.pricing?.model || ''} ${row.pricing?.lowestTier || ''}`;
+      const ratingBit = ratingLabel(row);
+      meta.textContent = [
+        ratingBit,
+        row.pricing?.model || '',
+        row.pricing?.lowestTier || '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
       body.append(name, meta);
       const bestTxt = typeof row.bestUsedFor === 'string' ? row.bestUsedFor.trim() : '';
       if (bestTxt) {
@@ -398,7 +643,7 @@ async function openAlternativesModal(tool) {
 
 export function mountToolLibrary(mount) {
   if (!mount) return;
-  mount.className = 'tool-library';
+  mount.classList.add('tool-library');
   mount.replaceChildren();
 
   const toolbar = el('div');
@@ -437,7 +682,25 @@ export function mountToolLibrary(mount) {
       delBtn.disabled = false;
     }
   });
-  toolbar.append(search, addBtn, delBtn);
+  const exportBtn = el('button');
+  exportBtn.type = 'button';
+  exportBtn.className = 'tool-library__btn';
+  exportBtn.textContent = 'Export';
+  exportBtn.title = 'Download filtered catalog JSON for climate-dash import';
+  exportBtn.addEventListener('click', () => {
+    window.open('/api/web-catalog/export?kind=tool&project=dashbird', '_blank');
+  });
+  toolbar.append(search, addBtn, delBtn, exportBtn);
+
+  const review = el('section');
+  review.className = 'tool-library__review';
+  review.hidden = true;
+  const reviewHeading = el('h3');
+  reviewHeading.className = 'tool-library__review-heading';
+  reviewHeading.textContent = 'Review';
+  const reviewList = el('div');
+  reviewList.className = 'tool-library__review-list';
+  review.append(reviewHeading, reviewList);
 
   const body = el('div');
   body.className = 'tool-library__body';
@@ -464,6 +727,8 @@ export function mountToolLibrary(mount) {
   main.append(status, empty, grid);
   body.append(sidebar, main);
 
-  mount.append(toolbar, body);
+  mount.append(toolbar, review, body);
   refresh(mount);
+  refreshReview(mount);
+  setInterval(() => refreshReview(mount), 20_000);
 }

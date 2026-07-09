@@ -10,6 +10,7 @@ import {
 } from '../lib/google-calendar-ical.js';
 import { resolveDashboardWeatherLatLon } from '../lib/hero-weather-location.js';
 import { fetchNwsPointsDocument, mapClickUrlForLatLon } from '../lib/nws-points.js';
+import { reverseGeocodeCoords } from '../lib/reverse-geocode.js';
 const router = Router();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -43,7 +44,8 @@ async function readLastBackupFromFile() {
 }
 
 router.get('/', async (req, res) => {
-  const { lat, lon, zip: weatherZip } = await resolveDashboardWeatherLatLon();
+  const { lat, lon, zip: weatherZip, place: weatherPlace, stateAbbrev } =
+    await resolveDashboardWeatherLatLon();
   const sfLat = parseFloat(process.env.SF_WEATHER_LAT ?? '37.7749');
   const sfLon = parseFloat(process.env.SF_WEATHER_LON ?? '-122.4194');
 
@@ -78,6 +80,26 @@ router.get('/', async (req, res) => {
     lanOrigin = await readLanOriginFromFile();
   }
 
+  const envLabel = String(process.env.DASHBOARD_LOCATION_LABEL || '').trim();
+  let placeLabel =
+    (typeof weatherPlace === 'string' && weatherPlace.trim()) ||
+    (envLabel ? envLabel.split('·')[0].trim() : '') ||
+    '';
+  if (!placeLabel) {
+    try {
+      const rev = await reverseGeocodeCoords(lat, lon);
+      if (rev?.shortLabel) placeLabel = rev.shortLabel;
+    } catch {
+      /* fall through */
+    }
+  }
+  if (!placeLabel) {
+    placeLabel =
+      (weatherZip && stateAbbrev ? `${weatherZip}, ${stateAbbrev}` : '') ||
+      envLabel ||
+      'Oakland, CA';
+  }
+
   res.json({
     lanOrigin,
     calendarEmbedUrl,
@@ -87,12 +109,12 @@ router.get('/', async (req, res) => {
     weatherLat: lat,
     weatherLon: lon,
     weatherZip,
+    weatherPlace: placeLabel,
     weatherTimeZone,
     nwsMapClickUrl,
     sfWeatherLat: Number.isFinite(sfLat) ? sfLat : 37.7749,
     sfWeatherLon: Number.isFinite(sfLon) ? sfLon : -122.4194,
-    locationLabel: process.env.DASHBOARD_LOCATION_LABEL || 'Oakland, CA · 94608',
-    openrouterModel: process.env.OPENROUTER_MODEL || 'openrouter/auto',
+    locationLabel: envLabel || `${placeLabel}${weatherZip ? ` · ${weatherZip}` : ''}`,
     lastBackupAt,
   });
 });

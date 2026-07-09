@@ -34,7 +34,7 @@ export const EVENT_TYPE_LIVE_URLS = {
   goes_glm_lightning: 'https://www.star.nesdis.noaa.gov/GOES/thumbnail.php?v=glm',
   goes_glm_sprite: 'https://www.star.nesdis.noaa.gov/GOES/thumbnail.php?v=glm',
   fear_greed_index: 'https://www.cnn.com/markets/fear-and-greed',
-  weather_radar: 'https://www.windy.com/',
+  weather_radar: 'https://radar.weather.gov/',
 };
 
 /**
@@ -167,6 +167,23 @@ export const EARTH_EVENT_MANIFEST = [
     label: 'Sprite-class flash (GLM proxy)',
     category: 'Earth',
     dataSource: 'GLM energy + footprint tiers · data/glm-sprite-events.json (7-day store)',
+  },
+];
+
+/** Market & weather service rows (order preserved for Settings table). */
+export const SERVICE_EVENT_MANIFEST = [
+  {
+    id: 'fear_greed_index',
+    label: 'F&G Index',
+    category: 'Market & weather',
+    dataSource: 'CNN Markets F&G Index (scraped)',
+  },
+  {
+    id: 'weather_radar',
+    label: 'Weather radar',
+    category: 'Market & weather',
+    dataSource:
+      'IEM MRMS SeamlessHSR via Leaflet · device location · Open-Meteo rain captions (24h precip gate temporarily off for troubleshooting)',
   },
 ];
 

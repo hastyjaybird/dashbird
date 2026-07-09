@@ -75,7 +75,7 @@ export async function buildServiceEventTypesStatus() {
         types.push({
           id: 'weather_radar',
           active: false,
-          value: 'Could not geocode rain-alert address',
+          value: 'Could not resolve dashboard location',
           liveUrl: getEventTypeLiveUrl('weather_radar'),
         });
       } else if (!radar.show) {
@@ -88,10 +88,16 @@ export async function buildServiceEventTypesStatus() {
       } else {
         const msg = typeof radar.message === 'string' ? radar.message.trim() : '';
         const loc = radar.geo?.displayName || radar.address || '';
+        const provider =
+          radar.provider === 'iem'
+            ? 'IEM MRMS'
+            : typeof radar.provider === 'string'
+              ? radar.provider
+              : 'radar';
         types.push({
           id: 'weather_radar',
           active: true,
-          value: [msg, loc].filter(Boolean).join(' · ') || 'Windy radar active',
+          value: [provider, msg, loc].filter(Boolean).join(' · ') || 'IEM MRMS radar active',
           liveUrl: radar.embed?.mapPageUrl || getEventTypeLiveUrl('weather_radar'),
         });
       }

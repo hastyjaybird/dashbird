@@ -36,6 +36,14 @@ const EARTHQUAKE_PIN_SRC = '/assets/earth-earthquake-pin.png';
 const GLM_LIGHTNING_STRIP_SRC = '/assets/earth-glm-lightning-strip.png';
 const NASTURTIUM_STRIP_ICON_SRC = '/assets/earth-nasturtium-strip.png';
 const FIREFLY_STRIP_ICON_SRC = '/assets/earth-firefly-strip.png';
+const HURRICANE_ICON_SRC = '/assets/earth-hurricane-icon.png';
+const FRUIT_APPLE_ICON_SRC = '/assets/fruit-apple.png';
+const FRUIT_PEAR_ICON_SRC = '/assets/fruit-pear.png';
+const FRUIT_PEACH_ICON_SRC = '/assets/fruit-peach.png';
+const FRUIT_PLUM_ICON_SRC = '/assets/fruit-plum.png';
+const FRUIT_FIG_ICON_SRC = '/assets/fruit-fig.png';
+const FRUIT_LOQUAT_ICON_SRC = '/assets/fruit-loquat.png';
+const FRUIT_BLACKBERRY_ICON_SRC = '/assets/fruit-blackberry.png';
 
 function buildTarantulaGlyph() {
   const wrap = document.createElement('span');
@@ -70,19 +78,34 @@ function isMinersLettuceRowLabel(label) {
   return false;
 }
 
+function buildWildEdibleImageGlyph(className, src) {
+  const wrap = document.createElement('span');
+  wrap.className = `hero-astro-glyph hero-astro-glyph--img earth-wild-edible-glyph ${className}`;
+  wrap.setAttribute('aria-hidden', 'true');
+  const img = document.createElement('img');
+  img.src = src;
+  img.alt = '';
+  img.decoding = 'async';
+  img.loading = 'lazy';
+  wrap.appendChild(img);
+  return wrap;
+}
+
 function buildWildEdibleGlyph(plantLabel) {
+  const s = String(plantLabel || '').toLowerCase();
   if (isMinersLettuceRowLabel(plantLabel)) {
-    const wrap = document.createElement('span');
-    wrap.className = 'hero-astro-glyph hero-astro-glyph--img earth-wild-edible-glyph earth-miners-lettuce-glyph';
-    wrap.setAttribute('aria-hidden', 'true');
-    const img = document.createElement('img');
-    img.src = MINERS_LETTUCE_STRIP_SRC;
-    img.alt = '';
-    img.decoding = 'async';
-    img.loading = 'lazy';
-    wrap.appendChild(img);
-    return wrap;
+    return buildWildEdibleImageGlyph('earth-miners-lettuce-glyph', MINERS_LETTUCE_STRIP_SRC);
   }
+  if (s.includes('loquat')) return buildWildEdibleImageGlyph('earth-wild-fruit-glyph', FRUIT_LOQUAT_ICON_SRC);
+  if (s.includes('pear')) return buildWildEdibleImageGlyph('earth-wild-fruit-glyph', FRUIT_PEAR_ICON_SRC);
+  if (s.includes('plum')) return buildWildEdibleImageGlyph('earth-wild-fruit-glyph', FRUIT_PLUM_ICON_SRC);
+  if (/(peach|nectarine|stone fruit)/.test(s)) {
+    return buildWildEdibleImageGlyph('earth-wild-fruit-glyph', FRUIT_PEACH_ICON_SRC);
+  }
+  if (s.includes('fig')) return buildWildEdibleImageGlyph('earth-wild-fruit-glyph', FRUIT_FIG_ICON_SRC);
+  if (s.includes('apple')) return buildWildEdibleImageGlyph('earth-wild-fruit-glyph', FRUIT_APPLE_ICON_SRC);
+  if (s.includes('blackberry')) return buildWildEdibleImageGlyph('earth-wild-fruit-glyph', FRUIT_BLACKBERRY_ICON_SRC);
+
   const wrap = document.createElement('span');
   wrap.className = 'hero-astro-glyph earth-wild-edible-glyph';
   wrap.textContent = '🌿';
@@ -181,6 +204,7 @@ function earthItemGlyph(ev) {
   if (t.startsWith('nasturtium_bloom')) return buildNasturtiumGlyph();
   if (t === 'firefly_season') return buildFireflyGlyph();
   if (t === 'fall_foliage_season') return buildFallFoliageGlyph();
+  if (t === 'atlantic_cyclone_land_impact') return buildAtlanticStormGlyph();
   return buildMonarchGlyph();
 }
 
@@ -202,6 +226,19 @@ function buildFallFoliageGlyph() {
   wrap.className = 'hero-astro-glyph earth-foliage-glyph';
   wrap.setAttribute('aria-hidden', 'true');
   wrap.textContent = '🍂';
+  return wrap;
+}
+
+function buildAtlanticStormGlyph() {
+  const wrap = document.createElement('span');
+  wrap.className = 'hero-astro-glyph hero-astro-glyph--img earth-atlantic-storm-glyph';
+  wrap.setAttribute('aria-hidden', 'true');
+  const img = document.createElement('img');
+  img.src = HURRICANE_ICON_SRC;
+  img.alt = '';
+  img.decoding = 'async';
+  img.loading = 'lazy';
+  wrap.appendChild(img);
   return wrap;
 }
 
@@ -272,6 +309,9 @@ function earthItemTooltip(earthType, ev) {
   if (t === 'fall_foliage_season') {
     return 'Fall leaf-color season at Settings secondary ZIP: USA-NPN MODIS LSP Mid Greendown median; active 21 days before start, peak, or end; opens Status of Autumn (new tab)';
   }
+  if (t === 'atlantic_cyclone_land_impact') {
+    return 'Atlantic Category 1+ cyclone row shown when NHC advisory indicates projected land impact; detail names forecasted landfall location when parsed from advisory text.';
+  }
   return '';
 }
 
@@ -314,6 +354,7 @@ function mergeFastEarthPayloads([
   nasturtiumJson,
   secondaryWatchJson,
   quakeJson,
+  atlanticStormJson,
 ]) {
   const npnSpringItems = parseEarthPayload(npnSpringJson);
   const tarantulaItems = parseEarthPayload(tarantulaJson);
@@ -324,6 +365,7 @@ function mergeFastEarthPayloads([
   const nasturtiumItems = parseEarthPayload(nasturtiumJson);
   const secondaryItems = parseEarthPayload(secondaryWatchJson);
   const quakeItems = parseEarthPayload(quakeJson);
+  const atlanticStormItems = parseEarthPayload(atlanticStormJson);
   const merged = npnSpringItems.concat(
     tarantulaItems,
     salamanderItems,
@@ -333,6 +375,7 @@ function mergeFastEarthPayloads([
     nasturtiumItems,
     secondaryItems,
     quakeItems,
+    atlanticStormItems,
   );
   return { merged, quakeItems };
 }
@@ -380,7 +423,7 @@ export function mountEarthStrip(container) {
     const md = typeof quakeAsOfMd === 'string' && quakeAsOfMd ? quakeAsOfMd : formatLocalQuakeMd();
     container.setAttribute(
       'aria-label',
-      `Earth events: USA-NPN spring when active, Diablo-area tarantulas, Oakland salamander heuristic, monarch migration, salmon seasons, wild edible / foraging notes, nasturtium bloom, lightning bugs at secondary ZIP (7-day heads-up before start), fall foliage at secondary ZIP (21-day heads-up), nearby earthquake through ${md} when strongest is M>3 within 30 mi, GOES GLM strongest flash and optional Sprite-class proxy row when a tier match is stored (~200 mi, 7-day retention)`,
+      `Earth events: USA-NPN spring when active, Diablo-area tarantulas, Oakland salamander heuristic, monarch migration, salmon seasons, wild edible / foraging notes, nasturtium bloom, lightning bugs at secondary ZIP (7-day heads-up before start), fall foliage at secondary ZIP (21-day heads-up), Atlantic Category 1+ storms with forecasted landfall location when parsed from NHC advisories, nearby earthquake through ${md} when strongest is M>3 within 30 mi, GOES GLM strongest flash and optional Sprite-class proxy row when a tier match is stored (~200 mi, 7-day retention)`,
     );
   }
 
@@ -388,8 +431,9 @@ export function mountEarthStrip(container) {
     if (card) card.hidden = !show;
   }
 
-  // GLM (S3 + NetCDF) is often several seconds; load in parallel but paint the fast batch first.
-  const glmPromise = fetchEarthJson('/api/dashboard-lightning-glm');
+  // Fast earth endpoints first; GLM (S3 + NetCDF, often several seconds) waits until
+  // the Earth card is near the viewport so it does not contend with the initial fan-out.
+  let glmStarted = false;
   let fastRowCount = 0;
   let glmRowCount = 0;
   let fastDone = false;
@@ -424,9 +468,37 @@ export function mountEarthStrip(container) {
     syncEarthVisibility();
   }
 
-  glmPromise.then((lightningJson) => {
-    applyGlmItems(parseEarthPayload(lightningJson));
-  });
+  function startGlmFetch() {
+    if (glmStarted) return;
+    glmStarted = true;
+    fetchEarthJson('/api/dashboard-lightning-glm').then((lightningJson) => {
+      applyGlmItems(parseEarthPayload(lightningJson));
+    });
+  }
+
+  function scheduleGlmWhenNear() {
+    const target = card || container;
+    if (!target || typeof IntersectionObserver !== 'function') {
+      // Fallback: still defer past the initial paint / fast-batch fan-out.
+      setTimeout(startGlmFetch, 2500);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          io.disconnect();
+          startGlmFetch();
+        }
+      },
+      { rootMargin: '200px 0px' },
+    );
+    io.observe(target);
+    // Safety net if the card stays off-screen (e.g. hidden until first rows arrive).
+    setTimeout(() => {
+      io.disconnect();
+      startGlmFetch();
+    }, 8000);
+  }
 
   Promise.all([
     fetchEarthJson('/api/usa-npn-spring'),
@@ -438,6 +510,7 @@ export function mountEarthStrip(container) {
     fetchEarthJson('/api/nasturtium-bloom'),
     fetchEarthJson('/api/secondary-watch'),
     fetchEarthJson('/api/dashboard-earthquake-week'),
+    fetchEarthJson('/api/atlantic-storm-watch'),
   ])
     .then((payloads) => {
       container.replaceChildren();
@@ -457,11 +530,13 @@ export function mountEarthStrip(container) {
       }
 
       syncEarthVisibility();
+      scheduleGlmWhenNear();
     })
     .catch(() => {
       container.replaceChildren();
       fastDone = true;
       fastRowCount = 0;
       syncEarthVisibility();
+      scheduleGlmWhenNear();
     });
 }

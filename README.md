@@ -1,6 +1,6 @@
 # dashbird
 
-Local **homepage dashboard** (Dashy-inspired glass UI): full-width photo background, a **hero** cluster (12-hour clock, Open-Meteo weather with low-poly SVG icons), **Personal** and **Admin** tile grids (favicon + one word), Google Calendar, plain-text notes, and **chat** via [OpenRouter](https://openrouter.ai/) through a **server-side** proxy (API keys never ship to the browser).
+Local **homepage dashboard** (Dashy-inspired glass UI): full-width photo background, a **hero** cluster (12-hour clock, Open-Meteo weather with low-poly SVG icons), **Personal** and **Admin** tile grids (favicon + one word), Google Calendar, and plain-text notes.
 
 Post–v1 integrations (Vikunja, Google Keep, optional Home Assistant proxy) live in [`docs/v2-roadmap.md`](docs/v2-roadmap.md).
 
@@ -10,7 +10,7 @@ This repo supersedes the earlier **`homeassistantdashboard`** workspace; the Cur
 
 ## Quick start
 
-1. Copy environment template and set at least `OPENROUTER_API_KEY` for chat:
+1. Copy environment template:
 
    ```bash
    cp .env.example .env
@@ -43,7 +43,7 @@ Optional: set **`DASHBOARD_LAN_ORIGIN`** in `.env` to override the auto-detected
 
 **If the page does not load:** allow the port on the host firewall (e.g. `sudo ufw allow 8787/tcp`), confirm phone and PC are on the same subnet, and disable router “AP/client isolation” if enabled.
 
-**Security:** anyone on your LAN who knows the IP can use the dashboard (including chat if OpenRouter is configured). This is intentional for trusted home Wi‑Fi only — do not port-forward to the public internet without authentication.
+**Security:** anyone on your LAN who knows the IP can use the dashboard. This is intentional for trusted home Wi‑Fi only — do not port-forward to the public internet without authentication.
 
 ### Hetzner Cloud (VPS)
 
@@ -65,14 +65,11 @@ Default `PORT` is **3000** when not using Compose.
 | `PORT` | HTTP port inside the container / for `npm start` |
 | `HOST_PORT` | Host port published by Compose (default `8787`) |
 | `DASHBOARD_LAN_ORIGIN` | Optional full origin for sidebar **Phone (same Wi‑Fi)** link; run `npm run lan-url` to discover |
-| `OPENROUTER_API_KEY` | Server-only key for `/api/chat` |
-| `OPENROUTER_MODEL` | Model id (default `openrouter/auto`) |
 | `CALENDAR_EMBED_URL` | Full `src` URL from Google Calendar **Integrate calendar** (iframe embed) |
 | `WEATHER_LAT` / `WEATHER_LON` | Open-Meteo coordinates (defaults: **Oakland, CA 94608**) |
 | `DASHBOARD_LOCATION_LABEL` | Reserved for future use (the hero no longer shows a location line under the date) |
 | `SF_WEATHER_LAT` / `SF_WEATHER_LON` | Second city in hero (default San Francisco) |
 | `LAST_BACKUP_AT` | Optional ISO time for **“days since last backup”** in the right system sidebar (overrides file below) |
-| `CHAT_RATE_LIMIT_PER_MINUTE` | Optional `/api/chat` throttle per IP per minute (`0` = off, **default**). Spend caps: set on [openrouter.ai](https://openrouter.ai/). |
 
 Commented **v2** placeholders are listed in [`.env.example`](.env.example).
 
@@ -84,13 +81,6 @@ Set **`LAST_BACKUP_AT`** in `.env` to an ISO timestamp, **or** put a single ISO 
 
 The main column uses the **full browser width** with responsive side padding (`clamp`), so laptop windows are not locked to a narrow max-width.
 
-## OpenRouter: cost and key safety
-
-- The **API key stays on the server** (`.env` / Docker secrets); it is never sent to the browser.
-- Turn on **spend limits and alerts** in your [OpenRouter account](https://openrouter.ai/) so a stolen key cannot run up an unlimited bill.
-- **`CHAT_RATE_LIMIT_PER_MINUTE`** (default **off**) can throttle how often this app calls OpenRouter per client IP. Your **monthly / spend limits** should stay on the OpenRouter account; this is only an optional local guardrail.
-- Prefer **not** exposing dashbird to the public internet without authentication; treat it like any local admin tool.
-
 ## Product backlog (from `features.txt`)
 
 Not implemented yet; tracked for future work:
@@ -99,7 +89,6 @@ Not implemented yet; tracked for future work:
 - Agent daily-ops status (fed by a separate orchestrator).
 - Private cycle / “bioclock” notes (local-only, no third party).
 - Persistent “Amazon package arrived” banner (external email agent later).
-- Chat: Perplexity-style **hover citations** on sources.
 - Google Keep–style sync (see [`docs/v2-roadmap.md`](docs/v2-roadmap.md) for Keep as v2).
 
 ## Browser home / new tab
@@ -119,7 +108,7 @@ Docker Compose mounts **`./public`** and **`./src`** into the container, so new 
 
 - **Express** serves `public/` and [`docs/`](docs/) at **`/docs/...`**.
 - **Panels** are ES modules under [`public/js/panels/`](public/js/panels/) (one file per area), loaded from [`public/js/app.js`](public/js/app.js).
-- **APIs**: `GET /api/config` (includes `openrouterModel` label), `POST /api/chat` (streams OpenRouter SSE), `GET /api/openrouter/summary` (monthly % when OpenRouter’s key payload allows it; else purchased-credits %), `GET /api/openrouter/credits` / `GET /api/openrouter/key` (proxies when the key is allowed), **`GET /api/sky-events`** (hero “sky sights” rows from [`src/data/sky-events-calendar.json`](src/data/sky-events-calendar.json); optional `?windowHours=24`), **`501`** stubs: `/api/vikunja/*`, `/api/home-assistant/*` for v2.
+- **APIs**: `GET /api/config`, **`GET /api/sky-events`** (hero “sky sights” rows from [`src/data/sky-events-calendar.json`](src/data/sky-events-calendar.json); optional `?windowHours=24`), **`501`** stubs: `/api/vikunja/*`, `/api/home-assistant/*` for v2.
 
 ### Sky event types and reference websites
 
@@ -143,19 +132,13 @@ Sky rows come from **hand-edited** [`src/data/sky-events-calendar.json`](src/dat
 
 The calendar `sources` array also lists [SpaceWeatherLive](https://www.spaceweatherlive.com/) for aurora / geomagnetic / solar context alongside NOAA.
 
-### Chat + OpenRouter metadata
-
-- After each reply, the footer shows **model**, **total tokens**, and a **mode** hint from OpenRouter usage when present.
-- **Enter** sends the message; **Shift+Enter** inserts a newline in the chat box.
-- **Credits / monthly %**: **`GET /api/openrouter/summary`** feeds the **OpenRouter ring** in the **right system sidebar** (refreshed periodically and after each successful chat). The summary prefers OpenRouter’s **`/api/v1/key`** payload for **% of period limit left**; if that is not available, it falls back to **`/api/v1/credits`** (purchased balance).
-
 ### Connectivity check (right sidebar)
 
-The **Check all** button at the bottom of the system sidebar runs **`POST /api/dashboard-check`**: OpenRouter, **`/api/sky-events`** (live SWPC including NOAA scales + Ovation/Kp paths used there), Open-Meteo for both hero cities, **`CALENDAR_EMBED_URL`** when set, HTTP(S) **bookmark** tiles (skips `cursor://` / `signal://`), **`public/data/notes.md`**, and internal **`/api/*`** probes. If anything fails, a **yellow warning triangle** appears next to the button; **hover** it for a plain-text list of what failed. When you add a new outbound connector or API, update **`src/lib/dashboard-check.js`** (checklist in that file’s header).
+The **Check all** button at the bottom of the system sidebar runs **`POST /api/dashboard-check`**: **`/api/sky-events`** (live SWPC including NOAA scales + Ovation/Kp paths used there), Open-Meteo for both hero cities, **`CALENDAR_EMBED_URL`** when set, HTTP(S) **bookmark** tiles (skips `cursor://` / `signal://`), **`public/data/notes.md`**, and internal **`/api/*`** probes. If anything fails, a **yellow warning triangle** appears next to the button; **hover** it for a plain-text list of what failed. When you add a new outbound connector or API, update **`src/lib/dashboard-check.js`** (checklist in that file’s header).
 
 ## Home Assistant / Lovelace vs this app
 
-You can still set the browser home URL to your **Home Assistant Lovelace** dashboard if entity control and community cards are the main goal. **dashbird** is a small, separate page for mixed “browser life” widgets and chat; see the plan file above for the full comparison.
+You can still set the browser home URL to your **Home Assistant Lovelace** dashboard if entity control and community cards are the main goal. **dashbird** is a small, separate page for mixed “browser life” widgets (hero weather, sky & space sidebar, bookmarks, calendar, tool library, notes); see the plan file above for the full comparison.
 
 ## License
 

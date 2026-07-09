@@ -1,7 +1,7 @@
 # Production stack for Hetzner Cloud (or any VPS with a public domain).
 # Usage: docker compose -f docker-compose.hetzner.yml up -d --build
 #
-# Requires .env with at least DASHBOARD_DOMAIN, CADDY_EMAIL, OPENROUTER_API_KEY.
+# Requires .env with at least DASHBOARD_DOMAIN, CADDY_EMAIL.
 # See deploy/env.hetzner.example and docs/deploy-hetzner.md.
 
 services:

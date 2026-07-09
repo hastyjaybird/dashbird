@@ -25,7 +25,7 @@ Cross-reference: implement v1 first so the routes and panel modules described he
 ### 3. Optional expansions (still v2 or later)
 
 - **Home Assistant REST proxy** — `/api/home-assistant/*` with long-lived token in env; a few entity tiles on the same page as the rest of the dashboard.
-- **Stronger chat controls** — tier → model map file, local spend caps, optional LiteLLM/Bifrost upstream swap (same OpenAI wire format).
+- **Optional assistant controls** — tier → model map file, local spend caps, optional LiteLLM/Bifrost upstream swap (same OpenAI wire format).
 
 ---
 
@@ -50,7 +50,6 @@ flowchart LR
     appServer[Node_server]
   end
   subgraph cloud [Cloud]
-    openrouter[OpenRouter]
     gkeep[Google_Keep_API]
   end
   subgraph network [LAN_or_internet]
@@ -62,7 +61,6 @@ flowchart LR
   dashPage --> appServer
   dashPage --> om
   dashPage --> gcal
-  appServer --> openrouter
   appServer --> vikunja
   appServer --> gkeep
   appServer --> homeassistant

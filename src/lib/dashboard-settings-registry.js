@@ -15,9 +15,6 @@
 export const DASHBOARD_SETTING_VARIABLES = [
   { key: 'PORT', group: 'Runtime', label: 'Server listen port (container)', source: '.env → process.env.PORT' },
   { key: 'HOST_PORT', group: 'Runtime', label: 'Published port (docker compose)', source: 'docker-compose.yml host mapping' },
-  { key: 'OPENROUTER_API_KEY', group: 'OpenRouter chat', label: 'OpenRouter API key', source: '.env (server only; never sent to browser)', secret: true },
-  { key: 'OPENROUTER_MODEL', group: 'OpenRouter chat', label: 'Default chat model', source: '.env → /api/config openrouterModel' },
-  { key: 'CHAT_RATE_LIMIT_PER_MINUTE', group: 'OpenRouter chat', label: 'Chat rate limit per IP', source: '.env (0 = off)' },
   { key: 'LAST_BACKUP_AT', group: 'Health sidebar', label: 'Last backup timestamp', source: '.env or public/data/last-backup.txt' },
   { key: 'GOOGLE_CALENDAR_ICAL_URL', group: 'Calendar', label: 'Google Calendar iCal feed', source: '.env → /api/calendar/upcoming' },
   { key: 'CALENDAR_EMBED_URL', group: 'Calendar', label: 'Calendar iframe embed URL', source: '.env (optional override)' },

@@ -38,6 +38,54 @@ body.dashy {
   background-attachment: fixed;
 }
 
+/* Priority boot: weather + sidebar fill in after search/bookmarks/calendar. */
+.boot-deferred {
+  opacity: 0.55;
+  transition: opacity 0.35s ease;
+}
+
+body.dashy--deferred-ready .boot-deferred {
+  opacity: 1;
+}
+
+.boot-skeleton {
+  margin: 0.35rem 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.boot-skeleton--hero {
+  padding: 0.25rem 0.15rem;
+}
+
+.bookmark-tile--skeleton {
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(
+    110deg,
+    rgba(255, 255, 255, 0.04) 8%,
+    rgba(255, 255, 255, 0.1) 18%,
+    rgba(255, 255, 255, 0.04) 33%
+  );
+  background-size: 200% 100%;
+  animation: boot-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes boot-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+.panel--calendar .calendar-frame {
+  min-height: 22rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: calc(var(--radius) - 4px);
+}
+
 .layout-body {
   flex: 1;
   display: flex;
@@ -55,7 +103,7 @@ body.dashy {
   -webkit-overflow-scrolling: touch;
 }
 
-/* Sky / space-events column (between main and system health strip) */
+/* Sky / space-events column (between main dashboard and right edge) */
 .sky-sidebar {
   flex: 0 0 auto;
   width: clamp(10rem, 24vw, 14rem);
@@ -149,50 +197,102 @@ body.dashy {
   gap: 0.35rem;
 }
 
-.weather-radar__caption {
-  margin: 0;
-  font-size: 0.78rem;
-  line-height: 1.35;
-  color: var(--text-muted, rgba(220, 230, 245, 0.72));
-}
-
 .weather-radar__map-host {
   width: 100%;
 }
 
-.weather-radar__tile-grid {
-  display: grid;
-  grid-template-columns: repeat(var(--rv-cols, 1), 1fr);
-  gap: 1px;
+.weather-radar__map-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
   width: 100%;
+}
+
+.weather-radar__leaflet {
+  width: 100%;
+  aspect-ratio: 1;
+  max-height: min(52vw, 320px);
+  min-height: 220px;
   border-radius: 8px;
   overflow: hidden;
   background: #0a0f18;
   border: 1px solid rgba(120, 150, 200, 0.18);
-  aspect-ratio: 1;
-  max-height: min(52vw, 280px);
+  z-index: 0;
 }
 
-.weather-radar__tile-cell {
-  position: relative;
+.weather-radar__leaflet .leaflet-control-attribution {
+  display: none;
+}
+
+.weather-radar__leaflet .leaflet-control-zoom {
+  border: 1px solid rgba(120, 150, 200, 0.28) !important;
+  border-radius: 6px !important;
   overflow: hidden;
-  aspect-ratio: 1;
-  background: #1a2332;
+  box-shadow: none !important;
+  margin: 8px !important;
 }
 
-.weather-radar__basemap-img,
-.weather-radar__tile-img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  transform: scale(var(--rv-crop-scale, 1));
-  transform-origin: var(--rv-origin-x, 50%) var(--rv-origin-y, 50%);
+.weather-radar__leaflet .leaflet-control-zoom a {
+  width: 22px !important;
+  height: 22px !important;
+  line-height: 22px !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  color: rgba(220, 230, 245, 0.88) !important;
+  background: rgba(14, 20, 32, 0.92) !important;
+  border-bottom: 1px solid rgba(120, 150, 200, 0.22) !important;
+  text-indent: 0 !important;
 }
 
-.weather-radar__tile-img {
+.weather-radar__leaflet .leaflet-control-zoom a:last-child {
+  border-bottom: none !important;
+}
+
+.weather-radar__leaflet .leaflet-control-zoom a:hover,
+.weather-radar__leaflet .leaflet-control-zoom a:focus {
+  background: rgba(28, 40, 60, 0.98) !important;
+  color: #cfe0ff !important;
+}
+
+.weather-radar__leaflet .leaflet-disabled {
+  opacity: 0.35 !important;
+  color: rgba(220, 230, 245, 0.45) !important;
+}
+
+.weather-radar__controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.1rem;
   pointer-events: none;
+  user-select: none;
+}
+
+.weather-radar__progress {
+  flex: 0 1 5.5rem;
+  width: 5.5rem;
+  max-width: 40%;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(120, 150, 200, 0.22);
+  overflow: hidden;
+}
+
+.weather-radar__progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(142, 184, 255, 0.55), #8eb8ff);
+  transition: width 0.35s linear;
+}
+
+.weather-radar__time {
+  flex: 0 0 auto;
+  min-width: 4.6rem;
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted, #9aa3b2);
+  text-align: left;
 }
 
 .weather-radar__link-fallback {
@@ -202,25 +302,6 @@ body.dashy {
 
 .weather-radar__link-fallback a {
   color: var(--accent-2, #8eb8ff);
-}
-
-.weather-radar__caption {
-  margin: 0.35rem 0 0;
-  font-size: 0.62rem;
-  line-height: 1.35;
-  color: var(--muted, #9aa3b2);
-}
-
-.weather-radar__map-link {
-  color: var(--accent-2, #8eb8ff);
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.weather-radar__map-link:hover,
-.weather-radar__map-link:focus-visible {
-  text-decoration: underline;
-  outline: none;
 }
 
 .sky-sidebar__card-body--air-quality {
@@ -484,9 +565,34 @@ body.dashy {
   color: #f5a8a8;
 }
 
-.settings-page__rain-block,
-.settings-page__secondary-block {
-  margin-bottom: 1rem;
+.settings-page__secondary-current {
+  margin: 0 0 0.65rem;
+  font-size: 0.9rem;
+}
+
+.settings-page__secondary-current-value {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.settings-page__secondary-editor {
+  margin-top: 0.5rem;
+}
+
+.settings-page__secondary-cancel {
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid rgba(160, 180, 210, 0.35);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.settings-page__secondary-cancel:hover,
+.settings-page__secondary-cancel:focus-visible {
+  background: rgba(60, 80, 110, 0.35);
 }
 
 .settings-page__secondary-zip-input {
@@ -1075,852 +1181,6 @@ body.dashy {
   font-weight: 500;
 }
 
-/* Thin collapsible host health strip (right on desktop) */
-.health-sidebar {
-  flex: 0 0 auto;
-  width: 5.35rem;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 0.45rem 0.35rem 0.5rem 0.25rem;
-  z-index: 2;
-  transition: width 0.18s ease, padding 0.18s ease;
-}
-
-.health-sidebar--collapsed {
-  width: 2.85rem;
-  padding-left: 0.2rem;
-  padding-right: 0.2rem;
-}
-
-.health-sidebar__inner {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  min-height: 0;
-  overflow: hidden;
-  padding: 0.35rem 0.25rem 0.45rem;
-  border-radius: var(--radius);
-}
-
-.health-sidebar__toggle {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.65rem;
-  height: 1.65rem;
-  margin: 0 0 0.15rem;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.22);
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.health-sidebar__toggle:hover {
-  color: var(--text);
-  background: rgba(0, 0, 0, 0.35);
-}
-
-.health-sidebar__tabs {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: center;
-  gap: 0.2rem;
-  width: 100%;
-  margin-bottom: 0.2rem;
-}
-
-.health-sidebar__tab {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.65rem;
-  height: 1.65rem;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.18);
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.health-sidebar__tab:hover {
-  color: var(--text);
-  background: rgba(0, 0, 0, 0.32);
-}
-
-.health-sidebar__tab--active {
-  color: var(--text);
-  background: rgba(126, 200, 255, 0.22);
-  box-shadow: inset 0 0 0 1px rgba(126, 200, 255, 0.35);
-}
-
-.health-sidebar--tab-sources:not(.health-sidebar--collapsed) {
-  width: 14.5rem;
-  transition: width 0.18s ease;
-}
-
-.health-sidebar__panels {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  width: 100%;
-  overflow: hidden;
-}
-
-.health-sidebar__panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  width: 100%;
-}
-
-.health-sidebar__panel--sources {
-  align-items: stretch;
-}
-
-.health-sources__intro {
-  margin: 0 0 0.35rem;
-  padding: 0 0.1rem;
-  font-size: 0.58rem;
-  line-height: 1.35;
-  color: var(--muted);
-}
-
-.health-sources__scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding-right: 0.15rem;
-}
-
-.health-sources__group {
-  margin-bottom: 0.45rem;
-}
-
-.health-sources__group-title {
-  margin: 0 0 0.2rem;
-  padding: 0 0.05rem;
-  font-size: 0.58rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: rgba(126, 200, 255, 0.88);
-}
-
-.health-sources__list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.health-sources__item {
-  margin-bottom: 0.35rem;
-}
-
-.health-sources__label {
-  font-size: 0.62rem;
-  font-weight: 600;
-  line-height: 1.3;
-  color: var(--text);
-}
-
-.health-sources__from {
-  margin: 0.12rem 0 0;
-  font-size: 0.56rem;
-  line-height: 1.35;
-  color: var(--muted);
-}
-
-.health-sources__empty {
-  margin: 0;
-  font-size: 0.6rem;
-  color: var(--muted);
-}
-
-.health-sidebar--collapsed .health-sidebar__tabs,
-.health-sidebar--collapsed .health-sidebar__panels {
-  display: none;
-}
-
-.health-sidebar__metrics {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0.45rem;
-  min-height: 0;
-  overflow-y: auto;
-  width: 100%;
-}
-
-.health-sidebar--collapsed .health-sidebar__metrics {
-  display: none;
-}
-
-.health-sidebar__check-footer {
-  flex-shrink: 0;
-  width: 100%;
-  margin-top: 0.35rem;
-  padding-top: 0.45rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.health-sidebar__lan-link {
-  display: block;
-  width: 100%;
-  margin-bottom: 0.35rem;
-  font-size: 0.58rem;
-  font-weight: 600;
-  text-align: center;
-  text-decoration: none;
-  color: rgba(180, 220, 255, 0.95);
-}
-
-.health-sidebar__lan-link:hover {
-  text-decoration: underline;
-}
-
-.health-sidebar__lan-link[hidden] {
-  display: none !important;
-}
-
-.health-sidebar--collapsed .health-sidebar__lan-link {
-  font-size: 0.52rem;
-  margin-bottom: 0.25rem;
-}
-
-.health-sidebar__check-row {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.35rem;
-}
-
-.health-sidebar__check-btn {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  border-radius: 8px;
-  padding: 0.35rem 0.25rem;
-  font-size: 0.62rem;
-  font-weight: 600;
-  cursor: pointer;
-  color: #0a1018;
-  background: linear-gradient(135deg, rgba(126, 200, 255, 0.92), rgba(123, 255, 206, 0.88));
-}
-
-.health-sidebar__check-btn:hover:not(:disabled) {
-  filter: brightness(1.06);
-}
-
-.health-sidebar__check-btn:disabled {
-  opacity: 0.55;
-  cursor: inherit;
-}
-
-/* Connectivity check: hide system cursor; animated follower is `.dashbird-check-cursor` (JS). */
-body.dashbird-check-busy,
-body.dashbird-check-busy * {
-  cursor: none !important;
-}
-
-.dashbird-check-cursor {
-  position: fixed;
-  width: 44px;
-  height: 44px;
-  left: 0;
-  top: 0;
-  pointer-events: none;
-  z-index: 2147483647;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  background: transparent;
-  /*
-   * Split-complementary to dashboard mint (--accent) + sky (--accent-2): warms contrast the cool base,
-   * cools echo UI accents so the loader stays on-brand against #0a1018.
-   */
-  --wait-dot-1: #ff9b7a;
-  --wait-dot-2: #ffc46e;
-  --wait-dot-3: #fdf08c;
-  --wait-dot-4: #8efcdb;
-  --wait-dot-5: var(--accent, #7bffce);
-  --wait-dot-6: var(--accent-2, #6ec8ff);
-  --wait-dot-7: #b7a9ff;
-  --wait-dot-8: #ff9dcf;
-}
-
-.dashbird-check-cursor__plate {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  overflow: visible;
-  background: transparent;
-}
-
-/* Ring rotates (slightly slower than dot pulse so the bright speck drifts around the wheel). */
-.dashbird-check-cursor__wheel {
-  position: absolute;
-  inset: 0;
-  background: transparent;
-  animation: dashbird-check-cursor-wheel-spin 1.35s linear infinite;
-}
-
-.dashbird-check-cursor__dot {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 7px;
-  height: 7px;
-  margin: -3.5px 0 0 -3.5px;
-  border-radius: 50%;
-  /* Do not animate `filter` — Chromium often composites filtered dots into an opaque ~44×44 tile (dark “negative” square). */
-  animation: dashbird-check-dot-chase 1.05s cubic-bezier(0.45, 0.08, 0.25, 1) infinite;
-}
-
-.dashbird-check-cursor__dot:nth-child(1) {
-  transform: rotate(0deg) translateY(-16px);
-  background: var(--wait-dot-1);
-  color: var(--wait-dot-1);
-  animation-delay: 0s;
-}
-
-.dashbird-check-cursor__dot:nth-child(2) {
-  transform: rotate(45deg) translateY(-16px);
-  background: var(--wait-dot-2);
-  color: var(--wait-dot-2);
-  animation-delay: -0.13125s;
-}
-
-.dashbird-check-cursor__dot:nth-child(3) {
-  transform: rotate(90deg) translateY(-16px);
-  background: var(--wait-dot-3);
-  color: var(--wait-dot-3);
-  animation-delay: -0.2625s;
-}
-
-.dashbird-check-cursor__dot:nth-child(4) {
-  transform: rotate(135deg) translateY(-16px);
-  background: var(--wait-dot-4);
-  color: var(--wait-dot-4);
-  animation-delay: -0.39375s;
-}
-
-.dashbird-check-cursor__dot:nth-child(5) {
-  transform: rotate(180deg) translateY(-16px);
-  background: var(--wait-dot-5);
-  color: var(--wait-dot-5);
-  animation-delay: -0.525s;
-}
-
-.dashbird-check-cursor__dot:nth-child(6) {
-  transform: rotate(225deg) translateY(-16px);
-  background: var(--wait-dot-6);
-  color: var(--wait-dot-6);
-  animation-delay: -0.65625s;
-}
-
-.dashbird-check-cursor__dot:nth-child(7) {
-  transform: rotate(270deg) translateY(-16px);
-  background: var(--wait-dot-7);
-  color: var(--wait-dot-7);
-  animation-delay: -0.7875s;
-}
-
-.dashbird-check-cursor__dot:nth-child(8) {
-  transform: rotate(315deg) translateY(-16px);
-  background: var(--wait-dot-8);
-  color: var(--wait-dot-8);
-  animation-delay: -0.91875s;
-}
-
-@keyframes dashbird-check-cursor-wheel-spin {
-  from {
-    transform: rotate(0deg);
-  }
-
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes dashbird-check-dot-chase {
-  0%,
-  100%,
-  55% {
-    opacity: 0.28;
-    box-shadow: none;
-  }
-
-  8% {
-    opacity: 1;
-    box-shadow:
-      0 0 0 2px rgba(10, 16, 24, 0.55),
-      0 0 12px currentColor;
-  }
-}
-
-.health-check-warn {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 0;
-  color: #e8b935;
-  filter: drop-shadow(0 0 4px rgba(255, 200, 60, 0.35));
-  cursor: pointer;
-}
-
-.health-check-warn[hidden] {
-  display: none !important;
-}
-
-.health-sidebar__check-meta {
-  font-size: 0.55rem;
-  line-height: 1.25;
-  color: var(--muted);
-  text-align: center;
-  margin-top: 0.25rem;
-}
-
-.health-sidebar--collapsed .health-sidebar__check-row {
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.2rem;
-}
-
-.health-sidebar--collapsed .health-sidebar__check-btn {
-  display: none !important;
-}
-
-/* No metrics + no warning: avoid an empty strip under the hamburger. */
-.health-sidebar--collapsed .health-sidebar__check-footer:has(.health-check-warn[hidden]) {
-  display: none;
-}
-
-.health-sidebar--collapsed .health-sidebar__check-meta {
-  display: none;
-}
-
-.health-metric {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 0.3rem;
-  min-width: 0;
-}
-
-.health-metric--network .health-ring {
-  flex-shrink: 0;
-}
-
-.health-backup-row {
-  align-items: center;
-}
-
-/* Align infinity icon in the same column width as ring+arrow rows so it sits under other gauges. */
-.health-backup-row--infinity .health-backup-stat {
-  flex: 0 0 calc(34px + 9px);
-  width: calc(34px + 9px);
-  max-width: calc(34px + 9px);
-  align-items: center;
-}
-
-.health-backup-row--infinity .health-backup-infinity-wrap {
-  justify-content: center;
-  width: 100%;
-}
-
-.health-backup-stat {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.08rem;
-  min-width: 0;
-  flex: 1;
-}
-
-.health-backup-main {
-  font-size: 0.68rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.15;
-  color: var(--text);
-}
-
-.health-backup-main--infinity {
-  display: flex;
-  align-items: center;
-  min-height: 1.05rem;
-}
-
-.health-backup-infinity-wrap {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-}
-
-.health-backup-infinity-icon {
-  width: 0.92rem;
-  height: 0.92rem;
-  display: block;
-  color: var(--text);
-  opacity: 0.9;
-}
-
-.health-backup-sub {
-  font-size: 0.5rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-  line-height: 1.1;
-}
-
-.health-backup-sub:empty {
-  display: none;
-}
-
-.health-metric__icon-wrap {
-  flex-shrink: 0;
-  width: 1.15rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  opacity: 0.92;
-}
-
-.health-metric__icon {
-  width: 1.05rem;
-  height: 1.05rem;
-  display: block;
-}
-
-.health-ring {
-  flex-shrink: 0;
-}
-
-.health-ring__svg {
-  display: block;
-}
-
-.health-ring__track {
-  stroke: #1f2a38;
-}
-
-.health-ring__progress {
-  stroke: var(--accent-2);
-  filter: drop-shadow(0 0 3px rgba(110, 200, 255, 0.28));
-}
-
-.health-ring__pct {
-  fill: var(--text);
-  font-size: 8.5px;
-  font-weight: 600;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-
-.health-ring--net {
-  display: inline-flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 1px;
-}
-
-.health-ring--net .health-ring__svg {
-  flex-shrink: 0;
-}
-
-.health-ring__net-arrow-svg {
-  display: block;
-  flex-shrink: 0;
-  align-self: center;
-}
-
-.dashbird-health-tip {
-  position: fixed;
-  z-index: 200;
-  pointer-events: none;
-  max-width: min(280px, 92vw);
-  padding: 0.45rem 0.55rem;
-  border-radius: 8px;
-  background: rgba(12, 18, 28, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
-  color: var(--text);
-  font-size: 0.72rem;
-  line-height: 1.35;
-}
-
-.dashbird-health-tip__title {
-  font-weight: 700;
-  color: var(--accent-2);
-  margin-bottom: 0.25rem;
-}
-
-.dashbird-health-tip__detail {
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: rgba(255, 255, 255, 0.88);
-}
-
-/* Replaces the quota ring when summary can’t be fetched (network/key/API). Hover → .dashbird-health-tip. */
-.or-limit-warn-badge {
-  flex-shrink: 0;
-  align-self: center;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  line-height: 0;
-}
-
-/* Sidebar status alerts: standalone caution mark only (hover → .dashbird-health-tip). */
-.dashbird-status-warn-badge {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 0;
-  color: #ecd44a;
-  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.45));
-  cursor: default;
-  user-select: none;
-  align-self: flex-start;
-}
-
-.dashbird-standalone-warn-exclam {
-  display: block;
-}
-
-.health-metric--status-alert > .health-metric__icon-wrap {
-  color: #ecd44a;
-  opacity: 1;
-}
-
-.health-check-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 300;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  background: rgba(0, 0, 0, 0.55);
-}
-
-.health-check-modal__panel {
-  width: min(100%, 420px);
-  max-height: min(86vh, 640px);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(10, 16, 24, 0.98);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
-}
-
-.health-check-modal__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.65rem 0.85rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(0, 0, 0, 0.22);
-}
-
-.health-check-modal__title {
-  margin: 0;
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.health-check-modal__close {
-  flex-shrink: 0;
-  border: 0;
-  border-radius: 8px;
-  padding: 0.35rem 0.65rem;
-  font-size: 0.78rem;
-  font-weight: 600;
-  cursor: pointer;
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text);
-}
-
-.health-check-modal__close:hover {
-  background: rgba(255, 255, 255, 0.16);
-}
-
-.health-check-modal__body {
-  padding: 0.65rem 0.85rem 0.85rem;
-  overflow-y: auto;
-  font-size: 0.78rem;
-  line-height: 1.45;
-  color: var(--text);
-}
-
-.health-check-modal__issue {
-  display: flex;
-  gap: 0.45rem;
-  align-items: flex-start;
-  margin-bottom: 0.55rem;
-}
-
-.health-check-modal__issue-icon {
-  flex-shrink: 0;
-  line-height: 0;
-  margin-top: 0.08rem;
-  color: #e8b935;
-}
-
-.health-check-modal__issue-text strong {
-  display: block;
-  margin-bottom: 0.15rem;
-}
-
-.health-check-modal__issue-detail {
-  color: var(--muted);
-  font-size: 0.72rem;
-  word-break: break-word;
-}
-
-.health-check-modal__sep {
-  margin: 0.65rem 0 0.4rem;
-  padding-top: 0.5rem;
-  border-top: 1px dashed rgba(255, 255, 255, 0.12);
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.health-check-modal__pass {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.4rem;
-  margin-bottom: 0.35rem;
-}
-
-.health-check-modal__pass-icon {
-  flex-shrink: 0;
-  line-height: 0;
-  margin-top: 0.12rem;
-}
-
-.health-check-modal__pass-label {
-  color: rgba(255, 255, 255, 0.9);
-}
-
-.health-check-modal__err {
-  margin: 0;
-  color: #ffb4b4;
-}
-
-/* OpenRouter limit ring (health sidebar; matches host ring size) */
-.or-limit-ring {
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: #000;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
-}
-
-.or-limit-ring__svg {
-  display: block;
-}
-
-.or-limit-ring__track {
-  stroke: #1f2a38;
-}
-
-.or-limit-ring__progress {
-  stroke: #5cecff;
-  filter: drop-shadow(0 0 3px rgba(92, 236, 255, 0.28));
-}
-
-.or-limit-ring__pct {
-  fill: var(--text);
-  font-size: 8.5px;
-  font-weight: 600;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-
-.or-limit-fallback {
-  margin: 0;
-  max-width: 3.1rem;
-  text-align: left;
-  font-size: 0.6rem;
-  line-height: 1.2;
-  word-break: break-word;
-}
-
-@media (max-width: 900px) {
-  .health-sidebar {
-    width: 100%;
-    max-width: 100%;
-    padding: 0.35rem clamp(0.75rem, 2.5vw, 2.5rem) 0.5rem;
-  }
-
-  .health-sidebar--collapsed {
-    width: 100%;
-  }
-
-  .health-sidebar__inner {
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 0.35rem 0.5rem;
-    padding: 0.4rem 0.5rem;
-  }
-
-  .health-sidebar__toggle {
-    margin: 0;
-  }
-
-  .health-sidebar__metrics {
-    flex: 1 1 auto;
-    flex-direction: row;
-    flex-wrap: wrap;
-    justify-content: space-evenly;
-    gap: 0.35rem 0.5rem;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding-bottom: 0.1rem;
-  }
-
-  .health-sidebar--tab-sources:not(.health-sidebar--collapsed) {
-    width: 100%;
-    max-width: 100%;
-  }
-
-  .health-sidebar__panel--sources {
-    flex: 1 1 100%;
-    min-width: min(100%, 18rem);
-  }
-
-  .health-sidebar--collapsed .health-sidebar__inner {
-    justify-content: center;
-  }
-}
-
 .chat-sidebar {
   flex: 0 0 clamp(260px, 38vw, 800px);
   width: clamp(260px, 38vw, 800px);
@@ -1928,7 +1188,7 @@ body.dashbird-check-busy * {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  /* Right padding keeps OpenRouter chat off the vertical resizer / divider line. */
+  /* Right padding keeps chat off the vertical resizer / divider line. */
   padding: 0.5rem 0.65rem 0.5rem clamp(0.5rem, 1.5vw, 1rem);
   z-index: 2;
 }
@@ -2206,7 +1466,43 @@ body.dashy--page-settings .page-view--main {
 }
 
 .settings-page__config-block-inner {
-  padding: 0 0.85rem 0.75rem;
+  padding: 0.55rem 0.85rem 0.75rem;
+}
+
+.settings-page__section-summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  user-select: none;
+}
+
+.settings-page__section-summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-page__section-summary::after {
+  content: '▸';
+  font-size: 0.7rem;
+  opacity: 0.75;
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.settings-page__section[open] > .settings-page__section-summary::after {
+  transform: rotate(90deg);
+}
+
+.settings-page__section-summary:hover,
+.settings-page__section-summary:focus-visible {
+  background: rgba(126, 200, 255, 0.08);
+}
+
+.settings-page__section-summary:focus-visible {
+  outline: 2px solid rgba(100, 160, 255, 0.45);
+  outline-offset: -2px;
 }
 
 .settings-page__block-title,
@@ -2220,6 +1516,10 @@ body.dashy--page-settings .page-view--main {
   color: var(--accent-2);
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(0, 0, 0, 0.22);
+}
+
+.settings-page__section:not([open]) > .settings-page__section-summary {
+  border-bottom: none;
 }
 
 .settings-page__section-title {
@@ -2970,11 +2270,12 @@ body.dashy--page-settings .page-view--main {
 
 .hero-city .hero-temp {
   font-size: clamp(0.98rem, 2vw, 1.28rem);
+  font-weight: 700;
 }
 
 .hero-city .hero-icon-slot {
-  width: 52px;
-  height: 52px;
+  width: 66px;
+  height: 66px;
 }
 
 .hero-city .hero-weather-desc {
@@ -3083,6 +2384,10 @@ body.dashy--page-settings .page-view--main {
   color: var(--muted);
   opacity: 0.65;
   user-select: none;
+  display: inline-block;
+  margin-inline: 0.42rem;
+  font-size: 1.22em;
+  line-height: 1;
 }
 
 .hero-astro {
@@ -3201,6 +2506,13 @@ body.dashy--page-settings .page-view--main {
 .hero-astro-glyph--img.earth-miners-lettuce-glyph img {
   width: 34px;
   height: 34px;
+}
+
+/* Local fruit-tree rows (loquat uses public/assets/fruit-loquat.png) */
+.hero-astro-glyph--img.earth-wild-fruit-glyph img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
 }
 
 /* Yosemite moonbow row icon (Sky & Space strip + shared sizing; public/assets/earth-moonbow-strip.png) */
@@ -3940,8 +3252,10 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
 }
 
 /* Tool Library (main column, below Calendar) */
-.panel__body--tool-library {
-  padding: 0.5rem 0.75rem 0.85rem;
+.panel__body--tool-library,
+.tool-library {
+  padding: 0.65rem 1.5rem 1rem;
+  box-sizing: border-box;
   min-height: 12rem;
 }
 
@@ -4085,22 +3399,24 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
 
 .tool-library__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
-  gap: 0.45rem;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: 0.6rem;
 }
 
 .tool-library__card {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.45rem 0.5rem 0.55rem;
+  cursor: pointer;
+  gap: 0.32rem;
+  padding: 0.52rem 0.6rem 0.62rem;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(0, 0, 0, 0.28);
   font-size: 0.7rem;
   line-height: 1.35;
   cursor: context-menu;
+  min-height: 12rem;
 }
 
 .tool-library__card--selected {
@@ -4116,11 +3432,11 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
 }
 
 .tool-library__card-snap {
-  height: 3.25rem;
+  height: 5.4rem;
   border-radius: 6px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.04);
-  margin-bottom: 0.1rem;
+  margin-bottom: 0.15rem;
 }
 
 .tool-library__card-snap img {
@@ -4146,7 +3462,7 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
 
 .tool-library__card-title {
   margin: 0;
-  font-size: 0.78rem;
+  font-size: 0.84rem;
   font-weight: 600;
   line-height: 1.2;
   text-decoration: none;
@@ -4160,17 +3476,37 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
 .tool-library__card-meta {
   margin: 0;
   color: #f5d76e;
-  font-size: 0.64rem;
+  font-size: 0.68rem;
   letter-spacing: 0.02em;
+}
+
+.tool-library__card-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.tool-library__card-cat {
+  display: inline-block;
+  padding: 0.12rem 0.38rem;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 170, 255, 0.28);
+  background: rgba(90, 140, 255, 0.14);
+  color: rgba(200, 220, 255, 0.95);
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .tool-library__card-blurb {
   margin: 0.1rem 0 0;
-  font-size: 0.62rem;
+  font-size: 0.67rem;
   line-height: 1.3;
   color: var(--muted, #9aa3b2);
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -4267,4 +3603,73 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
   margin: 0.2rem 0 0;
   font-size: 0.68rem;
   color: var(--muted, #9aa3b2);
+}
+
+.tool-library__status-chip {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.12rem 0.35rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--muted, #9aa3b2);
+}
+
+.tool-library__status-chip--up {
+  color: #8fdc9f;
+  border-color: rgba(143, 220, 159, 0.35);
+}
+
+.tool-library__status-chip--down {
+  color: #f0a0a0;
+  border-color: rgba(240, 160, 160, 0.4);
+}
+
+.tool-library__review {
+  margin: 0 0 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.tool-library__review-heading {
+  margin: 0 0 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.tool-library__review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 10rem;
+  overflow: auto;
+}
+
+.tool-library__review-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.tool-library__review-body {
+  font-size: 0.76rem;
+  line-height: 1.35;
+  min-width: 0;
+}
+
+.tool-library__review-meta {
+  margin: 0.15rem 0 0;
+  font-size: 0.68rem;
+  color: var(--muted, #9aa3b2);
+}
+
+.tool-library__review-actions {
+  display: flex;
+  gap: 0.3rem;
+  flex-shrink: 0;
 }

@@ -92,60 +92,33 @@ export async function fetchNextPrecipCaption(lat, lon, timeZone) {
 }
 
 /**
+ * Current conditions via dashbird `/api/hero-weather` (Open-Meteo with NWS fallback, cached).
  * @returns {Promise<{ tempF: number, apparentF: number | null, code: number, windMph: number | null, windDirectionFromDeg: number | null, uvIndex: number | null, usAqi: number | null }>}
  */
 export async function fetchCurrentWeather(lat, lon) {
-  const la = String(lat);
-  const lo = String(lon);
-  const url = new URL('https://api.open-meteo.com/v1/forecast');
-  url.searchParams.set('latitude', la);
-  url.searchParams.set('longitude', lo);
-  url.searchParams.set(
-    'current',
-    'temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,uv_index',
-  );
-  url.searchParams.set('temperature_unit', 'fahrenheit');
-  url.searchParams.set('wind_speed_unit', 'mph');
-
-  const airUrl = new URL('https://air-quality-api.open-meteo.com/v1/air-quality');
-  airUrl.searchParams.set('latitude', la);
-  airUrl.searchParams.set('longitude', lo);
-  airUrl.searchParams.set('current', 'us_aqi');
-  airUrl.searchParams.set('timezone', 'auto');
-
-  const [r1, r2] = await Promise.all([
-    fetch(url.toString()),
-    fetch(airUrl.toString(), {
-      headers: { 'User-Agent': 'dashbird/1.0 (hero city AQI; open-meteo.com)' },
-    }).catch(() => null),
-  ]);
-  if (!r1 || !r1.ok) throw new Error(`HTTP ${r1?.status ?? '?'}`);
-  const data = await r1.json();
-  const cur = data.current;
-  if (!cur) throw new Error('No current weather in response');
-
-  const uvRaw = cur.uv_index;
-  const uvIndex = typeof uvRaw === 'number' && Number.isFinite(uvRaw) ? uvRaw : null;
-
-  let usAqi = null;
-  if (r2 && r2.ok) {
-    try {
-      const aq = await r2.json();
-      const raw = aq?.current?.us_aqi;
-      const n = Number(raw);
-      if (Number.isFinite(n)) usAqi = Math.round(n);
-    } catch {
-      /* ignore */
-    }
+  const qs = new URLSearchParams({
+    lat: String(lat),
+    lon: String(lon),
+  });
+  const r = await fetch(`/api/hero-weather?${qs}`, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const data = await r.json();
+  if (!data || data.ok === false || typeof data.tempF !== 'number') {
+    throw new Error(data?.error || 'No current weather in response');
   }
 
+  const uvRaw = data.uvIndex;
+  const uvIndex = typeof uvRaw === 'number' && Number.isFinite(uvRaw) ? uvRaw : null;
+  const aqiRaw = data.usAqi;
+  const usAqi = typeof aqiRaw === 'number' && Number.isFinite(aqiRaw) ? Math.round(aqiRaw) : null;
+
   return {
-    tempF: cur.temperature_2m,
-    apparentF: cur.apparent_temperature ?? null,
-    code: cur.weather_code,
-    windMph: cur.wind_speed_10m ?? null,
+    tempF: data.tempF,
+    apparentF: typeof data.apparentF === 'number' ? data.apparentF : null,
+    code: Number(data.code) || 0,
+    windMph: typeof data.windMph === 'number' ? data.windMph : null,
     windDirectionFromDeg:
-      typeof cur.wind_direction_10m === 'number' ? cur.wind_direction_10m : null,
+      typeof data.windDirectionFromDeg === 'number' ? data.windDirectionFromDeg : null,
     uvIndex,
     usAqi,
   };

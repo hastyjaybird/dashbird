@@ -5,11 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printLanUrl } from './lib/lan-url.js';
 
-import chatRouter from './routes/chat.js';
 import configRouter from './routes/config.js';
 import vikunjaRouter from './routes/vikunja.js';
 import homeAssistantRouter from './routes/homeassistant.js';
-import openrouterMetaRouter from './routes/openrouter.js';
 import skyEventsRouter from './routes/sky-events.js';
 import hostHealthRouter from './routes/host-health.js';
 import dashboardCheckRouter from './routes/dashboard-check.js';
@@ -19,6 +17,7 @@ import eventTypesStatusRouter from './routes/event-types-status.js';
 import openDesktopRouter from './routes/open-desktop.js';
 import networkHealthRouter from './routes/network-health.js';
 import heroAstronomyRouter from './routes/hero-astronomy.js';
+import heroWeatherRouter from './routes/hero-weather.js';
 import calendarUpcomingRouter from './routes/calendar-upcoming.js';
 import earthEventsRouter from './routes/earth-events.js';
 import superbloomStatusRouter from './routes/superbloom-status.js';
@@ -33,8 +32,12 @@ import dashboardEarthquakeWeekRouter from './routes/dashboard-earthquake-week.js
 import dashboardLightningGlmRouter from './routes/dashboard-lightning-glm.js';
 import marketWatchRouter from './routes/market-watch.js';
 import rainAlertRouter from './routes/rain-alert.js';
+import geolocationRouter from './routes/geolocation.js';
 import airQualityRouter from './routes/air-quality.js';
 import weatherRadarRouter from './routes/weather-radar.js';
+import openrouterRouter from './routes/openrouter.js';
+import weatherAuthorityMemosRouter from './routes/weather-authority-memos.js';
+import atlanticStormWatchRouter from './routes/atlantic-storm-watch.js';
 import geoelectricFieldRouter from './routes/geoelectric-field.js';
 import magnetosphereRouter from './routes/magnetosphere.js';
 import { startGeospaceMagnetosphereMonitor } from './lib/geospace-magnetosphere.js';
@@ -42,9 +45,13 @@ import secondaryWatchRouter from './routes/secondary-watch.js';
 import aircraftNearbyRouter from './routes/aircraft-nearby.js';
 import { startSuperbloomAgent } from './lib/superbloom-agent.js';
 import { warmGoogleCalendarCache } from './lib/google-calendar-ical.js';
+import { resolveDashboardWeatherLatLon } from './lib/hero-weather-location.js';
 import { purgeDoneTodoItemsOnStartup } from './lib/todolist-store.js';
 import todolistRouter from './routes/todolist.js';
 import toolLibraryRouter from './routes/tool-library.js';
+import webCatalogRouter from './routes/web-catalog.js';
+import { startWebCatalogWatchPoller } from './lib/web-catalog-watch.js';
+import { startWebCatalogDiscoveryWorker } from './lib/web-catalog-discovery.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -82,14 +89,13 @@ app.use('/docs', express.static(docsDir));
 app.use('/vendor/leaflet', express.static(leafletDir));
 
 app.use('/api/config', configRouter);
-app.use('/api/chat', chatRouter);
 app.use('/api/vikunja', vikunjaRouter);
 app.use('/api/home-assistant', homeAssistantRouter);
-app.use('/api/openrouter', openrouterMetaRouter);
 app.use('/api/sky-events', skyEventsRouter);
 app.use('/api/host-health', hostHealthRouter);
 app.use('/api/network-health', networkHealthRouter);
 app.use('/api/hero-astronomy', heroAstronomyRouter);
+app.use('/api/hero-weather', heroWeatherRouter);
 app.use('/api/calendar', calendarUpcomingRouter);
 app.use('/api/earth-events', earthEventsRouter);
 app.use('/api/superbloom-status', superbloomStatusRouter);
@@ -104,8 +110,12 @@ app.use('/api/dashboard-earthquake-week', dashboardEarthquakeWeekRouter);
 app.use('/api/dashboard-lightning-glm', dashboardLightningGlmRouter);
 app.use('/api/market-watch', marketWatchRouter);
 app.use('/api/rain-alert', rainAlertRouter);
+app.use('/api/geolocation', geolocationRouter);
 app.use('/api/air-quality', airQualityRouter);
 app.use('/api/weather-radar', weatherRadarRouter);
+app.use('/api/openrouter', openrouterRouter);
+app.use('/api/weather-authority-memos', weatherAuthorityMemosRouter);
+app.use('/api/atlantic-storm-watch', atlanticStormWatchRouter);
 app.use('/api/geoelectric-field', geoelectricFieldRouter);
 app.use('/api/magnetosphere', magnetosphereRouter);
 app.use('/api/secondary-watch', secondaryWatchRouter);
@@ -117,6 +127,7 @@ app.use('/api/event-types-status', eventTypesStatusRouter);
 app.use('/api/open-desktop', openDesktopRouter);
 app.use('/api/todolist', todolistRouter);
 app.use('/api/tool-library', toolLibraryRouter);
+app.use('/api/web-catalog', webCatalogRouter);
 
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api')) {
@@ -143,5 +154,9 @@ app.listen(port, '0.0.0.0', () => {
   }
   startSuperbloomAgent();
   startGeospaceMagnetosphereMonitor();
+  startWebCatalogWatchPoller();
+  startWebCatalogDiscoveryWorker();
   warmGoogleCalendarCache();
+  // Prime ZIP → lat/lon so the first page-load fan-out does not wait on Zippopotam.
+  void resolveDashboardWeatherLatLon().catch(() => {});
 });

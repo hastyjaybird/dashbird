@@ -8,8 +8,9 @@ import {
   loadToolLibrary,
   toolLibraryAssetsDir,
 } from '../lib/tool-library-store.js';
-import { createToolFromUrl } from '../lib/tool-library-enrich.js';
+import { createToolFromUrl, repairToolLibraryAssets, refreshToolAssets } from '../lib/tool-library-enrich.js';
 import { findAlternatives, rankToolAmongAlternatives } from '../lib/tool-library-ai.js';
+import { fetchToolRating } from '../lib/tool-library-ratings.js';
 import { normalizeToolUrl } from '../lib/tool-library-store.js';
 
 const router = Router();
@@ -52,8 +53,7 @@ router.post('/tools', async (req, res) => {
     res.status(201).json({ ok: true, tool });
   } catch (e) {
     const msg = String(e?.message || e);
-    const code =
-      msg.includes('openrouter') || msg.includes('could_not_resolve') ? 503 : 400;
+    const code = msg.includes('could_not_resolve') ? 400 : 400;
     res.status(code).json({ ok: false, error: msg });
   }
 });
@@ -69,6 +69,47 @@ router.post('/tools/delete', async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+router.get('/ratings', async (req, res) => {
+  try {
+    const name = String(req.query?.name || '').trim();
+    if (!name) {
+      res.status(400).json({ ok: false, error: 'name_required' });
+      return;
+    }
+    const rating = await fetchToolRating(name);
+    res.json({ ok: true, name, ...(rating || { rating: null, source: '' }) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+router.post('/tools/repair-assets', async (_req, res) => {
+  try {
+    if (disabled()) {
+      res.status(503).json({ ok: false, error: 'disabled' });
+      return;
+    }
+    const result = await repairToolLibraryAssets();
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+router.post('/tools/:id/refresh-assets', async (req, res) => {
+  try {
+    if (disabled()) {
+      res.status(503).json({ ok: false, error: 'disabled' });
+      return;
+    }
+    const tool = await refreshToolAssets(req.params.id);
+    res.json({ ok: true, tool });
+  } catch (e) {
+    const msg = String(e?.message || e);
+    res.status(msg === 'not_found' ? 404 : 500).json({ ok: false, error: msg });
   }
 });
 
@@ -88,7 +129,7 @@ router.post('/tools/:id/alternatives', async (req, res) => {
     res.json({ ok: true, ranked, sourceToolId: tool.id });
   } catch (e) {
     const msg = String(e?.message || e);
-    res.status(msg.includes('openrouter') ? 503 : 500).json({ ok: false, error: msg });
+    res.status(500).json({ ok: false, error: msg });
   }
 });
 

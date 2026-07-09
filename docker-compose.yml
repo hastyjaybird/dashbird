@@ -26,6 +26,8 @@ services:
       DISPLAY: ${DISPLAY:-:0}
       XDG_RUNTIME_DIR: /run/user/1000
       DBUS_SESSION_BUS_ADDRESS: ${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/1000/bus}
+      RAIN_ALERT_DEBUG: ${RAIN_ALERT_DEBUG:-}
+      RAIN_ALERT_DEBUG_MINUTES: ${RAIN_ALERT_DEBUG_MINUTES:-42}
 
   # Runs on the host network after dashboard starts; prints the phone URL and refreshes
   # public/data/phone-lan-url.txt for the sidebar link (gitignored).

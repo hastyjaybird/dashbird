@@ -169,15 +169,6 @@ async function probeBookmarksBatch(urls) {
   return broken;
 }
 
-function openMeteoForecastUrl(lat, lon) {
-  const u = new URL('https://api.open-meteo.com/v1/forecast');
-  u.searchParams.set('latitude', String(lat));
-  u.searchParams.set('longitude', String(lon));
-  u.searchParams.set('current', 'temperature_2m');
-  u.searchParams.set('temperature_unit', 'fahrenheit');
-  return u.toString();
-}
-
 /**
  * @returns {Promise<{ ok: boolean, results: Array<{ id: string, label: string, ok: boolean, detail?: string }> }>}
  */
@@ -200,25 +191,6 @@ export async function runDashboardChecks() {
       false,
       cfg.err || `HTTP ${cfg.status || 'error'}`,
     );
-  }
-
-  const or = await probeInternal('/api/openrouter/summary');
-  if (or.status === 200 && or.json && or.json.ok !== false) {
-    push('openrouter', 'OpenRouter API (key + /summary)', true);
-  } else if (or.status === 503) {
-    push(
-      'openrouter',
-      'OpenRouter API (key + /summary)',
-      false,
-      'OPENROUTER_API_KEY missing or OpenRouter returned unavailable',
-    );
-  } else {
-    const msg =
-      or.json?.error?.message ||
-      or.json?.error ||
-      or.err ||
-      `HTTP ${or.status || 'error'}`;
-    push('openrouter', 'OpenRouter API (key + /summary)', false, String(msg).slice(0, 240));
   }
 
   const sky = await probeInternal('/api/sky-events?windowHours=24');
@@ -474,20 +446,37 @@ export async function runDashboardChecks() {
     push('hero_astronomy', 'Hero sunset + moonrise + next full/new moon caption (/api/hero-astronomy)', false, String(msg).slice(0, 240));
   }
 
-  /* --- Open-Meteo (hero weather) --- */
+  /* --- Hero weather (Open-Meteo + NWS fallback, both cities) --- */
   const lat = parseFloat(process.env.WEATHER_LAT ?? '37.848');
   const lon = parseFloat(process.env.WEATHER_LON ?? '-122.253');
   const sfLat = parseFloat(process.env.SF_WEATHER_LAT ?? '37.7749');
   const sfLon = parseFloat(process.env.SF_WEATHER_LON ?? '-122.4194');
-  const w1 = await probeExternalHttp(openMeteoForecastUrl(lat, lon));
-  const w2 = await probeExternalHttp(openMeteoForecastUrl(sfLat, sfLon));
-  if (w1.ok && w2.ok) {
-    push('open_meteo', 'Open-Meteo (hero weather, both cities)', true);
+  const w1 = await probeInternal(
+    `/api/hero-weather?lat=${encodeURIComponent(String(lat))}&lon=${encodeURIComponent(String(lon))}`,
+  );
+  const w2 = await probeInternal(
+    `/api/hero-weather?lat=${encodeURIComponent(String(sfLat))}&lon=${encodeURIComponent(String(sfLon))}`,
+  );
+  const w1Ok = w1.status === 200 && w1.json?.ok === true && typeof w1.json?.tempF === 'number';
+  const w2Ok = w2.status === 200 && w2.json?.ok === true && typeof w2.json?.tempF === 'number';
+  if (w1Ok && w2Ok) {
+    const providers = [w1.json?.provider, w2.json?.provider].filter(Boolean).join('+');
+    push(
+      'open_meteo',
+      'Hero weather both cities (/api/hero-weather · Open-Meteo / NWS)',
+      true,
+      providers || undefined,
+    );
   } else {
     const parts = [];
-    if (!w1.ok) parts.push(`primary ${w1.err || w1.status}`);
-    if (!w2.ok) parts.push(`SF ${w2.err || w2.status}`);
-    push('open_meteo', 'Open-Meteo (hero weather, both cities)', false, parts.join('; '));
+    if (!w1Ok) parts.push(`primary ${w1.json?.error || w1.err || w1.status}`);
+    if (!w2Ok) parts.push(`SF ${w2.json?.error || w2.err || w2.status}`);
+    push(
+      'open_meteo',
+      'Hero weather both cities (/api/hero-weather · Open-Meteo / NWS)',
+      false,
+      parts.join('; '),
+    );
   }
 
   const { lat: aqiLat, lon: aqiLon } = await resolveDashboardWeatherLatLon();
