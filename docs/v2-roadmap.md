@@ -47,7 +47,7 @@ Cross-reference: v1 ships the dashboard shell and core panels; v2 items mount in
 - **Home Assistant REST proxy** — `/api/home-assistant/*` with long-lived token in env.
 - **Optional assistant controls** — tier → model map, spend caps, optional LiteLLM/Bifrost upstream.
 - **AI provider pluggability** — OpenRouter stays default for now; evaluate direct OpenAI/Anthropic adapters behind one internal interface.
-- **Cybersecurity audit program** — recurring audit using the stack in [`docs/security-plan.md`](security-plan.md): `npm audit`, Dependabot (if enabled), Semgrep or equivalent static analysis, Cursor security review on meaningful diffs, and documented triage/fix cadence. **Billing/tooling decisions for commercial scanners are settled** — execute the audit plan, don’t re-litigate vendor billing.
+- **Cybersecurity stack follow-through** — §6 in [`docs/security-plan.md`](security-plan.md) is decided; Dependabot YAML is in-repo. Remaining: merge/push that config, flip GitHub Dependabot alerts + secret scanning/push protection in the UI, run the §1 cadence.
 
 ---
 
