@@ -3415,7 +3415,6 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
   background: rgba(0, 0, 0, 0.28);
   font-size: 0.7rem;
   line-height: 1.35;
-  cursor: context-menu;
   min-height: 12rem;
 }
 
@@ -3429,6 +3428,37 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
   top: 0.35rem;
   right: 0.35rem;
   z-index: 2;
+  width: 1.05rem;
+  height: 1.05rem;
+  cursor: pointer;
+  accent-color: #7aa2ff;
+}
+
+.tool-library__card-fav {
+  position: absolute;
+  right: 0.35rem;
+  bottom: 0.35rem;
+  z-index: 2;
+  width: 1.55rem;
+  height: 1.55rem;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tool-library__card-fav:hover,
+.tool-library__card-fav:focus-visible {
+  color: #f5d76e;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.tool-library__card-fav--on {
+  color: #f5d76e;
 }
 
 .tool-library__card-snap {
@@ -3511,6 +3541,37 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
   overflow: hidden;
 }
 
+.tool-library__card-foot {
+  margin-top: auto;
+  padding-top: 0.2rem;
+  padding-right: 1.9rem;
+  display: flex;
+  align-items: center;
+}
+
+.tool-library__card-alt {
+  appearance: none;
+  margin: 0;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted, #9aa3b2);
+  font: inherit;
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.tool-library__card-alt:hover,
+.tool-library__card-alt:focus-visible {
+  color: rgba(200, 220, 255, 0.95);
+  border-color: rgba(120, 170, 255, 0.35);
+  background: rgba(90, 140, 255, 0.12);
+}
+
 .tool-library__modal-backdrop {
   position: fixed;
   inset: 0;
@@ -3566,6 +3627,43 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
   justify-content: flex-end;
 }
 
+.tool-library__modal-actions--start {
+  justify-content: flex-start;
+  margin-bottom: 0.75rem;
+}
+
+.tool-library__import-schema {
+  margin: 0 0 0.55rem;
+  padding: 0.55rem 0.65rem;
+  max-height: 11rem;
+  overflow: auto;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text, #e8ecf2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  white-space: pre;
+}
+
+.tool-library__import-file-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.75rem;
+}
+
+.tool-library__import-file-name {
+  font-size: 0.75rem;
+  color: var(--muted, #9aa3b2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
 .tool-library__modal-msg {
   margin: 0.5rem 0 0;
   font-size: 0.74rem;
@@ -3592,6 +3690,18 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
 
 .tool-library__alt-row--original {
   border: 1px dashed rgba(120, 170, 255, 0.35);
+}
+
+.tool-library__alt-row--matched {
+  border: 1px solid rgba(143, 220, 159, 0.45);
+  background: rgba(143, 220, 159, 0.06);
+}
+
+.tool-library__empty-hint {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--muted, #9aa3b2);
+  font-size: 0.72rem;
 }
 
 .tool-library__alt-body {
@@ -3635,17 +3745,40 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
   background: rgba(0, 0, 0, 0.22);
 }
 
+.tool-library__review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
 .tool-library__review-heading {
-  margin: 0 0 0.45rem;
+  margin: 0;
   font-size: 0.78rem;
   font-weight: 600;
+}
+
+.tool-library__review-cancel {
+  flex-shrink: 0;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+}
+
+.tool-library__review-thinking {
+  margin: 0 0 0.4rem;
+  min-height: 1.1em;
+  font-size: 0.72rem;
+  color: var(--muted, #9aa3b2);
+  font-variant-numeric: tabular-nums;
 }
 
 .tool-library__review-list {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  max-height: 10rem;
+  /* ~10 review rows (thumb + meta + actions) */
+  max-height: 32rem;
   overflow: auto;
 }
 
@@ -3656,10 +3789,20 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
   gap: 0.6rem;
 }
 
+.tool-library__review-thumb {
+  width: 3.25rem;
+  height: 2.15rem;
+  object-fit: cover;
+  border-radius: 4px;
+  flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.35);
+}
+
 .tool-library__review-body {
   font-size: 0.76rem;
   line-height: 1.35;
   min-width: 0;
+  flex: 1;
 }
 
 .tool-library__review-meta {

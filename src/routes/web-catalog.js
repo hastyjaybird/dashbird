@@ -199,18 +199,35 @@ router.post('/review/:id/resolve', async (req, res) => {
 
 router.post('/jobs/alternatives', async (req, res) => {
   try {
-    const resourceId = String(req.body?.resourceId || req.body?.resource_id || '');
-    if (!resourceId) {
-      res.status(400).json({ ok: false, error: 'resource_id_required' });
-      return;
-    }
-    const resource = await getResourceById(resourceId);
+    let resourceId = String(req.body?.resourceId || req.body?.resource_id || '').trim();
+    let resource = resourceId ? await getResourceById(resourceId) : null;
+
+    // Allow queueing by name/URL when the tool is not in the catalog yet (no modal).
     if (!resource) {
-      res.status(404).json({ ok: false, error: 'not_found' });
-      return;
+      const nameOrUrl = String(
+        req.body?.url || req.body?.name || req.body?.query || req.body?.title || '',
+      ).trim();
+      if (!nameOrUrl) {
+        res.status(400).json({ ok: false, error: 'resource_id_or_name_required' });
+        return;
+      }
+      const { resolveToolHomepageUrl } = await import('../lib/tool-library-ai.js');
+      const homepage = await resolveToolHomepageUrl(nameOrUrl);
+      resource = await upsertResource(
+        {
+          url: homepage,
+          title: String(req.body?.title || req.body?.name || nameOrUrl).trim(),
+          summary: String(req.body?.summary || '').trim(),
+          kind_hints: ['tool'],
+          tags: Array.isArray(req.body?.tags) ? req.body.tags : [],
+        },
+        { project: req.body?.project || 'dashbird', section: req.body?.section || 'Tools' },
+      );
+      resourceId = resource.id;
     }
+
     const job = await createDiscoveryJob('alternatives', resourceId);
-    res.status(202).json({ ok: true, job });
+    res.status(202).json({ ok: true, job, resourceId });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }

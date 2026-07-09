@@ -34,13 +34,30 @@ CREATE TABLE IF NOT EXISTS web_resources (
   added_at timestamptz NOT NULL DEFAULT now(),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  search_vector tsvector GENERATED ALWAYS AS (
-    setweight(to_tsvector('english', coalesce(title, '')), 'A')
-    || setweight(to_tsvector('english', coalesce(summary, '')), 'B')
-    || setweight(to_tsvector('english', coalesce(array_to_string(tags, ' '), '')), 'A')
-    || setweight(to_tsvector('english', coalesce(array_to_string(kind_hints, ' '), '')), 'C')
-  ) STORED
+  -- Maintained by trigger (to_tsvector is not IMMUTABLE, so GENERATED ALWAYS fails on PG).
+  search_vector tsvector
 );
+
+CREATE OR REPLACE FUNCTION web_resources_search_vector_update()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.search_vector :=
+    setweight(to_tsvector('english', coalesce(NEW.title, '')), 'A')
+    || setweight(to_tsvector('english', coalesce(NEW.summary, '')), 'B')
+    || setweight(to_tsvector('english', coalesce(array_to_string(NEW.tags, ' '), '')), 'A')
+    || setweight(to_tsvector('english', coalesce(array_to_string(NEW.kind_hints, ' '), '')), 'C');
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS web_resources_search_vector_trg ON web_resources;
+CREATE TRIGGER web_resources_search_vector_trg
+  BEFORE INSERT OR UPDATE OF title, summary, tags, kind_hints
+  ON web_resources
+  FOR EACH ROW
+  EXECUTE FUNCTION web_resources_search_vector_update();
 
 CREATE UNIQUE INDEX IF NOT EXISTS web_resources_url_uidx ON web_resources (url);
 CREATE INDEX IF NOT EXISTS web_resources_tags_gin ON web_resources USING gin (tags);

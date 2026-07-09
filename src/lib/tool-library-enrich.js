@@ -15,6 +15,7 @@ import { inferToolCategories } from './tool-library-categories.js';
 import { fetchToolRating } from './tool-library-ratings.js';
 import { fetchPageMeta, importToolImages } from './tool-library-scrape.js';
 import { toolRecordToResource, upsertResource } from './web-catalog-store.js';
+import { isUnknownPricing, resolveToolPricing, unknownPricing } from './tool-library-pricing.js';
 
 /**
  * @param {string} urlInput
@@ -33,12 +34,13 @@ export async function createToolFromUrl(urlInput) {
       title: meta.title,
       description: meta.description,
       host: meta.host,
+      html: meta.htmlSnippet,
     }).catch((e) => {
       console.warn('[tool-library] enrich failed:', e?.message || e);
       return {
         name: meta.title || meta.host,
         bestUsedFor: meta.description || '',
-        pricing: { model: 'unknown', lowestTier: 'Unknown', summary: 'Could not auto-detect pricing' },
+        pricing: unknownPricing(),
         features: [],
         pros: [],
         cons: [],
@@ -101,6 +103,7 @@ export async function refreshToolAssets(toolId) {
       title: meta.title,
       description: meta.description,
       host: meta.host,
+      html: meta.htmlSnippet,
     }).catch(async () => {
       const g2 = await fetchToolRating(current.name).catch(() => null);
       return {
@@ -127,10 +130,21 @@ export async function refreshToolAssets(toolId) {
     })),
   ]);
 
+  const nextPricing =
+    ai.pricing && !isUnknownPricing(ai.pricing)
+      ? ai.pricing
+      : current.pricing && !isUnknownPricing(current.pricing)
+        ? current.pricing
+        : ai.pricing || current.pricing || unknownPricing();
+
   const updated = {
     ...current,
     name: ai.name || current.name,
     bestUsedFor: ai.bestUsedFor || current.bestUsedFor || '',
+    pricing: nextPricing,
+    features: Array.isArray(ai.features) && ai.features.length ? ai.features : current.features || [],
+    pros: Array.isArray(ai.pros) && ai.pros.length ? ai.pros : current.pros || [],
+    cons: Array.isArray(ai.cons) && ai.cons.length ? ai.cons : current.cons || [],
     rating: ai.rating ?? null,
     ratingSource: ai.ratingSource || '',
     operatingSystems: ai.operatingSystems?.length ? ai.operatingSystems : current.operatingSystems,
@@ -140,11 +154,16 @@ export async function refreshToolAssets(toolId) {
   };
   data.tools[idx] = updated;
   await saveToolLibrary(data);
+  try {
+    await upsertResource(toolRecordToResource(updated), { project: 'dashbird', section: 'Tools' });
+  } catch (e) {
+    console.warn('[tool-library] catalog sync failed:', e?.message || e);
+  }
   return updated;
 }
 
 /**
- * Repair tools missing images or stale ratings.
+ * Repair tools missing images, ratings, categories, or pricing.
  */
 export async function repairToolLibraryAssets() {
   const data = await loadToolLibrary();
@@ -160,14 +179,52 @@ export async function repairToolLibraryAssets() {
     const needsCategories =
       !tool.categories?.length ||
       (tool.categories.length === 1 && tool.categories[0] === 'utilities');
-    if (!needsImages && !needsRating && !needsCategories) continue;
+    const needsPricing = isUnknownPricing(tool.pricing);
+    if (!needsImages && !needsRating && !needsCategories && !needsPricing) continue;
     try {
+      if (needsPricing && !needsImages && !needsRating && !needsCategories) {
+        const light = await repairToolPricingOnly(tool);
+        if (light) {
+          const idx = data.tools.findIndex((t) => t.id === tool.id);
+          if (idx >= 0) data.tools[idx] = light;
+          await saveToolLibrary(data);
+          repaired.push(light);
+          continue;
+        }
+      }
       repaired.push(await refreshToolAssets(tool.id));
     } catch (e) {
       console.warn('[tool-library] repair skip', tool.id, e?.message || e);
     }
   }
   return { repaired: repaired.length, tools: repaired };
+}
+
+/**
+ * @param {object} tool
+ */
+async function repairToolPricingOnly(tool) {
+  let html = '';
+  try {
+    const meta = await fetchPageMeta(tool.url);
+    html = meta.htmlSnippet || '';
+  } catch {
+    /* known-map / search can still work without HTML */
+  }
+  const pricing = await resolveToolPricing({
+    name: tool.name,
+    description: tool.bestUsedFor || '',
+    url: tool.url,
+    html,
+  }).catch(() => null);
+  if (!pricing || isUnknownPricing(pricing)) return null;
+  const updated = { ...tool, pricing };
+  try {
+    await upsertResource(toolRecordToResource(updated), { project: 'dashbird', section: 'Tools' });
+  } catch (e) {
+    console.warn('[tool-library] catalog sync failed:', e?.message || e);
+  }
+  return updated;
 }
 
 /**

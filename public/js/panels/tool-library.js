@@ -10,8 +10,17 @@ let selectedIds = new Set();
 let activeCategoryFilters = new Set();
 /** @type {Set<string>} */
 let activeOsFilters = new Set();
+let favoritesOnly = false;
 let searchQuery = '';
 let repairAttempted = false;
+/** Max review candidates shown in the dropdown. */
+const REVIEW_MAX = 10;
+/** @type {ReturnType<typeof setInterval> | null} */
+let thinkingDotsTimer = null;
+/** @type {string} */
+let thinkingDotsLabel = '';
+/** Hide review panel until new items arrive (Cancel). */
+let reviewDismissed = false;
 
 function collectOsOptions(list) {
   const set = new Set();
@@ -39,14 +48,24 @@ function stars(n) {
   return '★'.repeat(full) + (half ? '½' : '') + '☆'.repeat(5 - full - half);
 }
 
+function isPlaceholderPricingText(text) {
+  const s = String(text || '').trim().toLowerCase();
+  if (!s) return true;
+  return /^(unknown|--|n\/a|na|none)$/i.test(s)
+    || /pricing not auto-detected|could not auto-detect pricing/i.test(s);
+}
+
 function normalizePricingText(text) {
   const raw = String(text || '').trim();
-  if (!raw) return '';
+  if (!raw || isPlaceholderPricingText(raw)) return '';
   const s = raw.toLowerCase();
+  if (/\bfreemium\b/.test(s)) return 'Freemium';
   if (/\bfree\b/.test(s) && (/\bopen[-\s]?source\b/.test(s) || /\bpersonal use\b/.test(s))) {
     return 'Free';
   }
-  if (/\bfree\b/.test(s)) return 'Free';
+  if (/^free(\s+plan)?$/i.test(raw) || /\bfree\b/.test(s) && s.length < 48) return 'Free';
+  if (/^paid$/i.test(raw)) return 'Paid';
+  if (/^\$/.test(raw)) return raw;
   return raw;
 }
 
@@ -59,19 +78,26 @@ function ratingLabel(tool) {
 
 function pricingBadgeText(tool) {
   const lowestTier = normalizePricingText(tool?.pricing?.lowestTier);
-  if (lowestTier && !/^(unknown|--|n\/a|na|none)$/i.test(lowestTier)) return lowestTier;
+  if (lowestTier) return lowestTier;
+  const model = String(tool?.pricing?.model || '').trim().toLowerCase();
+  if (model === 'free') return 'Free';
+  if (model === 'freemium') return 'Freemium';
+  if (model === 'paid') {
+    const summary = normalizePricingText(tool?.pricing?.summary);
+    return summary || 'Paid';
+  }
   const summary = normalizePricingText(tool?.pricing?.summary);
   if (summary) return summary;
-  const bestUsedFor = normalizePricingText(tool?.bestUsedFor);
-  if (bestUsedFor.includes('Free')) return 'Free';
-  const model = normalizePricingText(tool?.pricing?.model);
-  return /^unknown$/i.test(model) ? '' : model;
+  const bestUsedFor = String(tool?.bestUsedFor || '');
+  if (/\bfree\b/i.test(bestUsedFor)) return 'Free';
+  return '';
 }
 
 function filteredTools(list) {
   const q = searchQuery.trim().toLowerCase();
   const tokens = q.split(/\s+/).filter(Boolean);
   return list.filter((t) => {
+    if (favoritesOnly && !t.favorite) return false;
     if (activeCategoryFilters.size) {
       const cats = [...(t.categories || []), ...(t.tags || [])];
       if (!cats.some((c) => activeCategoryFilters.has(c))) return false;
@@ -144,13 +170,37 @@ function renderSidebar(root) {
   const clearBtn = root.querySelector('.tool-library__clear-filters');
   if (!filtersWrap) return;
   filtersWrap.replaceChildren();
+
+  const favGroup = el('div');
+  favGroup.className = 'tool-library__filter-group';
+  const favHeading = el('h3');
+  favHeading.className = 'tool-library__filter-heading';
+  favHeading.textContent = 'Saved';
+  const favChips = el('div');
+  favChips.className = 'tool-library__filter-chips';
+  const favBtn = el('button');
+  favBtn.type = 'button';
+  favBtn.className = 'tool-library__filter-chip';
+  if (favoritesOnly) favBtn.classList.add('tool-library__filter-chip--on');
+  favBtn.textContent = 'Favorites';
+  favBtn.addEventListener('click', () => {
+    favoritesOnly = !favoritesOnly;
+    renderSidebar(root);
+    renderGrid(root);
+  });
+  favChips.append(favBtn);
+  favGroup.append(favHeading, favChips);
+  filtersWrap.append(favGroup);
+
   const osOptions = collectOsOptions(tools);
   renderFilterGroup(filtersWrap, 'OS', osOptions, activeOsFilters);
   renderFilterGroup(filtersWrap, 'Category', categories, activeCategoryFilters);
-  const hasFilters = activeCategoryFilters.size > 0 || activeOsFilters.size > 0;
+  const hasFilters =
+    favoritesOnly || activeCategoryFilters.size > 0 || activeOsFilters.size > 0;
   if (clearBtn) {
     clearBtn.hidden = !hasFilters;
     clearBtn.onclick = () => {
+      favoritesOnly = false;
       activeCategoryFilters.clear();
       activeOsFilters.clear();
       renderSidebar(root);
@@ -164,7 +214,7 @@ function buildToolCard(card, tool) {
   card.className = 'tool-library__card';
   if (selected) card.classList.add('tool-library__card--selected');
   card.dataset.toolId = tool.id;
-  card.title = 'Click to open · Right-click queues background alternatives search';
+  card.title = 'Click to open';
 
   const pick = el('input');
   pick.type = 'checkbox';
@@ -177,6 +227,51 @@ function buildToolCard(card, tool) {
     else selectedIds.delete(tool.id);
     card.classList.toggle('tool-library__card--selected', pick.checked);
     updateDeleteBtn(card.closest('.tool-library'));
+  });
+
+  const favBtn = el('button');
+  favBtn.type = 'button';
+  favBtn.className = 'tool-library__card-fav';
+  if (tool.favorite) favBtn.classList.add('tool-library__card-fav--on');
+  favBtn.setAttribute('aria-label', tool.favorite ? 'Remove from favorites' : 'Add to favorites');
+  favBtn.title = tool.favorite ? 'Remove from favorites' : 'Add to favorites';
+  favBtn.textContent = tool.favorite ? '★' : '☆';
+  favBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const next = !tool.favorite;
+    favBtn.disabled = true;
+    try {
+      const r = await fetch(`/api/tool-library/tools/${encodeURIComponent(tool.id)}/favorite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          favorite: next,
+          url: tool.url || tool.website,
+          catalogId: tool.catalogId || '',
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+      tool.favorite = next;
+      const idx = tools.findIndex((t) => t.id === tool.id);
+      if (idx >= 0) tools[idx] = { ...tools[idx], favorite: next };
+      favBtn.classList.toggle('tool-library__card-fav--on', next);
+      favBtn.textContent = next ? '★' : '☆';
+      favBtn.title = next ? 'Remove from favorites' : 'Add to favorites';
+      favBtn.setAttribute('aria-label', favBtn.title);
+      const root = card.closest('.tool-library');
+      if (favoritesOnly) renderGrid(root);
+      renderSidebar(root);
+    } catch (err) {
+      const status = card.closest('.tool-library')?.querySelector('.tool-library__status');
+      if (status) {
+        status.hidden = false;
+        status.textContent = err?.message || 'Could not update favorite';
+      }
+    } finally {
+      favBtn.disabled = false;
+    }
   });
 
   const snap = el('div');
@@ -234,21 +329,32 @@ function buildToolCard(card, tool) {
   const bestForText =
     typeof tool.bestUsedFor === 'string' && tool.bestUsedFor.trim()
       ? tool.bestUsedFor.trim()
-      : truncate(tool.pricing?.summary, 120);
+      : normalizePricingText(tool.pricing?.summary);
   if (bestForText) {
     blurb.textContent = truncate(bestForText, 120);
   } else {
     blurb.hidden = true;
   }
 
-  card.append(pick, snap, logoRow, meta, ...(catRow ? [catRow] : []), blurb);
+  const foot = el('div');
+  foot.className = 'tool-library__card-foot';
+  const altBtn = el('button');
+  altBtn.type = 'button';
+  altBtn.className = 'tool-library__card-alt';
+  altBtn.textContent = 'find alt';
+  altBtn.title = 'Search for alternatives in the background';
+  altBtn.setAttribute('aria-label', `Find alternatives to ${tool.name || 'this tool'}`);
+  altBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    queueAlternativesJob(tool, card.closest('.tool-library'));
+  });
+  foot.append(altBtn);
+
+  card.append(pick, favBtn, snap, logoRow, meta, ...(catRow ? [catRow] : []), blurb, foot);
   card.addEventListener('click', (e) => {
     if (e.target.closest('input, a, button, label, .tool-library__card-cats')) return;
     window.open(siteUrl, '_blank', 'noopener,noreferrer');
-  });
-  card.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    queueAlternativesJob(tool, card.closest('.tool-library'));
   });
 }
 
@@ -261,9 +367,20 @@ function renderGrid(root) {
   if (!list.length) {
     if (empty) {
       empty.hidden = false;
-      empty.textContent = tools.length
-        ? 'No tools match your search or filters.'
-        : 'No tools yet — add one with a website URL.';
+      const q = searchQuery.trim();
+      if (!tools.length) {
+        empty.textContent = 'No tools yet — add one with a website URL.';
+      } else if (q) {
+        empty.replaceChildren();
+        const line = el('span');
+        line.textContent = 'No tools match your search or filters. ';
+        const hint = el('span');
+        hint.className = 'tool-library__empty-hint';
+        hint.textContent = `Press Enter to search alternatives for “${q}” in the background.`;
+        empty.append(line, hint);
+      } else {
+        empty.textContent = 'No tools match your search or filters.';
+      }
     }
     return;
   }
@@ -272,6 +389,135 @@ function renderGrid(root) {
     const card = el('article');
     buildToolCard(card, tool);
     grid.append(card);
+  }
+}
+
+/**
+ * Online search modal: matched tool + alternatives with checkboxes to add.
+ * @param {string} query
+ * @param {HTMLElement} root
+ */
+async function openOnlineSearchModal(query, root) {
+  const q = String(query || '').trim();
+  if (!q) return;
+
+  const backdrop = el('div');
+  backdrop.className = 'tool-library__modal-backdrop';
+  const modal = el('div');
+  modal.className = 'tool-library__modal tool-library__modal--wide';
+  const title = el('h3');
+  title.className = 'tool-library__modal-title';
+  title.textContent = `Search: ${q}`;
+  const msg = el('p');
+  msg.className = 'tool-library__modal-msg';
+  msg.textContent = 'Searching the web for this tool and alternatives…';
+  const list = el('div');
+  list.className = 'tool-library__alt-list';
+  const actions = el('div');
+  actions.className = 'tool-library__modal-actions';
+  const cancel = el('button');
+  cancel.type = 'button';
+  cancel.className = 'tool-library__btn';
+  cancel.textContent = 'Close';
+  const addBtn = el('button');
+  addBtn.type = 'button';
+  addBtn.className = 'tool-library__btn tool-library__btn--primary';
+  addBtn.textContent = 'Add selected';
+  addBtn.disabled = true;
+  cancel.addEventListener('click', () => backdrop.remove());
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) backdrop.remove();
+  });
+  const rowById = new Map();
+  addBtn.addEventListener('click', async () => {
+    const items = [];
+    for (const [id, row] of rowById) {
+      const cb = list.querySelector(`input[data-alt-id="${id}"]`);
+      if (cb?.checked && !row.alreadyInLibrary) items.push({ url: row.url });
+    }
+    if (!items.length) return;
+    addBtn.disabled = true;
+    msg.textContent = 'Adding tools…';
+    try {
+      const r = await fetch('/api/tool-library/tools/import-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      });
+      const data = await r.json();
+      if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+      backdrop.remove();
+      searchQuery = '';
+      const searchInput = root.querySelector('.tool-library__search');
+      if (searchInput) searchInput.value = '';
+      await refresh(root);
+    } catch (e) {
+      msg.textContent = e?.message || 'Import failed';
+      addBtn.disabled = false;
+    }
+  });
+  actions.append(cancel, addBtn);
+  modal.append(title, msg, list, actions);
+  backdrop.append(modal);
+  document.body.append(backdrop);
+
+  try {
+    const r = await fetch('/api/tool-library/tools/search-online', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q }),
+    });
+    const data = await r.json();
+    if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+    list.replaceChildren();
+    const ranked = Array.isArray(data.ranked) ? data.ranked : [];
+    if (!ranked.length) {
+      msg.textContent = 'No tools found online for that name.';
+      return;
+    }
+    msg.textContent =
+      'Top match and alternatives. Check rows to add to your toolbox, then Add selected.';
+    for (const row of ranked) {
+      const id = row.tempId || row.url;
+      rowById.set(id, row);
+      const item = el('div');
+      item.className = 'tool-library__alt-row';
+      if (row.tempId === 'matched' || row.source === 'search') {
+        item.classList.add('tool-library__alt-row--matched');
+      }
+      if (row.alreadyInLibrary) item.classList.add('tool-library__alt-row--original');
+      const pick = el('input');
+      pick.type = 'checkbox';
+      pick.dataset.altId = id;
+      pick.disabled = Boolean(row.alreadyInLibrary);
+      pick.checked = Boolean(
+        !row.alreadyInLibrary && (row.tempId === 'matched' || row.source === 'search'),
+      );
+      pick.title = row.alreadyInLibrary ? 'Already in toolbox' : 'Add to toolbox';
+      const body = el('div');
+      body.className = 'tool-library__alt-body';
+      const name = el('strong');
+      name.textContent =
+        row.tempId === 'matched' || row.source === 'search'
+          ? `${row.name} (match)`
+          : row.name;
+      const meta = el('span');
+      const ratingBit = ratingLabel(row);
+      meta.textContent = [ratingBit, row.url || ''].filter(Boolean).join(' · ');
+      body.append(name, meta);
+      const bestTxt = typeof row.bestUsedFor === 'string' ? row.bestUsedFor.trim() : '';
+      if (bestTxt) {
+        const bestLine = el('p');
+        bestLine.className = 'tool-library__alt-best-for';
+        bestLine.textContent = bestTxt;
+        body.append(bestLine);
+      }
+      item.append(pick, body);
+      list.append(item);
+    }
+    addBtn.disabled = false;
+  } catch (e) {
+    msg.textContent = e?.message || 'Online search failed';
   }
 }
 
@@ -308,6 +554,7 @@ async function refresh(root) {
             ...t,
             id: prev.id,
             catalogId: t.catalogId || t.id,
+            favorite: Boolean(prev.favorite),
             watchEnabled: t.watchEnabled ?? prev.watchEnabled,
             watchMode: t.watchMode ?? prev.watchMode,
             lastStatus: t.lastStatus ?? prev.lastStatus,
@@ -344,6 +591,252 @@ async function refresh(root) {
       status.textContent = `Could not load tools (${e?.message || e}).`;
     }
   }
+}
+
+/** Interchange v1 shape for third-party exporters (matches web-catalog import). */
+const IMPORT_BUNDLE_PROMPT = `{
+  "version": 1,
+  "exported_at": "2026-07-09T00:00:00.000Z",
+  "source": "your-tool-name",
+  "filter": {},
+  "resources": [
+    {
+      "url": "https://example.com/product",
+      "title": "Product Name",
+      "summary": "One-line description / best used for",
+      "tags": ["design", "AI"],
+      "kind_hints": ["tool"],
+      "proficient": false,
+      "watch_enabled": false,
+      "watch_mode": "off",
+      "ingest_candidate": false,
+      "operating_systems": ["Web", "Windows", "macOS"],
+      "icon_path": null
+    }
+  ]
+}`;
+
+function ensureToolKindHints(bundle) {
+  const resources = Array.isArray(bundle?.resources) ? bundle.resources : [];
+  return {
+    ...bundle,
+    version: Number(bundle?.version) || 1,
+    resources: resources.map((item) => {
+      if (!item || typeof item !== 'object') return item;
+      const hints = Array.isArray(item.kind_hints) ? [...item.kind_hints] : [];
+      if (!hints.some((h) => String(h).toLowerCase() === 'tool')) hints.push('tool');
+      return { ...item, kind_hints: hints };
+    }),
+  };
+}
+
+/**
+ * Open a JSON file picker, preferring Downloads via the File System Access API.
+ * @returns {Promise<{ name: string, text: string } | null>}
+ */
+async function pickImportJsonFile() {
+  if (typeof window.showOpenFilePicker === 'function') {
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        multiple: false,
+        excludeAcceptAllOption: false,
+        startIn: 'downloads',
+        types: [
+          {
+            description: 'Catalog JSON',
+            accept: { 'application/json': ['.json'] },
+          },
+        ],
+      });
+      if (!handle) return null;
+      const file = await handle.getFile();
+      return { name: file.name, text: await file.text() };
+    } catch (e) {
+      if (e?.name === 'AbortError') return null;
+      // Fall through to <input type="file"> if the picker API is blocked.
+    }
+  }
+
+  return new Promise((resolve) => {
+    const input = el('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.style.display = 'none';
+    const cleanup = () => {
+      input.remove();
+      window.removeEventListener('focus', onFocus);
+    };
+    const onFocus = () => {
+      // If the user cancels the dialog, change may never fire.
+      setTimeout(() => {
+        if (!input.files?.length) {
+          cleanup();
+          resolve(null);
+        }
+      }, 400);
+    };
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      cleanup();
+      if (!file) {
+        resolve(null);
+        return;
+      }
+      resolve({ name: file.name, text: await file.text() });
+    });
+    document.body.append(input);
+    window.addEventListener('focus', onFocus);
+    input.click();
+  });
+}
+
+function openImportModal(root) {
+  const backdrop = el('div');
+  backdrop.className = 'tool-library__modal-backdrop';
+  const modal = el('div');
+  modal.className = 'tool-library__modal tool-library__modal--wide';
+
+  const h = el('h3');
+  h.className = 'tool-library__modal-title';
+  h.textContent = 'Import tools';
+
+  const hint = el('p');
+  hint.className = 'tool-library__modal-hint';
+  hint.textContent =
+    'Ask a third-party processing tool to export a JSON file in this exact interchange format (version 1). Then choose that file — the picker opens in Downloads when the browser allows it.';
+
+  const pre = el('pre');
+  pre.className = 'tool-library__import-schema';
+  pre.textContent = IMPORT_BUNDLE_PROMPT;
+
+  const schemaActions = el('div');
+  schemaActions.className = 'tool-library__modal-actions tool-library__modal-actions--start';
+  const copyBtn = el('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'tool-library__btn';
+  copyBtn.textContent = 'Copy format prompt';
+  copyBtn.title = 'Copy the JSON schema for a third-party tool';
+  copyBtn.addEventListener('click', async () => {
+    const promptText =
+      'Export tools as a single JSON file matching this Dashbird web-catalog interchange v1 schema. ' +
+      'Each resource needs at least a public https url. Include kind_hints: ["tool"] so items appear in the Tool Library.\n\n' +
+      IMPORT_BUNDLE_PROMPT;
+    try {
+      await navigator.clipboard.writeText(promptText);
+      copyBtn.textContent = 'Copied';
+      setTimeout(() => {
+        copyBtn.textContent = 'Copy format prompt';
+      }, 1600);
+    } catch {
+      copyBtn.textContent = 'Copy failed';
+      setTimeout(() => {
+        copyBtn.textContent = 'Copy format prompt';
+      }, 1600);
+    }
+  });
+  schemaActions.append(copyBtn);
+
+  const fileRow = el('div');
+  fileRow.className = 'tool-library__import-file-row';
+  const fileLabel = el('span');
+  fileLabel.className = 'tool-library__import-file-name';
+  fileLabel.textContent = 'No file selected';
+  const chooseBtn = el('button');
+  chooseBtn.type = 'button';
+  chooseBtn.className = 'tool-library__btn tool-library__btn--primary';
+  chooseBtn.textContent = 'Choose JSON file…';
+  chooseBtn.title = 'Open file explorer (defaults to Downloads)';
+  fileRow.append(chooseBtn, fileLabel);
+
+  const actions = el('div');
+  actions.className = 'tool-library__modal-actions';
+  const cancel = el('button');
+  cancel.type = 'button';
+  cancel.className = 'tool-library__btn';
+  cancel.textContent = 'Cancel';
+  const importBtn = el('button');
+  importBtn.type = 'button';
+  importBtn.className = 'tool-library__btn tool-library__btn--primary';
+  importBtn.textContent = 'Import';
+  importBtn.disabled = true;
+
+  const msg = el('p');
+  msg.className = 'tool-library__modal-msg';
+  msg.hidden = true;
+
+  /** @type {{ name: string, text: string } | null} */
+  let picked = null;
+
+  const close = () => backdrop.remove();
+  cancel.addEventListener('click', close);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  chooseBtn.addEventListener('click', async () => {
+    msg.hidden = true;
+    chooseBtn.disabled = true;
+    try {
+      const next = await pickImportJsonFile();
+      if (!next) return;
+      picked = next;
+      fileLabel.textContent = next.name;
+      importBtn.disabled = false;
+    } catch (e) {
+      msg.hidden = false;
+      msg.textContent = e?.message || 'Could not open file picker';
+    } finally {
+      chooseBtn.disabled = false;
+    }
+  });
+
+  importBtn.addEventListener('click', async () => {
+    if (!picked) return;
+    importBtn.disabled = true;
+    chooseBtn.disabled = true;
+    msg.hidden = false;
+    msg.textContent = 'Importing…';
+    try {
+      let parsed;
+      try {
+        parsed = JSON.parse(picked.text);
+      } catch {
+        throw new Error('File is not valid JSON');
+      }
+      const bundle = ensureToolKindHints(parsed);
+      if (!Array.isArray(bundle.resources) || !bundle.resources.length) {
+        throw new Error('Bundle has no resources[] entries');
+      }
+      const r = await fetch('/api/web-catalog/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project: 'dashbird',
+          section: 'Imported',
+          bundle,
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+      close();
+      await refresh(root);
+      const status = root.querySelector('.tool-library__status');
+      if (status) {
+        status.hidden = false;
+        status.textContent = `Imported ${data.imported ?? 0} tool(s) from ${picked.name}.`;
+      }
+    } catch (e) {
+      msg.textContent = e?.message || 'Import failed';
+      importBtn.disabled = !picked;
+      chooseBtn.disabled = false;
+    }
+  });
+
+  actions.append(cancel, importBtn);
+  modal.append(h, hint, pre, schemaActions, fileRow, actions, msg);
+  backdrop.append(modal);
+  document.body.append(backdrop);
+  chooseBtn.focus();
 }
 
 function openAddModal(root) {
@@ -409,12 +902,14 @@ function openAddModal(root) {
 
 async function ensureCatalogId(tool) {
   if (tool.catalogId) return tool.catalogId;
+  const url = tool.url || tool.website;
+  if (!url) return '';
   // Sync tool URL into catalog so discovery jobs have a resource id
   const r = await fetch('/api/web-catalog/resources', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      url: tool.url || tool.website,
+      url,
       title: tool.name,
       summary: tool.bestUsedFor || '',
       kind_hints: ['tool'],
@@ -436,29 +931,112 @@ async function ensureCatalogId(tool) {
   return tool.catalogId;
 }
 
-async function queueAlternativesJob(tool, root) {
+function stopThinkingDots(root) {
+  if (thinkingDotsTimer) {
+    clearInterval(thinkingDotsTimer);
+    thinkingDotsTimer = null;
+  }
+  thinkingDotsLabel = '';
   const status = root?.querySelector('.tool-library__status');
-  try {
+  if (status?.dataset.thinking === '1') {
+    status.hidden = true;
+    status.textContent = '';
+    delete status.dataset.thinking;
+  }
+  const thinking = root?.querySelector('.tool-library__review-thinking');
+  if (thinking) {
+    thinking.hidden = true;
+    thinking.textContent = '';
+  }
+}
+
+/**
+ * Animate trailing dots while a background alternatives search runs.
+ * @param {HTMLElement} root
+ * @param {string} label
+ */
+function startThinkingDots(root, label) {
+  const status = root?.querySelector('.tool-library__status');
+  const thinking = root?.querySelector('.tool-library__review-thinking');
+  const wrap = root?.querySelector('.tool-library__review');
+  thinkingDotsLabel = label || 'Searching for alternatives';
+  if (thinkingDotsTimer) clearInterval(thinkingDotsTimer);
+  let n = 0;
+  const tick = () => {
+    n = (n % 3) + 1;
+    const dots = '.'.repeat(n);
+    const text = `${thinkingDotsLabel}${dots}`;
     if (status) {
       status.hidden = false;
-      status.textContent = `Queuing alternatives search for ${tool.name}…`;
+      status.dataset.thinking = '1';
+      status.textContent = text;
     }
-    const resourceId = await ensureCatalogId(tool);
+    if (thinking) {
+      thinking.hidden = false;
+      thinking.textContent = text;
+    }
+    if (wrap) wrap.hidden = false;
+  };
+  tick();
+  thinkingDotsTimer = setInterval(tick, 450);
+}
+
+/**
+ * @param {HTMLElement} root
+ * @returns {Promise<boolean>} true if any discovery job is still pending/running
+ */
+async function hasActiveDiscoveryJobs() {
+  try {
+    const r = await fetch('/api/web-catalog/jobs', { cache: 'no-store' });
+    const data = await r.json();
+    if (!r.ok || data.ok === false) return false;
+    const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    return jobs.some((j) => j.status === 'pending' || j.status === 'running');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Queue a background alternatives search (no modal).
+ * Accepts a library/catalog tool, or a plain name/query string.
+ * @param {object|string} toolOrQuery
+ * @param {HTMLElement} root
+ */
+async function queueAlternativesJob(toolOrQuery, root) {
+  const status = root?.querySelector('.tool-library__status');
+  const isQuery = typeof toolOrQuery === 'string';
+  const tool = isQuery ? null : toolOrQuery;
+  const label = isQuery
+    ? String(toolOrQuery).trim()
+    : tool?.name || tool?.url || tool?.website || 'tool';
+  reviewDismissed = false;
+  try {
+    startThinkingDots(root, `Searching alternatives for ${label}`);
+    /** @type {Record<string, string>} */
+    const body = {};
+    if (!isQuery) {
+      const resourceId = await ensureCatalogId(tool);
+      if (resourceId) body.resourceId = resourceId;
+      else if (tool?.url || tool?.website) body.url = tool.url || tool.website;
+      else if (tool?.name) body.name = tool.name;
+    } else {
+      body.name = String(toolOrQuery).trim();
+    }
+    if (!body.resourceId && !body.url && !body.name) {
+      throw new Error('Could not identify tool for alternatives search');
+    }
     const r = await fetch('/api/web-catalog/jobs/alternatives', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resourceId }),
+      body: JSON.stringify(body),
     });
     const data = await r.json();
     if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
-    if (status) {
-      status.textContent = `Searching alternatives for ${tool.name} in the background — check Review when ready.`;
-      setTimeout(() => {
-        if (status.textContent.includes('background')) status.hidden = true;
-      }, 5000);
-    }
+    startThinkingDots(root, `Searching alternatives for ${label}`);
     refreshReview(root);
   } catch (e) {
+    stopThinkingDots(root);
     if (status) {
       status.hidden = false;
       status.textContent = e?.message || 'Could not queue alternatives job';
@@ -470,18 +1048,59 @@ async function refreshReview(root) {
   const wrap = root?.querySelector('.tool-library__review');
   const list = root?.querySelector('.tool-library__review-list');
   const heading = root?.querySelector('.tool-library__review-heading');
+  const cancelBtn = root?.querySelector('.tool-library__review-cancel');
   if (!wrap || !list) return;
   try {
-    const r = await fetch('/api/web-catalog/review?status=pending', { cache: 'no-store' });
-    const data = await r.json();
-    if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
-    const items = Array.isArray(data.items) ? data.items : [];
+    const [reviewRes, active] = await Promise.all([
+      fetch('/api/web-catalog/review?status=pending', { cache: 'no-store' }),
+      hasActiveDiscoveryJobs(),
+    ]);
+    const data = await reviewRes.json();
+    if (!reviewRes.ok || data.ok === false) throw new Error(data.error || `HTTP ${reviewRes.status}`);
+    const allItems = Array.isArray(data.items) ? data.items : [];
+    const items = allItems.slice(0, REVIEW_MAX);
+    const total = allItems.length;
+
+    if (active && !reviewDismissed) {
+      if (!thinkingDotsTimer) {
+        startThinkingDots(root, thinkingDotsLabel || 'Searching for alternatives');
+      }
+    } else if (thinkingDotsTimer && !active) {
+      stopThinkingDots(root);
+    }
+
     list.replaceChildren();
-    if (heading) heading.textContent = items.length ? `Review (${items.length})` : 'Review';
-    wrap.hidden = items.length === 0;
+    if (heading) {
+      if (items.length) {
+        heading.textContent =
+          total > REVIEW_MAX
+            ? `Review (${items.length} of ${total})`
+            : `Review (${items.length})`;
+      } else {
+        heading.textContent = 'Review';
+      }
+    }
+
+    if (reviewDismissed && items.length) {
+      // New candidates arrived after Cancel — show them again.
+      reviewDismissed = false;
+    }
+
+    wrap.hidden = reviewDismissed || (items.length === 0 && !active);
+    if (cancelBtn) cancelBtn.hidden = wrap.hidden;
+
     for (const item of items) {
       const row = el('div');
       row.className = 'tool-library__review-row';
+      const thumbUrl = item.payload?.snapshot_url || item.payload?.logo_url || '';
+      if (thumbUrl) {
+        const thumb = el('img');
+        thumb.className = 'tool-library__review-thumb';
+        thumb.src = thumbUrl;
+        thumb.alt = '';
+        thumb.loading = 'lazy';
+        row.append(thumb);
+      }
       const body = el('div');
       body.className = 'tool-library__review-body';
       const name = el('strong');
@@ -526,8 +1145,19 @@ async function refreshReview(root) {
       list.append(row);
     }
   } catch {
-    wrap.hidden = true;
+    if (!thinkingDotsTimer) wrap.hidden = true;
   }
+}
+
+/**
+ * Dismiss the review panel (and stop thinking indicator).
+ * @param {HTMLElement} root
+ */
+function cancelReviewPanel(root) {
+  reviewDismissed = true;
+  stopThinkingDots(root);
+  const wrap = root?.querySelector('.tool-library__review');
+  if (wrap) wrap.hidden = true;
 }
 
 /** Legacy sync alternatives modal (kept for import-batch from older flows). */
@@ -617,13 +1247,8 @@ async function openAlternativesModal(tool) {
       name.textContent = row.name;
       const meta = el('span');
       const ratingBit = ratingLabel(row);
-      meta.textContent = [
-        ratingBit,
-        row.pricing?.model || '',
-        row.pricing?.lowestTier || '',
-      ]
-        .filter(Boolean)
-        .join(' · ');
+      const priceBit = pricingBadgeText(row);
+      meta.textContent = [ratingBit, priceBit].filter(Boolean).join(' · ');
       body.append(name, meta);
       const bestTxt = typeof row.bestUsedFor === 'string' ? row.bestUsedFor.trim() : '';
       if (bestTxt) {
@@ -651,10 +1276,26 @@ export function mountToolLibrary(mount) {
   const search = el('input');
   search.type = 'search';
   search.className = 'tool-library__search';
-  search.placeholder = 'Search tools…';
+  search.placeholder = 'Search tools… Enter finds alternatives in the background';
   search.addEventListener('input', () => {
     searchQuery = search.value;
     renderGrid(mount);
+  });
+  search.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const q = search.value.trim();
+    if (!q) return;
+    searchQuery = q;
+    renderGrid(mount);
+    const matches = filteredTools(tools);
+    if (matches.length === 1) {
+      queueAlternativesJob(matches[0], mount);
+      return;
+    }
+    if (matches.length > 1) return;
+    // No local match — queue background alternatives by name (no popup).
+    queueAlternativesJob(q, mount);
   });
   const addBtn = el('button');
   addBtn.type = 'button';
@@ -670,18 +1311,36 @@ export function mountToolLibrary(mount) {
     if (!selectedIds.size) return;
     if (!confirm(`Delete ${selectedIds.size} tool(s)?`)) return;
     delBtn.disabled = true;
+    const selected = tools.filter((t) => selectedIds.has(t.id));
+    const ids = selected.map((t) => t.id).filter(Boolean);
+    const catalogIds = selected.map((t) => t.catalogId).filter(Boolean);
+    const urls = selected.map((t) => t.url || t.website).filter(Boolean);
     try {
-      await fetch('/api/tool-library/tools/delete', {
+      const r = await fetch('/api/tool-library/tools/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: [...selectedIds] }),
+        body: JSON.stringify({ ids, catalogIds, urls }),
       });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
       selectedIds.clear();
       await refresh(mount);
-    } catch {
+    } catch (e) {
+      const status = mount.querySelector('.tool-library__status');
+      if (status) {
+        status.hidden = false;
+        status.textContent = e?.message || 'Delete failed';
+      }
       delBtn.disabled = false;
+      updateDeleteBtn(mount);
     }
   });
+  const importBtn = el('button');
+  importBtn.type = 'button';
+  importBtn.className = 'tool-library__btn';
+  importBtn.textContent = 'Import';
+  importBtn.title = 'Import tools from a JSON file (Downloads folder)';
+  importBtn.addEventListener('click', () => openImportModal(mount));
   const exportBtn = el('button');
   exportBtn.type = 'button';
   exportBtn.className = 'tool-library__btn';
@@ -690,17 +1349,30 @@ export function mountToolLibrary(mount) {
   exportBtn.addEventListener('click', () => {
     window.open('/api/web-catalog/export?kind=tool&project=dashbird', '_blank');
   });
-  toolbar.append(search, addBtn, delBtn, exportBtn);
+  toolbar.append(search, addBtn, delBtn, importBtn, exportBtn);
 
   const review = el('section');
   review.className = 'tool-library__review';
   review.hidden = true;
+  const reviewHead = el('div');
+  reviewHead.className = 'tool-library__review-head';
   const reviewHeading = el('h3');
   reviewHeading.className = 'tool-library__review-heading';
   reviewHeading.textContent = 'Review';
+  const reviewCancel = el('button');
+  reviewCancel.type = 'button';
+  reviewCancel.className = 'tool-library__btn tool-library__review-cancel';
+  reviewCancel.textContent = 'Cancel';
+  reviewCancel.title = 'Hide review panel';
+  reviewCancel.addEventListener('click', () => cancelReviewPanel(mount));
+  reviewHead.append(reviewHeading, reviewCancel);
+  const reviewThinking = el('p');
+  reviewThinking.className = 'tool-library__review-thinking';
+  reviewThinking.hidden = true;
+  reviewThinking.setAttribute('aria-live', 'polite');
   const reviewList = el('div');
   reviewList.className = 'tool-library__review-list';
-  review.append(reviewHeading, reviewList);
+  review.append(reviewHead, reviewThinking, reviewList);
 
   const body = el('div');
   body.className = 'tool-library__body';

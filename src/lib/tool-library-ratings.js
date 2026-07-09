@@ -8,17 +8,17 @@ const BROWSER_UA =
 
 /**
  * @param {string} toolName
- * @returns {Promise<{ rating: number, source: string, reviewCount?: number } | null>}
+ * @returns {Promise<{ rating: number, source: string, reviewCount?: number, resolvedBy?: 'g2' | 'openrouter' } | null>}
  */
 export async function fetchToolRating(toolName) {
   const name = String(toolName || '').trim();
   if (!name) return null;
 
   const g2 = await fetchG2RatingViaYahoo(name);
-  if (g2) return g2;
+  if (g2) return { ...g2, resolvedBy: 'g2' };
 
   const ai = await fetchRatingViaOpenRouter(name).catch(() => null);
-  if (ai) return ai;
+  if (ai) return { ...ai, resolvedBy: 'openrouter' };
 
   return null;
 }

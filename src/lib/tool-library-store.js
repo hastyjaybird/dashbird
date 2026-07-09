@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { looksLikePublicHttpUrl } from './public-http-url.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
@@ -113,6 +114,19 @@ export async function deleteTools(ids) {
 }
 
 /**
+ * @param {string} id
+ * @param {boolean} favorite
+ */
+export async function setToolFavorite(id, favorite) {
+  const data = await loadToolLibrary();
+  const tool = data.tools.find((t) => t.id === id);
+  if (!tool) return null;
+  tool.favorite = Boolean(favorite);
+  await saveToolLibrary(data);
+  return tool;
+}
+
+/**
  * @param {string} url
  */
 export function normalizeToolUrl(url) {
@@ -122,6 +136,8 @@ export function normalizeToolUrl(url) {
   const parsed = new URL(u);
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('invalid_url');
   parsed.hash = '';
+  // Sync reject of literal private/local hosts; DNS-aware check runs at fetch time.
+  if (!looksLikePublicHttpUrl(parsed.toString())) throw new Error('url_not_public');
   return parsed.toString();
 }
 

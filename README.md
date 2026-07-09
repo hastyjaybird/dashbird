@@ -6,6 +6,10 @@ Post–v1 integrations (Vikunja, Google Keep, optional Home Assistant proxy) liv
 
 Cross-project naming standards (local folders, repos, servers, domains) live in [`docs/naming-system.md`](docs/naming-system.md).
 
+Current product truth:
+- Chat is not in current dashboard scope.
+- CompHealth work is out of scope for this repo (handled as a separate project concern).
+
 This repo supersedes the earlier **`homeassistantdashboard`** workspace; the Cursor plan was merged here under the name **dashbird** (see `~/.cursor/plans/local_firefox_dashboard_26fbbff8.plan.md` if you still have it).
 
 ## Quick start
@@ -104,6 +108,10 @@ Use your browser’s settings to set **home page** and/or **custom new tab URL**
 
 Docker Compose mounts **`./public`** and **`./src`** into the container, so new sky icons, `sky-events-calendar.json`, and panel JS match the repo without `docker compose build` (restart or refresh is enough). Static responses use **`Cache-Control: no-cache, must-revalidate`** and **`GET /api/sky-events`** uses **`no-store`**, so a normal reload picks up icon URL changes; use a hard refresh if a tab was open for a long time. After **server** or **dependency** changes, run **`docker compose up --build`** again.
 
+## Tool Library ratings telemetry
+
+`GET /api/tool-library/ratings` emits structured console events with `sourceUsed`, `nullRating`, and `latencyMs`. `GET /api/tool-library/ratings/debug` exposes lightweight in-memory counters for local debugging.
+
 ## Architecture (v1)
 
 - **Express** serves `public/` and [`docs/`](docs/) at **`/docs/...`**.
@@ -112,7 +120,9 @@ Docker Compose mounts **`./public`** and **`./src`** into the container, so new 
 
 ### Sky event types and reference websites
 
-Sky rows come from **hand-edited** [`src/data/sky-events-calendar.json`](src/data/sky-events-calendar.json), except: **geomagnetic storm (G-scale)** — the server calls **NOAA SWPC** [`noaa-scales.json`](https://services.swpc.noaa.gov/products/noaa-scales.json) (today’s **`"0"`** geomagnetic **G** value) **and** [`planetary_k_index_1m.json`](https://services.swpc.noaa.gov/json/planetary_k_index_1m.json); the geomagnetic strip row appears only when **G≥2 on the NOAA geomagnetic scale** *or* **planetary estimated Kp reaches the G2 tier** (~**Kp 6−**, numeric floor **≈ 5.67**). Calendar `geomagnetic` rows are dropped in favour of these live merges. Storm **S**‑scale proton flux (**GOES** ≥10 MeV) is **no longer** substituted for geomagnetic (**G**)—they are distinct NOAA axes. **Aurora** — the server calls **SWPC** [`ovation_aurora_latest.json`](https://services.swpc.noaa.gov/json/ovation_aurora_latest.json) and [`planetary_k_index_1m.json`](https://services.swpc.noaa.gov/json/planetary_k_index_1m.json), bilinear-samples Ovation at **`WEATHER_LAT` / `WEATHER_LON`** (94608 defaults in `.env`), and replaces calendar `aurora` rows with one **“today”** row (`America/Los_Angeles` day bounds). The subtitle shows **Low / Medium / High / Very high** from `computeAuroraLikelihood` in [`src/lib/swpc-aurora.js`](src/lib/swpc-aurora.js) (latitude-aware Kp + Ovation); not clouds/moon. The app **does not** otherwise call the sites in the table on a schedule; update the JSON when you refresh passes, showers, etc. **ISS pass** and **Satellite flare** rows use optional `forecastUrl` in the same file so the hero can open the primary site in a new tab. Hero **weather** and **sunrise/sunset** use live [Open-Meteo](https://api.open-meteo.com/) requests from the browser when the page loads; **moonrise** is computed locally (SunCalc).
+Sky rows come from **hand-edited** [`src/data/sky-events-calendar.json`](src/data/sky-events-calendar.json), except: **geomagnetic storm (G-scale)** — the server calls **NOAA SWPC** [`noaa-scales.json`](https://services.swpc.noaa.gov/products/noaa-scales.json) (today’s **`"0"`** geomagnetic **G** value) **and** [`planetary_k_index_1m.json`](https://services.swpc.noaa.gov/json/planetary_k_index_1m.json); the geomagnetic strip row appears only when **G≥2 on the NOAA geomagnetic scale** *or* **planetary estimated Kp reaches the G2 tier** (~**Kp 6−**, numeric floor **≈ 5.67**). Calendar `geomagnetic` rows are dropped in favour of these live merges. Storm **S**‑scale proton flux (**GOES** ≥10 MeV) is **no longer** substituted for geomagnetic (**G**)—they are distinct NOAA axes. **Aurora** — the server calls **SWPC** [`ovation_aurora_latest.json`](https://services.swpc.noaa.gov/json/ovation_aurora_latest.json) and [`planetary_k_index_1m.json`](https://services.swpc.noaa.gov/json/planetary_k_index_1m.json), bilinear-samples Ovation at **`WEATHER_LAT` / `WEATHER_LON`** (94608 defaults in `.env`), and replaces calendar `aurora` rows with one **“today”** row (`America/Los_Angeles` day bounds). The subtitle shows **Low / Medium / High / Very high** from `computeAuroraLikelihood` in [`src/lib/swpc-aurora.js`](src/lib/swpc-aurora.js) (latitude-aware Kp + Ovation); not clouds/moon. The app **does not** otherwise call the sites in the table on a schedule; update the JSON when you refresh passes, showers, etc. **ISS pass** and **Satellite flare** rows use optional `forecastUrl` in the same file so the hero can open the primary site in a new tab. Hero **weather** and **sunrise/sunset** use live [Open-Meteo](https://api.open-meteo.com/) requests from the browser when the page loads; weather/rain location is **GPS-first** (prompted per user/device/browser), with fallback to configured coordinates when location permission is denied or unavailable; **moonrise** is computed locally (SunCalc).
+
+Earth row behavior is strict: Atlantic storm rows only appear for **Atlantic Category 1+** systems with projected land impact. The Puerto Rico risk marker appears only when that projected-impact signal includes Puerto Rico risk.
 
 
 | Event (hero label) | Primary website (curation / forecast) |

@@ -3,9 +3,18 @@
  */
 import { normalizeToolUrl } from './tool-library-store.js';
 import { loadToolLibrary } from './tool-library-store.js';
-import { fetchPageMeta, isBlockedPage } from './tool-library-scrape.js';
+import { fetchPageMeta, importToolImages, isBlockedPage } from './tool-library-scrape.js';
+import { assetIdForUrl } from './tool-library-screenshot.js';
 import { fetchToolRating } from './tool-library-ratings.js';
 import { cleanToolName, inferToolCategories } from './tool-library-categories.js';
+import { assertPublicHttpUrl } from './public-http-url.js';
+import {
+  resolveToolPricing,
+  resolveToolPricingSync,
+  unknownPricing,
+} from './tool-library-pricing.js';
+
+const MAX_SEARCH_ALTERNATIVES = 6;
 
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -41,6 +50,12 @@ const KNOWN_TOOL_HOMEPAGES = {
   'fusion 360': 'https://www.autodesk.com/products/fusion-360/overview',
   fusion360: 'https://www.autodesk.com/products/fusion-360/overview',
   'autodesk fusion 360': 'https://www.autodesk.com/products/fusion-360/overview',
+  notion: 'https://www.notion.so',
+  'notion.so': 'https://www.notion.so',
+  blender: 'https://www.blender.org',
+  sketchup: 'https://www.sketchup.com',
+  onshape: 'https://www.onshape.com',
+  kdenlive: 'https://kdenlive.org',
 };
 
 /**
@@ -56,6 +71,7 @@ function looksLikeHomepageUrl(input) {
 
 /**
  * Resolve a product name or partial URL to an official homepage (HTTPS).
+ * Falls back to a web search when the name is not in the known map.
  * @param {string} input
  */
 export async function resolveToolHomepageUrl(input) {
@@ -63,19 +79,309 @@ export async function resolveToolHomepageUrl(input) {
   if (!raw) throw new Error('url_required');
 
   if (looksLikeHomepageUrl(raw)) {
-    return normalizeToolUrl(raw);
+    return assertPublicHttpUrl(normalizeToolUrl(raw));
   }
 
   const key = raw.toLowerCase().replace(/\s+/g, ' ').trim();
   const compact = key.replace(/\s+/g, '');
   const known = KNOWN_TOOL_HOMEPAGES[key] || KNOWN_TOOL_HOMEPAGES[compact];
-  if (known) return normalizeToolUrl(known);
+  if (known) return assertPublicHttpUrl(normalizeToolUrl(known));
+
+  const fromWeb = await searchOfficialHomepageUrl(raw);
+  if (fromWeb) return assertPublicHttpUrl(normalizeToolUrl(fromWeb));
+
+  // Last resort for single-token product names: try www.<name>.com / .<name>.so
+  const guessed = await guessHomepageFromName(raw);
+  if (guessed) return assertPublicHttpUrl(normalizeToolUrl(guessed));
 
   throw new Error(`could_not_resolve_url for "${raw}" (provide full https URL)`);
 }
 
 /**
- * @param {{ url: string, title: string, description: string, host: string }} scrape
+ * @param {string} productName
+ */
+async function guessHomepageFromName(productName) {
+  const token = String(productName || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '');
+  if (!token || token.length < 2 || token.length > 32) return '';
+  const candidates = [
+    `https://www.${token}.com`,
+    `https://${token}.com`,
+    `https://www.${token}.so`,
+    `https://${token}.io`,
+    `https://www.${token}.io`,
+  ];
+  for (const url of candidates) {
+    if (await probeHomepageReachable(url)) return url;
+  }
+  return '';
+}
+
+/**
+ * @param {string} url
+ */
+async function probeHomepageReachable(url) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 6_000);
+  try {
+    const r = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: ac.signal,
+      headers: { Accept: 'text/html', 'User-Agent': BROWSER_UA },
+    });
+    return r.ok || (r.status >= 300 && r.status < 400);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Search the web for a tool by name; return a preview of the match + alternatives
+ * (not yet in the library) so the UI can offer Add.
+ * @param {string} query
+ */
+export async function searchToolOnline(query) {
+  const q = String(query || '').trim();
+  if (!q) throw new Error('query_required');
+
+  const homepage = await resolveToolHomepageUrl(q);
+  const meta = await fetchPageMeta(homepage);
+  const enriched = await enrichToolFromScrape({
+    url: homepage,
+    title: meta.title,
+    description: meta.description,
+    host: meta.host,
+    html: meta.htmlSnippet,
+  }).catch(() => ({
+    name: cleanToolName(meta.title || q),
+    bestUsedFor: meta.description || '',
+    pricing: unknownPricing(),
+    features: [],
+    pros: [],
+    cons: [],
+    rating: null,
+    ratingSource: '',
+    operatingSystems: ['Web'],
+    categories: inferToolCategories({
+      name: meta.title || q,
+      description: meta.description,
+      url: homepage,
+      host: meta.host,
+    }),
+  }));
+
+  const images = await importToolImages(assetIdForUrl(homepage), homepage, meta).catch(() => ({
+    logoPath: '',
+    snapshotPath: '',
+  }));
+
+  const matched = {
+    tempId: 'matched',
+    name: enriched.name || cleanToolName(q),
+    bestUsedFor: enriched.bestUsedFor || '',
+    url: homepage,
+    website: homepage,
+    pricing: enriched.pricing,
+    features: enriched.features || [],
+    pros: enriched.pros || [],
+    cons: enriched.cons || [],
+    rating: enriched.rating ?? null,
+    ratingSource: enriched.ratingSource || '',
+    operatingSystems: enriched.operatingSystems || ['Web'],
+    categories: enriched.categories || ['utilities'],
+    logoUrl: images.logoPath || '',
+    snapshotUrl: images.snapshotPath || '',
+    source: 'search',
+    isOriginal: false,
+  };
+
+  const existing = await loadToolLibrary();
+  const alreadyInLibrary = existing.tools.some(
+    (t) =>
+      safeNormalize(t.url) === safeNormalize(homepage) ||
+      safeHostname(t.url) === safeHostname(homepage) ||
+      cleanToolName(t.name || '').toLowerCase() === cleanToolName(matched.name).toLowerCase(),
+  );
+  matched.alreadyInLibrary = alreadyInLibrary;
+
+  const alternatives = await findAlternatives(matched);
+  const ranked = rankToolAmongAlternatives(matched, alternatives);
+
+  return {
+    query: q,
+    matched,
+    ranked: [matched, ...ranked.filter((r) => safeNormalize(r.url) !== safeNormalize(homepage))],
+  };
+}
+
+/**
+ * @param {string} productName
+ */
+async function searchOfficialHomepageUrl(productName) {
+  const name = String(productName || '').trim();
+  if (!name) return '';
+  const queries = [`${name} official site`, `${name} software`];
+  for (const q of queries) {
+    const [ddg, yahoo] = await Promise.all([
+      searchDuckDuckGoHomepageCandidates(q),
+      searchYahooHomepageCandidates(q),
+    ]);
+    const pick = pickBestHomepageCandidate([...ddg, ...yahoo], name);
+    if (pick) return pick;
+  }
+  return '';
+}
+
+/**
+ * @param {string} query
+ */
+async function searchDuckDuckGoHomepageCandidates(query) {
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 12_000);
+  try {
+    const r = await fetch(url, {
+      signal: ac.signal,
+      headers: { Accept: 'text/html', 'User-Agent': BROWSER_UA },
+    });
+    if (!r.ok) return [];
+    const html = await r.text();
+    return parseHomepageCandidatesFromDdg(html);
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * @param {string} query
+ */
+async function searchYahooHomepageCandidates(query) {
+  const url = `https://search.yahoo.com/search?p=${encodeURIComponent(query)}`;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 12_000);
+  try {
+    const r = await fetch(url, {
+      signal: ac.signal,
+      headers: { Accept: 'text/html', 'User-Agent': BROWSER_UA },
+    });
+    if (!r.ok) return [];
+    const html = await r.text();
+    return parseHomepageCandidatesFromYahoo(html);
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * @param {string} html
+ */
+function parseHomepageCandidatesFromDdg(html) {
+  const results = [];
+  const seen = new Set();
+  const re = /<a([^>]+)class="[^"]*result__a[^"]*"([^>]*)>(.*?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    const attrs = `${m[1]} ${m[2]}`;
+    const title = decodeHtmlEntities(stripTags(m[3])).replace(/\s+/g, ' ').trim();
+    const href = extractHref(attrs);
+    const target = parseDuckDuckGoTarget(href);
+    if (!target) continue;
+    const normalized = safeNormalize(target);
+    if (!normalized) continue;
+    const host = safeHostname(normalized);
+    if (!host || isAggregatorHost(host) || isLikelyContentPage(normalized, title)) continue;
+    if (seen.has(host)) continue;
+    seen.add(host);
+    results.push({ url: normalized, title });
+    if (results.length >= 12) break;
+  }
+  return results;
+}
+
+/**
+ * @param {string} html
+ */
+function parseHomepageCandidatesFromYahoo(html) {
+  const results = [];
+  const seen = new Set();
+  const re = /<a[^>]+href="(https?:\/\/[^"]+)"[^>]*>(.*?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    let href = decodeHtmlEntities(m[1]);
+    try {
+      const u = new URL(href);
+      if (u.hostname.includes('yahoo.') || u.hostname.includes('bing.')) {
+        const ru = u.searchParams.get('RU') || u.searchParams.get('u');
+        if (ru) href = decodeURIComponent(ru);
+      }
+    } catch {
+      continue;
+    }
+    const title = decodeHtmlEntities(stripTags(m[2])).replace(/\s+/g, ' ').trim();
+    const normalized = safeNormalize(href);
+    if (!normalized) continue;
+    const host = safeHostname(normalized);
+    if (!host || isAggregatorHost(host) || isLikelyContentPage(normalized, title)) continue;
+    if (seen.has(host)) continue;
+    seen.add(host);
+    results.push({ url: normalized, title });
+    if (results.length >= 12) break;
+  }
+  return results;
+}
+
+/**
+ * @param {{url:string,title:string}[]} candidates
+ * @param {string} productName
+ */
+function pickBestHomepageCandidate(candidates, productName) {
+  if (!candidates?.length) return '';
+  const tokens = String(productName || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length > 1);
+  const compact = tokens.join('');
+  let best = null;
+  let bestScore = -1;
+  for (const c of candidates) {
+    const host = safeHostname(c.url);
+    const title = String(c.title || '').toLowerCase();
+    const hostCore = host.split('.')[0] || '';
+    let score = 0;
+    if (compact && hostCore.includes(compact)) score += 8;
+    if (compact && title.replace(/\s+/g, '').includes(compact)) score += 6;
+    for (const t of tokens) {
+      if (hostCore.includes(t)) score += 3;
+      if (title.includes(t)) score += 2;
+    }
+    // Prefer short marketing homepages over deep product paths slightly
+    try {
+      const pathLen = new URL(c.url).pathname.replace(/\/$/, '').length;
+      if (pathLen <= 1) score += 2;
+      else if (pathLen < 40) score += 1;
+    } catch {
+      /* ignore */
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = c.url;
+    }
+  }
+  return bestScore >= 3 ? best : '';
+}
+
+/**
+ * @param {{ url: string, title: string, description: string, host: string, html?: string }} scrape
  */
 export async function enrichToolFromScrape(scrape) {
   const name = cleanToolName(scrape.title || scrape.host || 'Tool');
@@ -86,15 +392,20 @@ export async function enrichToolFromScrape(scrape) {
     url: scrape.url,
     host: scrape.host,
   });
-  const rated = await fetchToolRating(name).catch(() => null);
+  const [rated, pricing] = await Promise.all([
+    fetchToolRating(name).catch(() => null),
+    resolveToolPricing({
+      name,
+      description: desc,
+      url: scrape.url,
+      host: scrape.host,
+      html: scrape.html || '',
+    }).catch(() => unknownPricing()),
+  ]);
   return {
     name,
     bestUsedFor: desc.slice(0, 320),
-    pricing: {
-      model: 'unknown',
-      lowestTier: 'Unknown',
-      summary: 'Pricing not auto-detected',
-    },
+    pricing,
     features: [],
     pros: [],
     cons: [],
@@ -154,6 +465,7 @@ async function findWebAlternatives(tool) {
         title: meta.title || candidate.title,
         description: meta.description,
         host: meta.host,
+        html: meta.htmlSnippet,
       });
       const displayName = cleanToolName(
         candidate.title || enriched.name || meta.title || candidate.url,
@@ -161,6 +473,9 @@ async function findWebAlternatives(tool) {
       const resolvedName = displayName.toLowerCase();
       if (!resolvedName || existingNames.has(resolvedName)) continue;
       if (isJunkAlternativeName(displayName)) continue;
+      const images = await importToolImages(assetIdForUrl(resolvedUrl), resolvedUrl, meta).catch(
+        () => ({ logoPath: '', snapshotPath: '' }),
+      );
       out.push({
         tempId: `web-${i + 1}`,
         name: displayName,
@@ -175,14 +490,14 @@ async function findWebAlternatives(tool) {
         ratingSource: enriched.ratingSource || '',
         operatingSystems: enriched.operatingSystems || ['Web'],
         categories: enriched.categories || ['utilities'],
-        logoUrl: '',
-        snapshotUrl: '',
+        logoUrl: images.logoPath || '',
+        snapshotUrl: images.snapshotPath || '',
         source: 'web',
       });
     } catch {
       // Skip candidates we cannot resolve or fetch.
     }
-    if (out.length >= 12) break;
+    if (out.length >= MAX_SEARCH_ALTERNATIVES) break;
   }
   return out;
 }
@@ -481,7 +796,7 @@ function safeNormalize(maybeUrl) {
 
 /**
  * Fast enrichment for alternative rows (rating fetched when added to toolbox).
- * @param {{ url: string, title?: string, description?: string, host?: string }} scrape
+ * @param {{ url: string, title?: string, description?: string, host?: string, html?: string }} scrape
  */
 function enrichAlternativeCandidate(scrape) {
   const name = cleanToolName(scrape.title || scrape.host || 'Tool');
@@ -489,11 +804,13 @@ function enrichAlternativeCandidate(scrape) {
   return {
     name,
     bestUsedFor: desc.slice(0, 320),
-    pricing: {
-      model: 'unknown',
-      lowestTier: 'Unknown',
-      summary: 'Pricing not auto-detected',
-    },
+    pricing: resolveToolPricingSync({
+      name,
+      description: desc,
+      url: scrape.url,
+      host: scrape.host,
+      html: scrape.html || '',
+    }),
     features: [],
     pros: [],
     cons: [],

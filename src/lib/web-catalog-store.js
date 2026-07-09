@@ -6,7 +6,22 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { getWebCatalogClient, webCatalogConfigured } from './web-catalog-client.js';
+import {
+  forceWebCatalogLocal,
+  getWebCatalogClient,
+  isMissingCatalogSchemaError,
+  webCatalogConfigured,
+} from './web-catalog-client.js';
+
+/**
+ * If Supabase schema is missing, flip to local and return true so callers can retry.
+ * @param {unknown} error
+ */
+function maybeFallbackToLocal(error) {
+  if (!isMissingCatalogSchemaError(error)) return false;
+  forceWebCatalogLocal(error?.message || error);
+  return true;
+}
 import {
   buildExportBundle,
   canonicalHost,
@@ -79,7 +94,8 @@ export function normalizeResourceInput(input = {}) {
   const watch_mode = ['off', 'updown', 'change'].includes(input.watch_mode)
     ? input.watch_mode
     : 'off';
-  return {
+  /** @type {Record<string, unknown>} */
+  const out = {
     url,
     canonical_host: canonicalHost(url),
     title: String(input.title || '').trim() || url,
@@ -106,6 +122,11 @@ export function normalizeResourceInput(input = {}) {
     cons: Array.isArray(input.cons) ? input.cons : [],
     legacy_tool_id: input.legacy_tool_id || null,
   };
+  // Only set favorite when explicitly provided so upserts do not clobber existing stars.
+  if (Object.prototype.hasOwnProperty.call(input, 'favorite')) {
+    out.favorite = Boolean(input.favorite);
+  }
+  return out;
 }
 
 /**
@@ -120,7 +141,7 @@ export function resourceToToolRecord(r) {
     website: r.url,
     name: r.title,
     bestUsedFor: r.summary || '',
-    pricing: r.pricing || { model: 'unknown', lowestTier: 'Unknown', summary: '' },
+    pricing: r.pricing || { model: 'unknown', lowestTier: '', summary: '' },
     features: r.features || [],
     pros: r.pros || [],
     cons: r.cons || [],
@@ -140,6 +161,7 @@ export function resourceToToolRecord(r) {
     lastChangedAt: r.last_changed_at || null,
     ingestCandidate: Boolean(r.ingest_candidate),
     proficient: Boolean(r.proficient),
+    favorite: Boolean(r.favorite),
   };
 }
 
@@ -148,7 +170,8 @@ export function resourceToToolRecord(r) {
  */
 export function toolRecordToResource(tool) {
   const cats = Array.isArray(tool.categories) ? tool.categories : [];
-  return normalizeResourceInput({
+  /** @type {Record<string, unknown>} */
+  const base = {
     url: tool.url || tool.website,
     title: tool.name,
     summary: tool.bestUsedFor || '',
@@ -164,7 +187,12 @@ export function toolRecordToResource(tool) {
     pros: tool.pros || [],
     cons: tool.cons || [],
     legacy_tool_id: tool.id || null,
-  });
+    proficient: Boolean(tool.proficient),
+  };
+  if (Object.prototype.hasOwnProperty.call(tool, 'favorite')) {
+    base.favorite = Boolean(tool.favorite);
+  }
+  return normalizeResourceInput(base);
 }
 
 function matchesFilters(r, q = {}) {
@@ -175,6 +203,7 @@ function matchesFilters(r, q = {}) {
     return false;
   }
   if (q.proficient != null && Boolean(r.proficient) !== Boolean(q.proficient)) return false;
+  if (q.favorite != null && Boolean(r.favorite) !== Boolean(q.favorite)) return false;
   if (q.watch_enabled != null && Boolean(r.watch_enabled) !== Boolean(q.watch_enabled)) {
     return false;
   }
@@ -203,6 +232,40 @@ function matchesFilters(r, q = {}) {
   return true;
 }
 
+function isMissingFavoriteColumnError(error) {
+  const msg = String(error?.message || error || '').toLowerCase();
+  return msg.includes('favorite') && (msg.includes('column') || msg.includes('schema') || msg.includes('does not exist'));
+}
+
+/**
+ * Upsert that tolerates missing migration 002 (favorite column).
+ * @param {import('@supabase/supabase-js').SupabaseClient} sb
+ * @param {object} row
+ */
+async function upsertWebResourceRow(sb, row) {
+  let result = await sb.from('web_resources').upsert(row, { onConflict: 'url' }).select('*').single();
+  if (result.error && isMissingFavoriteColumnError(result.error) && 'favorite' in row) {
+    const { favorite: _fav, ...rest } = row;
+    result = await sb.from('web_resources').upsert(rest, { onConflict: 'url' }).select('*').single();
+  }
+  return result;
+}
+
+/**
+ * Update that tolerates missing migration 002 (favorite column).
+ * @param {import('@supabase/supabase-js').SupabaseClient} sb
+ * @param {string} id
+ * @param {object} row
+ */
+async function updateWebResourceRow(sb, id, row) {
+  let result = await sb.from('web_resources').update(row).eq('id', id).select('*').single();
+  if (result.error && isMissingFavoriteColumnError(result.error) && 'favorite' in row) {
+    const { favorite: _fav, ...rest } = row;
+    result = await sb.from('web_resources').update(rest).eq('id', id).select('*').single();
+  }
+  return result;
+}
+
 export function catalogBackend() {
   return webCatalogConfigured() ? 'supabase' : 'local';
 }
@@ -210,29 +273,58 @@ export function catalogBackend() {
 /** @param {object} [q] */
 export async function listResources(q = {}) {
   if (webCatalogConfigured()) {
-    const sb = getWebCatalogClient();
-    let query = sb.from('web_resources').select('*').order('title', { ascending: true });
-    if (q.proficient != null) query = query.eq('proficient', Boolean(q.proficient));
-    if (q.watch_enabled != null) query = query.eq('watch_enabled', Boolean(q.watch_enabled));
-    if (q.ingest_candidate != null) {
-      query = query.eq('ingest_candidate', Boolean(q.ingest_candidate));
+    try {
+      const sb = getWebCatalogClient();
+      let query = sb.from('web_resources').select('*').order('title', { ascending: true });
+      if (q.proficient != null) query = query.eq('proficient', Boolean(q.proficient));
+      if (q.favorite != null) query = query.eq('favorite', Boolean(q.favorite));
+      if (q.watch_enabled != null) query = query.eq('watch_enabled', Boolean(q.watch_enabled));
+      if (q.ingest_candidate != null) {
+        query = query.eq('ingest_candidate', Boolean(q.ingest_candidate));
+      }
+      if (q.kind) query = query.contains('kind_hints', [q.kind]);
+      if (q.tag) query = query.contains('tags', [q.tag]);
+      if (q.search) query = query.textSearch('search_vector', q.search, { type: 'websearch' });
+      if (q.project) {
+        const { data: mems, error: mErr } = await sb
+          .from('project_memberships')
+          .select('resource_id')
+          .eq('project', q.project);
+        if (mErr) throw mErr;
+        const ids = (mems || []).map((m) => m.resource_id);
+        if (!ids.length) return [];
+        query = query.in('id', ids);
+      }
+      let { data, error } = await query;
+      if (error && isMissingFavoriteColumnError(error) && q.favorite != null) {
+        // Migration 002 not applied yet — drop favorite filter and continue.
+        const retry = sb.from('web_resources').select('*').order('title', { ascending: true });
+        // Rebuild without favorite (caller still gets all rows).
+        let q2 = retry;
+        if (q.proficient != null) q2 = q2.eq('proficient', Boolean(q.proficient));
+        if (q.watch_enabled != null) q2 = q2.eq('watch_enabled', Boolean(q.watch_enabled));
+        if (q.ingest_candidate != null) q2 = q2.eq('ingest_candidate', Boolean(q.ingest_candidate));
+        if (q.kind) q2 = q2.contains('kind_hints', [q.kind]);
+        if (q.tag) q2 = q2.contains('tags', [q.tag]);
+        if (q.search) q2 = q2.textSearch('search_vector', q.search, { type: 'websearch' });
+        if (q.project) {
+          const { data: mems, error: mErr } = await sb
+            .from('project_memberships')
+            .select('resource_id')
+            .eq('project', q.project);
+          if (mErr) throw mErr;
+          const ids = (mems || []).map((m) => m.resource_id);
+          if (!ids.length) return [];
+          q2 = q2.in('id', ids);
+        }
+        ({ data, error } = await q2);
+      }
+      if (error) throw error;
+      return data || [];
+    } catch (e) {
+      if (maybeFallbackToLocal(e)) return listResources(q);
+      throw e;
     }
-    if (q.kind) query = query.contains('kind_hints', [q.kind]);
-    if (q.tag) query = query.contains('tags', [q.tag]);
-    if (q.search) query = query.textSearch('search_vector', q.search, { type: 'websearch' });
-    if (q.project) {
-      const { data: mems, error: mErr } = await sb
-        .from('project_memberships')
-        .select('resource_id')
-        .eq('project', q.project);
-      if (mErr) throw mErr;
-      const ids = (mems || []).map((m) => m.resource_id);
-      if (!ids.length) return [];
-      query = query.in('id', ids);
-    }
-    const { data, error } = await query;
-    if (error) throw error;
-    return data || [];
   }
 
   const data = await loadLocal();
@@ -249,10 +341,15 @@ export async function listResources(q = {}) {
 /** @param {string} id */
 export async function getResourceById(id) {
   if (webCatalogConfigured()) {
-    const sb = getWebCatalogClient();
-    const { data, error } = await sb.from('web_resources').select('*').eq('id', id).maybeSingle();
-    if (error) throw error;
-    return data;
+    try {
+      const sb = getWebCatalogClient();
+      const { data, error } = await sb.from('web_resources').select('*').eq('id', id).maybeSingle();
+      if (error) throw error;
+      return data;
+    } catch (e) {
+      if (maybeFallbackToLocal(e)) return getResourceById(id);
+      throw e;
+    }
   }
   const data = await loadLocal();
   return data.resources.find((r) => r.id === id) || null;
@@ -262,14 +359,19 @@ export async function getResourceById(id) {
 export async function getResourceByUrl(url) {
   const normalized = normalizeCatalogUrl(url);
   if (webCatalogConfigured()) {
-    const sb = getWebCatalogClient();
-    const { data, error } = await sb
-      .from('web_resources')
-      .select('*')
-      .eq('url', normalized)
-      .maybeSingle();
-    if (error) throw error;
-    return data;
+    try {
+      const sb = getWebCatalogClient();
+      const { data, error } = await sb
+        .from('web_resources')
+        .select('*')
+        .eq('url', normalized)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    } catch (e) {
+      if (maybeFallbackToLocal(e)) return getResourceByUrl(url);
+      throw e;
+    }
   }
   const data = await loadLocal();
   return data.resources.find((r) => r.url === normalized) || null;
@@ -282,32 +384,39 @@ export async function getResourceByUrl(url) {
 export async function upsertResource(input, membership = { project: 'dashbird' }) {
   const fields = normalizeResourceInput(input);
   const existing = await getResourceByUrl(fields.url);
+  // Preserve existing favorite unless the caller explicitly set it.
+  if (existing && !Object.prototype.hasOwnProperty.call(fields, 'favorite')) {
+    fields.favorite = Boolean(existing.favorite);
+  } else if (!Object.prototype.hasOwnProperty.call(fields, 'favorite')) {
+    fields.favorite = false;
+  }
 
   if (webCatalogConfigured()) {
-    const sb = getWebCatalogClient();
-    const row = {
-      ...fields,
-      updated_at: nowIso(),
-      ...(existing ? {} : { added_at: nowIso() }),
-    };
-    const { data, error } = await sb
-      .from('web_resources')
-      .upsert(row, { onConflict: 'url' })
-      .select('*')
-      .single();
-    if (error) throw error;
-    if (membership?.project) {
-      await sb.from('project_memberships').upsert(
-        {
-          resource_id: data.id,
-          project: membership.project,
-          section: membership.section || null,
-          sort_order: membership.sort_order || 0,
-        },
-        { onConflict: 'resource_id,project,section' },
-      );
+    try {
+      const sb = getWebCatalogClient();
+      const row = {
+        ...fields,
+        updated_at: nowIso(),
+        ...(existing ? {} : { added_at: nowIso() }),
+      };
+      const { data, error } = await upsertWebResourceRow(sb, row);
+      if (error) throw error;
+      if (membership?.project) {
+        await sb.from('project_memberships').upsert(
+          {
+            resource_id: data.id,
+            project: membership.project,
+            section: membership.section || null,
+            sort_order: membership.sort_order || 0,
+          },
+          { onConflict: 'resource_id,project,section' },
+        );
+      }
+      return data;
+    } catch (e) {
+      if (maybeFallbackToLocal(e)) return upsertResource(input, membership);
+      throw e;
     }
-    return data;
   }
 
   const data = await loadLocal();
@@ -318,6 +427,7 @@ export async function upsertResource(input, membership = { project: 'dashbird' }
       ...existing,
       ...fields,
       id: existing.id,
+      favorite: fields.favorite,
       updated_at: ts,
       added_at: existing.added_at || ts,
     };
@@ -326,6 +436,7 @@ export async function upsertResource(input, membership = { project: 'dashbird' }
     resource = {
       id: randomUUID(),
       ...fields,
+      favorite: fields.favorite,
       added_at: ts,
       created_at: ts,
       updated_at: ts,
@@ -355,19 +466,49 @@ export async function upsertResource(input, membership = { project: 'dashbird' }
   return resource;
 }
 
-/** @param {string[]} ids */
-export async function deleteResources(ids) {
-  const drop = new Set(ids.map(String));
+/**
+ * @param {string[]} ids
+ * @param {{ urls?: string[], legacyToolIds?: string[] }} [extra]
+ */
+export async function deleteResources(ids, extra = {}) {
+  const dropIds = new Set((ids || []).map(String).filter(Boolean));
+  const dropLegacy = new Set((extra.legacyToolIds || []).map(String).filter(Boolean));
+  const dropUrls = new Set();
+  for (const u of extra.urls || []) {
+    try {
+      dropUrls.add(normalizeCatalogUrl(u));
+    } catch {
+      /* skip bad url */
+    }
+  }
+
+  const matches = (r) =>
+    dropIds.has(String(r.id)) ||
+    (r.legacy_tool_id && dropLegacy.has(String(r.legacy_tool_id))) ||
+    (r.url && dropUrls.has(r.url));
+
   if (webCatalogConfigured()) {
-    const sb = getWebCatalogClient();
-    const { error } = await sb.from('web_resources').delete().in('id', [...drop]);
-    if (error) throw error;
-    return { removed: drop.size };
+    try {
+      const sb = getWebCatalogClient();
+      const all = await listResources({});
+      const toDelete = all.filter(matches).map((r) => r.id);
+      if (!toDelete.length) return { removed: 0 };
+      const { error } = await sb.from('web_resources').delete().in('id', toDelete);
+      if (error) throw error;
+      return { removed: toDelete.length };
+    } catch (e) {
+      if (maybeFallbackToLocal(e)) return deleteResources(ids, extra);
+      throw e;
+    }
   }
   const data = await loadLocal();
   const before = data.resources.length;
-  data.resources = data.resources.filter((r) => !drop.has(r.id));
-  data.memberships = data.memberships.filter((m) => !drop.has(m.resource_id));
+  const keep = data.resources.filter((r) => !matches(r));
+  const removedIds = new Set(
+    data.resources.filter((r) => matches(r)).map((r) => r.id),
+  );
+  data.resources = keep;
+  data.memberships = data.memberships.filter((m) => !removedIds.has(m.resource_id));
   await saveLocal(data);
   return { removed: before - data.resources.length };
 }
@@ -399,12 +540,17 @@ export async function importResources(raw, membership = { project: 'dashbird' })
 
 export async function listReviewItems(status = 'pending') {
   if (webCatalogConfigured()) {
-    const sb = getWebCatalogClient();
-    let q = sb.from('review_items').select('*').order('created_at', { ascending: false });
-    if (status) q = q.eq('status', status);
-    const { data, error } = await q;
-    if (error) throw error;
-    return data || [];
+    try {
+      const sb = getWebCatalogClient();
+      let q = sb.from('review_items').select('*').order('created_at', { ascending: false });
+      if (status) q = q.eq('status', status);
+      const { data, error } = await q;
+      if (error) throw error;
+      return data || [];
+    } catch (e) {
+      if (maybeFallbackToLocal(e)) return listReviewItems(status);
+      throw e;
+    }
   }
   const data = await loadLocal();
   return data.review_items.filter((r) => !status || r.status === status);
@@ -427,10 +573,15 @@ export async function addReviewItem(item) {
     resolved_at: null,
   };
   if (webCatalogConfigured()) {
-    const sb = getWebCatalogClient();
-    const { data, error } = await sb.from('review_items').insert(row).select('*').single();
-    if (error) throw error;
-    return data;
+    try {
+      const sb = getWebCatalogClient();
+      const { data, error } = await sb.from('review_items').insert(row).select('*').single();
+      if (error) throw error;
+      return data;
+    } catch (e) {
+      if (maybeFallbackToLocal(e)) return addReviewItem(item);
+      throw e;
+    }
   }
   const data = await loadLocal();
   const dup = data.review_items.find(
@@ -449,35 +600,42 @@ export async function addReviewItem(item) {
 export async function resolveReviewItem(id, status) {
   if (!['approved', 'rejected'].includes(status)) throw new Error('invalid_status');
   if (webCatalogConfigured()) {
-    const sb = getWebCatalogClient();
-    const { data: item, error: gErr } = await sb
-      .from('review_items')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle();
-    if (gErr) throw gErr;
-    if (!item) throw new Error('not_found');
-    const { data, error } = await sb
-      .from('review_items')
-      .update({ status, resolved_at: nowIso() })
-      .eq('id', id)
-      .select('*')
-      .single();
-    if (error) throw error;
-    let resource = null;
-    if (status === 'approved') {
-      resource = await upsertResource(
-        {
-          url: item.candidate_url,
-          title: item.candidate_title,
-          summary: item.candidate_summary,
-          kind_hints: item.payload?.kind_hints || ['tool'],
-          tags: item.payload?.tags || [],
-        },
-        { project: 'dashbird' },
-      );
+    try {
+      const sb = getWebCatalogClient();
+      const { data: item, error: gErr } = await sb
+        .from('review_items')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (gErr) throw gErr;
+      if (!item) throw new Error('not_found');
+      const { data, error } = await sb
+        .from('review_items')
+        .update({ status, resolved_at: nowIso() })
+        .eq('id', id)
+        .select('*')
+        .single();
+      if (error) throw error;
+      let resource = null;
+      if (status === 'approved') {
+        resource = await upsertResource(
+          {
+            url: item.candidate_url,
+            title: item.candidate_title,
+            summary: item.candidate_summary,
+            kind_hints: item.payload?.kind_hints || ['tool'],
+            tags: item.payload?.tags || [],
+            logo_url: item.payload?.logo_url || null,
+            snapshot_url: item.payload?.snapshot_url || null,
+          },
+          { project: 'dashbird' },
+        );
+      }
+      return { item: data, resource };
+    } catch (e) {
+      if (maybeFallbackToLocal(e)) return resolveReviewItem(id, status);
+      throw e;
     }
-    return { item: data, resource };
   }
 
   const data = await loadLocal();
@@ -495,6 +653,8 @@ export async function resolveReviewItem(id, status) {
         summary: item.candidate_summary,
         kind_hints: item.payload?.kind_hints || ['tool'],
         tags: item.payload?.tags || [],
+        logo_url: item.payload?.logo_url || null,
+        snapshot_url: item.payload?.snapshot_url || null,
       },
       { project: 'dashbird' },
     );
@@ -517,10 +677,15 @@ export async function createDiscoveryJob(kind, resourceId) {
     finished_at: null,
   };
   if (webCatalogConfigured()) {
-    const sb = getWebCatalogClient();
-    const { data, error } = await sb.from('discovery_jobs').insert(row).select('*').single();
-    if (error) throw error;
-    return data;
+    try {
+      const sb = getWebCatalogClient();
+      const { data, error } = await sb.from('discovery_jobs').insert(row).select('*').single();
+      if (error) throw error;
+      return data;
+    } catch (e) {
+      if (maybeFallbackToLocal(e)) return createDiscoveryJob(kind, resourceId);
+      throw e;
+    }
   }
   const data = await loadLocal();
   data.discovery_jobs.push(row);
@@ -530,14 +695,19 @@ export async function createDiscoveryJob(kind, resourceId) {
 
 export async function listDiscoveryJobs(limit = 20) {
   if (webCatalogConfigured()) {
-    const sb = getWebCatalogClient();
-    const { data, error } = await sb
-      .from('discovery_jobs')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(limit);
-    if (error) throw error;
-    return data || [];
+    try {
+      const sb = getWebCatalogClient();
+      const { data, error } = await sb
+        .from('discovery_jobs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return data || [];
+    } catch (e) {
+      if (maybeFallbackToLocal(e)) return listDiscoveryJobs(limit);
+      throw e;
+    }
   }
   const data = await loadLocal();
   return data.discovery_jobs
@@ -548,15 +718,20 @@ export async function listDiscoveryJobs(limit = 20) {
 
 export async function updateDiscoveryJob(id, patch) {
   if (webCatalogConfigured()) {
-    const sb = getWebCatalogClient();
-    const { data, error } = await sb
-      .from('discovery_jobs')
-      .update(patch)
-      .eq('id', id)
-      .select('*')
-      .single();
-    if (error) throw error;
-    return data;
+    try {
+      const sb = getWebCatalogClient();
+      const { data, error } = await sb
+        .from('discovery_jobs')
+        .update(patch)
+        .eq('id', id)
+        .select('*')
+        .single();
+      if (error) throw error;
+      return data;
+    } catch (e) {
+      if (maybeFallbackToLocal(e)) return updateDiscoveryJob(id, patch);
+      throw e;
+    }
   }
   const data = await loadLocal();
   const job = data.discovery_jobs.find((j) => j.id === id);
@@ -568,20 +743,25 @@ export async function updateDiscoveryJob(id, patch) {
 
 export async function claimNextDiscoveryJob() {
   if (webCatalogConfigured()) {
-    const sb = getWebCatalogClient();
-    const { data: pending, error } = await sb
-      .from('discovery_jobs')
-      .select('*')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: true })
-      .limit(1);
-    if (error) throw error;
-    const job = pending?.[0];
-    if (!job) return null;
-    return updateDiscoveryJob(job.id, {
-      status: 'running',
-      started_at: nowIso(),
-    });
+    try {
+      const sb = getWebCatalogClient();
+      const { data: pending, error } = await sb
+        .from('discovery_jobs')
+        .select('*')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: true })
+        .limit(1);
+      if (error) throw error;
+      const job = pending?.[0];
+      if (!job) return null;
+      return updateDiscoveryJob(job.id, {
+        status: 'running',
+        started_at: nowIso(),
+      });
+    } catch (e) {
+      if (maybeFallbackToLocal(e)) return claimNextDiscoveryJob();
+      throw e;
+    }
   }
   const data = await loadLocal();
   const job = data.discovery_jobs
@@ -603,15 +783,18 @@ export async function patchResource(id, patch) {
   if (!current) throw new Error('not_found');
   const merged = normalizeResourceInput({ ...current, ...patch, url: patch.url || current.url });
   if (webCatalogConfigured()) {
-    const sb = getWebCatalogClient();
-    const { data, error } = await sb
-      .from('web_resources')
-      .update({ ...merged, updated_at: nowIso() })
-      .eq('id', id)
-      .select('*')
-      .single();
-    if (error) throw error;
-    return data;
+    try {
+      const sb = getWebCatalogClient();
+      const { data, error } = await updateWebResourceRow(sb, id, {
+        ...merged,
+        updated_at: nowIso(),
+      });
+      if (error) throw error;
+      return data;
+    } catch (e) {
+      if (maybeFallbackToLocal(e)) return patchResource(id, patch);
+      throw e;
+    }
   }
   const data = await loadLocal();
   const idx = data.resources.findIndex((r) => r.id === id);

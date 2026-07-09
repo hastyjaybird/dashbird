@@ -28,6 +28,8 @@ async function processAlternativesJob(job) {
         kind_hints: ['tool'],
         tags: alt.categories || [],
         rating: alt.rating,
+        logo_url: alt.logoUrl || null,
+        snapshot_url: alt.snapshotUrl || null,
       },
     });
     queued += 1;
