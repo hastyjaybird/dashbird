@@ -15,7 +15,7 @@ import { inferToolCategories } from './tool-library-categories.js';
 import { fetchToolRating } from './tool-library-ratings.js';
 import { fetchPageMeta, importToolImages } from './tool-library-scrape.js';
 import { toolRecordToResource, upsertResource } from './web-catalog-store.js';
-import { isUnknownPricing, resolveToolPricing, unknownPricing } from './tool-library-pricing.js';
+import { isUnknownPricing, needsPricingRewrite, resolveToolPricing, resolveToolPricingSync, unknownPricing } from './tool-library-pricing.js';
 
 /**
  * @param {string} urlInput
@@ -179,7 +179,11 @@ export async function repairToolLibraryAssets() {
     const needsCategories =
       !tool.categories?.length ||
       (tool.categories.length === 1 && tool.categories[0] === 'utilities');
-    const needsPricing = isUnknownPricing(tool.pricing);
+    const needsPricing = needsPricingRewrite(tool.pricing, {
+      name: tool.name,
+      url: tool.url,
+      description: tool.bestUsedFor || '',
+    });
     if (!needsImages && !needsRating && !needsCategories && !needsPricing) continue;
     try {
       if (needsPricing && !needsImages && !needsRating && !needsCategories) {
@@ -204,19 +208,27 @@ export async function repairToolLibraryAssets() {
  * @param {object} tool
  */
 async function repairToolPricingOnly(tool) {
-  let html = '';
-  try {
-    const meta = await fetchPageMeta(tool.url);
-    html = meta.htmlSnippet || '';
-  } catch {
-    /* known-map / search can still work without HTML */
-  }
-  const pricing = await resolveToolPricing({
+  // Prefer sync known-map first (fast, no network).
+  let pricing = resolveToolPricingSync({
     name: tool.name,
     description: tool.bestUsedFor || '',
     url: tool.url,
-    html,
-  }).catch(() => null);
+  });
+  if (isUnknownPricing(pricing)) {
+    let html = '';
+    try {
+      const meta = await fetchPageMeta(tool.url);
+      html = meta.htmlSnippet || '';
+    } catch {
+      /* search / AI can still work without HTML */
+    }
+    pricing = await resolveToolPricing({
+      name: tool.name,
+      description: tool.bestUsedFor || '',
+      url: tool.url,
+      html,
+    }).catch(() => null);
+  }
   if (!pricing || isUnknownPricing(pricing)) return null;
   const updated = { ...tool, pricing };
   try {

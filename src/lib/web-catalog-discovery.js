@@ -6,24 +6,93 @@ import {
   addReviewItem,
   claimNextDiscoveryJob,
   getResourceById,
+  getResourceByUrl,
   resourceToToolRecord,
   updateDiscoveryJob,
 } from './web-catalog-store.js';
 
+/**
+ * Build a tool-shaped object for alternatives search without requiring a catalog row.
+ * @param {object} job
+ */
+async function resolveSourceTool(job) {
+  if (job.resource_id) {
+    const resource = await getResourceById(job.resource_id);
+    if (resource) return { tool: resourceToToolRecord(resource), resource };
+  }
+  const q = job.result?._query && typeof job.result._query === 'object' ? job.result._query : null;
+  if (!q) return null;
+  const name = String(q.name || '').trim();
+  let url = String(q.url || '').trim();
+  if (!url && name) {
+    const { resolveToolHomepageUrl } = await import('./tool-library-ai.js');
+    url = await resolveToolHomepageUrl(name);
+  }
+  if (!url) return null;
+  // Prefer an existing catalog row if one already exists for this URL (do not create).
+  const existing = await getResourceByUrl(url).catch(() => null);
+  if (existing) return { tool: resourceToToolRecord(existing), resource: existing };
+  return {
+    tool: {
+      id: null,
+      catalogId: null,
+      url,
+      website: url,
+      name: name || url,
+      bestUsedFor: '',
+      categories: [],
+      tags: [],
+    },
+    resource: null,
+  };
+}
+
+/**
+ * Persist a heartbeat so the UI can advance progress dots only when work is moving.
+ * @param {object} job
+ * @param {object} progress
+ */
+async function heartbeatJob(job, progress) {
+  const prev = job.result && typeof job.result === 'object' ? job.result : {};
+  const next = {
+    ...prev,
+    progress: {
+      ...progress,
+      at: new Date().toISOString(),
+    },
+  };
+  job.result = next;
+  await updateDiscoveryJob(job.id, { result: next });
+}
+
 async function processAlternativesJob(job) {
-  const resource = await getResourceById(job.resource_id);
-  if (!resource) throw new Error('resource_not_found');
-  const tool = resourceToToolRecord(resource);
-  const alternatives = await findAlternatives(tool);
+  const resolved = await resolveSourceTool(job);
+  if (!resolved?.tool) throw new Error('resource_not_found');
+  const { tool, resource } = resolved;
+  await heartbeatJob(job, { phase: 'resolving', checked: 0, found: 0 });
+  const alternatives = await findAlternatives(tool, {
+    onProgress: async (info) => {
+      await heartbeatJob(job, info);
+    },
+  });
   let queued = 0;
+  const seenHosts = new Set();
   for (const alt of alternatives || []) {
     if (alt.isOriginal || !alt.url) continue;
+    let host = '';
+    try {
+      host = new URL(alt.url).hostname.replace(/^www\./i, '').toLowerCase();
+    } catch {
+      host = '';
+    }
+    if (host && seenHosts.has(host)) continue;
+    if (host) seenHosts.add(host);
     await addReviewItem({
-      source_resource_id: resource.id,
+      source_resource_id: resource?.id || null,
       candidate_url: alt.url,
       candidate_title: alt.name || alt.url,
       candidate_summary: alt.bestUsedFor || '',
-      reason: `Alternative to ${resource.title}`,
+      reason: `Alternative to ${tool.name || tool.url}`,
       payload: {
         kind_hints: ['tool'],
         tags: alt.categories || [],
@@ -33,8 +102,14 @@ async function processAlternativesJob(job) {
       },
     });
     queued += 1;
+    await heartbeatJob(job, {
+      phase: 'queueing',
+      checked: alternatives.length,
+      found: queued,
+      total: alternatives.length,
+    });
   }
-  return { queued, source: resource.title };
+  return { queued, source: tool.name || tool.url };
 }
 
 export async function processOneDiscoveryJob() {
@@ -47,9 +122,11 @@ export async function processOneDiscoveryJob() {
     } else {
       result = { skipped: true, kind: job.kind };
     }
+    // Preserve ephemeral _query if present; merge job outcome into result.
+    const prev = job.result && typeof job.result === 'object' ? job.result : {};
     await updateDiscoveryJob(job.id, {
       status: 'done',
-      result,
+      result: { ...prev, ...result },
       finished_at: new Date().toISOString(),
       error: null,
     });

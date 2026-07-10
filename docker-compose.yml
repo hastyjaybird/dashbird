@@ -28,6 +28,25 @@ services:
       DBUS_SESSION_BUS_ADDRESS: ${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/1000/bus}
       RAIN_ALERT_DEBUG: ${RAIN_ALERT_DEBUG:-}
       RAIN_ALERT_DEBUG_MINUTES: ${RAIN_ALERT_DEBUG_MINUTES:-42}
+    depends_on:
+      vikunja:
+        condition: service_started
+
+  # Local Vikunja (todos). UI: http://<lan-ip>:3456/ — Dashbird proxies via /api/vikunja.
+  vikunja:
+    image: vikunja/vikunja:latest
+    ports:
+      - "0.0.0.0:${VIKUNJA_HOST_PORT:-3456}:3456"
+    environment:
+      VIKUNJA_SERVICE_PUBLICURL: ${VIKUNJA_SERVICE_PUBLICURL:-http://192.168.5.2:3456/}
+      VIKUNJA_SERVICE_JWTSECRET: ${VIKUNJA_SERVICE_SECRET:-changeme-set-in-env}
+      # Alias used by some docs / older configs
+      VIKUNJA_SERVICE_SECRET: ${VIKUNJA_SERVICE_SECRET:-changeme-set-in-env}
+      VIKUNJA_SERVICE_ENABLEREGISTRATION: "true"
+    volumes:
+      - ./data/vikunja/files:/app/vikunja/files
+      - ./data/vikunja/db:/db
+    restart: unless-stopped
 
   # Runs on the host network after dashboard starts; prints the phone URL and refreshes
   # public/data/phone-lan-url.txt for the sidebar link (gitignored).

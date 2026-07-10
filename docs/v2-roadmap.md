@@ -17,10 +17,11 @@ Cross-reference: v1 ships the dashboard shell and core panels; v2 items mount in
 
 ## V2 features (planned)
 
-### 1. Vikunja-backed todos
+### 1. Vikunja-backed todos — **live**
 
-- **Server:** `GET/POST/PATCH/DELETE` proxy under `/api/vikunja/*` with `VIKUNJA_BASE_URL` + token in server env only.
-- **Client:** todo panel — lists, subtasks, statuses, drag-and-drop as supported by Vikunja’s REST API at build time.
+- **Server:** `/api/vikunja/*` same-origin proxy (`VIKUNJA_BASE_URL` + `VIKUNJA_TOKEN` in server env only). Panel helpers: `GET/POST /api/vikunja/todos`, `PATCH .../done|undo`. Fail closed when unset. `VIKUNJA_PROJECT_ID` scopes the Today Todo panel (required).
+- **Local stack:** `docker-compose.yml` includes a `vikunja` service (SQLite under `data/vikunja/`, UI on port `3456`). Bootstrap credentials live in `data/vikunja/credentials.txt` (gitignored).
+- **Client:** Today’s To Do sidebar uses Vikunja (open tasks, add, complete). Local CSV `/api/todolist` removed. Subtasks / drag-and-drop deferred.
 
 ### 2. Google Keep snippets
 
@@ -34,8 +35,11 @@ Cross-reference: v1 ships the dashboard shell and core panels; v2 items mount in
 
 ### 4. Events
 
-- **UI slot today:** left sidebar card `Events` — **visual placeholder only**.
-- **V2 build:** criteria doc, curated sources (Meetup, Eventbrite, local calendars), thumbs up/down + optional feedback window, preference store and ranking.
+- **UI slot today:** left sidebar card `Events` — filters + feed from ingest (Gmail intake first); Settings has sources table, filter criteria, and ingestion smoke tests.
+- **Live ingest:** Intake Gmail (`jay.intake.box@gmail.com`) via Gmail API OAuth — see Events sources roadmap §7. Facebook via Apify when configured.
+- **Event catalog:** local SQLite at `data/events-finder.db` (`src/lib/events-finder-store.js`) — sources upsert; feed reads the catalog. Criteria remain in `data/events-finder-criteria.json`.
+- **V2 build:** more curated sources (Meetup, Eventbrite, Luma/Partiful), thumbs up/down + optional feedback window, preference store and ranking.
+- **Per-source ingest plan:** [`docs/events-sources-roadmap.md`](events-sources-roadmap.md).
 
 ### 5. Personal / local news
 

@@ -9,162 +9,172 @@ const BROWSER_UA =
 
 /** @typedef {{ model: string, lowestTier: string, summary: string }} ToolPricing */
 
+/**
+ * @param {string} [paidLabel]
+ */
+function freeTierLabel(paidLabel = '') {
+  const paid = String(paidLabel || '').trim();
+  if (!paid || /^free$/i.test(paid)) return 'Free';
+  if (/^free\s*\//i.test(paid)) return paid.replace(/\s*\/\s*/, ' / ');
+  return `Free / ${paid}`;
+}
+
 /** @type {Record<string, ToolPricing>} */
 const KNOWN_TOOL_PRICING = {
   freecad: {
     model: 'free',
     lowestTier: 'Free',
-    summary: 'Free and open source',
+    summary: 'Free',
   },
   blender: {
     model: 'free',
     lowestTier: 'Free',
-    summary: 'Free and open source',
+    summary: 'Free',
   },
   openscad: {
     model: 'free',
     lowestTier: 'Free',
-    summary: 'Free and open source',
+    summary: 'Free',
   },
   shotcut: {
     model: 'free',
     lowestTier: 'Free',
-    summary: 'Free and open source',
+    summary: 'Free',
   },
   openshot: {
     model: 'free',
     lowestTier: 'Free',
-    summary: 'Free and open source',
+    summary: 'Free',
   },
   kdenlive: {
     model: 'free',
     lowestTier: 'Free',
-    summary: 'Free and open source',
+    summary: 'Free',
   },
   onshape: {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Free plan + paid Professional',
+    model: 'free',
+    lowestTier: freeTierLabel('$1,500/yr'),
+    summary: freeTierLabel('$1,500/yr'),
   },
   'fusion 360': {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Personal-use free; paid commercial',
+    model: 'free',
+    lowestTier: freeTierLabel('$57/mo'),
+    summary: freeTierLabel('$57/mo'),
   },
   fusion360: {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Personal-use free; paid commercial',
+    model: 'free',
+    lowestTier: freeTierLabel('$57/mo'),
+    summary: freeTierLabel('$57/mo'),
   },
   'autodesk fusion': {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Personal-use free; paid commercial',
+    model: 'free',
+    lowestTier: freeTierLabel('$57/mo'),
+    summary: freeTierLabel('$57/mo'),
   },
   'autodesk fusion 360': {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Personal-use free; paid commercial',
+    model: 'free',
+    lowestTier: freeTierLabel('$57/mo'),
+    summary: freeTierLabel('$57/mo'),
   },
   solidworks: {
     model: 'paid',
-    lowestTier: 'Paid',
-    summary: 'Commercial subscription',
+    lowestTier: '$235/mo',
+    summary: 'From $235/mo',
   },
   'solid edge': {
-    model: 'freemium',
+    model: 'free',
     lowestTier: 'Free',
-    summary: 'Community Edition free; paid commercial',
+    summary: 'Free',
   },
   solidedge: {
-    model: 'freemium',
+    model: 'free',
     lowestTier: 'Free',
-    summary: 'Community Edition free; paid commercial',
+    summary: 'Free',
   },
   inventor: {
     model: 'paid',
-    lowestTier: 'Paid',
-    summary: 'Autodesk subscription',
+    lowestTier: '$305/mo',
+    summary: 'From $305/mo',
   },
   'autodesk inventor': {
     model: 'paid',
-    lowestTier: 'Paid',
-    summary: 'Autodesk subscription',
+    lowestTier: '$305/mo',
+    summary: 'From $305/mo',
   },
   catia: {
     model: 'paid',
-    lowestTier: 'Paid',
-    summary: 'Enterprise / commercial licensing',
+    lowestTier: 'Contact for pricing',
+    summary: 'Contact for pricing',
   },
   'rhino 3d': {
     model: 'paid',
-    lowestTier: 'Paid',
-    summary: 'Perpetual license + service',
+    lowestTier: '$995',
+    summary: 'From $995',
   },
   rhino: {
     model: 'paid',
-    lowestTier: 'Paid',
-    summary: 'Perpetual license + service',
+    lowestTier: '$995',
+    summary: 'From $995',
   },
   bricscad: {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Lite free trial / paid editions',
+    model: 'paid',
+    lowestTier: '$625/yr',
+    summary: 'From $625/yr',
   },
   sketchup: {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Free web plan + paid Pro',
+    model: 'free',
+    lowestTier: freeTierLabel('$119/yr'),
+    summary: freeTierLabel('$119/yr'),
   },
   'davinci resolve': {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Free edition + paid Studio',
+    model: 'free',
+    lowestTier: freeTierLabel('$295'),
+    summary: freeTierLabel('$295'),
   },
   davinci: {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Free edition + paid Studio',
+    model: 'free',
+    lowestTier: freeTierLabel('$295'),
+    summary: freeTierLabel('$295'),
   },
   'adobe premiere pro': {
     model: 'paid',
-    lowestTier: 'Paid',
-    summary: 'Adobe Creative Cloud subscription',
+    lowestTier: '$22.99/mo',
+    summary: 'From $22.99/mo',
   },
   premiere: {
     model: 'paid',
-    lowestTier: 'Paid',
-    summary: 'Adobe Creative Cloud subscription',
+    lowestTier: '$22.99/mo',
+    summary: 'From $22.99/mo',
   },
   'final cut pro': {
     model: 'paid',
-    lowestTier: 'Paid',
-    summary: 'One-time Mac App Store purchase',
+    lowestTier: '$299',
+    summary: 'From $299',
   },
   hitfilm: {
-    model: 'freemium',
+    model: 'free',
     lowestTier: 'Free',
-    summary: 'Free Express + paid Pro',
+    summary: 'Free',
   },
   figma: {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Free starter + paid seats',
+    model: 'free',
+    lowestTier: freeTierLabel('$12/mo'),
+    summary: freeTierLabel('$12/mo'),
   },
   notion: {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Free personal + paid teams',
+    model: 'free',
+    lowestTier: freeTierLabel('$10/mo'),
+    summary: freeTierLabel('$10/mo'),
   },
   slack: {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Free plan + paid Pro/Business',
+    model: 'free',
+    lowestTier: freeTierLabel('$7.25/mo'),
+    summary: freeTierLabel('$7.25/mo'),
   },
   discord: {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Free + Nitro paid',
+    model: 'free',
+    lowestTier: freeTierLabel('$2.99/mo'),
+    summary: freeTierLabel('$2.99/mo'),
   },
   vscode: {
     model: 'free',
@@ -177,19 +187,19 @@ const KNOWN_TOOL_PRICING = {
     summary: 'Free',
   },
   cursor: {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Free Hobby + paid Pro',
+    model: 'free',
+    lowestTier: freeTierLabel('$20/mo'),
+    summary: freeTierLabel('$20/mo'),
   },
   github: {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Free public repos + paid plans',
+    model: 'free',
+    lowestTier: freeTierLabel('$4/mo'),
+    summary: freeTierLabel('$4/mo'),
   },
   gitlab: {
-    model: 'freemium',
-    lowestTier: 'Free',
-    summary: 'Free tier + paid Premium/Ultimate',
+    model: 'free',
+    lowestTier: freeTierLabel('$29/mo'),
+    summary: freeTierLabel('$29/mo'),
   },
 };
 
@@ -219,50 +229,133 @@ export function isUnknownPricing(pricing) {
 }
 
 /**
+ * True when stored pricing uses legacy freemium wording or needs display cleanup.
+ * @param {ToolPricing | null | undefined} pricing
+ * @param {{ name?: string, url?: string, host?: string, description?: string }} [ctx]
+ */
+export function needsPricingRewrite(pricing, ctx = {}) {
+  if (isUnknownPricing(pricing)) return true;
+  const model = String(pricing?.model || '').trim().toLowerCase();
+  const tier = String(pricing?.lowestTier || '');
+  const summary = String(pricing?.summary || '');
+  if (model === 'freemium') return true;
+  if (/\bfreemium\b/i.test(tier) || /\bfreemium\b/i.test(summary)) return true;
+  // Bare "Paid" with no dollar amount — rewrite when we can find a lowest tier.
+  if (model === 'paid' && (/^paid$/i.test(tier.trim()) || (!tier.trim() && /^paid$/i.test(summary.trim())))) {
+    return true;
+  }
+  if (
+    model === 'free' &&
+    summary &&
+    !/^free(\s*\/\s*\$[\d,.]+)?$/i.test(summary.trim()) &&
+    /paid|professional|pro\b|commercial/i.test(summary)
+  ) {
+    return true;
+  }
+  // Bare "Free" when known map / sync has a second-tier price.
+  if (model === 'free' && /^free$/i.test(tier.trim()) && (ctx.name || ctx.url)) {
+    const known = resolveToolPricingSync({
+      name: ctx.name,
+      url: ctx.url,
+      host: ctx.host,
+      description: ctx.description,
+    });
+    if (known?.model === 'free' && /^free\s*\//i.test(String(known.lowestTier || ''))) return true;
+  }
+  return false;
+}
+
+/**
  * @param {Partial<ToolPricing> | null | undefined} raw
  * @returns {ToolPricing}
  */
 export function normalizePricing(raw) {
   if (!raw || typeof raw !== 'object') return unknownPricing();
-  const model = normalizeModel(raw.model);
+  let model = normalizeModel(raw.model);
   let lowestTier = String(raw.lowestTier || '').trim();
   let summary = String(raw.summary || '').trim();
   if (/^(unknown|--|n\/a|na|none)$/i.test(lowestTier)) lowestTier = '';
   if (/pricing not auto-detected|could not auto-detect pricing/i.test(summary)) summary = '';
+  // Never surface "freemium" — ongoing free tier counts as Free.
+  if (model === 'freemium' || model === 'open_source') model = 'free';
+  if (/\bfreemium\b/i.test(lowestTier)) lowestTier = freeTierLabel(extractPaidFromFreeLabel(lowestTier));
+  if (/\bfreemium\b/i.test(summary)) summary = freeTierLabel(extractPaidFromFreeLabel(summary));
 
   if (model === 'free' && !lowestTier) lowestTier = 'Free';
-  if (model === 'freemium' && !lowestTier) lowestTier = 'Free';
-  if (model === 'paid' && !lowestTier) lowestTier = 'Paid';
-  if (model === 'open_source' && !lowestTier) {
-    lowestTier = 'Free';
+  // Prefer leaving lowestTier empty over the bare word "Paid" so the UI can
+  // show a real price once detection finds one.
+  if (model === 'paid' && (!lowestTier || /^paid$/i.test(lowestTier))) {
+    const fromSummary = String(summary || '').match(
+      /\$\s*[\d,.]+(?:\s*\/\s*(?:mo|month|yr|year|user|seat))?/i,
+    );
+    lowestTier = fromSummary
+      ? fromSummary[0].replace(/\s+/g, '').replace(/\/month/i, '/mo').replace(/\/year/i, '/yr')
+      : '';
+  }
+  if (model === 'paid' && !summary) {
+    summary = lowestTier ? `From ${lowestTier}` : '';
   }
 
-  const finalModel = model === 'open_source' ? 'free' : model;
-  if (!finalModel || finalModel === 'unknown') {
-    if (/\bfree\b/i.test(lowestTier) || /\bfree\b/i.test(summary)) {
-      return {
-        model: /\b(paid|pro|premium|plus|team|business|enterprise)\b/i.test(`${lowestTier} ${summary}`)
-          ? 'freemium'
-          : 'free',
-        lowestTier: lowestTier || 'Free',
-        summary: summary || (lowestTier || 'Free'),
-      };
+  if (!model || model === 'unknown') {
+    if (/^free\s*\/\s*\$/i.test(lowestTier) || /^free\s*\/\s*\$/i.test(summary)) {
+      const label = freeTierLabel(extractPaidFromFreeLabel(lowestTier || summary));
+      return { model: 'free', lowestTier: label, summary: label };
     }
-    if (lowestTier || summary) {
+    if (/^\$/.test(lowestTier) || /^from\s+\$/i.test(summary)) {
       return {
         model: 'paid',
-        lowestTier: lowestTier || 'Paid',
-        summary: summary || lowestTier || 'Paid',
+        lowestTier: lowestTier || summary.replace(/^from\s+/i, '') || '',
+        summary: summary || (lowestTier ? `From ${lowestTier}` : ''),
+      };
+    }
+    if (/\bfree\b/i.test(lowestTier) || /\bfree\b/i.test(summary)) {
+      const paid = extractPaidFromFreeLabel(lowestTier) || extractPaidFromFreeLabel(summary) || '';
+      const label = freeTierLabel(paid);
+      return { model: 'free', lowestTier: label, summary: label };
+    }
+    if (lowestTier || summary) {
+      const dollarBit = String(lowestTier || summary).match(
+        /\$\s*[\d,.]+(?:\s*\/\s*(?:mo|month|yr|year|user|seat))?/i,
+      );
+      const tier = dollarBit
+        ? dollarBit[0].replace(/\s+/g, '').replace(/\/month/i, '/mo').replace(/\/year/i, '/yr')
+        : /^paid$/i.test(lowestTier)
+          ? ''
+          : lowestTier;
+      return {
+        model: 'paid',
+        lowestTier: tier,
+        summary: summary || (tier ? `From ${tier}` : ''),
       };
     }
     return unknownPricing();
   }
 
+  if (model === 'free') {
+    const paid =
+      extractPaidFromFreeLabel(lowestTier) ||
+      extractPaidFromFreeLabel(summary) ||
+      (String(/** @type {{ paidTier?: string }} */ (raw).paidTier || '').trim());
+    const label = freeTierLabel(paid);
+    return { model: 'free', lowestTier: label, summary: label };
+  }
+
   return {
-    model: finalModel,
-    lowestTier: lowestTier || (finalModel === 'paid' ? 'Paid' : 'Free'),
-    summary: summary || lowestTier || finalModel,
+    model: 'paid',
+    lowestTier: lowestTier || '',
+    summary: summary || (lowestTier ? `From ${lowestTier}` : ''),
   };
+}
+
+/**
+ * @param {string} text
+ */
+function extractPaidFromFreeLabel(text) {
+  const s = String(text || '').trim();
+  const m = s.match(/^free\s*\/\s*(\$\s*[\d,.]+(?:\s*\/\s*(?:mo|month|yr|year|user|seat))?)/i);
+  if (m) return m[1].replace(/\s+/g, '').replace(/\/month/i, '/mo').replace(/\/year/i, '/yr');
+  if (/^\$/.test(s)) return s;
+  return '';
 }
 
 /**
@@ -377,6 +470,46 @@ function pricingLookupKeys(name, url = '', host = '') {
 }
 
 /**
+ * Ongoing free tier (personal/community/plan), not a time-limited trial.
+ * @param {string} lower
+ */
+function hasOngoingFreeOffer(lower) {
+  if (/\bfreemium\b/.test(lower)) return true;
+  if (/\bopen[-\s]?source\b/.test(lower) || /\bgpl\b/.test(lower) || /\bmit license\b/.test(lower)) {
+    return true;
+  }
+  if (/\bfree (plan|tier|edition|version|forever)\b/.test(lower)) return true;
+  if (/\bfree for (personal|hobby|individuals|students|community|non[-\s]?commercial)\b/.test(lower)) {
+    return true;
+  }
+  if (/\b(personal|hobby|community)[-\s]?(use|edition)\b.{0,24}\bfree\b/.test(lower)) return true;
+  if (/\bfree\b.{0,24}\b(personal|hobby|community)[-\s]?(use|edition)\b/.test(lower)) return true;
+  if (/\bcommunity edition\b/.test(lower)) return true;
+  // Bare "free" that is not only a trial mention
+  if (/\bfree\b/.test(lower) && !isTrialOnlyOffer(lower)) return true;
+  return false;
+}
+
+/**
+ * Free only as a trial — use paid lowest tier instead.
+ * @param {string} lower
+ */
+function isTrialOnlyOffer(lower) {
+  if (/\bfree (plan|tier|edition|version|forever)\b/.test(lower)) return false;
+  if (/\bfree for (personal|hobby|individuals|students|community|non[-\s]?commercial)\b/.test(lower)) {
+    return false;
+  }
+  if (/\bfreemium\b/.test(lower) || /\bopen[-\s]?source\b/.test(lower)) return false;
+  return (
+    /\bfree trial\b/.test(lower) ||
+    /\b\d+[-\s]?day(?:s)? (?:free )?trial\b/.test(lower) ||
+    /\bfree for \d+ days?\b/.test(lower) ||
+    /\btry (it |for )?free\b/.test(lower) ||
+    (/\btrial\b/.test(lower) && /\bfree\b/.test(lower) && !/\bfree (plan|tier|edition)\b/.test(lower))
+  );
+}
+
+/**
  * @param {string} text
  * @param {{ preferHtml?: boolean }} [opts]
  * @returns {ToolPricing | null}
@@ -390,15 +523,8 @@ export function detectPricingFromText(text, opts = {}) {
   const lower = blob.toLowerCase();
 
   const dollar = extractLowestDollarPrice(blob);
-  const hasFree = /\bfree\b/.test(lower);
-  const hasOpenSource =
-    /\bopen[-\s]?source\b/.test(lower) || /\bgpl\b/.test(lower) || /\bmit license\b/.test(lower);
-  const hasFreemium =
-    /\bfreemium\b/.test(lower) ||
-    /\bfree (plan|tier|edition|version|forever)\b/.test(lower) ||
-    /\bfree for (personal|hobby|individuals|students|community)\b/.test(lower) ||
-    /\b(start|get) (for )?free\b/.test(lower) ||
-    /\bno credit card\b/.test(lower);
+  const ongoingFree = hasOngoingFreeOffer(lower);
+  const trialOnly = isTrialOnlyOffer(lower);
   const hasPaid =
     /\b(paid|subscription|per seat|per user|per month|\/mo\b|\/month\b|pricing starts|starting at)\b/.test(
       lower,
@@ -406,27 +532,29 @@ export function detectPricingFromText(text, opts = {}) {
   const hasEnterpriseOnly =
     /\benterprise only\b/.test(lower) || /\bcontact (us )?for pricing\b/.test(lower);
 
-  if (hasOpenSource && hasFree && !dollar) {
+  // Personal / community / free plan → Free, plus cheapest paid tier when known.
+  if (ongoingFree) {
     return normalizePricing({
       model: 'free',
-      lowestTier: 'Free',
-      summary: 'Free and open source',
+      lowestTier: freeTierLabel(dollar || ''),
+      summary: freeTierLabel(dollar || ''),
+      paidTier: dollar || '',
     });
   }
 
-  if (hasFree && (hasFreemium || hasPaid || dollar)) {
+  // Trial-only → cheapest paid tier when known.
+  if (trialOnly) {
+    if (dollar) {
+      return normalizePricing({
+        model: 'paid',
+        lowestTier: dollar,
+        summary: `From ${dollar}`,
+      });
+    }
     return normalizePricing({
-      model: 'freemium',
-      lowestTier: 'Free',
-      summary: dollar ? `Free plan; paid from ${dollar}` : 'Free plan available',
-    });
-  }
-
-  if (hasFree && !hasPaid) {
-    return normalizePricing({
-      model: 'free',
-      lowestTier: 'Free',
-      summary: 'Free',
+      model: 'paid',
+      lowestTier: '',
+      summary: '',
     });
   }
 
@@ -441,8 +569,8 @@ export function detectPricingFromText(text, opts = {}) {
   if (hasPaid || hasEnterpriseOnly) {
     return normalizePricing({
       model: 'paid',
-      lowestTier: 'Paid',
-      summary: hasEnterpriseOnly ? 'Contact for pricing' : 'Paid',
+      lowestTier: '',
+      summary: hasEnterpriseOnly ? 'Contact for pricing' : '',
     });
   }
 
@@ -662,9 +790,12 @@ async function fetchPricingViaOpenRouter(toolName, context = {}) {
         {
           role: 'system',
           content:
-            'Return JSON only: { "model": "free"|"freemium"|"paid"|"unknown", "lowestTier": string, "summary": string }. ' +
-            'lowestTier should be short UI text like "Free", "$12/mo", or "Paid". ' +
-            'Use widely known public pricing for the software. If unsure, model "unknown" with empty strings.',
+            'Return JSON only: { "model": "free"|"paid"|"unknown", "lowestTier": string, "summary": string }. ' +
+            'Rules: If there is an ongoing free plan/edition/personal-use tier, model is "free". ' +
+            'When free AND a paid tier exists, lowestTier must be "Free / $X/mo" (or /yr) using the cheapest paid tier — never say freemium. ' +
+            'If free with no paid tier (open source only), lowestTier is "Free". ' +
+            'If the only free option is a time-limited trial, model is "paid" and lowestTier is the cheapest paid price (e.g. "$12/mo"). ' +
+            'If unsure, model "unknown" with empty strings.',
         },
         {
           role: 'user',
@@ -699,9 +830,10 @@ function normalizeModel(raw) {
     .toLowerCase()
     .replace(/[-\s]+/g, '_');
   if (!s || s === 'unknown' || s === 'n_a' || s === 'na') return 'unknown';
-  if (s === 'open_source' || s === 'opensource' || s === 'oss') return 'open_source';
+  if (s === 'open_source' || s === 'opensource' || s === 'oss') return 'free';
   if (s === 'free' || s === 'freeware') return 'free';
-  if (s === 'freemium' || s === 'free_tier' || s === 'free_plan') return 'freemium';
+  // Legacy / AI "freemium" → free (ongoing free tier).
+  if (s === 'freemium' || s === 'free_tier' || s === 'free_plan') return 'free';
   if (s === 'paid' || s === 'subscription' || s === 'commercial' || s === 'premium') return 'paid';
   return 'unknown';
 }

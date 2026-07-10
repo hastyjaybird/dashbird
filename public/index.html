@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>dashbird</title>
-    <link rel="stylesheet" href="/styles.css?v=tool-library-fav2" />
+    <link rel="stylesheet" href="/styles.css?v=boot-cache-skeletons" />
     <link rel="modulepreload" href="/js/web-search-boot.js" />
     <link rel="modulepreload" href="/js/panels/web-search.js" />
     <link rel="preload" href="/api/config" as="fetch" crossorigin />
@@ -33,8 +33,59 @@
       </main>
     </div>
 
+    <div id="page-house-hunter" class="page-view page-view--house-hunter" hidden>
+      <main class="house-hunter-page" aria-label="House Hunter">
+        <section class="panel panel--glass panel--house-hunter" aria-labelledby="h-house-hunter">
+          <h2 id="h-house-hunter">House Hunter</h2>
+          <div id="mount-house-hunter" class="panel__body panel__body--house-hunter"></div>
+        </section>
+      </main>
+    </div>
+
     <div id="page-main" class="page-view page-view--main">
     <div class="layout-body">
+      <aside class="life-sidebar boot-deferred" aria-label="Events and news" aria-busy="true">
+        <div class="life-sidebar__stack">
+          <section
+            class="life-sidebar__card life-sidebar__card--events panel panel--glass"
+            aria-labelledby="h-events-finder"
+          >
+            <h2 id="h-events-finder" class="life-sidebar__card-heading">Events</h2>
+            <div
+              id="mount-events-finder"
+              class="life-sidebar__card-body life-sidebar__card-body--events"
+              role="region"
+              aria-labelledby="h-events-finder"
+            >
+              <div class="boot-skeleton-stack" aria-hidden="true">
+                <div class="boot-skeleton-line boot-skeleton-line--lg"></div>
+                <div class="boot-skeleton-line"></div>
+                <div class="boot-skeleton-line boot-skeleton-line--md"></div>
+                <div class="boot-skeleton-line"></div>
+                <div class="boot-skeleton-line boot-skeleton-line--sm"></div>
+              </div>
+            </div>
+          </section>
+          <section
+            class="life-sidebar__card life-sidebar__card--news panel panel--glass"
+            aria-labelledby="h-local-news"
+          >
+            <h2 id="h-local-news" class="life-sidebar__card-heading">Local News</h2>
+            <div
+              id="mount-local-news"
+              class="life-sidebar__card-body life-sidebar__card-body--news"
+              role="region"
+              aria-labelledby="h-local-news"
+            >
+              <div class="boot-skeleton-stack" aria-hidden="true">
+                <div class="boot-skeleton-line"></div>
+                <div class="boot-skeleton-line boot-skeleton-line--md"></div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </aside>
+
       <div class="layout-main">
         <main class="dashboard">
           <div class="row row--web-search">
@@ -55,7 +106,8 @@
                   />
                   <script>
                     (function () {
-                      if (localStorage.getItem('dashbirdPage') === 'settings') return;
+                      var page = localStorage.getItem('dashbirdPage');
+                      if (page === 'settings' || page === 'house-hunter') return;
                       var el = document.getElementById('web-search-input');
                       if (el) el.focus({ preventScroll: true });
                     })();
@@ -119,7 +171,14 @@
               aria-label="Time, location, and weather"
             >
               <div id="mount-hero" class="panel__body panel__body--hero">
-                <p class="boot-skeleton boot-skeleton--hero" aria-hidden="true">Loading weather…</p>
+                <div class="boot-skeleton-stack boot-skeleton-stack--hero" aria-hidden="true">
+                  <div class="boot-skeleton-line boot-skeleton-line--clock"></div>
+                  <div class="boot-skeleton-line boot-skeleton-line--date"></div>
+                  <div class="boot-skeleton-row">
+                    <div class="boot-skeleton-block"></div>
+                    <div class="boot-skeleton-block"></div>
+                  </div>
+                </div>
               </div>
             </section>
           </div>
@@ -129,7 +188,13 @@
               class="panel panel--glass panel--cal-upcoming"
               aria-label="Next calendar event"
             >
-              <div id="mount-cal-upcoming" class="panel__body panel__body--cal-upcoming"></div>
+              <div id="mount-cal-upcoming" class="panel__body panel__body--cal-upcoming">
+                <div class="boot-skeleton-stack boot-skeleton-stack--cal" aria-hidden="true">
+                  <div class="boot-skeleton-line boot-skeleton-line--sm"></div>
+                  <div class="boot-skeleton-line boot-skeleton-line--lg"></div>
+                  <div class="boot-skeleton-line boot-skeleton-line--md"></div>
+                </div>
+              </div>
             </section>
           </div>
 
@@ -158,13 +223,9 @@
               <h2 id="h-calendar">Calendar</h2>
               <div id="mount-calendar" class="panel__body panel__body--calendar"></div>
             </section>
-            <section class="panel panel--glass panel--tool-library" aria-labelledby="h-tool-library">
-              <h2 id="h-tool-library">Tool Library</h2>
-              <div
-                id="mount-tool-library"
-                class="panel__body panel__body--tool-library"
-                title="Right-click a card to queue background alternatives → Review"
-              ></div>
+            <section class="panel panel--glass panel--notes" aria-labelledby="h-notes">
+              <h2 id="h-notes">Notes</h2>
+              <div id="mount-notes" class="panel__body notes-body"></div>
             </section>
           </div>
         </main>
@@ -182,7 +243,13 @@
               class="sky-sidebar__card-body sky-sidebar__card-body--todo"
               role="region"
               aria-labelledby="h-today-todo"
-            ></div>
+            >
+              <div class="boot-skeleton-stack" aria-hidden="true">
+                <div class="boot-skeleton-line"></div>
+                <div class="boot-skeleton-line boot-skeleton-line--md"></div>
+                <div class="boot-skeleton-line boot-skeleton-line--sm"></div>
+              </div>
+            </div>
           </section>
           <section
             class="sky-sidebar__card sky-sidebar__card--sky panel panel--glass"
@@ -194,7 +261,12 @@
               class="sky-sidebar__card-body sky-sidebar__card-body--sky"
               role="region"
               aria-labelledby="h-sky-sidebar"
-            ></div>
+            >
+              <div class="boot-skeleton-stack" aria-hidden="true">
+                <div class="boot-skeleton-line boot-skeleton-line--md"></div>
+                <div class="boot-skeleton-line"></div>
+              </div>
+            </div>
           </section>
           <section
             id="earth-sidebar-card"
@@ -263,10 +335,35 @@
               class="sky-sidebar__card-body sky-sidebar__card-body--market"
               role="region"
               aria-labelledby="h-market-sidebar"
-            ></div>
+            >
+              <div class="boot-skeleton-stack" aria-hidden="true">
+                <div class="boot-skeleton-line"></div>
+                <div class="boot-skeleton-line boot-skeleton-line--md"></div>
+                <div class="boot-skeleton-line boot-skeleton-line--sm"></div>
+              </div>
+            </div>
           </section>
         </div>
       </aside>
+    </div>
+
+    <div class="tool-library-row">
+      <section class="panel panel--glass panel--tool-library" aria-labelledby="h-tool-library">
+        <h2 id="h-tool-library">Tool Library</h2>
+        <div
+          id="mount-tool-library"
+          class="panel__body panel__body--tool-library"
+          title="Right-click a card to queue background alternatives → Review"
+        >
+          <div class="boot-skeleton-stack boot-skeleton-stack--tools" aria-hidden="true">
+            <div class="boot-skeleton-row">
+              <div class="boot-skeleton-block boot-skeleton-block--tool"></div>
+              <div class="boot-skeleton-block boot-skeleton-block--tool"></div>
+              <div class="boot-skeleton-block boot-skeleton-block--tool"></div>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
     </div>
     <script type="module" src="/js/web-search-boot.js"></script>

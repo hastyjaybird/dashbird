@@ -1,6 +1,12 @@
 /**
+ * Today's To Do — Vikunja-backed via same-origin /api/vikunja/todos.
  * @param {HTMLElement} root
  */
+import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
+
+const TODO_CACHE_KEY = 'today-todo';
+const TODO_CACHE_MAX_MS = 12 * 60 * 60 * 1000;
+
 export function mountTodayTodo(root) {
   root.replaceChildren();
 
@@ -33,6 +39,7 @@ export function mountTodayTodo(root) {
 
   /** @type {Array<{ id: string, text: string, done: boolean }>} */
   let state = [];
+  let canWrite = false;
 
   function showStatus(msg, isErr = false) {
     status.hidden = !msg;
@@ -40,11 +47,10 @@ export function mountTodayTodo(root) {
     status.classList.toggle('today-todo__status--err', isErr);
   }
 
-  /** @returns {Array<{ id: string, text: string, done: boolean }>} */
-  function itemsForDisplay() {
-    const active = state.filter((it) => !it.done);
-    const done = state.filter((it) => it.done);
-    return [...active, ...done];
+  function setFormEnabled(on) {
+    canWrite = on;
+    addInput.disabled = !on;
+    addForm.classList.toggle('today-todo__add--disabled', !on);
   }
 
   /**
@@ -59,12 +65,9 @@ export function mountTodayTodo(root) {
     if (cb instanceof HTMLInputElement) cb.checked = done;
   }
 
-  async function loadItems() {
-    const r = await fetch('/api/todolist', { cache: 'no-store' });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
-    state = Array.isArray(j.items)
-      ? j.items
+  function applyItems(items, { writable = true } = {}) {
+    state = Array.isArray(items)
+      ? items
           .map((it) => ({
             id: String(it.id),
             text: String(it.text || '').trim(),
@@ -72,7 +75,38 @@ export function mountTodayTodo(root) {
           }))
           .filter((it) => it.id && it.text)
       : [];
+    setFormEnabled(writable);
     renderList();
+  }
+
+  async function loadItems() {
+    const r = await fetch('/api/vikunja/todos', { cache: 'no-store' });
+    const j = await r.json().catch(() => ({}));
+
+    if (
+      r.status === 503 ||
+      j.error === 'vikunja_not_configured' ||
+      j.error === 'vikunja_project_required'
+    ) {
+      state = [];
+      renderList();
+      setFormEnabled(false);
+      showStatus(
+        j.error === 'vikunja_project_required'
+          ? 'Set VIKUNJA_PROJECT_ID in server env.'
+          : 'Set VIKUNJA_BASE_URL, VIKUNJA_TOKEN, and VIKUNJA_PROJECT_ID in server env.',
+        true,
+      );
+      return;
+    }
+
+    if (!r.ok || j.ok === false) {
+      throw new Error(j.detail || j.error || `HTTP ${r.status}`);
+    }
+
+    const items = Array.isArray(j.items) ? j.items : [];
+    applyItems(items, { writable: true });
+    writePanelCache(TODO_CACHE_KEY, { items });
     showStatus('');
   }
 
@@ -110,7 +144,7 @@ export function mountTodayTodo(root) {
 
   function renderList() {
     list.replaceChildren();
-    for (const item of itemsForDisplay()) {
+    for (const item of state) {
       list.append(renderItem(item));
     }
   }
@@ -122,20 +156,23 @@ export function mountTodayTodo(root) {
     const index = state.findIndex((it) => it.id === id);
     if (index < 0 || state[index].done) return;
 
-    state[index] = { ...state[index], done: true };
+    const prev = state[index];
+    state[index] = { ...prev, done: true };
     syncRowDom(id, true);
-    const li = list.querySelector(`[data-id="${CSS.escape(id)}"]`);
-    if (li) list.append(li);
 
     try {
-      const r = await fetch(`/api/todolist/${encodeURIComponent(id)}/done`, {
+      const r = await fetch(`/api/vikunja/todos/${encodeURIComponent(id)}/done`, {
         method: 'PATCH',
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      // Open-only list: drop completed tasks from the panel.
+      state = state.filter((it) => it.id !== id);
+      writePanelCache(TODO_CACHE_KEY, { items: state });
+      renderList();
       showStatus('');
     } catch {
-      state[index] = { ...state[index], done: false };
+      state[index] = { ...prev, done: false };
       renderList();
       showStatus('Could not save done state.', true);
     }
@@ -148,20 +185,20 @@ export function mountTodayTodo(root) {
     const index = state.findIndex((it) => it.id === id);
     if (index < 0 || !state[index].done) return;
 
-    state[index] = { ...state[index], done: false };
+    const prev = state[index];
+    state[index] = { ...prev, done: false };
     syncRowDom(id, false);
-    const li = list.querySelector(`[data-id="${CSS.escape(id)}"]`);
-    if (li) list.prepend(li);
 
     try {
-      const r = await fetch(`/api/todolist/${encodeURIComponent(id)}/undo`, {
+      const r = await fetch(`/api/vikunja/todos/${encodeURIComponent(id)}/undo`, {
         method: 'PATCH',
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      writePanelCache(TODO_CACHE_KEY, { items: state });
       showStatus('');
     } catch {
-      state[index] = { ...state[index], done: true };
+      state[index] = { ...prev, done: true };
       renderList();
       showStatus('Could not undo.', true);
     }
@@ -169,35 +206,53 @@ export function mountTodayTodo(root) {
 
   async function addItem(text) {
     const t = text.trim();
-    if (!t) return;
+    if (!t || !canWrite) return;
 
-    const r = await fetch('/api/todolist', {
+    const r = await fetch('/api/vikunja/todos', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: t }),
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false || !j.item) {
-      showStatus('Could not add item.', true);
+      showStatus(
+        j.error === 'vikunja_project_required'
+          ? 'Set VIKUNJA_PROJECT_ID to create tasks.'
+          : 'Could not add item.',
+        true,
+      );
       return;
     }
-    state.push({
+    state.unshift({
       id: String(j.item.id),
       text: String(j.item.text).trim(),
       done: false,
     });
+    writePanelCache(TODO_CACHE_KEY, { items: state });
     showStatus('');
     renderList();
   }
 
   addForm.addEventListener('submit', (e) => {
     e.preventDefault();
+    if (addInput.disabled) return;
     const t = addInput.value;
     addInput.value = '';
     void addItem(t).then(() => addInput.focus());
   });
 
+  const cached = readPanelCache(TODO_CACHE_KEY, TODO_CACHE_MAX_MS);
+  if (cached && typeof cached === 'object' && Array.isArray(cached.items)) {
+    applyItems(cached.items, { writable: true });
+    showStatus('');
+  } else {
+    setFormEnabled(false);
+  }
+
   loadItems().catch(() => {
-    showStatus('Could not load to-do list.', true);
+    if (!state.length) {
+      setFormEnabled(false);
+      showStatus('Could not load Vikunja to-do list.', true);
+    }
   });
 }

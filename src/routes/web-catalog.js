@@ -2,11 +2,13 @@ import { Router } from 'express';
 import express from 'express';
 import {
   catalogBackend,
+  clearPendingReviewItems,
   collectTags,
   createDiscoveryJob,
   deleteResources,
   exportResources,
   getResourceById,
+  getResourceByUrl,
   importResources,
   listDiscoveryJobs,
   listResources,
@@ -186,6 +188,16 @@ router.get('/review', async (req, res) => {
   }
 });
 
+/** Dismiss all pending review candidates (must be before /review/:id/…). */
+router.post('/review/clear-pending', async (_req, res) => {
+  try {
+    const result = await clearPendingReviewItems();
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 router.post('/review/:id/resolve', async (req, res) => {
   try {
     const status = String(req.body?.status || '');
@@ -201,8 +213,10 @@ router.post('/jobs/alternatives', async (req, res) => {
   try {
     let resourceId = String(req.body?.resourceId || req.body?.resource_id || '').trim();
     let resource = resourceId ? await getResourceById(resourceId) : null;
+    /** @type {{ name?: string, url?: string } | null} */
+    let query = null;
 
-    // Allow queueing by name/URL when the tool is not in the catalog yet (no modal).
+    // Name/URL search: look up an existing catalog row, but never upsert a blank card.
     if (!resource) {
       const nameOrUrl = String(
         req.body?.url || req.body?.name || req.body?.query || req.body?.title || '',
@@ -213,21 +227,27 @@ router.post('/jobs/alternatives', async (req, res) => {
       }
       const { resolveToolHomepageUrl } = await import('../lib/tool-library-ai.js');
       const homepage = await resolveToolHomepageUrl(nameOrUrl);
-      resource = await upsertResource(
-        {
+      resource = await getResourceByUrl(homepage).catch(() => null);
+      if (resource) {
+        resourceId = resource.id;
+      } else {
+        resourceId = '';
+        query = {
+          name: String(req.body?.title || req.body?.name || nameOrUrl).trim(),
           url: homepage,
-          title: String(req.body?.title || req.body?.name || nameOrUrl).trim(),
-          summary: String(req.body?.summary || '').trim(),
-          kind_hints: ['tool'],
-          tags: Array.isArray(req.body?.tags) ? req.body.tags : [],
-        },
-        { project: req.body?.project || 'dashbird', section: req.body?.section || 'Tools' },
-      );
-      resourceId = resource.id;
+        };
+      }
     }
 
-    const job = await createDiscoveryJob('alternatives', resourceId);
-    res.status(202).json({ ok: true, job, resourceId });
+    // Drop leftover candidates from a previous search so Review only shows this job.
+    const cleared = await clearPendingReviewItems();
+    const job = await createDiscoveryJob('alternatives', resourceId || null, query);
+    res.status(202).json({
+      ok: true,
+      job,
+      resourceId: resourceId || null,
+      clearedPending: cleared.cleared,
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }

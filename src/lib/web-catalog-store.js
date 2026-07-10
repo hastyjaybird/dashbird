@@ -65,12 +65,29 @@ async function loadLocal() {
   }
 }
 
-async function saveLocal(data) {
+/** Serialize local catalog writes (same race as tool-library.json). */
+let webCatalogWriteChain = Promise.resolve();
+
+async function writeWebCatalogFile(data) {
   const p = webCatalogPath();
   await fs.mkdir(path.dirname(p), { recursive: true });
-  const tmp = `${p}.tmp`;
-  await fs.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
-  await fs.rename(tmp, p);
+  const tmp = `${p}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    await fs.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+    await fs.rename(tmp, p);
+  } catch (e) {
+    await fs.unlink(tmp).catch(() => {});
+    throw e;
+  }
+}
+
+async function saveLocal(data) {
+  const next = webCatalogWriteChain.then(
+    () => writeWebCatalogFile(data),
+    () => writeWebCatalogFile(data),
+  );
+  webCatalogWriteChain = next.catch(() => {});
+  await next;
 }
 
 function nowIso() {
@@ -557,8 +574,70 @@ export async function listReviewItems(status = 'pending') {
 }
 
 /**
+ * Reject all pending review candidates so a new search does not mix with a prior one.
+ * @returns {Promise<{ cleared: number }>}
+ */
+export async function clearPendingReviewItems() {
+  const resolvedAt = nowIso();
+  if (webCatalogConfigured()) {
+    try {
+      const sb = getWebCatalogClient();
+      const { data: pending, error: listErr } = await sb
+        .from('review_items')
+        .select('id')
+        .eq('status', 'pending');
+      if (listErr) throw listErr;
+      const ids = (pending || []).map((r) => r.id).filter(Boolean);
+      if (!ids.length) return { cleared: 0 };
+      const { error } = await sb
+        .from('review_items')
+        .update({ status: 'rejected', resolved_at: resolvedAt })
+        .in('id', ids);
+      if (error) throw error;
+      return { cleared: ids.length };
+    } catch (e) {
+      if (maybeFallbackToLocal(e)) return clearPendingReviewItems();
+      throw e;
+    }
+  }
+  const data = await loadLocal();
+  let cleared = 0;
+  for (const item of data.review_items) {
+    if (item.status !== 'pending') continue;
+    item.status = 'rejected';
+    item.resolved_at = resolvedAt;
+    cleared += 1;
+  }
+  if (cleared) await saveLocal(data);
+  return { cleared };
+}
+
+/**
  * @param {object} item
  */
+/**
+ * Pending review rows that collide with this candidate (same URL or same host+title).
+ * @param {object[]} items
+ * @param {{ candidate_url: string, candidate_title: string }} row
+ */
+function findPendingReviewDup(items, row) {
+  const host = canonicalHost(row.candidate_url);
+  const titleKey = String(row.candidate_title || '')
+    .trim()
+    .toLowerCase();
+  return (items || []).find((r) => {
+    if (r.status !== 'pending') return false;
+    if (r.candidate_url === row.candidate_url) return true;
+    if (host && canonicalHost(r.candidate_url) === host) {
+      const otherTitle = String(r.candidate_title || '')
+        .trim()
+        .toLowerCase();
+      if (!titleKey || !otherTitle || otherTitle === titleKey) return true;
+    }
+    return false;
+  });
+}
+
 export async function addReviewItem(item) {
   const row = {
     id: randomUUID(),
@@ -575,6 +654,13 @@ export async function addReviewItem(item) {
   if (webCatalogConfigured()) {
     try {
       const sb = getWebCatalogClient();
+      const { data: pending, error: listErr } = await sb
+        .from('review_items')
+        .select('*')
+        .eq('status', 'pending');
+      if (listErr) throw listErr;
+      const dup = findPendingReviewDup(pending || [], row);
+      if (dup) return dup;
       const { data, error } = await sb.from('review_items').insert(row).select('*').single();
       if (error) throw error;
       return data;
@@ -584,9 +670,7 @@ export async function addReviewItem(item) {
     }
   }
   const data = await loadLocal();
-  const dup = data.review_items.find(
-    (r) => r.status === 'pending' && r.candidate_url === row.candidate_url,
-  );
+  const dup = findPendingReviewDup(data.review_items, row);
   if (dup) return dup;
   data.review_items.push(row);
   await saveLocal(data);
@@ -664,14 +748,26 @@ export async function resolveReviewItem(id, status) {
   return { item, resource: null };
 }
 
-export async function createDiscoveryJob(kind, resourceId) {
+/**
+ * @param {string} kind
+ * @param {string|null} resourceId
+ * @param {{ name?: string, url?: string }} [query] Ephemeral search context when resource is not in catalog yet.
+ */
+export async function createDiscoveryJob(kind, resourceId, query = null) {
+  const qName = String(query?.name || '').trim();
+  const qUrl = String(query?.url || '').trim();
+  /** @type {Record<string, unknown>} */
+  const result = {};
+  if (qName || qUrl) {
+    result._query = { name: qName, url: qUrl };
+  }
   const row = {
     id: randomUUID(),
     kind: kind || 'alternatives',
     resource_id: resourceId || null,
     status: 'pending',
     error: null,
-    result: {},
+    result,
     created_at: nowIso(),
     started_at: null,
     finished_at: null,
@@ -683,7 +779,7 @@ export async function createDiscoveryJob(kind, resourceId) {
       if (error) throw error;
       return data;
     } catch (e) {
-      if (maybeFallbackToLocal(e)) return createDiscoveryJob(kind, resourceId);
+      if (maybeFallbackToLocal(e)) return createDiscoveryJob(kind, resourceId, query);
       throw e;
     }
   }

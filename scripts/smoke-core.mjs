@@ -107,6 +107,18 @@ const checks = [
       }
       return `show=${json.show} provider=${String(json.provider || 'n/a')}`;
     }),
+  () =>
+    runCheck('/api/vikunja/health', async () => {
+      const { res, json, text } = await getJson(`${base}/api/vikunja/health`);
+      // Fail closed when unset (503); when configured, expect ok upstream.
+      if (res.status === 503) {
+        assert(json && json.error === 'vikunja_not_configured', `body=${text}`);
+        return 'not_configured';
+      }
+      assert(res.ok, `http_${res.status}`);
+      assert(json && json.ok === true && json.configured === true, `body=${text}`);
+      return `configured version=${String(json.version || 'n/a')}`;
+    }),
 ];
 
 const results = [];

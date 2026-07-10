@@ -3,7 +3,8 @@
  * @see https://mesonet.agron.iastate.edu/ogc/
  */
 
-export const RADAR_RADIUS_MI = 40;
+/** Map viewport / precip-gate radius (miles from center). */
+export const RADAR_RADIUS_MI = 20;
 export const IEM_TILE_BASE = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0';
 /** Carto Dark Matter — policy-friendly dark basemap. */
 export const CARTO_DARK_URL =

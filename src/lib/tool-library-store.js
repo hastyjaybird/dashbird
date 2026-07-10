@@ -61,12 +61,32 @@ export async function loadToolLibrary() {
 /**
  * @param {{ version: number, tools: ToolRecord[] }} data
  */
-export async function saveToolLibrary(data) {
+/** Serialize mutations so concurrent favorite/asset updates cannot clobber the same .tmp. */
+let toolLibraryWriteChain = Promise.resolve();
+
+async function writeToolLibraryFile(data) {
   const p = toolLibraryPath();
   await fs.mkdir(path.dirname(p), { recursive: true });
-  const tmp = `${p}.tmp`;
-  await fs.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
-  await fs.rename(tmp, p);
+  const tmp = `${p}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    await fs.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+    await fs.rename(tmp, p);
+  } catch (e) {
+    await fs.unlink(tmp).catch(() => {});
+    throw e;
+  }
+}
+
+/**
+ * @param {{ version: number, tools: ToolRecord[] }} data
+ */
+export async function saveToolLibrary(data) {
+  const next = toolLibraryWriteChain.then(
+    () => writeToolLibraryFile(data),
+    () => writeToolLibraryFile(data),
+  );
+  toolLibraryWriteChain = next.catch(() => {});
+  await next;
 }
 
 /**
@@ -118,12 +138,17 @@ export async function deleteTools(ids) {
  * @param {boolean} favorite
  */
 export async function setToolFavorite(id, favorite) {
-  const data = await loadToolLibrary();
-  const tool = data.tools.find((t) => t.id === id);
-  if (!tool) return null;
-  tool.favorite = Boolean(favorite);
-  await saveToolLibrary(data);
-  return tool;
+  const run = async () => {
+    const data = await loadToolLibrary();
+    const tool = data.tools.find((t) => t.id === id);
+    if (!tool) return null;
+    tool.favorite = Boolean(favorite);
+    await writeToolLibraryFile(data);
+    return tool;
+  };
+  const next = toolLibraryWriteChain.then(run, run);
+  toolLibraryWriteChain = next.catch(() => {});
+  return next;
 }
 
 /**

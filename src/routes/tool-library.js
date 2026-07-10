@@ -27,6 +27,9 @@ router.use(express.json({ limit: '256kb' }));
 
 /** At most one heavy online-search at a time (scrape + screenshots). */
 let searchOnlineBusy = false;
+let searchOnlineBusySince = 0;
+/** Stale-lock recovery if a search hangs and never clears the flag. */
+const SEARCH_BUSY_MAX_MS = 3 * 60 * 1000;
 
 const ratingsTelemetry = {
   totalRequests: 0,
@@ -110,8 +113,13 @@ router.post('/tools/search-online', async (req, res) => {
       return;
     }
     if (searchOnlineBusy) {
-      res.status(429).json({ ok: false, error: 'search_busy' });
-      return;
+      const age = Date.now() - searchOnlineBusySince;
+      if (age < SEARCH_BUSY_MAX_MS) {
+        res.status(429).json({ ok: false, error: 'search_busy' });
+        return;
+      }
+      // Previous search never cleared the flag (hang / crash mid-flight).
+      searchOnlineBusy = false;
     }
     const query = String(req.body?.query || req.body?.q || '').trim();
     if (!query) {
@@ -119,14 +127,20 @@ router.post('/tools/search-online', async (req, res) => {
       return;
     }
     searchOnlineBusy = true;
+    searchOnlineBusySince = Date.now();
     try {
       const result = await searchToolOnline(query);
-      res.json({ ok: true, ...result });
+      if (!res.writableEnded && !req.destroyed) {
+        res.json({ ok: true, ...result });
+      }
     } finally {
       searchOnlineBusy = false;
+      searchOnlineBusySince = 0;
     }
   } catch (e) {
     searchOnlineBusy = false;
+    searchOnlineBusySince = 0;
+    if (res.writableEnded || req.destroyed) return;
     const msg = String(e?.message || e);
     res.status(msg.includes('could_not_resolve') ? 404 : 500).json({ ok: false, error: msg });
   }

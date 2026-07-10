@@ -78,17 +78,23 @@ House Hunter is a separate topbar page — also a **placeholder** until v2.
 | `HOST_PORT` | Host port published by Compose (default `8787`) |
 | `DASHBOARD_LAN_ORIGIN` | Optional full origin for phone/LAN bookmark link |
 | `GOOGLE_CALENDAR_ICAL_URL` | Public iCal URL (Settings / calendar panel) |
+| `GOOGLE_OAUTH_CLIENT_ID` / `SECRET` | Gmail Events intake OAuth (Settings → Connect Gmail) |
+| `GMAIL_INTAKE_ADDRESS` | Default `jay.intake.box@gmail.com` |
 | `WEATHER_LAT` / `WEATHER_LON` | Fallback coordinates when GPS is denied |
 | `SF_WEATHER_LAT` / `SF_WEATHER_LON` | Second city in hero (default San Francisco) |
 | `OPENROUTER_API_KEY` | Optional; tool library AI rating fallback |
+| `VIKUNJA_BASE_URL` / `VIKUNJA_TOKEN` | Vikunja instance + API token (Today’s To Do) |
+| `VIKUNJA_PROJECT_ID` | Project used for list/create in the todo panel |
 
 Commented placeholders are listed in [`.env.example`](.env.example).
+
+**Today’s To Do** reads and writes Vikunja through `/api/vikunja` (tokens stay on the server). Compose starts a local Vikunja on port **3456**; set `VIKUNJA_*` in `.env` (see `.env.example`). Without those env vars the panel shows a setup hint.
 
 ## Product backlog
 
 Tracked in [`docs/v2-roadmap.md`](docs/v2-roadmap.md), including:
 
-- Vikunja todos, Google Keep, Home Assistant proxy
+- Google Keep snippets, Home Assistant proxy (Vikunja todos are live — see below)
 - **House Hunter**, **Events**, **Local News** (real builds — UI slots exist as placeholders)
 - Life-goals / refocus panel, agent daily-ops, bioclock notes, Amazon package banner
 - Cybersecurity audit cadence (see security plan)
@@ -126,7 +132,7 @@ Core checks: OpenRouter health, tool ratings, Atlantic storm watch, weather rada
 
 - **Express** serves `public/` and [`docs/`](docs/) at **`/docs/...`**.
 - **Panels** are ES modules under [`public/js/panels/`](public/js/panels/), loaded from [`public/js/app.js`](public/js/app.js).
-- **APIs:** `GET /api/config`, `GET /api/sky-events`, `GET /api/openrouter/health`, tool library routes, web catalog routes; **`501`** stubs for `/api/vikunja/*`, `/api/home-assistant/*` (v2).
+- **APIs:** `GET /api/config`, `GET /api/sky-events`, `GET /api/openrouter/health`, `/api/vikunja/*` (Vikunja proxy + `/todos` panel helpers), tool library routes, web catalog routes; **`501`** stub for `/api/home-assistant/*` (v2).
 
 ### Location and weather
 

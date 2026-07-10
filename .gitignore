@@ -20,8 +20,13 @@ data/market-watch-tickers.json
 data/market-watch-settings.json
 data/rain-alert-address.json
 data/secondary-watch-zip.json
-# Live to-do list (CSV persisted by /api/todolist; seed: src/data/todolist.txt)
-data/todolist.txt
+data/events-finder-criteria.json
+data/gmail-intake-token.json
+data/gmail-intake-tokens/
+data/facebook-events-cache.json
+data/events-finder.db
+data/events-finder.db-wal
+data/events-finder.db-shm
 data/geospace-magnetosphere-state.json
 data/fear-greed-last.json
 data/tool-library.json
@@ -29,4 +34,5 @@ data/tool-library-assets/*
 !data/tool-library-assets/.gitkeep
 data/web-catalog.json
 data/web-catalog.json.tmp
-todolist.txt
+# Local Vikunja SQLite + uploads + bootstrap credentials
+data/vikunja/

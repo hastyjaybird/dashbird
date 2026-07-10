@@ -1,15 +1,14 @@
 /**
  * Weather radar visibility + IEM map payload (shared by API route and Settings status).
  *
- * Troubleshooting default: always show when enabled (ignore 24h precip gate for display).
- * Gate logic is retained — set WEATHER_RADAR_GATE=1 (or unset ALWAYS troubleshooting)
- * when restoring precip-gated visibility. For now WEATHER_RADAR_ALWAYS defaults on unless
- * explicitly set to 0, and precip gate is skipped unless WEATHER_RADAR_GATE=1.
+ * Default: show only when precip is active / imminent within ~20 mi (Open-Meteo sample).
+ * Set WEATHER_RADAR_ALWAYS=1 to force the card on for troubleshooting.
  */
 import { resolveDashboardWeatherLatLon } from './hero-weather-location.js';
 import {
-  precipExpectedWithin24Hours,
+  precipActiveWithinRadius,
   rainImminentWithin2Hours,
+  RADAR_PRECIP_RADIUS_MI,
 } from './rain-imminent.js';
 import { buildIemRadarPayload, RADAR_RADIUS_MI } from './weather-radar-iem.js';
 
@@ -18,16 +17,11 @@ export function radarDisabled() {
 }
 
 /**
- * Troubleshooting: show radar even with no precip.
- * Default ON while troubleshooting; set WEATHER_RADAR_ALWAYS=0 to honor the gate early,
- * or WEATHER_RADAR_GATE=1 to force precip-gated visibility.
+ * Force radar card visible even with no nearby precip (troubleshooting).
+ * Opt-in via WEATHER_RADAR_ALWAYS=1.
  */
 export function radarForceShow() {
-  if (String(process.env.WEATHER_RADAR_GATE || '').trim() === '1') return false;
-  const raw = String(process.env.WEATHER_RADAR_ALWAYS || '').trim();
-  if (raw === '0') return false;
-  // Default: always show (troubleshooting). Explicit 1 also always show.
-  return true;
+  return String(process.env.WEATHER_RADAR_ALWAYS || '').trim() === '1';
 }
 
 function parseCoord(raw, min, max) {
@@ -80,45 +74,48 @@ export async function getWeatherRadarStatus(opts = {}) {
   const geo = await resolveRadarGeo(opts);
   const tz = String(process.env.TZ || 'America/Los_Angeles').trim() || 'America/Los_Angeles';
   const forceShow = radarForceShow();
+  const radiusMi = RADAR_RADIUS_MI;
 
-  const [rain2h, precip24h] = await Promise.all([
+  const [rain2h, nearby] = await Promise.all([
     rainImminentWithin2Hours(geo.lat, geo.lon, tz),
-    precipExpectedWithin24Hours(geo.lat, geo.lon, tz),
+    precipActiveWithinRadius(geo.lat, geo.lon, RADAR_PRECIP_RADIUS_MI, tz),
   ]);
 
-  const precipExpected = Boolean(precip24h.expected);
-  const show = forceShow || precipExpected;
+  const precipNearby = Boolean(nearby.expected);
+  const show = forceShow || precipNearby;
 
   if (!show) {
     return {
       ok: true,
       show: false,
-      precipExpected24h: false,
+      precipNearby: false,
+      precipRadiusMi: RADAR_PRECIP_RADIUS_MI,
       imminent: rain2h.imminent,
       zip: geo.zip,
       geo: { lat: geo.lat, lon: geo.lon, displayName: geo.displayName, source: geo.source },
     };
   }
 
-  const radar = buildIemRadarPayload(geo.lat, geo.lon, RADAR_RADIUS_MI, tz);
+  const radar = buildIemRadarPayload(geo.lat, geo.lon, radiusMi, tz);
 
   return {
     ok: true,
     show: true,
-    precipExpected24h: precipExpected,
+    precipNearby,
+    precipRadiusMi: RADAR_PRECIP_RADIUS_MI,
     imminent: rain2h.imminent,
-    testMode: forceShow && !precipExpected,
+    testMode: forceShow && !precipNearby,
     troubleshooting: forceShow,
     zip: geo.zip,
     geo: { lat: geo.lat, lon: geo.lon, displayName: geo.displayName, source: geo.source },
     minutesUntil: rain2h.minutesUntil,
-    hoursUntilPrecip: precip24h.hoursUntil,
+    hoursUntilPrecip: nearby.hoursUntil,
     provider: 'iem',
     embed: {
       mapPageUrl: radar.mapPageUrl,
       lat: geo.lat,
       lon: geo.lon,
-      radiusMi: RADAR_RADIUS_MI,
+      radiusMi,
     },
     radar,
   };

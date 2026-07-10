@@ -183,7 +183,7 @@ export const SERVICE_EVENT_MANIFEST = [
     label: 'Weather radar',
     category: 'Market & weather',
     dataSource:
-      'IEM MRMS SeamlessHSR via Leaflet · device location · Open-Meteo rain captions (24h precip gate temporarily off for troubleshooting)',
+      'IEM MRMS SeamlessHSR via Leaflet · device location · shown when precip is within ~20 mi (Open-Meteo)',
   },
 ];
 

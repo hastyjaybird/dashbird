@@ -13,7 +13,7 @@ const inFlight = new Map();
 
 /**
  * @param {string} zip5
- * @returns {Promise<{ lat: number, lon: number, place: string, stateAbbrev: string, stateName: string } | null>}
+ * @returns {Promise<{ lat: number, lon: number, city: string, place: string, stateAbbrev: string, stateName: string } | null>}
  */
 async function fetchUsZip5Uncached(zip5) {
   const r = await fetch(`https://api.zippopotam.us/us/${zip5}`, {
@@ -30,12 +30,12 @@ async function fetchUsZip5Uncached(zip5) {
   const st = String(p['state abbreviation'] || '').trim();
   const stateName = String(p.state || '').trim();
   const place = city && st ? `${city}, ${st}` : st || city || `ZIP ${zip5}`;
-  return { lat, lon, place, stateAbbrev: st, stateName };
+  return { lat, lon, city, place, stateAbbrev: st, stateName };
 }
 
 /**
  * @param {string} zip5
- * @returns {Promise<{ lat: number, lon: number, place: string, stateAbbrev: string, stateName: string } | null>}
+ * @returns {Promise<{ lat: number, lon: number, city: string, place: string, stateAbbrev: string, stateName: string } | null>}
  */
 export async function geocodeUsZip5(zip5) {
   const z = String(zip5).replace(/\D/g, '');

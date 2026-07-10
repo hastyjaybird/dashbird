@@ -14,6 +14,10 @@ import dashboardCheckRouter from './routes/dashboard-check.js';
 import monitoringSourcesRouter from './routes/monitoring-sources.js';
 import dashboardSettingsRouter from './routes/dashboard-settings.js';
 import eventTypesStatusRouter from './routes/event-types-status.js';
+import eventsFinderStatusRouter from './routes/events-finder-status.js';
+import eventsFinderCriteriaRouter from './routes/events-finder-criteria.js';
+import eventsFinderGmailRouter from './routes/events-finder-gmail.js';
+import eventsFinderEventsRouter from './routes/events-finder-events.js';
 import openDesktopRouter from './routes/open-desktop.js';
 import networkHealthRouter from './routes/network-health.js';
 import heroAstronomyRouter from './routes/hero-astronomy.js';
@@ -46,12 +50,11 @@ import aircraftNearbyRouter from './routes/aircraft-nearby.js';
 import { startSuperbloomAgent } from './lib/superbloom-agent.js';
 import { warmGoogleCalendarCache } from './lib/google-calendar-ical.js';
 import { resolveDashboardWeatherLatLon } from './lib/hero-weather-location.js';
-import { purgeDoneTodoItemsOnStartup } from './lib/todolist-store.js';
-import todolistRouter from './routes/todolist.js';
 import toolLibraryRouter from './routes/tool-library.js';
 import webCatalogRouter from './routes/web-catalog.js';
 import { startWebCatalogWatchPoller } from './lib/web-catalog-watch.js';
 import { startWebCatalogDiscoveryWorker } from './lib/web-catalog-discovery.js';
+import { startFacebookEventsWeeklyScheduler } from './lib/events-finder-facebook.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -124,8 +127,11 @@ app.use('/api/dashboard-check', dashboardCheckRouter);
 app.use('/api/monitoring-sources', monitoringSourcesRouter);
 app.use('/api/dashboard-settings', dashboardSettingsRouter);
 app.use('/api/event-types-status', eventTypesStatusRouter);
+app.use('/api/events-finder-status', eventsFinderStatusRouter);
+app.use('/api/events-finder-criteria', eventsFinderCriteriaRouter);
+app.use('/api/events-finder-gmail', eventsFinderGmailRouter);
+app.use('/api/events-finder/events', eventsFinderEventsRouter);
 app.use('/api/open-desktop', openDesktopRouter);
-app.use('/api/todolist', todolistRouter);
 app.use('/api/tool-library', toolLibraryRouter);
 app.use('/api/web-catalog', webCatalogRouter);
 
@@ -142,11 +148,6 @@ app.use((err, req, res, next) => {
   res.status(err.status || 500).json({ error: err.message || 'internal_error' });
 });
 
-const purged = await purgeDoneTodoItemsOnStartup();
-if (purged.removed > 0) {
-  console.log(`todolist: removed ${purged.removed} done item(s) on startup`);
-}
-
 app.listen(port, '0.0.0.0', () => {
   console.log(`dashbird listening on http://0.0.0.0:${port}`);
   if (!existsSync('/.dockerenv')) {
@@ -156,6 +157,7 @@ app.listen(port, '0.0.0.0', () => {
   startGeospaceMagnetosphereMonitor();
   startWebCatalogWatchPoller();
   startWebCatalogDiscoveryWorker();
+  startFacebookEventsWeeklyScheduler();
   warmGoogleCalendarCache();
   // Prime ZIP → lat/lon so the first page-load fan-out does not wait on Zippopotam.
   void resolveDashboardWeatherLatLon().catch(() => {});

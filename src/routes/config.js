@@ -100,6 +100,31 @@ router.get('/', async (req, res) => {
       'Oakland, CA';
   }
 
+  const vikunjaBase = String(process.env.VIKUNJA_BASE_URL || '').trim();
+  const vikunjaToken = String(process.env.VIKUNJA_TOKEN || '').trim();
+  const vikunjaProject = String(process.env.VIKUNJA_PROJECT_ID || '').trim();
+  const vikunjaConfigured = Boolean(vikunjaBase && vikunjaToken);
+  const vikunjaProjectId =
+    vikunjaProject && /^\d+$/.test(vikunjaProject) ? Number(vikunjaProject) : null;
+
+  let vikunjaPublicUrl = String(process.env.VIKUNJA_SERVICE_PUBLICURL || '').trim();
+  if (vikunjaPublicUrl) {
+    vikunjaPublicUrl = vikunjaPublicUrl.replace(/\/+$/, '') + '/';
+  } else if (vikunjaConfigured) {
+    // Fall back: host-facing URL when PUBLICURL unset (Docker hostname is not browser-reachable).
+    const hostPort = String(process.env.VIKUNJA_HOST_PORT || '3456').trim() || '3456';
+    if (lanOrigin) {
+      try {
+        const u = new URL(lanOrigin);
+        vikunjaPublicUrl = `${u.protocol}//${u.hostname}:${hostPort}/`;
+      } catch {
+        vikunjaPublicUrl = `http://127.0.0.1:${hostPort}/`;
+      }
+    } else {
+      vikunjaPublicUrl = `http://127.0.0.1:${hostPort}/`;
+    }
+  }
+
   res.json({
     lanOrigin,
     calendarEmbedUrl,
@@ -116,6 +141,9 @@ router.get('/', async (req, res) => {
     sfWeatherLon: Number.isFinite(sfLon) ? sfLon : -122.4194,
     locationLabel: envLabel || `${placeLabel}${weatherZip ? ` · ${weatherZip}` : ''}`,
     lastBackupAt,
+    vikunjaConfigured,
+    vikunjaProjectConfigured: vikunjaConfigured && vikunjaProjectId != null,
+    vikunjaPublicUrl,
   });
 });
 

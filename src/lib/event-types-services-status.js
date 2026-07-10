@@ -82,7 +82,7 @@ export async function buildServiceEventTypesStatus() {
         types.push({
           id: 'weather_radar',
           active: false,
-          value: 'Hidden · no precipitation expected in 24 hours',
+          value: 'Hidden · no precipitation within ~20 mi',
           liveUrl: getEventTypeLiveUrl('weather_radar'),
         });
       } else {

@@ -284,15 +284,15 @@ export function mountWeatherRadar(card, mount) {
           applyLinkFallback(mapHost, data);
         }
       }
-    } catch (e) {
-      card.hidden = false;
+    } catch {
+      /* Keep the card out of the sidebar — no empty/error block. */
+      card.hidden = true;
       stopMap();
       stopMap = () => {};
       lastMountKey = '';
       body.replaceChildren();
-      status.hidden = false;
-      status.textContent =
-        e instanceof Error ? `Radar unavailable: ${e.message}` : 'Radar unavailable';
+      status.hidden = true;
+      status.textContent = '';
     }
   }
 

@@ -1,5 +1,10 @@
 /** @typedef {object} Tool */
 
+import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
+
+const TOOL_LIBRARY_CACHE_KEY = 'tool-library';
+const TOOL_LIBRARY_CACHE_MAX_MS = 7 * 24 * 60 * 60 * 1000;
+
 const el = (tag) => document.createElement(tag);
 
 let tools = [];
@@ -13,14 +18,114 @@ let activeOsFilters = new Set();
 let favoritesOnly = false;
 let searchQuery = '';
 let repairAttempted = false;
-/** Max review candidates shown in the dropdown. */
-const REVIEW_MAX = 10;
+/** @type {Set<string>} */
+const assetPollInFlight = new Set();
+/** @type {Map<string, number>} */
+const assetPollAttempts = new Map();
 /** @type {ReturnType<typeof setInterval> | null} */
-let thinkingDotsTimer = null;
-/** @type {string} */
-let thinkingDotsLabel = '';
-/** Hide review panel until new items arrive (Cancel). */
-let reviewDismissed = false;
+let assetPollTimer = null;
+const ASSET_POLL_MAX_ATTEMPTS = 4;
+
+/**
+ * Same 8-dot spinning wheel as the old health-sidebar "Check" wait cursor.
+ * @returns {HTMLElement}
+ */
+function createWaitWheel() {
+  const wrap = el('div');
+  wrap.className = 'tool-library__wait-wheel';
+  wrap.setAttribute('aria-hidden', 'true');
+  const spin = el('div');
+  spin.className = 'tool-library__wait-wheel-spin';
+  for (let i = 0; i < 8; i += 1) {
+    const dot = el('span');
+    dot.className = 'tool-library__wait-wheel-dot';
+    spin.append(dot);
+  }
+  wrap.append(spin);
+  return wrap;
+}
+
+/**
+ * Modal status line with animated chasing dots (cleared by later textContent sets).
+ * @param {HTMLElement} msgEl
+ * @param {string} label
+ */
+function setChasingDotsMsg(msgEl, label) {
+  if (!msgEl) return;
+  msgEl.replaceChildren();
+  msgEl.append(document.createTextNode(label));
+  const dots = el('span');
+  dots.className = 'tool-library__chase-dots';
+  dots.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < 3; i += 1) {
+    const d = el('span');
+    d.textContent = '.';
+    dots.append(d);
+  }
+  msgEl.append(dots);
+}
+
+function needsSnapshot(tool) {
+  if (!tool?.id || String(tool?.snapshotUrl || '').trim()) return false;
+  return (assetPollAttempts.get(tool.id) || 0) < ASSET_POLL_MAX_ATTEMPTS;
+}
+
+/**
+ * Kick refresh-assets for tools missing snapshots, then re-poll the library.
+ * @param {HTMLElement} root
+ */
+function ensureAssetPolling(root) {
+  const missing = tools.filter(needsSnapshot);
+  if (!missing.length) {
+    if (assetPollTimer) {
+      clearInterval(assetPollTimer);
+      assetPollTimer = null;
+    }
+    return;
+  }
+  for (const tool of missing.slice(0, 4)) {
+    if (assetPollInFlight.has(tool.id)) continue;
+    assetPollInFlight.add(tool.id);
+    assetPollAttempts.set(tool.id, (assetPollAttempts.get(tool.id) || 0) + 1);
+    fetch(`/api/tool-library/tools/${encodeURIComponent(tool.id)}/refresh-assets`, {
+      method: 'POST',
+    })
+      .then((r) => r.json().catch(() => ({})))
+      .then((data) => {
+        if (data?.ok && data.tool) {
+          const idx = tools.findIndex((t) => t.id === tool.id);
+          if (idx >= 0) {
+            tools[idx] = { ...tools[idx], ...data.tool };
+            if (data.tool.snapshotUrl) {
+              const card = root.querySelector(`.tool-library__card[data-tool-id="${CSS.escape(tool.id)}"]`);
+              if (card) {
+                // Soft update: re-render grid so spinner swaps for the image.
+                renderGrid(root);
+              }
+            }
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        assetPollInFlight.delete(tool.id);
+      });
+  }
+  if (!assetPollTimer) {
+    assetPollTimer = setInterval(() => {
+      if (!tools.some(needsSnapshot)) {
+        clearInterval(assetPollTimer);
+        assetPollTimer = null;
+        return;
+      }
+      // Prefer soft refresh of assets without a full library reload when possible.
+      ensureAssetPolling(root);
+      if (tools.some((t) => t.snapshotUrl && root.querySelector(`.tool-library__card-snap--loading`))) {
+        renderGrid(root);
+      }
+    }, 4000);
+  }
+}
 
 function collectOsOptions(list) {
   const set = new Set();
@@ -59,12 +164,31 @@ function normalizePricingText(text) {
   const raw = String(text || '').trim();
   if (!raw || isPlaceholderPricingText(raw)) return '';
   const s = raw.toLowerCase();
-  if (/\bfreemium\b/.test(s)) return 'Freemium';
+  if (/\bfreemium\b/.test(s)) return 'Free';
+  const freeSlash = raw.match(/^free\s*\/\s*(\$\s*[\d,.]+(?:\s*\/\s*(?:mo|month|yr|year|user|seat))?)/i);
+  if (freeSlash) {
+    const paid = freeSlash[1].replace(/\s+/g, '').replace(/\/month/i, '/mo').replace(/\/year/i, '/yr');
+    return `Free / ${paid}`;
+  }
   if (/\bfree\b/.test(s) && (/\bopen[-\s]?source\b/.test(s) || /\bpersonal use\b/.test(s))) {
     return 'Free';
   }
-  if (/^free(\s+plan)?$/i.test(raw) || /\bfree\b/.test(s) && s.length < 48) return 'Free';
-  if (/^paid$/i.test(raw)) return 'Paid';
+  if (/^free(\s+plan)?$/i.test(raw) || (/\bfree\b/.test(s) && s.length < 48 && !/\bfree trial\b/.test(s))) {
+    return 'Free';
+  }
+  // Prefer an explicit dollar amount over the bare word "Paid".
+  const dollar = raw.match(
+    /\$\s*[\d,.]+(?:\s*\/\s*(?:mo|month|yr|year|user|seat))?/i,
+  );
+  if (dollar) {
+    return dollar[0]
+      .replace(/\s+/g, '')
+      .replace(/\/month/i, '/mo')
+      .replace(/\/year/i, '/yr');
+  }
+  const from = raw.match(/^from\s+(\$\S+)/i);
+  if (from) return from[1];
+  if (/^paid$/i.test(raw)) return '';
   if (/^\$/.test(raw)) return raw;
   return raw;
 }
@@ -77,26 +201,44 @@ function ratingLabel(tool) {
 }
 
 function pricingBadgeText(tool) {
-  const lowestTier = normalizePricingText(tool?.pricing?.lowestTier);
+  const pricing = tool?.pricing || {};
+  const lowestTier = normalizePricingText(pricing.lowestTier);
   if (lowestTier) return lowestTier;
-  const model = String(tool?.pricing?.model || '').trim().toLowerCase();
-  if (model === 'free') return 'Free';
-  if (model === 'freemium') return 'Freemium';
-  if (model === 'paid') {
-    const summary = normalizePricingText(tool?.pricing?.summary);
-    return summary || 'Paid';
-  }
-  const summary = normalizePricingText(tool?.pricing?.summary);
+  const summary = normalizePricingText(pricing.summary);
   if (summary) return summary;
+  const model = String(pricing.model || '').trim().toLowerCase();
+  if (model === 'free' || model === 'freemium') return 'Free';
+  // Never show bare "Paid" — leave blank until a lowest tier price is known.
+  if (model === 'paid') return '';
   const bestUsedFor = String(tool?.bestUsedFor || '');
-  if (/\bfree\b/i.test(bestUsedFor)) return 'Free';
+  if (/\bfree\b/i.test(bestUsedFor) && !/\bfree trial\b/i.test(bestUsedFor)) return 'Free';
   return '';
+}
+
+/** Prefer concrete Free/$ price over unknown/freemium placeholders when merging catalog. */
+function preferPricing(a, b) {
+  const score = (p) => {
+    const model = String(p?.model || '').toLowerCase();
+    const tier = String(p?.lowestTier || '');
+    const summary = String(p?.summary || '');
+    if (!p || model === 'unknown' || !model) return 0;
+    if (/pricing not auto-detected/i.test(summary)) return 0;
+    if (model === 'freemium' || /\bfreemium\b/i.test(tier) || /\bfreemium\b/i.test(summary)) return 1;
+    if (model === 'free' && /^free\s*\//i.test(tier)) return 4;
+    if (model === 'free' && tier.toLowerCase() === 'free') return 2;
+    if (/^\$/.test(tier)) return 3;
+    if (model === 'paid') return 2;
+    if (model === 'free') return 2;
+    return 1;
+  };
+  return score(a) >= score(b) ? a || b || {} : b || a || {};
 }
 
 function filteredTools(list) {
   const q = searchQuery.trim().toLowerCase();
   const tokens = q.split(/\s+/).filter(Boolean);
   return list.filter((t) => {
+    if (isAppleOrMacOnlyTool(t)) return false;
     if (favoritesOnly && !t.favorite) return false;
     if (activeCategoryFilters.size) {
       const cats = [...(t.categories || []), ...(t.tags || [])];
@@ -123,6 +265,58 @@ function filteredTools(list) {
       .toLowerCase();
     return tokens.every((tok) => blob.includes(tok));
   });
+}
+
+/** OS labels that are Apple-ecosystem only. */
+const APPLE_ONLY_OS = new Set(['macos', 'mac', 'osx', 'ios', 'ipados', 'watchos', 'tvos']);
+
+/**
+ * @param {string} os
+ */
+function normalizeOsLabel(os) {
+  return String(os || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+}
+
+/**
+ * Hide Apple/macOS-only tools from search and browse.
+ * Cross-platform tools that also support macOS are kept.
+ * @param {object} tool
+ */
+function isAppleOrMacOnlyTool(tool) {
+  if (!tool) return false;
+  let host = '';
+  try {
+    host = new URL(String(tool.url || tool.website || ''))
+      .hostname.replace(/^www\./, '')
+      .toLowerCase();
+  } catch {
+    host = '';
+  }
+  if (
+    host === 'apple.com' ||
+    host.endsWith('.apple.com') ||
+    host === 'apps.apple.com' ||
+    host === 'developer.apple.com' ||
+    host === 'itunes.apple.com'
+  ) {
+    return true;
+  }
+  const name = String(tool.name || '').toLowerCase();
+  if (
+    /\bfinal\s*cut\b/.test(name) ||
+    /\blogic\s*pro\b/.test(name) ||
+    /\bxcode\b/.test(name) ||
+    /\bgarageband\b/.test(name) ||
+    /\bapple\s+(keynote|pages|numbers|motion|compressor)\b/.test(name)
+  ) {
+    return true;
+  }
+  const oss = (tool.operatingSystems || []).map(normalizeOsLabel).filter(Boolean);
+  if (!oss.length) return false;
+  return oss.every((o) => APPLE_ONLY_OS.has(o));
 }
 
 function statusChip(tool) {
@@ -212,6 +406,7 @@ function renderSidebar(root) {
 function buildToolCard(card, tool) {
   const selected = selectedIds.has(tool.id);
   card.className = 'tool-library__card';
+  card.dataset.toolId = tool.id || '';
   if (selected) card.classList.add('tool-library__card--selected');
   card.dataset.toolId = tool.id;
   card.title = 'Click to open';
@@ -239,32 +434,40 @@ function buildToolCard(card, tool) {
   favBtn.addEventListener('click', async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    const next = !tool.favorite;
+    if (favBtn.disabled) return;
+    const next = !Boolean(tool.favorite);
     favBtn.disabled = true;
+    const root = card.closest('.tool-library');
+    const status = root?.querySelector('.tool-library__status');
     try {
       const r = await fetch(`/api/tool-library/tools/${encodeURIComponent(tool.id)}/favorite`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           favorite: next,
-          url: tool.url || tool.website,
+          url: tool.url || tool.website || '',
           catalogId: tool.catalogId || '',
         }),
       });
-      const data = await r.json();
-      if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
-      tool.favorite = next;
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false) {
+        throw new Error(data.error || `Could not update favorite (HTTP ${r.status})`);
+      }
+      const saved = Boolean(data.tool?.favorite ?? next);
+      tool.favorite = saved;
       const idx = tools.findIndex((t) => t.id === tool.id);
-      if (idx >= 0) tools[idx] = { ...tools[idx], favorite: next };
-      favBtn.classList.toggle('tool-library__card-fav--on', next);
-      favBtn.textContent = next ? '★' : '☆';
-      favBtn.title = next ? 'Remove from favorites' : 'Add to favorites';
+      if (idx >= 0) tools[idx] = { ...tools[idx], favorite: saved };
+      favBtn.classList.toggle('tool-library__card-fav--on', saved);
+      favBtn.textContent = saved ? '★' : '☆';
+      favBtn.title = saved ? 'Remove from favorites' : 'Add to favorites';
       favBtn.setAttribute('aria-label', favBtn.title);
-      const root = card.closest('.tool-library');
+      if (status?.textContent?.startsWith('Could not')) {
+        status.hidden = true;
+        status.textContent = '';
+      }
       if (favoritesOnly) renderGrid(root);
-      renderSidebar(root);
+      else renderSidebar(root);
     } catch (err) {
-      const status = card.closest('.tool-library')?.querySelector('.tool-library__status');
       if (status) {
         status.hidden = false;
         status.textContent = err?.message || 'Could not update favorite';
@@ -282,6 +485,11 @@ function buildToolCard(card, tool) {
     img.alt = '';
     img.loading = 'lazy';
     snap.append(img);
+  } else {
+    snap.classList.add('tool-library__card-snap--loading');
+    snap.title = 'Fetching preview image…';
+    snap.setAttribute('aria-busy', 'true');
+    snap.append(createWaitWheel());
   }
 
   const logoRow = el('div');
@@ -342,12 +550,14 @@ function buildToolCard(card, tool) {
   altBtn.type = 'button';
   altBtn.className = 'tool-library__card-alt';
   altBtn.textContent = 'find alt';
-  altBtn.title = 'Search for alternatives in the background';
+  altBtn.title = 'Search the web for this tool and alternatives';
   altBtn.setAttribute('aria-label', `Find alternatives to ${tool.name || 'this tool'}`);
   altBtn.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    queueAlternativesJob(tool, card.closest('.tool-library'));
+    const q = String(tool.name || tool.url || tool.website || '').trim();
+    if (!q) return;
+    openOnlineSearchModal(q, card.closest('.tool-library'));
   });
   foot.append(altBtn);
 
@@ -376,7 +586,7 @@ function renderGrid(root) {
         line.textContent = 'No tools match your search or filters. ';
         const hint = el('span');
         hint.className = 'tool-library__empty-hint';
-        hint.textContent = `Press Enter to search alternatives for “${q}” in the background.`;
+        hint.textContent = `Press Enter to search the web for “${q}”.`;
         empty.append(line, hint);
       } else {
         empty.textContent = 'No tools match your search or filters.';
@@ -389,6 +599,18 @@ function renderGrid(root) {
     const card = el('article');
     buildToolCard(card, tool);
     grid.append(card);
+  }
+}
+
+/** Hide the “Press Enter to search…” empty hint after Enter starts an online search. */
+function clearEmptyEnterHint(root) {
+  const empty = root?.querySelector('.tool-library__empty');
+  if (!empty || empty.hidden) return;
+  const hint = empty.querySelector('.tool-library__empty-hint');
+  if (hint) hint.remove();
+  const q = searchQuery.trim();
+  if (q && !filteredTools(tools).length) {
+    empty.textContent = `Searching the web for “${q}”…`;
   }
 }
 
@@ -410,7 +632,7 @@ async function openOnlineSearchModal(query, root) {
   title.textContent = `Search: ${q}`;
   const msg = el('p');
   msg.className = 'tool-library__modal-msg';
-  msg.textContent = 'Searching the web for this tool and alternatives…';
+  setChasingDotsMsg(msg, 'Searching the web for this tool and alternatives');
   const list = el('div');
   list.className = 'tool-library__alt-list';
   const actions = el('div');
@@ -424,34 +646,49 @@ async function openOnlineSearchModal(query, root) {
   addBtn.className = 'tool-library__btn tool-library__btn--primary';
   addBtn.textContent = 'Add selected';
   addBtn.disabled = true;
-  cancel.addEventListener('click', () => backdrop.remove());
+  const ac = new AbortController();
+  let closed = false;
+  const clearSearchAndShowLibrary = () => {
+    searchQuery = '';
+    const searchInput = root.querySelector('.tool-library__search');
+    if (searchInput) searchInput.value = '';
+    renderGrid(root);
+  };
+  const closeModal = () => {
+    closed = true;
+    ac.abort();
+    backdrop.remove();
+    clearSearchAndShowLibrary();
+  };
+  cancel.addEventListener('click', closeModal);
   backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop) backdrop.remove();
+    if (e.target === backdrop) closeModal();
   });
   const rowById = new Map();
   addBtn.addEventListener('click', async () => {
     const items = [];
     for (const [id, row] of rowById) {
       const cb = list.querySelector(`input[data-alt-id="${id}"]`);
-      if (cb?.checked && !row.alreadyInLibrary) items.push({ url: row.url });
+      if (cb?.checked) items.push({ url: row.url });
     }
     if (!items.length) return;
     addBtn.disabled = true;
-    msg.textContent = 'Adding tools…';
+    setChasingDotsMsg(msg, 'Adding tools');
     try {
       const r = await fetch('/api/tool-library/tools/import-batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items }),
+        signal: ac.signal,
       });
       const data = await r.json();
       if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+      closed = true;
       backdrop.remove();
-      searchQuery = '';
-      const searchInput = root.querySelector('.tool-library__search');
-      if (searchInput) searchInput.value = '';
+      clearSearchAndShowLibrary();
       await refresh(root);
     } catch (e) {
+      if (closed || e?.name === 'AbortError') return;
       msg.textContent = e?.message || 'Import failed';
       addBtn.disabled = false;
     }
@@ -462,17 +699,34 @@ async function openOnlineSearchModal(query, root) {
   document.body.append(backdrop);
 
   try {
-    const r = await fetch('/api/tool-library/tools/search-online', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: q }),
-    });
-    const data = await r.json();
-    if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+    let data = null;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (closed) return;
+      const r = await fetch('/api/tool-library/tools/search-online', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q }),
+        signal: ac.signal,
+      });
+      data = await r.json().catch(() => ({}));
+      if (r.status === 429 || data?.error === 'search_busy') {
+        setChasingDotsMsg(msg, 'Waiting for the previous search to finish');
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        continue;
+      }
+      if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+      break;
+    }
+    if (closed) return;
+    if (!data || data.ok === false) {
+      throw new Error(data?.error === 'search_busy' ? 'search_busy' : data?.error || 'search_failed');
+    }
     list.replaceChildren();
-    const ranked = Array.isArray(data.ranked) ? data.ranked : [];
+    const ranked = (Array.isArray(data.ranked) ? data.ranked : []).filter(
+      (row) => !isAppleOrMacOnlyTool(row) && !row.alreadyInLibrary,
+    );
     if (!ranked.length) {
-      msg.textContent = 'No tools found online for that name.';
+      msg.textContent = 'No new tools found online (matches are already in your toolbox).';
       return;
     }
     msg.textContent =
@@ -485,15 +739,11 @@ async function openOnlineSearchModal(query, root) {
       if (row.tempId === 'matched' || row.source === 'search') {
         item.classList.add('tool-library__alt-row--matched');
       }
-      if (row.alreadyInLibrary) item.classList.add('tool-library__alt-row--original');
       const pick = el('input');
       pick.type = 'checkbox';
       pick.dataset.altId = id;
-      pick.disabled = Boolean(row.alreadyInLibrary);
-      pick.checked = Boolean(
-        !row.alreadyInLibrary && (row.tempId === 'matched' || row.source === 'search'),
-      );
-      pick.title = row.alreadyInLibrary ? 'Already in toolbox' : 'Add to toolbox';
+      pick.checked = Boolean(row.tempId === 'matched' || row.source === 'search');
+      pick.title = 'Add to toolbox';
       const body = el('div');
       body.className = 'tool-library__alt-body';
       const name = el('strong');
@@ -517,7 +767,11 @@ async function openOnlineSearchModal(query, root) {
     }
     addBtn.disabled = false;
   } catch (e) {
-    msg.textContent = e?.message || 'Online search failed';
+    if (closed || e?.name === 'AbortError') return;
+    msg.textContent =
+      e?.message === 'search_busy'
+        ? 'Another search is still running. Close and try again in a moment.'
+        : e?.message || 'Online search failed';
   }
 }
 
@@ -527,6 +781,27 @@ function updateDeleteBtn(root) {
   const n = selectedIds.size;
   btn.disabled = n === 0;
   btn.textContent = n ? `Delete (${n})` : 'Delete';
+}
+
+/**
+ * @param {HTMLElement} root
+ * @param {{ tools: object[], categories: string[] }} payload
+ */
+function applyToolLibraryPayload(root, payload) {
+  tools = Array.isArray(payload?.tools) ? payload.tools : [];
+  categories = Array.isArray(payload?.categories) ? [...payload.categories] : [];
+  for (const t of tools) {
+    for (const c of t.categories || t.tags || []) {
+      if (c && !categories.includes(c)) categories.push(c);
+    }
+  }
+  categories.sort((a, b) => a.localeCompare(b));
+  const status = root.querySelector('.tool-library__status');
+  if (status) status.hidden = true;
+  renderSidebar(root);
+  renderGrid(root);
+  updateDeleteBtn(root);
+  ensureAssetPolling(root);
 }
 
 async function refresh(root) {
@@ -546,15 +821,27 @@ async function refresh(root) {
       const cdata = await cr.json();
       for (const t of Array.isArray(cdata.tools) ? cdata.tools : []) {
         const key = String(t.url || '').toLowerCase();
-        if (!byUrl.has(key)) byUrl.set(key, t);
-        else {
+        // Skip bare catalog stubs (name-only search used to upsert these by mistake).
+        const isStub =
+          !t.bestUsedFor &&
+          !t.logoUrl &&
+          !t.snapshotUrl &&
+          !(t.categories || []).length &&
+          !(t.tags || []).length &&
+          !t.favorite;
+        if (!byUrl.has(key)) {
+          if (isStub) continue;
+          byUrl.set(key, t);
+        } else {
           const prev = byUrl.get(key);
+          const mergedPricing = preferPricing(prev?.pricing, t.pricing);
           byUrl.set(key, {
             ...prev,
             ...t,
             id: prev.id,
             catalogId: t.catalogId || t.id,
-            favorite: Boolean(prev.favorite),
+            pricing: mergedPricing,
+            favorite: Boolean(prev.favorite || t.favorite),
             watchEnabled: t.watchEnabled ?? prev.watchEnabled,
             watchMode: t.watchMode ?? prev.watchMode,
             lastStatus: t.lastStatus ?? prev.lastStatus,
@@ -563,14 +850,10 @@ async function refresh(root) {
         }
       }
     }
-    tools = [...byUrl.values()];
-    categories = Array.isArray(data.categories) ? data.categories : [];
-    for (const t of tools) {
-      for (const c of t.categories || t.tags || []) {
-        if (c && !categories.includes(c)) categories.push(c);
-      }
-    }
-    categories.sort((a, b) => a.localeCompare(b));
+    const nextTools = [...byUrl.values()];
+    const nextCategories = Array.isArray(data.categories) ? data.categories : [];
+    writePanelCache(TOOL_LIBRARY_CACHE_KEY, { tools: nextTools, categories: nextCategories });
+    applyToolLibraryPayload(root, { tools: nextTools, categories: nextCategories });
     if (!repairAttempted) {
       repairAttempted = true;
       fetch('/api/tool-library/tools/repair-assets', { method: 'POST' })
@@ -580,12 +863,8 @@ async function refresh(root) {
         })
         .catch(() => {});
     }
-    if (status) status.hidden = true;
-    renderSidebar(root);
-    renderGrid(root);
-    updateDeleteBtn(root);
-    refreshReview(root);
   } catch (e) {
+    if (tools.length) return;
     if (status) {
       status.hidden = false;
       status.textContent = `Could not load tools (${e?.message || e}).`;
@@ -900,372 +1179,6 @@ function openAddModal(root) {
   input.focus();
 }
 
-async function ensureCatalogId(tool) {
-  if (tool.catalogId) return tool.catalogId;
-  const url = tool.url || tool.website;
-  if (!url) return '';
-  // Sync tool URL into catalog so discovery jobs have a resource id
-  const r = await fetch('/api/web-catalog/resources', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      url,
-      title: tool.name,
-      summary: tool.bestUsedFor || '',
-      kind_hints: ['tool'],
-      tags: tool.categories || [],
-      project: 'dashbird',
-      section: 'Tools',
-      legacy_tool_id: tool.id,
-      logo_url: tool.logoUrl || null,
-      snapshot_url: tool.snapshotUrl || null,
-      operating_systems: tool.operatingSystems || [],
-      rating: tool.rating,
-      rating_source: tool.ratingSource,
-      pricing: tool.pricing || {},
-    }),
-  });
-  const data = await r.json();
-  if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
-  tool.catalogId = data.resource?.id;
-  return tool.catalogId;
-}
-
-function stopThinkingDots(root) {
-  if (thinkingDotsTimer) {
-    clearInterval(thinkingDotsTimer);
-    thinkingDotsTimer = null;
-  }
-  thinkingDotsLabel = '';
-  const status = root?.querySelector('.tool-library__status');
-  if (status?.dataset.thinking === '1') {
-    status.hidden = true;
-    status.textContent = '';
-    delete status.dataset.thinking;
-  }
-  const thinking = root?.querySelector('.tool-library__review-thinking');
-  if (thinking) {
-    thinking.hidden = true;
-    thinking.textContent = '';
-  }
-}
-
-/**
- * Animate trailing dots while a background alternatives search runs.
- * @param {HTMLElement} root
- * @param {string} label
- */
-function startThinkingDots(root, label) {
-  const status = root?.querySelector('.tool-library__status');
-  const thinking = root?.querySelector('.tool-library__review-thinking');
-  const wrap = root?.querySelector('.tool-library__review');
-  thinkingDotsLabel = label || 'Searching for alternatives';
-  if (thinkingDotsTimer) clearInterval(thinkingDotsTimer);
-  let n = 0;
-  const tick = () => {
-    n = (n % 3) + 1;
-    const dots = '.'.repeat(n);
-    const text = `${thinkingDotsLabel}${dots}`;
-    if (status) {
-      status.hidden = false;
-      status.dataset.thinking = '1';
-      status.textContent = text;
-    }
-    if (thinking) {
-      thinking.hidden = false;
-      thinking.textContent = text;
-    }
-    if (wrap) wrap.hidden = false;
-  };
-  tick();
-  thinkingDotsTimer = setInterval(tick, 450);
-}
-
-/**
- * @param {HTMLElement} root
- * @returns {Promise<boolean>} true if any discovery job is still pending/running
- */
-async function hasActiveDiscoveryJobs() {
-  try {
-    const r = await fetch('/api/web-catalog/jobs', { cache: 'no-store' });
-    const data = await r.json();
-    if (!r.ok || data.ok === false) return false;
-    const jobs = Array.isArray(data.jobs) ? data.jobs : [];
-    return jobs.some((j) => j.status === 'pending' || j.status === 'running');
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Queue a background alternatives search (no modal).
- * Accepts a library/catalog tool, or a plain name/query string.
- * @param {object|string} toolOrQuery
- * @param {HTMLElement} root
- */
-async function queueAlternativesJob(toolOrQuery, root) {
-  const status = root?.querySelector('.tool-library__status');
-  const isQuery = typeof toolOrQuery === 'string';
-  const tool = isQuery ? null : toolOrQuery;
-  const label = isQuery
-    ? String(toolOrQuery).trim()
-    : tool?.name || tool?.url || tool?.website || 'tool';
-  reviewDismissed = false;
-  try {
-    startThinkingDots(root, `Searching alternatives for ${label}`);
-    /** @type {Record<string, string>} */
-    const body = {};
-    if (!isQuery) {
-      const resourceId = await ensureCatalogId(tool);
-      if (resourceId) body.resourceId = resourceId;
-      else if (tool?.url || tool?.website) body.url = tool.url || tool.website;
-      else if (tool?.name) body.name = tool.name;
-    } else {
-      body.name = String(toolOrQuery).trim();
-    }
-    if (!body.resourceId && !body.url && !body.name) {
-      throw new Error('Could not identify tool for alternatives search');
-    }
-    const r = await fetch('/api/web-catalog/jobs/alternatives', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await r.json();
-    if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
-    startThinkingDots(root, `Searching alternatives for ${label}`);
-    refreshReview(root);
-  } catch (e) {
-    stopThinkingDots(root);
-    if (status) {
-      status.hidden = false;
-      status.textContent = e?.message || 'Could not queue alternatives job';
-    }
-  }
-}
-
-async function refreshReview(root) {
-  const wrap = root?.querySelector('.tool-library__review');
-  const list = root?.querySelector('.tool-library__review-list');
-  const heading = root?.querySelector('.tool-library__review-heading');
-  const cancelBtn = root?.querySelector('.tool-library__review-cancel');
-  if (!wrap || !list) return;
-  try {
-    const [reviewRes, active] = await Promise.all([
-      fetch('/api/web-catalog/review?status=pending', { cache: 'no-store' }),
-      hasActiveDiscoveryJobs(),
-    ]);
-    const data = await reviewRes.json();
-    if (!reviewRes.ok || data.ok === false) throw new Error(data.error || `HTTP ${reviewRes.status}`);
-    const allItems = Array.isArray(data.items) ? data.items : [];
-    const items = allItems.slice(0, REVIEW_MAX);
-    const total = allItems.length;
-
-    if (active && !reviewDismissed) {
-      if (!thinkingDotsTimer) {
-        startThinkingDots(root, thinkingDotsLabel || 'Searching for alternatives');
-      }
-    } else if (thinkingDotsTimer && !active) {
-      stopThinkingDots(root);
-    }
-
-    list.replaceChildren();
-    if (heading) {
-      if (items.length) {
-        heading.textContent =
-          total > REVIEW_MAX
-            ? `Review (${items.length} of ${total})`
-            : `Review (${items.length})`;
-      } else {
-        heading.textContent = 'Review';
-      }
-    }
-
-    if (reviewDismissed && items.length) {
-      // New candidates arrived after Cancel — show them again.
-      reviewDismissed = false;
-    }
-
-    wrap.hidden = reviewDismissed || (items.length === 0 && !active);
-    if (cancelBtn) cancelBtn.hidden = wrap.hidden;
-
-    for (const item of items) {
-      const row = el('div');
-      row.className = 'tool-library__review-row';
-      const thumbUrl = item.payload?.snapshot_url || item.payload?.logo_url || '';
-      if (thumbUrl) {
-        const thumb = el('img');
-        thumb.className = 'tool-library__review-thumb';
-        thumb.src = thumbUrl;
-        thumb.alt = '';
-        thumb.loading = 'lazy';
-        row.append(thumb);
-      }
-      const body = el('div');
-      body.className = 'tool-library__review-body';
-      const name = el('strong');
-      name.textContent = item.candidate_title || item.candidate_url;
-      const meta = el('p');
-      meta.className = 'tool-library__review-meta';
-      meta.textContent = item.reason || item.candidate_summary || item.candidate_url;
-      body.append(name, meta);
-      const actions = el('div');
-      actions.className = 'tool-library__review-actions';
-      const approve = el('button');
-      approve.type = 'button';
-      approve.className = 'tool-library__btn tool-library__btn--primary';
-      approve.textContent = 'Add';
-      const reject = el('button');
-      reject.type = 'button';
-      reject.className = 'tool-library__btn';
-      reject.textContent = 'Skip';
-      approve.addEventListener('click', async () => {
-        approve.disabled = true;
-        reject.disabled = true;
-        await fetch(`/api/web-catalog/review/${encodeURIComponent(item.id)}/resolve`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: 'approved' }),
-        });
-        await refresh(root);
-        await refreshReview(root);
-      });
-      reject.addEventListener('click', async () => {
-        approve.disabled = true;
-        reject.disabled = true;
-        await fetch(`/api/web-catalog/review/${encodeURIComponent(item.id)}/resolve`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: 'rejected' }),
-        });
-        await refreshReview(root);
-      });
-      actions.append(approve, reject);
-      row.append(body, actions);
-      list.append(row);
-    }
-  } catch {
-    if (!thinkingDotsTimer) wrap.hidden = true;
-  }
-}
-
-/**
- * Dismiss the review panel (and stop thinking indicator).
- * @param {HTMLElement} root
- */
-function cancelReviewPanel(root) {
-  reviewDismissed = true;
-  stopThinkingDots(root);
-  const wrap = root?.querySelector('.tool-library__review');
-  if (wrap) wrap.hidden = true;
-}
-
-/** Legacy sync alternatives modal (kept for import-batch from older flows). */
-async function openAlternativesModal(tool) {
-  const backdrop = el('div');
-  backdrop.className = 'tool-library__modal-backdrop';
-  const modal = el('div');
-  modal.className = 'tool-library__modal tool-library__modal--wide';
-  const title = el('h3');
-  title.className = 'tool-library__modal-title';
-  title.textContent = `Alternatives to ${tool.name}`;
-  const msg = el('p');
-  msg.className = 'tool-library__modal-msg';
-  msg.textContent = 'Searching for top alternatives…';
-  const list = el('div');
-  list.className = 'tool-library__alt-list';
-  const actions = el('div');
-  actions.className = 'tool-library__modal-actions';
-  const cancel = el('button');
-  cancel.type = 'button';
-  cancel.className = 'tool-library__btn';
-  cancel.textContent = 'Close';
-  const addBtn = el('button');
-  addBtn.type = 'button';
-  addBtn.className = 'tool-library__btn tool-library__btn--primary';
-  addBtn.textContent = 'Add selected to toolbox';
-  addBtn.disabled = true;
-  cancel.addEventListener('click', () => backdrop.remove());
-  backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop) backdrop.remove();
-  });
-  const rowById = new Map();
-  addBtn.addEventListener('click', async () => {
-    const items = [];
-    for (const [id, row] of rowById) {
-      const cb = list.querySelector(`input[data-alt-id="${id}"]`);
-      if (cb?.checked && !row.isOriginal) items.push({ url: row.url });
-    }
-    if (!items.length) return;
-    addBtn.disabled = true;
-    msg.textContent = 'Adding tools…';
-    try {
-      await fetch('/api/tool-library/tools/import-batch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items }),
-      });
-      backdrop.remove();
-      const root = document.querySelector('.tool-library');
-      if (root) await refresh(root);
-    } catch (e) {
-      msg.textContent = e?.message || 'Import failed';
-      addBtn.disabled = false;
-    }
-  });
-  actions.append(cancel, addBtn);
-  modal.append(title, msg, list, actions);
-  backdrop.append(modal);
-  document.body.append(backdrop);
-  try {
-    const r = await fetch(`/api/tool-library/tools/${encodeURIComponent(tool.id)}/alternatives`, {
-      method: 'POST',
-    });
-    const data = await r.json();
-    if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
-    list.replaceChildren();
-    const ranked = data.ranked || [];
-    if (!ranked.length) {
-      msg.textContent = 'No new alternatives found (web search returned no tools outside your toolbox).';
-      addBtn.disabled = true;
-      return;
-    }
-    msg.textContent = 'Web-discovered alternatives not already in your toolbox. Check rows to add.';
-    for (const row of ranked) {
-      rowById.set(row.tempId, row);
-      const item = el('div');
-      item.className = 'tool-library__alt-row';
-      if (row.isOriginal) item.classList.add('tool-library__alt-row--original');
-      const pick = el('input');
-      pick.type = 'checkbox';
-      pick.dataset.altId = row.tempId;
-      pick.disabled = Boolean(row.isOriginal);
-      pick.title = row.isOriginal ? 'Already in toolbox' : 'Add to toolbox';
-      const body = el('div');
-      body.className = 'tool-library__alt-body';
-      const name = el('strong');
-      name.textContent = row.name;
-      const meta = el('span');
-      const ratingBit = ratingLabel(row);
-      const priceBit = pricingBadgeText(row);
-      meta.textContent = [ratingBit, priceBit].filter(Boolean).join(' · ');
-      body.append(name, meta);
-      const bestTxt = typeof row.bestUsedFor === 'string' ? row.bestUsedFor.trim() : '';
-      if (bestTxt) {
-        const bestLine = el('p');
-        bestLine.className = 'tool-library__alt-best-for';
-        bestLine.textContent = bestTxt;
-        body.append(bestLine);
-      }
-      item.append(pick, body);
-      list.append(item);
-    }
-    addBtn.disabled = false;
-  } catch (e) {
-    msg.textContent = e?.message || 'Could not find alternatives';
-  }
-}
-
 export function mountToolLibrary(mount) {
   if (!mount) return;
   mount.classList.add('tool-library');
@@ -1276,7 +1189,7 @@ export function mountToolLibrary(mount) {
   const search = el('input');
   search.type = 'search';
   search.className = 'tool-library__search';
-  search.placeholder = 'Search tools… Enter finds alternatives in the background';
+  search.placeholder = 'Search tools… Enter searches the web when nothing matches';
   search.addEventListener('input', () => {
     searchQuery = search.value;
     renderGrid(mount);
@@ -1289,13 +1202,10 @@ export function mountToolLibrary(mount) {
     searchQuery = q;
     renderGrid(mount);
     const matches = filteredTools(tools);
-    if (matches.length === 1) {
-      queueAlternativesJob(matches[0], mount);
-      return;
-    }
     if (matches.length > 1) return;
-    // No local match — queue background alternatives by name (no popup).
-    queueAlternativesJob(q, mount);
+    // Zero or one local match — open web search (match + alternatives).
+    clearEmptyEnterHint(mount);
+    openOnlineSearchModal(q, mount);
   });
   const addBtn = el('button');
   addBtn.type = 'button';
@@ -1351,29 +1261,6 @@ export function mountToolLibrary(mount) {
   });
   toolbar.append(search, addBtn, delBtn, importBtn, exportBtn);
 
-  const review = el('section');
-  review.className = 'tool-library__review';
-  review.hidden = true;
-  const reviewHead = el('div');
-  reviewHead.className = 'tool-library__review-head';
-  const reviewHeading = el('h3');
-  reviewHeading.className = 'tool-library__review-heading';
-  reviewHeading.textContent = 'Review';
-  const reviewCancel = el('button');
-  reviewCancel.type = 'button';
-  reviewCancel.className = 'tool-library__btn tool-library__review-cancel';
-  reviewCancel.textContent = 'Cancel';
-  reviewCancel.title = 'Hide review panel';
-  reviewCancel.addEventListener('click', () => cancelReviewPanel(mount));
-  reviewHead.append(reviewHeading, reviewCancel);
-  const reviewThinking = el('p');
-  reviewThinking.className = 'tool-library__review-thinking';
-  reviewThinking.hidden = true;
-  reviewThinking.setAttribute('aria-live', 'polite');
-  const reviewList = el('div');
-  reviewList.className = 'tool-library__review-list';
-  review.append(reviewHead, reviewThinking, reviewList);
-
   const body = el('div');
   body.className = 'tool-library__body';
   const sidebar = el('aside');
@@ -1399,8 +1286,15 @@ export function mountToolLibrary(mount) {
   main.append(status, empty, grid);
   body.append(sidebar, main);
 
-  mount.append(toolbar, review, body);
+  mount.append(toolbar, body);
+
+  const cached = readPanelCache(TOOL_LIBRARY_CACHE_KEY, TOOL_LIBRARY_CACHE_MAX_MS);
+  if (cached && typeof cached === 'object' && Array.isArray(cached.tools) && cached.tools.length) {
+    applyToolLibraryPayload(mount, cached);
+  } else {
+    status.hidden = false;
+    status.textContent = 'Loading tools…';
+  }
+
   refresh(mount);
-  refreshReview(mount);
-  setInterval(() => refreshReview(mount), 20_000);
 }

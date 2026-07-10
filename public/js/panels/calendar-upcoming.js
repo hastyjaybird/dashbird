@@ -1,4 +1,6 @@
-const STORAGE_KEY = 'dashbird-cal-upcoming-v1';
+import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
+
+const STORAGE_KEY = 'cal-upcoming';
 const LOCAL_MAX_MS = 24 * 60 * 60 * 1000;
 
 /** @param {string} dateLabel @param {string} timeLabel */
@@ -44,32 +46,17 @@ function formatWhen(ev, timeZone) {
 }
 
 function readLocalCalendarCache() {
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const j = JSON.parse(raw);
-    if (!j?.at || !Array.isArray(j.events)) return null;
-    if (Date.now() - j.at > LOCAL_MAX_MS) return null;
-    return j;
-  } catch {
-    return null;
-  }
+  const j = readPanelCache(STORAGE_KEY, LOCAL_MAX_MS);
+  if (!j || typeof j !== 'object' || !Array.isArray(j.events)) return null;
+  return j;
 }
 
 /** @param {{ events: object[], timeZone?: string }} payload */
 function writeLocalCalendarCache(payload) {
-  try {
-    sessionStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        at: Date.now(),
-        events: payload.events,
-        timeZone: payload.timeZone,
-      }),
-    );
-  } catch {
-    /* ignore */
-  }
+  writePanelCache(STORAGE_KEY, {
+    events: payload.events,
+    timeZone: payload.timeZone,
+  });
 }
 
 /**

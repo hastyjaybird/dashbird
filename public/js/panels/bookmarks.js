@@ -1,3 +1,5 @@
+import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
+
 function hostnameFromHref(href) {
   try {
     const u = new URL(href);
@@ -197,33 +199,17 @@ function createTile(row) {
   return a;
 }
 
-const BOOKMARK_CACHE_PREFIX = 'dashbird-bookmarks-v1:';
+const BOOKMARK_CACHE_PREFIX = 'bookmarks:';
 const BOOKMARK_CACHE_MAX_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** @param {string} dataPath */
 function readBookmarkCache(dataPath) {
-  try {
-    const raw = sessionStorage.getItem(BOOKMARK_CACHE_PREFIX + dataPath);
-    if (!raw) return null;
-    const j = JSON.parse(raw);
-    if (!j?.at || j.payload == null) return null;
-    if (Date.now() - j.at > BOOKMARK_CACHE_MAX_MS) return null;
-    return j.payload;
-  } catch {
-    return null;
-  }
+  return readPanelCache(BOOKMARK_CACHE_PREFIX + dataPath, BOOKMARK_CACHE_MAX_MS);
 }
 
 /** @param {string} dataPath @param {unknown} payload */
 function writeBookmarkCache(dataPath, payload) {
-  try {
-    sessionStorage.setItem(
-      BOOKMARK_CACHE_PREFIX + dataPath,
-      JSON.stringify({ at: Date.now(), payload }),
-    );
-  } catch {
-    /* ignore */
-  }
+  writePanelCache(BOOKMARK_CACHE_PREFIX + dataPath, payload);
 }
 
 function showBookmarkSkeleton(root, count = 6) {

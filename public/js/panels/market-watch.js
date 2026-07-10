@@ -1,7 +1,10 @@
 import { createSentimentDialBlock } from './sentiment-dial.js';
+import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
 
 const REFRESH_MS = 5 * 60 * 1000;
 const FNG_REFRESH_MS = 90 * 1000;
+const MARKET_CACHE_KEY = 'market-watch';
+const MARKET_CACHE_MAX_MS = 30 * 60 * 1000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 const MW_UP = '#6ee7a8';
@@ -443,6 +446,43 @@ export function mountMarketWatch(container) {
     }
   }
 
+  /**
+   * @param {object} j
+   * @param {{ fromCache?: boolean }} [opts]
+   */
+  function applyMarketPayload(j, opts = {}) {
+    if (j?.disabled) {
+      body.textContent = 'Market watch disabled';
+      sentimentSub.hidden = true;
+      if (card) card.hidden = true;
+      return;
+    }
+    sentimentSub.hidden = false;
+    const tickers = Array.isArray(j.tickers) ? j.tickers : [];
+    savedTickers = tickers.map((q) => ({
+      label: displayTickerLabel(q.label, q.symbol),
+      symbol: String(q.symbol || '').trim().toUpperCase(),
+    }));
+    if (j.settings && typeof j.settings === 'object') {
+      marketSettings = {
+        quoteRange: String(j.settings.quoteRange || '5d'),
+        fearGreedHorizon: String(j.settings.fearGreedHorizon || 'all'),
+      };
+    }
+    renderMarketWatch(
+      body,
+      { tickers, settings: marketSettings },
+      editing ? { editing: true, onRemove: removeTicker } : {},
+    );
+    if (j.fearGreed) sentimentDial.applyFng(j.fearGreed);
+    else if (!opts.fromCache) void sentimentDial.refresh();
+    body.removeAttribute('aria-busy');
+    msg.hidden = true;
+    if (card) card.hidden = false;
+    if (editing) showEditFooter();
+    else showViewFooter();
+  }
+
   async function refreshQuotes() {
     body.setAttribute('aria-busy', 'true');
     if (!body.querySelector('.market-watch__list') && !body.querySelector('.market-watch__status--err')) {
@@ -456,37 +496,13 @@ export function mountMarketWatch(container) {
       const r = await fetch('/api/market-watch', { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
-      if (j.disabled) {
-        body.textContent = 'Market watch disabled';
-        sentimentSub.hidden = true;
-        if (card) card.hidden = true;
+      if (!j.disabled) writePanelCache(MARKET_CACHE_KEY, j);
+      applyMarketPayload(j);
+    } catch (e) {
+      if (body.querySelector('.market-watch__list')) {
+        body.removeAttribute('aria-busy');
         return;
       }
-      sentimentSub.hidden = false;
-      const tickers = Array.isArray(j.tickers) ? j.tickers : [];
-      savedTickers = tickers.map((q) => ({
-        label: displayTickerLabel(q.label, q.symbol),
-        symbol: String(q.symbol || '').trim().toUpperCase(),
-      }));
-      if (j.settings && typeof j.settings === 'object') {
-        marketSettings = {
-          quoteRange: String(j.settings.quoteRange || '5d'),
-          fearGreedHorizon: String(j.settings.fearGreedHorizon || 'all'),
-        };
-      }
-      renderMarketWatch(
-        body,
-        { tickers, settings: marketSettings },
-        editing ? { editing: true, onRemove: removeTicker } : {},
-      );
-      if (j.fearGreed) sentimentDial.applyFng(j.fearGreed);
-      else void sentimentDial.refresh();
-      body.removeAttribute('aria-busy');
-      msg.hidden = true;
-      if (card) card.hidden = false;
-      if (editing) showEditFooter();
-      else showViewFooter();
-    } catch (e) {
       body.replaceChildren();
       const err = document.createElement('p');
       err.className = 'market-watch__status market-watch__status--err';
@@ -519,6 +535,11 @@ export function mountMarketWatch(container) {
       msg.hidden = false;
       showViewFooter();
     }
+  }
+
+  const cached = readPanelCache(MARKET_CACHE_KEY, MARKET_CACHE_MAX_MS);
+  if (cached && typeof cached === 'object' && Array.isArray(cached.tickers)) {
+    applyMarketPayload(cached, { fromCache: true });
   }
 
   void sentimentDial.refresh();

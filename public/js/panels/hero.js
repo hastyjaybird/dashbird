@@ -4,10 +4,13 @@ import { describeWeather, fetchCurrentWeather } from './weather-data.js';
 import { detailLineWithSkyHarvestLicenseHint } from '../lib/resource-license-hint.js';
 import { standaloneWarnExclamationSvgHtml } from '../lib/standalone-warn-exclamation.js';
 import { rainAlertQueryString, subscribeDevicePlace } from '../lib/device-location.js';
+import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
 
 const FALLBACK_TZ = 'America/Los_Angeles';
 /** Matches server OpenSky cache (src/lib/aircraft-nearby.js CACHE_MS). */
 const SKY_STRIP_POLL_MS = 90_000;
+const HERO_CACHE_MAX_MS = 45 * 60 * 1000;
+const SKY_CACHE_MAX_MS = 20 * 60 * 1000;
 
 const HERO_SUNSET_SRC = '/icons/weather/sunset-glyph.png';
 const YOSEMITE_MOONBOW_STRIP_SRC = '/assets/earth-moonbow-strip.png';
@@ -630,6 +633,7 @@ async function refreshSkyEventStrip(container, tz, moonJ) {
   const j = await fetch('/api/sky-events?windowHours=24', { cache: 'no-store' }).then((r) =>
     r.ok ? r.json() : null,
   );
+  if (j) writePanelCache('sky-events', { sky: j, moon: moonJ });
   renderSkyEventStrip(container, j, moonJ, tz);
 }
 
@@ -649,6 +653,14 @@ function fillSkyEventStrip(container, timeZone) {
   let hasRendered = false;
   /** @type {object | null} */
   let moonJ = null;
+
+  const cachedSky = readPanelCache('sky-events', SKY_CACHE_MAX_MS);
+  if (cachedSky && typeof cachedSky === 'object' && cachedSky.sky) {
+    moonJ = cachedSky.moon ?? null;
+    renderSkyEventStrip(container, cachedSky.sky, moonJ, tz);
+    hasRendered = true;
+  }
+
   const moonbowPromise = fetch('/api/yosemite-moonbow', { cache: 'no-store' })
     .then((r) => (r.ok ? r.json() : null))
     .then((j) => {
@@ -667,6 +679,7 @@ function fillSkyEventStrip(container, timeZone) {
           r.ok ? r.json() : null,
         );
         const [, skyJ] = await Promise.all([moonbowPromise, skyPromise]);
+        if (skyJ) writePanelCache('sky-events', { sky: skyJ, moon: moonJ });
         renderSkyEventStrip(container, skyJ, moonJ, tz);
         return;
       }
@@ -775,6 +788,91 @@ export function mountHero(root, config, options = {}) {
   const oakLon = config.weatherLon;
   const sfLat = config.sfWeatherLat;
   const sfLon = config.sfWeatherLon;
+  const heroCacheKey = `hero-weather:${oakLat},${oakLon}:${sfLat},${sfLon}`;
+
+  /**
+   * @param {{ a?: object | null, wOak?: object | null, wSf?: object | null, memo?: object | null, precipLine?: string }} payload
+   * @param {{ keepLoading?: boolean }} [opts]
+   */
+  function paintHero(payload, opts = {}) {
+    if (!opts.keepLoading) loading.remove();
+    fillHeroPrecipLine(precipEl, typeof payload.precipLine === 'string' ? payload.precipLine : '');
+    const a = payload.a;
+    const wOak = payload.wOak;
+    const wSf = payload.wSf;
+    const memo = payload.memo;
+    if (wOak) fillCityWeather(oak, wOak, 'oak', { heatAdvisory: memo?.heatAdvisory === true });
+    if (wSf) fillCityWeather(sf, wSf, 'sf');
+
+    const zipOk = hasFiveDigitWeatherZip(config);
+
+    if (!a || a.ok === false) {
+      sunBlock.replaceChildren(
+        buildAstroItem(buildHeroSunsetGlyph(), 'Sunset', '—', '', ''),
+      );
+      moonBlock.replaceChildren(
+        buildMoonFlankItem(buildHeroMoonGlyph(new Date()), '—', ''),
+      );
+      return;
+    }
+
+    const sunsetMs = a.sunsetEpochMs;
+    const moonMs = a.moonriseEpochMs;
+    const sunsetAt =
+      typeof sunsetMs === 'number' && Number.isFinite(sunsetMs) ? new Date(sunsetMs) : null;
+    const astroTz =
+      typeof a.timeZone === 'string' && a.timeZone.trim() !== '' ? a.timeZone.trim() : displayTz;
+    const nwsLink =
+      typeof a.nwsMapClickUrl === 'string' && /^https?:\/\//i.test(a.nwsMapClickUrl.trim())
+        ? a.nwsMapClickUrl.trim()
+        : typeof config.nwsMapClickUrl === 'string' && /^https?:\/\//i.test(config.nwsMapClickUrl.trim())
+          ? config.nwsMapClickUrl.trim()
+          : '';
+    const showNextNew = a.moonCaptionShowsNextNewMoon === true;
+    const capMs = showNextNew ? a.nextNewMoonEpochMs : a.nextFullMoonEpochMs;
+    const capDate =
+      typeof capMs === 'number' && Number.isFinite(capMs) ? new Date(capMs) : null;
+    const moonCaption =
+      capDate && !Number.isNaN(capDate.getTime())
+        ? `${showNextNew ? 'New Moon:' : 'Full Moon:'} ${formatCaptionDateNoYear(capDate, astroTz)}`
+        : '';
+
+    const sunItem = buildAstroItem(
+      buildHeroSunsetGlyph(),
+      'Sunset',
+      formatLaTime12h(sunsetAt, astroTz),
+      nwsLink,
+      '',
+    );
+    const textCol = sunItem.querySelector('.hero-astro-text');
+    const timeEl = textCol?.querySelector('.hero-astro-time');
+    if (
+      timeEl &&
+      zipOk &&
+      wOak &&
+      wOak.uvIndex != null &&
+      Number.isFinite(Number(wOak.uvIndex))
+    ) {
+      timeEl.after(buildSunUvWrap(wOak.uvIndex));
+    }
+    if (nwsLink) {
+      sunItem.title = 'National Weather Service — point forecast (opens in new tab)';
+    }
+    sunBlock.replaceChildren(sunItem);
+
+    moonBlock.replaceChildren(
+      buildMoonFlankItem(
+        buildHeroMoonGlyph(new Date()),
+        formatMoonriseLabel(moonMs, astroTz),
+        moonCaption,
+      ),
+    );
+  }
+
+  const cachedHero = readPanelCache(heroCacheKey, HERO_CACHE_MAX_MS);
+  if (cachedHero && typeof cachedHero === 'object') {
+    paintHero(cachedHero);
+  }
 
   const astroQs = new URLSearchParams({
     lat: String(oakLat),
@@ -796,8 +894,15 @@ export function mountHero(root, config, options = {}) {
     fetchRainAlert().then((d) => (d?.imminent && d?.message ? String(d.message) : '')),
   ])
     .then(([a, wOak, wSf, memo, precipLine]) => {
-      loading.remove();
-      fillHeroPrecipLine(precipEl, typeof precipLine === 'string' ? precipLine : '');
+      const payload = {
+        a,
+        wOak,
+        wSf,
+        memo,
+        precipLine: typeof precipLine === 'string' ? precipLine : '',
+      };
+      writePanelCache(heroCacheKey, payload);
+      paintHero(payload);
       const refreshRain = () => {
         fetchRainAlert().then((d) => {
           fillHeroPrecipLine(
@@ -810,74 +915,9 @@ export function mountHero(root, config, options = {}) {
       subscribeDevicePlace(() => {
         refreshRain();
       });
-      if (wOak) fillCityWeather(oak, wOak, 'oak', { heatAdvisory: memo?.heatAdvisory === true });
-      if (wSf) fillCityWeather(sf, wSf, 'sf');
-
-      const zipOk = hasFiveDigitWeatherZip(config);
-
-      if (!a || a.ok === false) {
-        sunBlock.replaceChildren(
-          buildAstroItem(buildHeroSunsetGlyph(), 'Sunset', '—', '', ''),
-        );
-        moonBlock.replaceChildren(
-          buildMoonFlankItem(buildHeroMoonGlyph(new Date()), '—', ''),
-        );
-        return;
-      }
-
-      const sunsetMs = a.sunsetEpochMs;
-      const moonMs = a.moonriseEpochMs;
-      const sunsetAt =
-        typeof sunsetMs === 'number' && Number.isFinite(sunsetMs) ? new Date(sunsetMs) : null;
-      const astroTz =
-        typeof a.timeZone === 'string' && a.timeZone.trim() !== '' ? a.timeZone.trim() : displayTz;
-      const nwsLink =
-        typeof a.nwsMapClickUrl === 'string' && /^https?:\/\//i.test(a.nwsMapClickUrl.trim())
-          ? a.nwsMapClickUrl.trim()
-          : typeof config.nwsMapClickUrl === 'string' && /^https?:\/\//i.test(config.nwsMapClickUrl.trim())
-            ? config.nwsMapClickUrl.trim()
-            : '';
-      const showNextNew = a.moonCaptionShowsNextNewMoon === true;
-      const capMs = showNextNew ? a.nextNewMoonEpochMs : a.nextFullMoonEpochMs;
-      const capDate =
-        typeof capMs === 'number' && Number.isFinite(capMs) ? new Date(capMs) : null;
-      const moonCaption =
-        capDate && !Number.isNaN(capDate.getTime())
-          ? `${showNextNew ? 'New Moon:' : 'Full Moon:'} ${formatCaptionDateNoYear(capDate, astroTz)}`
-          : '';
-
-      const sunItem = buildAstroItem(
-        buildHeroSunsetGlyph(),
-        'Sunset',
-        formatLaTime12h(sunsetAt, astroTz),
-        nwsLink,
-        '',
-      );
-      const textCol = sunItem.querySelector('.hero-astro-text');
-      const timeEl = textCol?.querySelector('.hero-astro-time');
-      if (
-        timeEl &&
-        zipOk &&
-        wOak &&
-        wOak.uvIndex != null &&
-        Number.isFinite(Number(wOak.uvIndex))
-      ) {
-        timeEl.after(buildSunUvWrap(wOak.uvIndex));
-      }
-      if (nwsLink) {
-        sunItem.title = 'National Weather Service — point forecast (opens in new tab)';
-      }
-      sunBlock.replaceChildren(sunItem);
-
-      moonBlock.replaceChildren(
-        buildMoonFlankItem(
-          buildHeroMoonGlyph(new Date()),
-          formatMoonriseLabel(moonMs, astroTz),
-          moonCaption,
-        ),
-      );
     })
     .catch((e) => {
+      if (!document.contains(loading)) return;
       loading.textContent = `Weather or astronomy unavailable: ${e.message}`;
     });
 }

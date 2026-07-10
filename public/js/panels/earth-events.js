@@ -1,4 +1,9 @@
 import { buildAstroItem } from './hero.js';
+import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
+
+const EARTH_CACHE_KEY = 'earth-strip-fast';
+const EARTH_CACHE_MAX_MS = 60 * 60 * 1000;
+
 const MONARCH_STRIP_ICON_SRC = '/assets/monarch-earth-strip.png';
 
 function buildMonarchGlyph() {
@@ -500,6 +505,35 @@ export function mountEarthStrip(container) {
     }, 8000);
   }
 
+  /**
+   * @param {object[]} merged
+   * @param {object[]} quakeItems
+   */
+  function paintFastEarth(merged, quakeItems) {
+    container.replaceChildren();
+    fastRowCount = merged.length;
+    fastDone = true;
+
+    if (merged.length > 0) {
+      const qEv = quakeItems.find((e) => e.earthType === 'usgs_quake_week_max');
+      setEarthAriaLabel(qEv?.quakeAsOfMd);
+      appendEarthEventRows(container, merged);
+    }
+
+    if (pendingGlmItems?.length) {
+      appendEarthEventRows(container, pendingGlmItems);
+      pendingGlmItems = null;
+    }
+
+    syncEarthVisibility();
+  }
+
+  const cachedEarth = readPanelCache(EARTH_CACHE_KEY, EARTH_CACHE_MAX_MS);
+  if (cachedEarth && typeof cachedEarth === 'object' && Array.isArray(cachedEarth.merged)) {
+    paintFastEarth(cachedEarth.merged, Array.isArray(cachedEarth.quakeItems) ? cachedEarth.quakeItems : []);
+    scheduleGlmWhenNear();
+  }
+
   Promise.all([
     fetchEarthJson('/api/usa-npn-spring'),
     fetchEarthJson('/api/diablo-tarantula'),
@@ -513,30 +547,18 @@ export function mountEarthStrip(container) {
     fetchEarthJson('/api/atlantic-storm-watch'),
   ])
     .then((payloads) => {
-      container.replaceChildren();
       const { merged, quakeItems } = mergeFastEarthPayloads(payloads);
-      fastRowCount = merged.length;
-      fastDone = true;
-
-      if (merged.length > 0) {
-        const qEv = quakeItems.find((e) => e.earthType === 'usgs_quake_week_max');
-        setEarthAriaLabel(qEv?.quakeAsOfMd);
-        appendEarthEventRows(container, merged);
-      }
-
-      if (pendingGlmItems?.length) {
-        appendEarthEventRows(container, pendingGlmItems);
-        pendingGlmItems = null;
-      }
-
-      syncEarthVisibility();
+      writePanelCache(EARTH_CACHE_KEY, { merged, quakeItems });
+      paintFastEarth(merged, quakeItems);
       scheduleGlmWhenNear();
     })
     .catch(() => {
-      container.replaceChildren();
-      fastDone = true;
-      fastRowCount = 0;
-      syncEarthVisibility();
+      if (!fastDone) {
+        container.replaceChildren();
+        fastDone = true;
+        fastRowCount = 0;
+        syncEarthVisibility();
+      }
       scheduleGlmWhenNear();
     });
 }

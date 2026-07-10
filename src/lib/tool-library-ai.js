@@ -41,9 +41,25 @@ const VIDEO_TOOL_SEEDS = [
   { title: 'Shotcut', url: 'https://shotcut.org/' },
   { title: 'OpenShot', url: 'https://www.openshot.org/' },
   { title: 'Adobe Premiere Pro', url: 'https://www.adobe.com/products/premiere.html' },
-  { title: 'Final Cut Pro', url: 'https://www.apple.com/final-cut-pro/' },
   { title: 'HitFilm', url: 'https://fxhome.com/product/hitfilm' },
 ];
+
+/** @type {{ title: string, url: string }[]} */
+const NOTES_TOOL_SEEDS = [
+  { title: 'Notion', url: 'https://www.notion.so' },
+  { title: 'Obsidian', url: 'https://obsidian.md' },
+  { title: 'Coda', url: 'https://coda.io' },
+  { title: 'Craft', url: 'https://www.craft.do' },
+  { title: 'Evernote', url: 'https://evernote.com' },
+  { title: 'Roam Research', url: 'https://roamresearch.com' },
+  { title: 'Logseq', url: 'https://logseq.com' },
+  { title: 'ClickUp', url: 'https://clickup.com' },
+  { title: 'Confluence', url: 'https://www.atlassian.com/software/confluence' },
+  { title: 'Airtable', url: 'https://airtable.com' },
+];
+
+/** OS labels that are Apple-ecosystem only (no Windows/Linux/Web/Android). */
+const APPLE_ONLY_OS = new Set(['macos', 'mac', 'osx', 'ios', 'ipados', 'watchos', 'tvos']);
 
 /** @type {Record<string, string>} */
 const KNOWN_TOOL_HOMEPAGES = {
@@ -210,12 +226,22 @@ export async function searchToolOnline(query) {
   matched.alreadyInLibrary = alreadyInLibrary;
 
   const alternatives = await findAlternatives(matched);
-  const ranked = rankToolAmongAlternatives(matched, alternatives);
+  const ranked = rankToolAmongAlternatives(matched, alternatives).filter(
+    (r) => !isAppleOrMacOnlyTool(r),
+  );
+  const matchIsAppleOnly = isAppleOrMacOnlyTool(matched);
+  const includeMatch = !matchIsAppleOnly && !alreadyInLibrary;
+  const rankedOut = includeMatch
+    ? [
+        matched,
+        ...ranked.filter((r) => safeNormalize(r.url) !== safeNormalize(homepage)),
+      ]
+    : ranked.filter((r) => safeNormalize(r.url) !== safeNormalize(homepage));
 
   return {
     query: q,
-    matched,
-    ranked: [matched, ...ranked.filter((r) => safeNormalize(r.url) !== safeNormalize(homepage))],
+    matched: includeMatch ? matched : null,
+    ranked: rankedOut,
   };
 }
 
@@ -418,9 +444,10 @@ export async function enrichToolFromScrape(scrape) {
 
 /**
  * @param {object} tool
+ * @param {{ onProgress?: (info: { phase: string, checked?: number, found?: number, total?: number }) => void | Promise<void> }} [opts]
  */
-export async function findAlternatives(tool) {
-  const webAlternatives = await findWebAlternatives(tool);
+export async function findAlternatives(tool, opts = {}) {
+  const webAlternatives = await findWebAlternatives(tool, opts);
   return dedupeAlternatives(webAlternatives, tool);
 }
 
@@ -440,10 +467,17 @@ export function rankToolAmongAlternatives(tool, alternatives) {
 
 /**
  * @param {object} tool
+ * @param {{ onProgress?: (info: { phase: string, checked?: number, found?: number, total?: number }) => void | Promise<void> }} [opts]
  */
-async function findWebAlternatives(tool) {
+async function findWebAlternatives(tool, opts = {}) {
+  const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
+  await onProgress?.({ phase: 'searching' });
   const candidates = await searchAlternativeUrls(tool);
-  if (!candidates.length) return [];
+  if (!candidates.length) {
+    await onProgress?.({ phase: 'done', checked: 0, found: 0, total: 0 });
+    return [];
+  }
+  await onProgress?.({ phase: 'checking', checked: 0, found: 0, total: candidates.length });
   const existing = await loadToolLibrary();
   const existingUrls = new Set(existing.tools.map((t) => safeNormalize(t.url)).filter(Boolean));
   const existingHosts = new Set(existing.tools.map((t) => safeHostname(t.url)).filter(Boolean));
@@ -451,6 +485,8 @@ async function findWebAlternatives(tool) {
     existing.tools.map((t) => cleanToolName(t.name || '').toLowerCase()).filter(Boolean),
   );
   const out = [];
+  const seenHosts = new Set();
+  let checked = 0;
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
     try {
@@ -458,6 +494,23 @@ async function findWebAlternatives(tool) {
       const resolvedHost = safeHostname(resolvedUrl);
       if (existingUrls.has(safeNormalize(resolvedUrl))) continue;
       if (resolvedHost && existingHosts.has(resolvedHost)) continue;
+      if (resolvedHost && seenHosts.has(resolvedHost)) continue;
+      if (
+        resolvedHost === 'apple.com' ||
+        resolvedHost.endsWith('.apple.com') ||
+        resolvedHost === 'apps.apple.com' ||
+        resolvedHost === 'developer.apple.com' ||
+        resolvedHost === 'itunes.apple.com'
+      ) {
+        continue;
+      }
+      checked += 1;
+      await onProgress?.({
+        phase: 'checking',
+        checked,
+        found: out.length,
+        total: candidates.length,
+      });
       const meta = await fetchPageMeta(resolvedUrl);
       if (isBlockedPage({ ...meta, html: meta.htmlSnippet })) continue;
       const enriched = enrichAlternativeCandidate({
@@ -473,9 +526,17 @@ async function findWebAlternatives(tool) {
       const resolvedName = displayName.toLowerCase();
       if (!resolvedName || existingNames.has(resolvedName)) continue;
       if (isJunkAlternativeName(displayName)) continue;
+      const candidateRow = {
+        name: displayName,
+        url: resolvedUrl,
+        bestUsedFor: enriched.bestUsedFor || meta.description || '',
+        operatingSystems: enriched.operatingSystems || ['Web'],
+      };
+      if (isAppleOrMacOnlyTool(candidateRow)) continue;
       const images = await importToolImages(assetIdForUrl(resolvedUrl), resolvedUrl, meta).catch(
         () => ({ logoPath: '', snapshotPath: '' }),
       );
+      if (resolvedHost) seenHosts.add(resolvedHost);
       out.push({
         tempId: `web-${i + 1}`,
         name: displayName,
@@ -494,11 +555,23 @@ async function findWebAlternatives(tool) {
         snapshotUrl: images.snapshotPath || '',
         source: 'web',
       });
+      await onProgress?.({
+        phase: 'checking',
+        checked,
+        found: out.length,
+        total: candidates.length,
+      });
     } catch {
       // Skip candidates we cannot resolve or fetch.
     }
     if (out.length >= MAX_SEARCH_ALTERNATIVES) break;
   }
+  await onProgress?.({
+    phase: 'done',
+    checked,
+    found: out.length,
+    total: candidates.length,
+  });
   return out;
 }
 
@@ -621,7 +694,15 @@ function seedAlternativeUrls(tool) {
  */
 function toolSeedPool(tool) {
   const name = cleanToolName(tool?.name || '').toLowerCase();
-  const cats = new Set((tool?.categories || []).map((c) => String(c).toLowerCase()));
+  const cats = new Set(
+    [...(tool?.categories || []), ...(tool?.tags || [])].map((c) => String(c).toLowerCase()),
+  );
+  const inferred = inferToolCategories({
+    name: tool?.name || '',
+    description: tool?.bestUsedFor || tool?.summary || '',
+    url: tool?.url || tool?.website || '',
+  }).map((c) => String(c).toLowerCase());
+  for (const c of inferred) cats.add(c);
 
   if (
     cats.has('3d modeling') ||
@@ -636,6 +717,14 @@ function toolSeedPool(tool) {
     /\b(kdenlive|davinci|premiere|shotcut|openshot|hitfilm|video edit)\b/i.test(name)
   ) {
     return VIDEO_TOOL_SEEDS;
+  }
+  if (
+    cats.has('notes') ||
+    cats.has('project mgmt') ||
+    cats.has('writing') ||
+    /\b(notion|obsidian|evernote|coda|roam|logseq|confluence|clickup|airtable|craft)\b/i.test(name)
+  ) {
+    return NOTES_TOOL_SEEDS;
   }
   return [];
 }
@@ -749,15 +838,112 @@ function isLikelyContentPage(url, title = '') {
  * @param {{title:string,url:string}[]} rows
  */
 function dedupeUrlCandidates(rows) {
-  const seen = new Set();
+  const seenUrl = new Set();
+  const seenHost = new Set();
   const out = [];
   for (const row of rows) {
     const normalized = safeNormalize(row?.url || '');
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
+    if (!normalized || seenUrl.has(normalized)) continue;
+    const host = safeHostname(normalized);
+    if (host && seenHost.has(host)) continue;
+    seenUrl.add(normalized);
+    if (host) seenHost.add(host);
     out.push({ title: String(row?.title || '').trim(), url: normalized });
   }
   return out;
+}
+
+/**
+ * Category labels for the source tool (tags + inferred from name/url).
+ * @param {object} tool
+ */
+function sourceToolCategories(tool) {
+  const fromFields = [
+    ...(Array.isArray(tool?.categories) ? tool.categories : []),
+    ...(Array.isArray(tool?.tags) ? tool.tags : []),
+  ]
+    .map((c) => String(c || '').trim().toLowerCase())
+    .filter(Boolean);
+  const inferred = inferToolCategories({
+    name: tool?.name || '',
+    description: tool?.bestUsedFor || tool?.summary || '',
+    url: tool?.url || tool?.website || '',
+  }).map((c) => String(c).toLowerCase());
+  return new Set([...fromFields, ...inferred]);
+}
+
+/** Categories that count as the same product family for alternatives. */
+const CATEGORY_FAMILIES = [
+  new Set(['3d modeling']),
+  new Set(['video']),
+  new Set(['audio', 'audio-only']),
+  new Set(['notes', 'writing', 'project mgmt', 'communication']),
+  new Set(['design']),
+  new Set(['development', 'automation', 'AI']),
+];
+
+/**
+ * @param {Set<string>} cats
+ * @returns {Set<string>}
+ */
+function familyKeysFor(cats) {
+  const keys = new Set();
+  for (let i = 0; i < CATEGORY_FAMILIES.length; i += 1) {
+    const fam = CATEGORY_FAMILIES[i];
+    for (const c of cats) {
+      if (fam.has(c)) keys.add(`fam:${i}`);
+    }
+  }
+  for (const c of cats) keys.add(`cat:${c}`);
+  return keys;
+}
+
+/**
+ * Drop alternatives that clearly belong to a different product family
+ * (e.g. SOLIDWORKS when searching Notion notes/docs tools).
+ * @param {object} alt
+ * @param {Set<string>} sourceCats
+ */
+function isCategoryCompatibleAlternative(alt, sourceCats) {
+  if (!sourceCats.size) return true;
+  const altCats = new Set(
+    (alt.categories || []).map((c) => String(c || '').trim().toLowerCase()).filter(Boolean),
+  );
+  if (!altCats.size) {
+    for (const c of inferToolCategories({
+      name: alt.name || '',
+      description: alt.bestUsedFor || '',
+      url: alt.url || '',
+    })) {
+      altCats.add(String(c).toLowerCase());
+    }
+  }
+  if (!altCats.size) return true;
+  for (const c of altCats) {
+    if (sourceCats.has(c)) return true;
+  }
+  // Exclusive families: CAD and video must not cross into other searches.
+  const sourceIsCad = sourceCats.has('3d modeling');
+  const altIsCad = altCats.has('3d modeling');
+  if (altIsCad !== sourceIsCad) return false;
+  const sourceIsVideo = sourceCats.has('video');
+  const altIsVideo = altCats.has('video');
+  if (altIsVideo !== sourceIsVideo) return false;
+  // Related families (notes ↔ writing ↔ project mgmt) count as compatible.
+  const sourceFam = familyKeysFor(sourceCats);
+  const altFam = familyKeysFor(altCats);
+  for (const k of altFam) {
+    if (k.startsWith('fam:') && sourceFam.has(k)) return true;
+  }
+  // Notes/docs/productivity searches: keep generic tools (utilities/AI) that are
+  // not in an exclusive CAD/video family — seed lists are already curated.
+  if (sourceFam.has('fam:3') && !altIsCad && !altIsVideo) {
+    const onlySoft = [...altCats].every((c) =>
+      ['utilities', 'ai', 'automation', 'communication', 'notes', 'writing', 'project mgmt'].includes(c),
+    );
+    if (onlySoft) return true;
+  }
+  return false;
 }
 
 /**
@@ -765,19 +951,30 @@ function dedupeUrlCandidates(rows) {
  * @param {object} sourceTool
  */
 function dedupeAlternatives(rows, sourceTool) {
-  const seen = new Set();
+  const seenUrls = new Set();
+  const seenHosts = new Set();
+  const seenNames = new Set();
   const sourceUrl = safeNormalize(sourceTool.url);
+  const sourceHost = safeHostname(sourceTool.url);
   const sourceName = String(sourceTool.name || '').trim().toLowerCase();
+  const sourceCats = sourceToolCategories(sourceTool);
   /** @type {object[]} */
   const out = [];
   for (const row of rows) {
     const rowUrl = safeNormalize(row.url);
+    const rowHost = safeHostname(rowUrl);
     const rowName = String(row.name || '').trim().toLowerCase();
     if (!rowUrl) continue;
     if (sourceUrl && rowUrl === sourceUrl) continue;
+    if (sourceHost && rowHost === sourceHost) continue;
     if (sourceName && rowName === sourceName) continue;
-    if (seen.has(rowUrl)) continue;
-    seen.add(rowUrl);
+    if (seenUrls.has(rowUrl)) continue;
+    if (rowHost && seenHosts.has(rowHost)) continue;
+    if (rowName && seenNames.has(rowName)) continue;
+    if (!isCategoryCompatibleAlternative(row, sourceCats)) continue;
+    seenUrls.add(rowUrl);
+    if (rowHost) seenHosts.add(rowHost);
+    if (rowName) seenNames.add(rowName);
     out.push(row);
   }
   return out;
@@ -841,6 +1038,52 @@ function isJunkAlternativeName(name) {
 }
 
 /**
+ * Normalize an OS label for comparison.
+ * @param {string} os
+ */
+function normalizeOsLabel(os) {
+  return String(os || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+}
+
+/**
+ * True when a tool is Apple/macOS-only (no non-Apple platforms).
+ * Cross-platform tools that also support macOS are kept.
+ * @param {object} tool
+ */
+export function isAppleOrMacOnlyTool(tool) {
+  if (!tool) return false;
+  const host = safeHostname(tool.url || tool.website || '');
+  if (
+    host === 'apple.com' ||
+    host.endsWith('.apple.com') ||
+    host === 'apps.apple.com' ||
+    host === 'developer.apple.com' ||
+    host === 'itunes.apple.com'
+  ) {
+    return true;
+  }
+  const name = String(tool.name || '').toLowerCase();
+  if (
+    /\bfinal\s*cut\b/.test(name) ||
+    /\blogic\s*pro\b/.test(name) ||
+    /\bxcode\b/.test(name) ||
+    /\bgarageband\b/.test(name) ||
+    /\bapple\s+(keynote|pages|numbers|motion|compressor)\b/.test(name)
+  ) {
+    return true;
+  }
+  const oss = (tool.operatingSystems || [])
+    .map(normalizeOsLabel)
+    .filter(Boolean);
+  if (!oss.length) return false;
+  const nonApple = oss.filter((o) => !APPLE_ONLY_OS.has(o));
+  return nonApple.length === 0;
+}
+
+/**
  * @param {string} description
  * @param {string} url
  * @param {string} host
@@ -851,8 +1094,12 @@ function inferOperatingSystems(description, url, host) {
   const out = [];
   if (/\bweb\b|\.io\b|saas|browser/.test(blob)) out.push('Web');
   if (/\bwindows\b|\bwin32\b|\bpc\b/.test(blob)) out.push('Windows');
+  if (/\bmac\s*os\b|\bmacos\b|\bos\s*x\b|\bmacintosh\b/.test(blob)) out.push('macOS');
   if (/\blinux\b|\bubuntu\b|\bappimage\b/.test(blob)) out.push('Linux');
   if (/\bios\b|\biphone\b|\bipad\b/.test(blob)) out.push('iOS');
   if (/\bandroid\b/.test(blob)) out.push('Android');
+  if (host && (host === 'apple.com' || host.endsWith('.apple.com'))) {
+    if (!out.includes('macOS') && !out.includes('iOS')) out.push('macOS');
+  }
   return out.length ? [...new Set(out)] : ['Web'];
 }

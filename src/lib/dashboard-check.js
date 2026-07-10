@@ -561,16 +561,19 @@ export async function runDashboardChecks() {
     }
   }
 
-  /* --- v2 stubs: only warn if env suggests user expects them --- */
+  /* --- Vikunja: only check when env suggests the user expects it --- */
   if (process.env.VIKUNJA_BASE_URL?.trim() || process.env.VIKUNJA_TOKEN?.trim()) {
-    const v = await probeInternal('/api/vikunja/');
-    const bad = v.status === 501 || v.json?.error === 'not_implemented';
-    push(
-      'vikunja',
-      'Vikunja API (/api/vikunja)',
-      !bad,
-      bad ? 'VIKUNJA_BASE_URL is set but the proxy is still not implemented (v2).' : '',
-    );
+    const v = await probeInternal('/api/vikunja/health');
+    const ok = v.status === 200 && v.json?.ok === true;
+    const detail = ok
+      ? v.json?.version
+        ? `ok · ${v.json.version}`
+        : 'ok'
+      : v.err ||
+        v.json?.detail ||
+        v.json?.error ||
+        (v.status ? `HTTP ${v.status}` : 'unreachable');
+    push('vikunja', 'Vikunja API (/api/vikunja)', ok, ok ? detail : String(detail));
   }
 
   if (process.env.HASS_BASE_URL?.trim() && process.env.HASS_TOKEN?.trim()) {

@@ -2,8 +2,10 @@ import { focusWebSearchInput } from './web-search.js';
 
 const LS_PAGE_KEY = 'dashbirdPage';
 
+/** @typedef {'main' | 'house-hunter' | 'settings'} DashbirdPage */
+
 /**
- * @param {{ onChange: (page: 'main' | 'settings') => void }} opts
+ * @param {{ onChange: (page: DashbirdPage) => void }} opts
  */
 export function mountPageTabs(mountEl, opts) {
   if (!mountEl) return;
@@ -14,41 +16,45 @@ export function mountPageTabs(mountEl, opts) {
   tabsWrap.setAttribute('role', 'tablist');
   tabsWrap.setAttribute('aria-label', 'Dashboard pages');
 
-  const tabMain = document.createElement('button');
-  tabMain.type = 'button';
-  tabMain.className = 'topbar__tab';
-  tabMain.id = 'page-tab-main';
-  tabMain.setAttribute('role', 'tab');
-  tabMain.textContent = 'Main';
+  /** @type {{ id: DashbirdPage, label: string, el: HTMLButtonElement }[]} */
+  const tabs = [
+    { id: 'main', label: 'Main', el: document.createElement('button') },
+    { id: 'house-hunter', label: 'House Hunter', el: document.createElement('button') },
+    { id: 'settings', label: 'Settings', el: document.createElement('button') },
+  ];
 
-  const tabSettings = document.createElement('button');
-  tabSettings.type = 'button';
-  tabSettings.className = 'topbar__tab';
-  tabSettings.id = 'page-tab-settings';
-  tabSettings.setAttribute('role', 'tab');
-  tabSettings.textContent = 'Settings';
+  for (const tab of tabs) {
+    tab.el.type = 'button';
+    tab.el.className = 'topbar__tab';
+    tab.el.id = `page-tab-${tab.id}`;
+    tab.el.setAttribute('role', 'tab');
+    tab.el.textContent = tab.label;
+    tab.el.addEventListener('click', () => setPage(tab.id));
+    tabsWrap.append(tab.el);
+  }
 
-  tabsWrap.append(tabMain, tabSettings);
   mountEl.append(tabsWrap);
 
+  /** @returns {DashbirdPage} */
   function loadPage() {
     const p = localStorage.getItem(LS_PAGE_KEY);
-    return p === 'settings' ? 'settings' : 'main';
+    if (p === 'settings' || p === 'house-hunter') return p;
+    return 'main';
   }
 
+  /** @param {DashbirdPage} page */
   function setPage(page) {
-    const isSettings = page === 'settings';
-    tabMain.classList.toggle('topbar__tab--active', !isSettings);
-    tabSettings.classList.toggle('topbar__tab--active', isSettings);
-    tabMain.setAttribute('aria-selected', isSettings ? 'false' : 'true');
-    tabSettings.setAttribute('aria-selected', isSettings ? 'true' : 'false');
-    localStorage.setItem(LS_PAGE_KEY, isSettings ? 'settings' : 'main');
-    document.body.classList.toggle('dashy--page-settings', isSettings);
-    opts.onChange(isSettings ? 'settings' : 'main');
-    if (!isSettings) focusWebSearchInput();
+    for (const tab of tabs) {
+      const active = tab.id === page;
+      tab.el.classList.toggle('topbar__tab--active', active);
+      tab.el.setAttribute('aria-selected', active ? 'true' : 'false');
+    }
+    localStorage.setItem(LS_PAGE_KEY, page);
+    document.body.classList.toggle('dashy--page-settings', page === 'settings');
+    document.body.classList.toggle('dashy--page-house-hunter', page === 'house-hunter');
+    opts.onChange(page);
+    if (page === 'main') focusWebSearchInput();
   }
 
-  tabMain.addEventListener('click', () => setPage('main'));
-  tabSettings.addEventListener('click', () => setPage('settings'));
   setPage(loadPage());
 }
