@@ -610,6 +610,8 @@ export function mountEventsFinder(root) {
   let markersLayer = null;
   /** @type {{ lat: number, lng: number, zoom: number } | null} */
   let mapViewBeforePopup = null;
+  /** True after the first fitBounds/setView for this map instance. */
+  let mapDidInitialFit = false;
   /** @type {number} */
   let mapSyncGen = 0;
   /** @type {HTMLElement | null} */
@@ -766,22 +768,28 @@ export function mountEventsFinder(root) {
         }
         const homeLat = Number(data?.geo?.lat);
         const homeLon = Number(data?.geo?.lon);
-        const fit = () => {
-          if (gen !== mapSyncGen || !mapInstance) return;
-          mapInstance.invalidateSize();
-          if (latLngs.length === 1) {
-            mapInstance.setView(latLngs[0], 13);
-          } else if (latLngs.length > 1) {
-            mapInstance.fitBounds(L.latLngBounds(latLngs).pad(0.18), { maxZoom: 14 });
-          } else if (Number.isFinite(homeLat) && Number.isFinite(homeLon)) {
-            mapInstance.setView([homeLat, homeLon], 11);
-          }
-        };
-        requestAnimationFrame(() => {
-          fit();
-          setTimeout(fit, 50);
-          setTimeout(fit, 200);
-        });
+        // Keep the user's zoom/pan when markers refresh (e.g. Skip). Only frame once.
+        if (!mapDidInitialFit) {
+          const fit = () => {
+            if (gen !== mapSyncGen || !mapInstance) return;
+            mapInstance.invalidateSize();
+            if (latLngs.length === 1) {
+              mapInstance.setView(latLngs[0], 13);
+            } else if (latLngs.length > 1) {
+              mapInstance.fitBounds(L.latLngBounds(latLngs).pad(0.18), { maxZoom: 14 });
+            } else if (Number.isFinite(homeLat) && Number.isFinite(homeLon)) {
+              mapInstance.setView([homeLat, homeLon], 11);
+            }
+            mapDidInitialFit = true;
+          };
+          requestAnimationFrame(() => {
+            fit();
+            setTimeout(fit, 50);
+            setTimeout(fit, 200);
+          });
+        } else {
+          requestAnimationFrame(() => mapInstance?.invalidateSize());
+        }
       })
       .catch(() => {
         if (gen !== mapSyncGen || !mapNoteEl) return;
@@ -793,6 +801,7 @@ export function mountEventsFinder(root) {
   function destroyMapInstance() {
     mapSyncGen += 1;
     mapViewBeforePopup = null;
+    mapDidInitialFit = false;
     if (mapInstance) {
       mapInstance.remove();
       mapInstance = null;
@@ -950,19 +959,6 @@ export function mountEventsFinder(root) {
       filterMsg.textContent = 'Saving…';
     }
     try {
-      const originZip = String(zipInput.value || '').replace(/\D/g, '').slice(0, 5);
-      if (originZip.length !== 5) throw new Error('Enter a 5-digit ZIP.');
-      const milesRaw = milesInput.value.trim();
-      const maxMiles = milesRaw === '' ? NaN : Number(milesRaw);
-      if (!Number.isFinite(maxMiles) || maxMiles <= 0) {
-        throw new Error('Set radius (1–100 miles).');
-      }
-      const range = calendar.getRange();
-      const earliestRaw = String(timeInput.value || '').trim();
-      const earliest = normalizeLocalTime(earliestRaw);
-      if (earliestRaw && !earliest) {
-        throw new Error('Earliest time must look like 11:00.');
-      }
       const lookFor = patch.lookFor ?? taste?.lookFor ?? '';
       const skip = patch.skip ?? taste?.skip ?? '';
       const favoriteEventIds = patch.favoriteEventIds ?? taste?.favoriteEventIds ?? [];
@@ -974,7 +970,29 @@ export function mountEventsFinder(root) {
         skip,
         favoriteEventIds,
         calendarAddedEventIds,
-        filters: {
+        scrape: taste?.scrape,
+      };
+      // Silent saves (Skip / favorite / taste chips) must not rewrite browse filters from
+      // the form — omit filters so the server keeps the last saved ZIP/radius/dates.
+      if (!patch.silent) {
+        // ZIP/radius optional: blank ZIP clears origin; blank radius → default 25.
+        const originZipDigits = String(zipInput.value || '').replace(/\D/g, '').slice(0, 5);
+        if (originZipDigits && originZipDigits.length !== 5) {
+          throw new Error('Enter a 5-digit ZIP (or leave blank).');
+        }
+        const originZip = originZipDigits.length === 5 ? originZipDigits : '';
+        const milesRaw = milesInput.value.trim();
+        const maxMiles = milesRaw === '' ? 25 : Number(milesRaw);
+        if (!Number.isFinite(maxMiles) || maxMiles <= 0 || maxMiles > 100) {
+          throw new Error('Set radius (1–100 miles), or leave blank for 25.');
+        }
+        const range = calendar.getRange();
+        const earliestRaw = String(timeInput.value || '').trim();
+        const earliest = normalizeLocalTime(earliestRaw);
+        if (earliestRaw && !earliest) {
+          throw new Error('Earliest time must look like 11:00.');
+        }
+        body.filters = {
           cities: (() => {
             const selected = cityChecks.getSelected();
             const available = Array.isArray(lastEventsPayload?.availableCities)
@@ -991,9 +1009,8 @@ export function mountEventsFinder(root) {
           earliestLocalTime: earliest || null,
           attendance: 'in_person',
           originZip,
-        },
-        scrape: taste?.scrape,
-      };
+        };
+      }
       // Only send skip lists when explicitly patching them — filter-only saves must not
       // overwrite SQLite skips with a stale/empty client copy.
       if (patch.skippedEvents !== undefined) {
@@ -1289,6 +1306,8 @@ export function mountEventsFinder(root) {
     const id = String(ev.id || '').trim();
     if (!id) return;
     if (!filtersReady) return;
+    // Zoom/pan stay put via mapDidInitialFit (do not touch mapViewBeforePopup —
+    // that stash is only for restoring the pre-pin-popup view).
     const record = skippedRecordFromEventLocal(ev);
     const prevSkipped = Array.isArray(taste?.skippedEvents) ? [...taste.skippedEvents] : [];
     const nextSkipped = [
