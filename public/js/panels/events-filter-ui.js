@@ -1,5 +1,5 @@
 /**
- * Shared Events filter widgets: date calendar (individual days or range) + attendance.
+ * Shared Events filter widgets: date calendar (click/drag day paint) + attendance.
  */
 
 /**
@@ -44,6 +44,69 @@ export function normalizeDateList(raw) {
 }
 
 /**
+ * Normalize a typed local time to HH:MM (24h). Accepts "11", "11:0", "9:30", "11am".
+ * @param {unknown} raw
+ * @returns {string | null}
+ */
+export function normalizeLocalTime(raw) {
+  const s = String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '');
+  if (!s) return null;
+
+  let ampm = null;
+  let core = s;
+  const ampmMatch = core.match(/^(.+?)(a\.?m\.?|p\.?m\.?)$/i);
+  if (ampmMatch) {
+    core = ampmMatch[1];
+    ampm = ampmMatch[2].startsWith('p') ? 'pm' : 'am';
+  }
+
+  const m = core.match(/^(\d{1,2})(?::(\d{1,2}))?$/);
+  if (!m) return null;
+  let h = Number(m[1]);
+  let min = m[2] == null || m[2] === '' ? 0 : Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(min) || min < 0 || min > 59) return null;
+
+  if (ampm) {
+    if (h < 1 || h > 12) return null;
+    if (ampm === 'am') h = h === 12 ? 0 : h;
+    else h = h === 12 ? 12 : h + 12;
+  } else if (h > 23) {
+    return null;
+  }
+
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+}
+
+/**
+ * Expand an inclusive YYYY-MM-DD range into discrete day strings.
+ * @param {string | null | undefined} from
+ * @param {string | null | undefined} to
+ * @returns {string[]}
+ */
+function expandDateRange(from, to) {
+  const start = parseYmd(from);
+  const end = parseYmd(to || from);
+  if (!start || !end) return [];
+  let a = start;
+  let b = end;
+  if (a.getTime() > b.getTime()) {
+    a = end;
+    b = start;
+  }
+  const out = [];
+  const cur = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+  const stop = new Date(b.getFullYear(), b.getMonth(), b.getDate());
+  while (cur <= stop) {
+    out.push(formatYmd(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+}
+
+/**
  * @param {string | null | undefined} attendance
  * @returns {{ inPerson: boolean, online: boolean }}
  */
@@ -69,14 +132,13 @@ export function checksToAttendance(checks) {
 }
 
 /**
- * Clickable month calendar — pick individual days (default) or a contiguous range.
+ * Clickable month calendar — toggle individual days; click-drag paints select/deselect.
  * @param {{
  *   idPrefix?: string,
  *   classPrefix?: string,
  *   dateFrom?: string | null,
  *   dateTo?: string | null,
  *   dates?: string[] | null,
- *   mode?: 'days' | 'range',
  * }} [opts]
  * @returns {{
  *   root: HTMLElement,
@@ -92,28 +154,6 @@ export function createRangeCalendar(opts = {}) {
   const root = document.createElement('div');
   root.className = prefix;
   root.id = `${idPrefix}-root`;
-
-  const modeRow = document.createElement('div');
-  modeRow.className = `${prefix}__modes`;
-  modeRow.setAttribute('role', 'group');
-  modeRow.setAttribute('aria-label', 'Date selection mode');
-
-  /**
-   * @param {'days' | 'range'} value
-   * @param {string} label
-   */
-  function makeModeBtn(value, label) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = `${prefix}__mode`;
-    btn.dataset.mode = value;
-    btn.textContent = label;
-    modeRow.append(btn);
-    return btn;
-  }
-
-  const daysModeBtn = makeModeBtn('days', 'Pick days');
-  const rangeModeBtn = makeModeBtn('range', 'Date range');
 
   const head = document.createElement('div');
   head.className = `${prefix}__head`;
@@ -136,9 +176,6 @@ export function createRangeCalendar(opts = {}) {
 
   head.append(prevBtn, title, nextBtn);
 
-  const summary = document.createElement('p');
-  summary.className = `${prefix}__summary`;
-
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
   clearBtn.className = `${prefix}__clear`;
@@ -155,69 +192,67 @@ export function createRangeCalendar(opts = {}) {
   const grid = document.createElement('div');
   grid.className = `${prefix}__grid`;
   grid.setAttribute('role', 'grid');
+  grid.setAttribute('aria-label', 'Select dates; click and drag to paint');
 
-  root.append(modeRow, head, summary, clearBtn, dow, grid);
+  root.append(head, clearBtn, dow, grid);
 
   const now = new Date();
   let viewYear = now.getFullYear();
   let viewMonth = now.getMonth();
-  /** @type {'days' | 'range'} */
-  let mode =
-    opts.mode === 'range'
-      ? 'range'
-      : Array.isArray(opts.dates) && opts.dates.length
-        ? 'days'
-        : opts.dateFrom || opts.dateTo
-          ? 'range'
-          : 'days';
   /** @type {Set<string>} */
-  let selectedDays = new Set(normalizeDateList(opts.dates));
-  /** @type {string | null} */
-  let dateFrom = opts.dateFrom || null;
-  /** @type {string | null} */
-  let dateTo = opts.dateTo || null;
-  /** @type {'from' | 'to'} */
-  let pickPhase = dateFrom && !dateTo ? 'to' : 'from';
+  let selectedDays = new Set(
+    normalizeDateList(opts.dates).length
+      ? normalizeDateList(opts.dates)
+      : expandDateRange(opts.dateFrom, opts.dateTo),
+  );
   let disabled = false;
+  /** @type {'add' | 'remove' | null} */
+  let dragMode = null;
+  /** @type {number | null} */
+  let dragPointerId = null;
 
-  function syncModeButtons() {
-    daysModeBtn.classList.toggle(`${prefix}__mode--active`, mode === 'days');
-    rangeModeBtn.classList.toggle(`${prefix}__mode--active`, mode === 'range');
-    daysModeBtn.setAttribute('aria-pressed', mode === 'days' ? 'true' : 'false');
-    rangeModeBtn.setAttribute('aria-pressed', mode === 'range' ? 'true' : 'false');
-    grid.setAttribute(
-      'aria-label',
-      mode === 'days' ? 'Select individual dates' : 'Select date range',
-    );
+  /**
+   * @param {string} ymd
+   * @param {HTMLElement} btn
+   * @param {'add' | 'remove'} mode
+   */
+  function applyDay(ymd, btn, mode) {
+    if (mode === 'add') {
+      if (selectedDays.has(ymd)) return;
+      selectedDays.add(ymd);
+      btn.classList.add(`${prefix}__day--selected`);
+      btn.setAttribute('aria-pressed', 'true');
+    } else {
+      if (!selectedDays.has(ymd)) return;
+      selectedDays.delete(ymd);
+      btn.classList.remove(`${prefix}__day--selected`);
+      btn.setAttribute('aria-pressed', 'false');
+    }
   }
 
-  function updateSummary() {
-    if (mode === 'days') {
-      const list = [...selectedDays].sort();
-      if (!list.length) {
-        summary.textContent = 'Any dates — click days to include (toggle on/off)';
-        return;
-      }
-      if (list.length <= 3) {
-        summary.textContent = list.join(', ');
-        return;
-      }
-      summary.textContent = `${list.length} days selected (${list[0]} … ${list[list.length - 1]})`;
-      return;
-    }
-    if (!dateFrom && !dateTo) {
-      summary.textContent = 'Any dates — click a day to start a range';
-      return;
-    }
-    if (dateFrom && !dateTo) {
-      summary.textContent = `${dateFrom} → pick end date`;
-      return;
-    }
-    summary.textContent = `${dateFrom} → ${dateTo}`;
+  /**
+   * @param {number} clientX
+   * @param {number} clientY
+   * @returns {HTMLElement | null}
+   */
+  function dayButtonAt(clientX, clientY) {
+    const el = document.elementFromPoint(clientX, clientY);
+    if (!el || typeof el.closest !== 'function') return null;
+    const btn = el.closest(`.${prefix}__day`);
+    if (!btn || !(btn instanceof HTMLElement) || !grid.contains(btn)) return null;
+    if (!btn.dataset.ymd || btn.classList.contains(`${prefix}__day--empty`)) return null;
+    return btn;
+  }
+
+  function endDrag() {
+    if (!dragMode) return;
+    dragMode = null;
+    dragPointerId = null;
+    root.classList.remove(`${prefix}--dragging`);
   }
 
   function paint() {
-    syncModeButtons();
+    endDrag();
     title.textContent = new Date(viewYear, viewMonth, 1).toLocaleString(undefined, {
       month: 'long',
       year: 'numeric',
@@ -235,9 +270,6 @@ export function createRangeCalendar(opts = {}) {
       grid.append(empty);
     }
 
-    const from = dateFrom;
-    const to = dateTo || dateFrom;
-
     for (let day = 1; day <= daysInMonth; day += 1) {
       const ymd = formatYmd(new Date(viewYear, viewMonth, day));
       const btn = document.createElement('button');
@@ -246,97 +278,58 @@ export function createRangeCalendar(opts = {}) {
       btn.textContent = String(day);
       btn.dataset.ymd = ymd;
       btn.disabled = disabled;
+      btn.tabIndex = disabled ? -1 : 0;
 
-      if (mode === 'days') {
-        if (selectedDays.has(ymd)) {
-          btn.classList.add(`${prefix}__day--selected`);
-          btn.setAttribute('aria-pressed', 'true');
-        } else {
-          btn.setAttribute('aria-pressed', 'false');
-        }
+      if (selectedDays.has(ymd)) {
+        btn.classList.add(`${prefix}__day--selected`);
+        btn.setAttribute('aria-pressed', 'true');
       } else {
-        if (from && to && ymd >= from && ymd <= to) {
-          btn.classList.add(`${prefix}__day--in-range`);
-        }
-        if (ymd === dateFrom) btn.classList.add(`${prefix}__day--start`);
-        if (ymd === dateTo || (dateFrom && !dateTo && ymd === dateFrom)) {
-          btn.classList.add(`${prefix}__day--end`);
-        }
+        btn.setAttribute('aria-pressed', 'false');
       }
       if (ymd === formatYmd(now)) btn.classList.add(`${prefix}__day--today`);
 
-      btn.addEventListener('click', () => {
-        if (disabled) return;
-        if (mode === 'days') {
-          if (selectedDays.has(ymd)) selectedDays.delete(ymd);
-          else selectedDays.add(ymd);
-          updateSummary();
-          paint();
-          return;
-        }
-        if (pickPhase === 'from' || (dateFrom && dateTo)) {
-          dateFrom = ymd;
-          dateTo = null;
-          pickPhase = 'to';
-        } else {
-          if (ymd < /** @type {string} */ (dateFrom)) {
-            dateTo = dateFrom;
-            dateFrom = ymd;
-          } else if (ymd === dateFrom) {
-            dateTo = ymd;
-          } else {
-            dateTo = ymd;
-          }
-          pickPhase = 'from';
-        }
-        updateSummary();
-        paint();
-      });
-
       grid.append(btn);
     }
-
-    updateSummary();
   }
 
-  /**
-   * @param {'days' | 'range'} next
-   */
-  function setMode(next) {
-    if (next === mode) return;
-    if (next === 'days') {
-      // Carry over current range into discrete days when switching.
-      if (!selectedDays.size && dateFrom) {
-        const end = dateTo || dateFrom;
-        const start = parseYmd(dateFrom);
-        const stop = parseYmd(end);
-        if (start && stop) {
-          for (let t = start.getTime(); t <= stop.getTime(); t += 86400000) {
-            selectedDays.add(formatYmd(new Date(t)));
-          }
-        }
-      }
-      dateFrom = null;
-      dateTo = null;
-      pickPhase = 'from';
-    } else {
-      const list = [...selectedDays].sort();
-      if (list.length) {
-        dateFrom = list[0];
-        dateTo = list[list.length - 1];
-      }
-      selectedDays = new Set();
-      pickPhase = dateFrom && !dateTo ? 'to' : 'from';
+  grid.addEventListener('pointerdown', (e) => {
+    if (disabled || e.button !== 0) return;
+    const btn = dayButtonAt(e.clientX, e.clientY);
+    if (!btn || !btn.dataset.ymd) return;
+    e.preventDefault();
+    const ymd = btn.dataset.ymd;
+    dragMode = selectedDays.has(ymd) ? 'remove' : 'add';
+    dragPointerId = e.pointerId;
+    root.classList.add(`${prefix}--dragging`);
+    applyDay(ymd, btn, dragMode);
+    try {
+      grid.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
     }
-    mode = next;
-    paint();
-  }
-
-  daysModeBtn.addEventListener('click', () => {
-    if (!disabled) setMode('days');
   });
-  rangeModeBtn.addEventListener('click', () => {
-    if (!disabled) setMode('range');
+
+  grid.addEventListener('pointermove', (e) => {
+    if (!dragMode || (dragPointerId != null && e.pointerId !== dragPointerId)) return;
+    const btn = dayButtonAt(e.clientX, e.clientY);
+    if (!btn || !btn.dataset.ymd) return;
+    applyDay(btn.dataset.ymd, btn, dragMode);
+  });
+
+  grid.addEventListener('pointerup', endDrag);
+  grid.addEventListener('pointercancel', endDrag);
+  grid.addEventListener('lostpointercapture', endDrag);
+
+  // Keyboard: Space/Enter still toggles the focused day.
+  grid.addEventListener('keydown', (e) => {
+    if (disabled) return;
+    if (e.key !== ' ' && e.key !== 'Enter') return;
+    const btn = e.target;
+    if (!(btn instanceof HTMLElement) || !btn.dataset.ymd) return;
+    e.preventDefault();
+    const ymd = btn.dataset.ymd;
+    const mode = selectedDays.has(ymd) ? 'remove' : 'add';
+    applyDay(ymd, btn, mode);
   });
 
   prevBtn.addEventListener('click', () => {
@@ -362,9 +355,6 @@ export function createRangeCalendar(opts = {}) {
   clearBtn.addEventListener('click', () => {
     if (disabled) return;
     selectedDays = new Set();
-    dateFrom = null;
-    dateTo = null;
-    pickPhase = 'from';
     paint();
   });
 
@@ -373,50 +363,22 @@ export function createRangeCalendar(opts = {}) {
   return {
     root,
     getRange() {
-      if (mode === 'days') {
-        const dates = [...selectedDays].sort();
-        return {
-          dates,
-          dateFrom: null,
-          dateTo: null,
-        };
-      }
+      const dates = [...selectedDays].sort();
       return {
-        dates: [],
-        dateFrom: dateFrom || null,
-        dateTo: dateTo || dateFrom || null,
+        dates,
+        dateFrom: null,
+        dateTo: null,
       };
     },
     setRange(from, to, dates) {
       const list = normalizeDateList(dates);
-      if (list.length) {
-        mode = 'days';
-        selectedDays = new Set(list);
-        dateFrom = null;
-        dateTo = null;
-        pickPhase = 'from';
-        const d = parseYmd(list[0]);
+      selectedDays = new Set(list.length ? list : expandDateRange(from, to));
+      const first = [...selectedDays].sort()[0];
+      if (first) {
+        const d = parseYmd(first);
         if (d) {
           viewYear = d.getFullYear();
           viewMonth = d.getMonth();
-        }
-      } else {
-        mode = from || to ? 'range' : mode;
-        selectedDays = new Set();
-        dateFrom = from || null;
-        dateTo = to || null;
-        if (dateFrom && dateTo && dateTo < dateFrom) {
-          const tmp = dateFrom;
-          dateFrom = dateTo;
-          dateTo = tmp;
-        }
-        pickPhase = dateFrom && !dateTo ? 'to' : 'from';
-        if (dateFrom) {
-          const d = parseYmd(dateFrom);
-          if (d) {
-            viewYear = d.getFullYear();
-            viewMonth = d.getMonth();
-          }
         }
       }
       paint();
@@ -426,8 +388,6 @@ export function createRangeCalendar(opts = {}) {
       prevBtn.disabled = disabled;
       nextBtn.disabled = disabled;
       clearBtn.disabled = disabled;
-      daysModeBtn.disabled = disabled;
-      rangeModeBtn.disabled = disabled;
       paint();
     },
   };
@@ -499,6 +459,98 @@ export function createAttendanceChecks(opts = {}) {
     setDisabled(disabled) {
       inPerson.disabled = disabled;
       online.disabled = disabled;
+    },
+  };
+}
+
+/**
+ * Dynamic city checkboxes from the current feed.
+ * @param {{
+ *   idPrefix?: string,
+ *   classPrefix?: string,
+ *   cities?: string[],
+ *   selected?: string[] | null,
+ *   onChange?: () => void,
+ * }} [opts]
+ * @returns {{
+ *   root: HTMLElement,
+ *   getSelected: () => string[],
+ *   setCities: (cities: string[], selected?: string[] | null) => void,
+ *   setDisabled: (disabled: boolean) => void,
+ * }}
+ */
+export function createCityChecks(opts = {}) {
+  const prefix = opts.classPrefix || 'events-finder';
+  const idPrefix = opts.idPrefix || 'events-finder-city';
+
+  const root = document.createElement('div');
+  root.className = `${prefix}__checkboxes ${prefix}__checkboxes--cities`;
+  root.setAttribute('role', 'group');
+  root.setAttribute('aria-label', 'Cities');
+
+  /** @type {HTMLInputElement[]} */
+  let inputs = [];
+  let disabled = false;
+  const onChange = typeof opts.onChange === 'function' ? opts.onChange : null;
+
+  /**
+   * @param {string[]} cities
+   * @param {string[] | null | undefined} selected
+   *   null/undefined = all checked; array = only those checked
+   */
+  function setCities(cities, selected) {
+    const list = Array.isArray(cities)
+      ? [...new Set(cities.map((c) => String(c || '').trim()).filter(Boolean))]
+      : [];
+    list.sort((a, b) => {
+      if (a === 'Unknown') return 1;
+      if (b === 'Unknown') return -1;
+      return a.localeCompare(b, undefined, { sensitivity: 'base' });
+    });
+
+    /** @type {Set<string> | null} */
+    let selectedSet = null;
+    if (Array.isArray(selected) && selected.length) {
+      selectedSet = new Set(
+        selected.map((c) => String(c || '').trim().toLowerCase()).filter(Boolean),
+      );
+    }
+
+    root.replaceChildren();
+    inputs = [];
+    for (const city of list) {
+      const id = `${idPrefix}-${city.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+      const row = document.createElement('label');
+      row.className = `${prefix}__check`;
+      row.htmlFor = id;
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.id = id;
+      input.value = city;
+      input.disabled = disabled;
+      input.checked = selectedSet == null ? true : selectedSet.has(city.toLowerCase());
+      input.addEventListener('change', () => {
+        if (onChange) onChange();
+      });
+      const span = document.createElement('span');
+      span.textContent = city;
+      row.append(input, span);
+      root.append(row);
+      inputs.push(input);
+    }
+  }
+
+  setCities(opts.cities || [], opts.selected);
+
+  return {
+    root,
+    getSelected() {
+      return inputs.filter((i) => i.checked).map((i) => i.value);
+    },
+    setCities,
+    setDisabled(next) {
+      disabled = Boolean(next);
+      for (const input of inputs) input.disabled = disabled;
     },
   };
 }

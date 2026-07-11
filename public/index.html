@@ -5,14 +5,91 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>dashbird</title>
     <link rel="stylesheet" href="/styles.css?v=boot-cache-skeletons" />
-    <link rel="modulepreload" href="/js/web-search-boot.js" />
-    <link rel="modulepreload" href="/js/panels/web-search.js" />
     <link rel="preload" href="/api/config" as="fetch" crossorigin />
     <link rel="preload" href="/data/bookmarks-personal.json" as="fetch" crossorigin />
     <link rel="preload" href="/data/bookmarks-work.json" as="fetch" crossorigin />
     <link rel="preload" href="/api/calendar/upcoming" as="fetch" crossorigin />
     <link rel="preload" href="/assets/search-brave.png" as="image" />
     <link rel="preload" href="/assets/search-duckduckgo.png" as="image" />
+    <!-- Instant search: no modules — Enter opens a new tab before app.js loads. -->
+    <script>
+      window.__dashbirdSearch = (function () {
+        var KEY = 'dashbird-search-engine';
+        var ENGINES = {
+          brave: function (q) {
+            return 'https://search.brave.com/search?q=' + encodeURIComponent(q);
+          },
+          google: function (q) {
+            return 'https://www.google.com/search?q=' + encodeURIComponent(q);
+          },
+          duckduckgo: function (q) {
+            return 'https://duckduckgo.com/?q=' + encodeURIComponent(q);
+          },
+        };
+        function engine() {
+          var saved = '';
+          try {
+            saved = localStorage.getItem(KEY) || '';
+          } catch (e) {}
+          return ENGINES[saved] ? saved : 'brave';
+        }
+        function setEngine(id, root) {
+          if (!ENGINES[id]) return;
+          try {
+            localStorage.setItem(KEY, id);
+          } catch (e) {}
+          if (!root) return;
+          var buttons = root.querySelectorAll('button[data-engine]');
+          for (var i = 0; i < buttons.length; i++) {
+            var btn = buttons[i];
+            var on = btn.getAttribute('data-engine') === id;
+            btn.classList.toggle('web-search__engine-btn--active', on);
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+          }
+        }
+        function openSearch(q) {
+          var query = String(q || '').trim();
+          if (!query) return false;
+          var id = engine();
+          window.open(ENGINES[id](query), '_blank', 'noopener,noreferrer');
+          return true;
+        }
+        function wire(root) {
+          if (!root || root.getAttribute('data-search-enhanced') === '1') return;
+          var form = root.querySelector('form.web-search');
+          var input = root.querySelector('input.web-search__input') || document.getElementById('web-search-input');
+          if (!form || !input) return;
+          var current = engine();
+          setEngine(current, root);
+          var buttons = root.querySelectorAll('button[data-engine]');
+          for (var i = 0; i < buttons.length; i++) {
+            buttons[i].addEventListener('click', function (ev) {
+              var btn = ev.currentTarget;
+              setEngine(btn.getAttribute('data-engine'), root);
+            });
+          }
+          form.addEventListener('submit', function (e) {
+            e.preventDefault();
+            openSearch(input.value);
+          });
+          // Enter must search even if something else stops form submit.
+          input.addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            openSearch(input.value);
+          });
+          root.setAttribute('data-search-enhanced', '1');
+          var page = '';
+          try {
+            page = localStorage.getItem('dashbirdPage') || '';
+          } catch (err) {}
+          if (page !== 'settings' && page !== 'house-hunter') {
+            input.focus({ preventScroll: true });
+          }
+        }
+        return { wire: wire, openSearch: openSearch, setEngine: setEngine, engine: engine };
+      })();
+    </script>
   </head>
   <body class="dashy">
     <header class="topbar glass" role="banner">
@@ -50,7 +127,29 @@
             class="life-sidebar__card life-sidebar__card--events panel panel--glass"
             aria-labelledby="h-events-finder"
           >
-            <h2 id="h-events-finder" class="life-sidebar__card-heading">Events</h2>
+            <div class="life-sidebar__card-bar">
+              <h2 id="h-events-finder" class="life-sidebar__card-heading">Events</h2>
+              <button
+                type="button"
+                class="life-sidebar__card-expand"
+                id="events-finder-expand"
+                aria-label="Pop out events"
+                title="Pop out events"
+                aria-expanded="false"
+                aria-controls="mount-events-finder"
+              >
+                <svg class="life-sidebar__card-expand-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                  <path
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M6.5 3H13v6.5M13 3L6 10M3 6v7h7"
+                  />
+                </svg>
+              </button>
+            </div>
             <div
               id="mount-events-finder"
               class="life-sidebar__card-body life-sidebar__card-body--events"
@@ -103,15 +202,8 @@
                     placeholder="Search the web…"
                     aria-label="Search query"
                     autofocus
+                    enterkeyhint="search"
                   />
-                  <script>
-                    (function () {
-                      var page = localStorage.getItem('dashbirdPage');
-                      if (page === 'settings' || page === 'house-hunter') return;
-                      var el = document.getElementById('web-search-input');
-                      if (el) el.focus({ preventScroll: true });
-                    })();
-                  </script>
                   <div class="web-search__engines" role="group" aria-label="Search engine">
                     <button
                       type="button"
@@ -161,6 +253,10 @@
                     </button>
                   </div>
                 </form>
+                <script>
+                  window.__dashbirdSearch &&
+                    window.__dashbirdSearch.wire(document.getElementById('mount-web-search'));
+                </script>
               </div>
             </section>
           </div>
@@ -366,7 +462,6 @@
       </section>
     </div>
     </div>
-    <script type="module" src="/js/web-search-boot.js"></script>
-    <script type="module" src="/js/app.js"></script>
+    <script type="module" src="/js/app.js?v=events-map-restore-zoom"></script>
   </body>
 </html>

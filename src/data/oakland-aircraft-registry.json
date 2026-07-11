@@ -66,6 +66,17 @@
       "notes": "Observed circling Oakland protests June 2020."
     },
     {
+      "icao24": "adb34f",
+      "nNumber": "N982HP",
+      "callsign": "H32",
+      "label": "CHP heli",
+      "category": "police",
+      "icon": "helicopter",
+      "operator": "California Highway Patrol",
+      "equipment": "Airbus H125 (AS50)",
+      "notes": "CHP air unit; ADS-B often broadcasts tactical callsign H32 (not N982HP). Observed over West Oakland Jul 2026."
+    },
+    {
       "icao24": "a4c4b8",
       "nNumber": "N408CC",
       "label": "Contra Costa Co. Sheriff heli",
@@ -203,6 +214,12 @@
       "pattern": "HP",
       "category": "police",
       "label": "CHP"
+    },
+    {
+      "pattern": "H32",
+      "category": "police",
+      "label": "CHP heli",
+      "icon": "helicopter"
     },
     {
       "pattern": "TV",

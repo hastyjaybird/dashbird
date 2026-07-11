@@ -253,6 +253,46 @@ export function eventMatchesHomeCity(event, home) {
 }
 
 /**
+ * Display / filter label for an event's city (missing → Unknown).
+ * @param {{
+ *   venueCity?: string | null,
+ *   listingCity?: string | null,
+ *   city?: string | null,
+ * }} event
+ * @returns {string}
+ */
+export function eventCityLabel(event) {
+  const raw = [event?.city, event?.venueCity, event?.listingCity]
+    .map((c) => String(c || '').trim().replace(/\s+/g, ' '))
+    .find(Boolean);
+  return raw || 'Unknown';
+}
+
+/**
+ * Unique sorted city labels from events.
+ * @param {object[]} events
+ * @returns {string[]}
+ */
+export function uniqueEventCities(events) {
+  const seen = new Set();
+  /** @type {string[]} */
+  const out = [];
+  for (const ev of Array.isArray(events) ? events : []) {
+    const label = eventCityLabel(ev);
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(label);
+  }
+  out.sort((a, b) => {
+    if (a === 'Unknown') return 1;
+    if (b === 'Unknown') return -1;
+    return a.localeCompare(b, undefined, { sensitivity: 'base' });
+  });
+  return out;
+}
+
+/**
  * Soft distance for ranking (null when either side lacks coords).
  * @param {{ lat?: number | null, lon?: number | null }} event
  * @param {{ lat: number, lon: number }} home
@@ -265,6 +305,45 @@ export function eventDistanceMiles(event, home) {
   if (!Number.isFinite(home.lat) || !Number.isFinite(home.lon)) return null;
   const d = haversineMiles(home.lat, home.lon, elat, elon);
   return Number.isFinite(d) ? Math.round(d * 10) / 10 : null;
+}
+
+/**
+ * Look up approximate coords for a Bay Area city name (centroid).
+ * @param {string | null | undefined} cityName
+ * @returns {{ lat: number, lon: number, name: string } | null}
+ */
+export function bayAreaCityCoords(cityName) {
+  const want = normalizeCityName(cityName);
+  if (!want) return null;
+  for (const city of BAY_AREA_CITY_COORDS) {
+    const n = normalizeCityName(city.name);
+    if (n === want || n.includes(want) || want.includes(n)) {
+      return { lat: city.lat, lon: city.lon, name: city.name };
+    }
+  }
+  return null;
+}
+
+/**
+ * Distance using event coords, else Bay Area city centroid when city is known.
+ * @param {{
+ *   lat?: number | null,
+ *   lon?: number | null,
+ *   city?: string | null,
+ *   venueCity?: string | null,
+ *   listingCity?: string | null,
+ * }} event
+ * @param {{ lat: number, lon: number }} home
+ * @returns {number | null}
+ */
+export function eventDistanceMilesWithCityFallback(event, home) {
+  const direct = eventDistanceMiles(event, home);
+  if (direct != null) return direct;
+  const label = eventCityLabel(event);
+  if (!label || label === 'Unknown') return null;
+  const centroid = bayAreaCityCoords(label);
+  if (!centroid) return null;
+  return eventDistanceMiles({ lat: centroid.lat, lon: centroid.lon }, home);
 }
 
 /**
@@ -300,7 +379,45 @@ export function eventAttendanceMode(event) {
 }
 
 /**
- * Apply saved feed filters (city subset, optional max miles, date/time, attendance).
+ * Local calendar day + clock minutes for an event start.
+ * @param {Date} start
+ * @param {string} [timeZone]
+ * @returns {{ day: string, minutes: number } | null}
+ */
+export function eventLocalDayAndMinutes(start, timeZone = 'America/Los_Angeles') {
+  if (!(start instanceof Date) || Number.isNaN(start.getTime())) return null;
+  const tz =
+    typeof timeZone === 'string' && timeZone.trim()
+      ? timeZone.trim()
+      : 'America/Los_Angeles';
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(start);
+    const get = (type) => parts.find((p) => p.type === type)?.value;
+    const y = get('year');
+    const m = get('month');
+    const d = get('day');
+    const hour = Number(get('hour'));
+    const minute = Number(get('minute'));
+    if (!y || !m || !d || !Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+    return { day: `${y}-${m}-${d}`, minutes: hour * 60 + minute };
+  } catch {
+    return {
+      day: start.toISOString().slice(0, 10),
+      minutes: start.getUTCHours() * 60 + start.getUTCMinutes(),
+    };
+  }
+}
+
+/**
+ * Apply saved feed filters (ZIP radius, date/time, attendance).
  * @param {{
  *   venueCity?: string | null,
  *   listingCity?: string | null,
@@ -325,15 +442,19 @@ export function eventAttendanceMode(event) {
  *   attendance?: 'any' | 'in_person' | 'online' | null,
  * }} filters
  * @param {{ lat: number, lon: number, homeCities?: string[] }} home
+ * @param {{ timeZone?: string }} [opts]
  * @returns {{ ok: boolean, reason?: string, distanceMiles: number | null, cityMatch: boolean }}
  */
-export function eventPassesFeedFilters(event, filters, home) {
-  const distanceMiles = eventDistanceMiles(event, home);
+export function eventPassesFeedFilters(event, filters, home, opts = {}) {
+  const distanceMiles = eventDistanceMilesWithCityFallback(event, home);
   const attendanceWanted = String(filters?.attendance || 'any')
     .trim()
     .toLowerCase()
     .replace(/[\s-]+/g, '_');
   const attendance = eventAttendanceMode(event);
+  const timeZone =
+    String(opts.timeZone || process.env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim()
+    || 'America/Los_Angeles';
 
   if (attendanceWanted === 'online' || attendanceWanted === 'in_person') {
     if (attendance === 'unknown') {
@@ -343,47 +464,46 @@ export function eventPassesFeedFilters(event, filters, home) {
     }
   }
 
-  // Online events skip city/distance gates (no local venue required).
-  if (attendance === 'online') {
-    // still apply date/time below
-  } else {
-    const activeCities =
-      Array.isArray(filters?.cities) && filters.cities.length
-        ? filters.cities
-        : home.homeCities || [];
-
-    const cityMatch = eventMatchesHomeCity(event, {
-      ...home,
-      homeCities: activeCities,
-    });
-    if (!cityMatch) {
-      return { ok: false, reason: 'city', distanceMiles, cityMatch: false };
-    }
-
+  // Online events skip distance gates (no local venue required).
+  // City-first: when coords are missing, use Bay Area city centroid distance.
+  let cityMatch = true;
+  if (attendance !== 'online') {
     const maxMiles = filters?.maxMiles;
     if (maxMiles != null && Number.isFinite(Number(maxMiles))) {
       if (distanceMiles == null) {
-        // No coords: keep if city matched (city-first), don't hard-drop.
+        // Still allow home-city matches with no usable city/coords (incomplete data).
+        if (!eventMatchesHomeCity(event, home)) {
+          return { ok: false, reason: 'distance', distanceMiles, cityMatch: false };
+        }
+        cityMatch = true;
       } else if (distanceMiles > Number(maxMiles)) {
-        return { ok: false, reason: 'distance', distanceMiles, cityMatch: true };
+        return { ok: false, reason: 'distance', distanceMiles, cityMatch: false };
+      } else {
+        cityMatch = true;
       }
     }
   }
 
-  const cityMatch =
-    attendance === 'online'
-      ? true
-      : eventMatchesHomeCity(event, {
-          ...home,
-          homeCities:
-            Array.isArray(filters?.cities) && filters.cities.length
-              ? filters.cities
-              : home.homeCities || [],
-        });
+  const wantedCities = Array.isArray(filters?.cities)
+    ? filters.cities.map((c) => String(c || '').trim()).filter(Boolean)
+    : [];
+  if (wantedCities.length) {
+    const label = eventCityLabel(event);
+    const labelNorm = normalizeCityName(label);
+    const okCity = wantedCities.some((w) => {
+      const wn = normalizeCityName(w);
+      return wn && (wn === labelNorm || labelNorm.includes(wn) || wn.includes(labelNorm));
+    });
+    if (!okCity) {
+      return { ok: false, reason: 'city', distanceMiles, cityMatch: false };
+    }
+    cityMatch = true;
+  }
 
   const start = event.start ? new Date(event.start) : null;
   if (start && !Number.isNaN(start.getTime())) {
-    const day = start.toISOString().slice(0, 10);
+    const local = eventLocalDayAndMinutes(start, timeZone);
+    const day = local?.day || start.toISOString().slice(0, 10);
     const dates = Array.isArray(filters?.dates)
       ? filters.dates.map((d) => String(d).slice(0, 10)).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
       : [];
@@ -403,11 +523,10 @@ export function eventPassesFeedFilters(event, filters, home) {
     }
 
     const earliest = String(filters?.earliestLocalTime || '').trim();
-    if (/^\d{1,2}:\d{2}$/.test(earliest)) {
+    if (/^\d{1,2}:\d{2}$/.test(earliest) && local) {
       const [eh, em] = earliest.split(':').map(Number);
-      const mins = start.getHours() * 60 + start.getMinutes();
       const floor = eh * 60 + em;
-      if (mins < floor) {
+      if (local.minutes < floor) {
         return { ok: false, reason: 'time', distanceMiles, cityMatch };
       }
     }

@@ -96,6 +96,7 @@ Tracked in [`docs/v2-roadmap.md`](docs/v2-roadmap.md), including:
 
 - Google Keep snippets, Home Assistant proxy (Vikunja todos are live — see below)
 - **House Hunter**, **Events**, **Local News** (real builds — UI slots exist as placeholders)
+- Events **map view**; **Friend CRM** with Telegram new-friend ingest
 - Life-goals / refocus panel, agent daily-ops, bioclock notes, Amazon package banner
 - Cybersecurity audit cadence (see security plan)
 - Optional AI provider pluggability beyond OpenRouter

@@ -60,10 +60,22 @@ const ENGINE_META = {
 
 /**
  * Wire search form (static HTML in index or built here). Idempotent.
+ * Prefer the inline head boot (`window.__dashbirdSearch`) when present —
+ * that path runs before any module loads.
  * @param {HTMLElement} root
  */
 export function enhanceWebSearch(root) {
   if (!root || root.dataset.searchEnhanced === '1') return;
+
+  // Instant path already wired in index.html — do not double-bind.
+  const boot = typeof window !== 'undefined' ? window.__dashbirdSearch : null;
+  if (boot && typeof boot.wire === 'function') {
+    boot.wire(root);
+    if (root.dataset.searchEnhanced === '1') {
+      focusWebSearchInput(root);
+      return;
+    }
+  }
 
   let form = root.querySelector('form.web-search');
   let input = form?.querySelector('input.web-search__input');
@@ -83,8 +95,9 @@ export function enhanceWebSearch(root) {
     input.placeholder = 'Search the web…';
     input.className = 'web-search__input';
     input.setAttribute('aria-label', 'Search query');
+    input.setAttribute('enterkeyhint', 'search');
 
-    enginesWrap = document.createElement("div");
+    enginesWrap = document.createElement('div');
     enginesWrap.className = 'web-search__engines';
     enginesWrap.setAttribute('role', 'group');
     enginesWrap.setAttribute('aria-label', 'Search engine');
@@ -139,8 +152,15 @@ export function enhanceWebSearch(root) {
     e.preventDefault();
     const q = input.value.trim();
     if (!q) return;
-    const url = ENGINES[current](q);
-    window.open(url, '_blank', 'noopener,noreferrer');
+    window.open(ENGINES[current](q), '_blank', 'noopener,noreferrer');
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const q = input.value.trim();
+    if (!q) return;
+    window.open(ENGINES[current](q), '_blank', 'noopener,noreferrer');
   });
 
   root.dataset.searchEnhanced = '1';

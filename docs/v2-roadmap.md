@@ -39,6 +39,7 @@ Cross-reference: v1 ships the dashboard shell and core panels; v2 items mount in
 - **Live ingest:** Intake Gmail (`jay.intake.box@gmail.com`) via Gmail API OAuth — see Events sources roadmap §7. Facebook via Apify when configured.
 - **Event catalog:** local SQLite at `data/events-finder.db` (`src/lib/events-finder-store.js`) — sources upsert; feed reads the catalog. Criteria remain in `data/events-finder-criteria.json`.
 - **V2 build:** more curated sources (Meetup, Eventbrite, Luma/Partiful), thumbs up/down + optional feedback window, preference store and ranking.
+- **Later:** **map view** — plot catalog events on a map (geo from venue / criteria), alongside the list feed.
 - **Per-source ingest plan:** [`docs/events-sources-roadmap.md`](events-sources-roadmap.md).
 
 ### 5. Personal / local news
@@ -46,7 +47,12 @@ Cross-reference: v1 ships the dashboard shell and core panels; v2 items mount in
 - **UI slot today:** left sidebar card `Local News` — **visual placeholder only**.
 - **V2 build:** personal/local feed with the same preference-learning pattern as Events.
 
-### 6. Optional expansions (v2 or later)
+### 6. Friend CRM
+
+- **Later build:** personal friend/contact CRM in the dashboard (people, notes, last contact, tags — exact schema TBD).
+- **Ingest:** new-friend capture via **Telegram** (bot or channel → CRM create/update), so meeting someone can land in the CRM without manual entry.
+
+### 7. Optional expansions (v2 or later)
 
 - **Home Assistant REST proxy** — `/api/home-assistant/*` with long-lived token in env.
 - **Optional assistant controls** — tier → model map, spend caps, optional LiteLLM/Bifrost upstream.

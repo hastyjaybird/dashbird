@@ -7,6 +7,10 @@ import { readFile, writeFile, mkdir, access } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseIcsEvents } from './ical-parse.js';
+import {
+  eventsIngestWindowDays,
+  filterEventsToIngestWindow,
+} from './events-finder-window.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..', '..');
@@ -24,13 +28,14 @@ const AUTH_URI = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1';
 
 const DEFAULT_QUERY =
-  'newer_than:45d (filename:ics OR subject:(invite OR invitation OR RSVP OR event OR meetup OR "you\'re invited" OR "join us") OR from:(partiful.com OR secretparty.io OR lu.ma OR eventbrite.com OR meetup.com OR facebookmail.com OR metamail.com OR facebook.com))';
+  'newer_than:35d (filename:ics OR subject:(invite OR invitation OR RSVP OR event OR meetup OR "you\'re invited" OR "join us") OR from:(partiful.com OR secretparty.io OR lu.ma OR eventbrite.com OR meetup.com OR facebookmail.com OR metamail.com OR facebook.com))';
 
 /**
  * Public event / invite links. Facebook: /events/{id}, page hosted tabs, group events.
+ * Secret Party events are usually https://<slug>.secretparty.io/ (subdomain), not path URLs.
  */
 const PLATFORM_HOST_RE =
-  /(?:https?:\/\/)?(?:www\.)?(?:partiful\.com|secretparty\.io|lu\.ma|luma\.com|eventbrite\.com|meetup\.com|facebook\.com\/(?:events\/[^\s"'<>)\]]+|[^/\s"'<>)\]]+\/(?:upcoming_hosted_events|past_hosted_events|events)|groups\/[^/\s"'<>)\]]+\/events)[^\s"'<>)\]]*)/gi;
+  /(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?secretparty\.io(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:www\.)?(?:partiful\.com|lu\.ma|luma\.com|eventbrite\.com|meetup\.com|facebook\.com\/(?:events\/[^\s"'<>)\]]+|[^/\s"'<>)\]]+\/(?:upcoming_hosted_events|past_hosted_events|events)|groups\/[^/\s"'<>)\]]+\/events)[^\s"'<>)\]]*)/gi;
 
 /**
  * @param {string} email
@@ -75,6 +80,28 @@ export function gmailIntakeAddresses(env = process.env) {
  */
 export function gmailIntakeAddress(env = process.env) {
   return gmailIntakeAddresses(env)[0] || GMAIL_INTAKE_DEFAULT_ADDRESS;
+}
+
+/**
+ * App password for IMAP fallback (avoids Google OAuth consent UI).
+ * Prefer GMAIL_INTAKE_APP_PASSWORD_<SLUG> or GMAIL_INTAKE_APP_PASSWORD for primary.
+ * @param {string} email
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function gmailAppPasswordFor(email, env = process.env) {
+  const addr = normalizeGmailAddress(email);
+  if (!addr) return '';
+  const slug = gmailTokenFileSlug(addr)
+    .replace(/[^a-z0-9]+/gi, '_')
+    .replace(/^_|_$/g, '')
+    .toUpperCase();
+  const specific = String(env[`GMAIL_INTAKE_APP_PASSWORD_${slug}`] || '').trim();
+  if (specific) return specific.replace(/\s+/g, '');
+  const primary = String(env.GMAIL_INTAKE_APP_PASSWORD || '').trim().replace(/\s+/g, '');
+  if (!primary) return '';
+  const addresses = gmailIntakeAddresses(env);
+  if (addresses[0] === addr || addresses.length === 1) return primary;
+  return '';
 }
 
 /**
@@ -447,7 +474,7 @@ function collectMimeParts(part, bag) {
  * @param {string} htmlOrText
  * @returns {string[]}
  */
-function extractPlatformUrls(htmlOrText) {
+export function extractPlatformUrls(htmlOrText) {
   const raw = String(htmlOrText || '');
   const found = raw.match(PLATFORM_HOST_RE) || [];
   /** @type {string[]} */
@@ -458,15 +485,99 @@ function extractPlatformUrls(htmlOrText) {
     if (!/^https?:\/\//i.test(u)) u = `https://${u}`;
     try {
       const parsed = new URL(u);
-      const key = parsed.href.split('#')[0];
+      // Prefer the real event subdomain inside Secret Party click-trackers.
+      const unwrapped = unwrapSecretPartyTrackingUrl(parsed.href);
+      const finalUrl = unwrapped || parsed.href;
+      const host = new URL(finalUrl).hostname.replace(/^www\./, '').toLowerCase();
+      if (host === 'track.secretparty.io') continue;
+      const key = finalUrl.split('#')[0].toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push(parsed.href);
+      out.push(finalUrl.split('#')[0]);
     } catch {
       /* ignore */
     }
   }
   return out;
+}
+
+/**
+ * Decode Secret Party ESP click trackers → https://<slug>.secretparty.io/...
+ * @param {string} href
+ * @returns {string | null}
+ */
+function unwrapSecretPartyTrackingUrl(href) {
+  try {
+    const u = new URL(href);
+    if (u.hostname.replace(/^www\./, '').toLowerCase() !== 'track.secretparty.io') return null;
+    const p = u.searchParams.get('p');
+    if (!p) return null;
+    // Payload is URL-safe base64 JSON: { p: "<stringified json with url>" } or nested.
+    const padded = p.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = padded.length % 4 === 0 ? '' : '='.repeat(4 - (padded.length % 4));
+    const json = Buffer.from(padded + pad, 'base64').toString('utf8');
+    const outer = JSON.parse(json);
+    let inner = outer;
+    if (typeof outer?.p === 'string') {
+      try {
+        inner = JSON.parse(outer.p);
+      } catch {
+        inner = outer;
+      }
+    }
+    const target = String(inner?.url || inner?.u || '').trim();
+    if (!target) return null;
+    const dest = new URL(target);
+    const host = dest.hostname.replace(/^www\./, '').toLowerCase();
+    if (!host.endsWith('secretparty.io') || host === 'track.secretparty.io') return null;
+    return dest.href.split('#')[0];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Prefer a platform source key when the message links to a known host.
+ * @param {string[]} urls
+ * @param {string} [fallback='gmail']
+ * @returns {string}
+ */
+export function sourceFromPlatformUrls(urls, fallback = 'gmail') {
+  for (const href of urls || []) {
+    try {
+      const host = new URL(href).hostname.replace(/^www\./, '').toLowerCase();
+      if (host === 'secretparty.io' || host.endsWith('.secretparty.io')) return 'secretparty';
+      if (host === 'partiful.com' || host.endsWith('.partiful.com')) return 'partiful';
+      if (host === 'lu.ma' || host === 'luma.com' || host.endsWith('.luma.com')) return 'luma';
+      if (host === 'eventbrite.com' || host.endsWith('.eventbrite.com')) return 'eventbrite';
+      if (host === 'meetup.com' || host.endsWith('.meetup.com')) return 'meetup';
+      if (host === 'facebook.com' || host.endsWith('.facebook.com')) return 'facebook';
+    } catch {
+      /* ignore */
+    }
+  }
+  return fallback;
+}
+
+/**
+ * Human title from Secret Party subdomain slug when the page/subject is generic.
+ * @param {string} href
+ * @returns {string | null}
+ */
+export function secretPartyTitleFromUrl(href) {
+  try {
+    const host = new URL(href).hostname.replace(/^www\./, '').toLowerCase();
+    const m = host.match(/^([a-z0-9-]+)\.secretparty\.io$/);
+    if (!m || !m[1] || m[1] === 'www' || m[1] === 'api') return null;
+    return m[1]
+      .split('-')
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ')
+      .slice(0, 180);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -573,16 +684,19 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
     for (const ev of parsed) {
       const startIso = Number.isFinite(ev.startMs) ? new Date(ev.startMs).toISOString() : null;
       const endIso = Number.isFinite(ev.endMs) ? new Date(ev.endMs).toISOString() : null;
+      const url = urls[0] || `https://mail.google.com/mail/u/0/#inbox/${id}`;
+      const platformSource = sourceFromPlatformUrls(urls.length ? urls : [url]);
+      const slugTitle = platformSource === 'secretparty' ? secretPartyTitleFromUrl(url) : null;
       events.push({
         id: `${idPrefix}:ics:${ev.id}`,
-        title: ev.title || subject,
+        title: ev.title || slugTitle || subject,
         start: startIso,
         end: endIso,
         venue: ev.location || null,
         location: ev.location || null,
         city: null,
-        url: urls[0] || `https://mail.google.com/mail/u/0/#inbox/${id}`,
-        source: 'gmail',
+        url,
+        source: platformSource === 'gmail' ? 'gmail' : platformSource,
         raw: {
           messageId: id,
           threadId,
@@ -591,13 +705,14 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
           date: dateHdr,
           mailbox: mailbox || null,
           via: 'ics',
+          platform: platformSource,
         },
       });
     }
   }
 
   if (!events.length) {
-    const start = guessStartIso(`${subject}\n${textBlob}`) || (dateHdr ? new Date(dateHdr).toISOString() : null);
+    const start = guessStartIso(`${subject}\n${textBlob}`) || null;
     const startOk = start && Number.isFinite(Date.parse(start)) ? start : null;
     // Only emit when we have a platform link or a plausible invite subject.
     const inviteish =
@@ -606,16 +721,20 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
         subject,
       );
     if (inviteish) {
+      const url = urls[0] || `https://mail.google.com/mail/u/0/#inbox/${id}`;
+      const platformSource = sourceFromPlatformUrls(urls.length ? urls : [url]);
+      const slugTitle = platformSource === 'secretparty' ? secretPartyTitleFromUrl(url) : null;
+      const cleanedSubject = subject.replace(/^(re|fwd):\s*/i, '').trim() || subject;
       events.push({
         id: idPrefix,
-        title: subject.replace(/^(re|fwd):\s*/i, '').trim() || subject,
+        title: slugTitle && /^secret party$/i.test(cleanedSubject) ? slugTitle : cleanedSubject,
         start: startOk,
         end: null,
         venue: null,
         location: null,
         city: null,
-        url: urls[0] || `https://mail.google.com/mail/u/0/#inbox/${id}`,
-        source: 'gmail',
+        url,
+        source: platformSource === 'gmail' ? 'gmail' : platformSource,
         raw: {
           messageId: id,
           threadId,
@@ -624,6 +743,7 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
           date: dateHdr,
           mailbox: mailbox || null,
           via: urls.length ? 'platform_link' : 'subject_heuristic',
+          platform: platformSource,
           urls,
           snippet: String(message?.snippet || '').slice(0, 240),
         },
@@ -657,6 +777,11 @@ function stripHtml(html) {
  */
 export async function probeGmailMailbox(email, env = process.env) {
   const address = normalizeGmailAddress(email);
+  const appPassword = gmailAppPasswordFor(address, env);
+  if (appPassword) {
+    const { probeGmailMailboxViaImap } = await import('./events-finder-gmail-imap.js');
+    return probeGmailMailboxViaImap(address, appPassword, env);
+  }
   const auth = await getGmailAccessTokenFor(address, env);
   if (!auth.ok) {
     return {
@@ -671,7 +796,7 @@ export async function probeGmailMailbox(email, env = process.env) {
       ingestTest:
         auth.code === 'oauth_not_configured'
           ? 'Not wired — set GOOGLE_OAUTH_CLIENT_ID / SECRET in .env'
-          : `Not wired — connect ${address} (OAuth)`,
+          : `Not wired — connect ${address} (OAuth or App Password)`,
       email: address,
       messageCount: 0,
     };
@@ -834,6 +959,22 @@ export async function probeGmailEventsIntake(env = process.env) {
 export async function fetchGmailEventAnnouncementsFor(email, env = process.env, opts = {}) {
   const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 25, 1), 50);
   const address = normalizeGmailAddress(email);
+  const appPassword = gmailAppPasswordFor(address, env);
+  if (appPassword) {
+    try {
+      const { fetchGmailEventsViaImap } = await import('./events-finder-gmail-imap.js');
+      return await fetchGmailEventsViaImap(address, appPassword, env, { maxMessages });
+    } catch (e) {
+      return {
+        ok: false,
+        error: e?.code || 'gmail_imap',
+        hint: String(e?.message || e),
+        email: address,
+        scanned: 0,
+        events: [],
+      };
+    }
+  }
   const auth = await getGmailAccessTokenFor(address, env);
   if (!auth.ok) {
     return {
@@ -866,13 +1007,10 @@ export async function fetchGmailEventAnnouncementsFor(email, env = process.env, 
       events.push(...eventsFromGmailMessage(msg, 'America/Los_Angeles', { mailbox }));
     }
 
-    const now = Date.now();
-    const windowPastMs = 2 * 24 * 60 * 60 * 1000;
-    const filtered = events.filter((ev) => {
-      if (!ev.start) return true;
-      const ms = Date.parse(ev.start);
-      if (!Number.isFinite(ms)) return true;
-      return ms >= now - windowPastMs;
+    const windowDays = eventsIngestWindowDays(env);
+    const filtered = filterEventsToIngestWindow(events, {
+      pastDays: windowDays.pastDays,
+      futureDays: windowDays.futureDays,
     });
 
     return {
@@ -881,6 +1019,7 @@ export async function fetchGmailEventAnnouncementsFor(email, env = process.env, 
       query: gmailEventsQuery(env),
       scanned: ids.length,
       events: filtered,
+      windowDays,
     };
   } catch (e) {
     return {
@@ -993,9 +1132,11 @@ export async function gmailIntakeStatusSummary(env = process.env) {
   const accounts = [];
   for (const email of addresses) {
     const token = await loadGmailTokenFor(email, env);
+    const appPassword = Boolean(gmailAppPasswordFor(email, env));
     accounts.push({
       email,
       tokenOnDisk: Boolean(token?.refresh_token || token?.access_token),
+      appPasswordConfigured: appPassword,
       oauthStartPath: `/api/events-finder-gmail/oauth/start?email=${encodeURIComponent(email)}`,
     });
   }
@@ -1005,6 +1146,7 @@ export async function gmailIntakeStatusSummary(env = process.env) {
     accounts,
     oauthConfigured: Boolean(client),
     tokenOnDisk: accounts.some((a) => a.tokenOnDisk),
+    appPasswordConfigured: accounts.some((a) => a.appPasswordConfigured),
     redirectUri: gmailOAuthRedirectUri(env),
     query: gmailEventsQuery(env),
   };

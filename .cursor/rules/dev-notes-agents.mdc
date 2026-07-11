@@ -1,0 +1,16 @@
+---
+description: Resolve Dashbird floating DEV NOTES — spin up one agent per exported task
+alwaysApply: true
+---
+
+# Dashbird DEV NOTES → agents
+
+When the user asks to spin up agents for each task, resolve DEV NOTES, or work through sticky / exported change requests:
+
+1. Read `data/dev-notes.md` (also available via `GET /api/dev-notes`). If missing or empty, say so and stop.
+2. Treat each unchecked markdown task (`- [ ] …`) as one unit of work. Group by `## …` section when present; ignore HTML comments and metadata lines (`Page:`, `Exported:`).
+3. Launch one Task subagent **per open task** (parallel when independent). Each agent gets the task text, page context from the section (`main` / `house-hunter` / `settings`), and instruction to implement and verify on that Dashbird screen.
+4. After a task is done, mark it checked (`- [x] …`) in `data/dev-notes.md` (or `PUT /api/dev-notes` with the updated markdown). Do not delete sections until the user asks to clear resolved notes.
+5. Summarize what each agent did; call out any tasks that failed or need Jay.
+
+Draft notes still on the floating sticky (not yet Exported) live only in browser localStorage (`dashbird-dev-sticky:*`) — ask Jay to hit **Export** on the sticky first if the file is empty.

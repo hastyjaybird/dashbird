@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { eventTicketPriceRank } from './events-finder-price.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
@@ -49,6 +50,37 @@ function toIsoOrNull(value) {
 }
 
 /**
+ * Rewrite source image URLs that are blocked when hotlinked (e.g. Partiful Firebase).
+ * @param {unknown} url
+ * @returns {string | null}
+ */
+export function normalizeEventImageUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return null;
+  if (/^external\/user\//i.test(raw) || /^external\//i.test(raw)) {
+    return `https://partiful.imgix.net/${raw.replace(/^\/+/, '')}?fit=clip&w=640&auto=format`;
+  }
+  try {
+    const u = new URL(raw);
+    if (
+      u.hostname === 'firebasestorage.googleapis.com'
+      && /getpartiful\.appspot\.com/i.test(u.pathname)
+    ) {
+      const m = u.pathname.match(/\/o\/(.+)$/);
+      if (m) {
+        const objectPath = decodeURIComponent(m[1]).replace(/^\/+/, '');
+        if (objectPath) {
+          return `https://partiful.imgix.net/${objectPath}?fit=clip&w=640&auto=format`;
+        }
+      }
+    }
+  } catch {
+    /* keep raw */
+  }
+  return raw.slice(0, 2000);
+}
+
+/**
  * Collapse title for name+date dedupe (case/punct/spacing insensitive).
  * @param {unknown} title
  * @returns {string}
@@ -63,6 +95,73 @@ export function normalizeEventTitleKey(title) {
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
     .replace(/\s+/g, ' ');
+}
+
+/**
+ * Drop weekday words so "Saturday Night Networking" ≈ "Sunday Night Networking".
+ * @param {string} titleKey
+ * @returns {string}
+ */
+export function stripWeekdayFromTitleKey(titleKey) {
+  return String(titleKey || '')
+    .replace(
+      /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b/g,
+      ' ',
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Stable series identity: same Meetup group (or source+venue) + weekday-stripped title.
+ * @param {object} event
+ * @returns {string | null}
+ */
+export function eventSeriesDedupeKey(event) {
+  const titleKey = stripWeekdayFromTitleKey(
+    normalizeEventTitleKey(/** @type {{ title?: unknown }} */ (event)?.title),
+  );
+  if (!titleKey) return null;
+
+  const source = String(/** @type {{ source?: unknown }} */ (event)?.source || '')
+    .trim()
+    .toLowerCase() || 'unknown';
+
+  let group = String(/** @type {{ groupSlug?: unknown }} */ (event)?.groupSlug || '')
+    .trim()
+    .toLowerCase();
+
+  if (!group) {
+    const url = String(
+      /** @type {{ groupUrl?: unknown, url?: unknown }} */ (event)?.groupUrl
+        || /** @type {{ url?: unknown }} */ (event)?.url
+        || '',
+    ).trim();
+    try {
+      const u = new URL(url);
+      const host = u.hostname.replace(/^www\./, '').toLowerCase();
+      if (host === 'meetup.com') {
+        const slug = u.pathname.split('/').filter(Boolean)[0] || '';
+        if (slug && slug !== 'find' && slug !== 'events') group = slug;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (!group) {
+    const venue = normalizeEventTitleKey(
+      /** @type {{ venue?: unknown, location?: unknown }} */ (event)?.venue
+        || /** @type {{ location?: unknown }} */ (event)?.location
+        || '',
+    );
+    const city = normalizeEventTitleKey(/** @type {{ city?: unknown }} */ (event)?.city || '');
+    group = venue || city || '';
+  }
+
+  // Without a group/venue anchor, don't series-collapse (too aggressive for generic titles).
+  if (!group) return null;
+  return `${source}|${group}|${titleKey}`;
 }
 
 /**
@@ -114,6 +213,7 @@ const SOURCE_PREF = {
   luma: 4,
   eventbrite: 4,
   meetup: 4,
+  multiverse: 4,
   secretparty: 3,
   gmail: 1,
 };
@@ -140,6 +240,7 @@ function eventRichnessScore(event) {
 
 /**
  * Keep one event per matching name + local calendar date.
+ * Prefer the listing with the higher ticket price; otherwise richer / more canonical.
  * Events missing a title or start date are left alone (cannot pair on both).
  * @param {object[]} events
  * @param {{ timeZone?: string }} [opts]
@@ -156,6 +257,20 @@ export function dedupeEventsByNameAndDate(events, opts = {}) {
   /** @type {object[]} */
   const passthrough = [];
 
+  /**
+   * @param {object} a
+   * @param {object} b
+   * @returns {boolean} true when `b` should replace `a`
+   */
+  function shouldPrefer(a, b) {
+    const pa = eventTicketPriceRank(a);
+    const pb = eventTicketPriceRank(b);
+    if (pa != null && pb != null && pa !== pb) return pb > pa;
+    if (pb != null && pb > 0 && (pa == null || pa <= 0)) return true;
+    if (pa != null && pa > 0 && (pb == null || pb <= 0)) return false;
+    return eventRichnessScore(b) > eventRichnessScore(a);
+  }
+
   for (const event of list) {
     if (!event || typeof event !== 'object') continue;
     const key = eventNameDateDedupeKey(event, timeZone);
@@ -168,9 +283,7 @@ export function dedupeEventsByNameAndDate(events, opts = {}) {
       winners.set(key, event);
       continue;
     }
-    const prevScore = eventRichnessScore(prev);
-    const nextScore = eventRichnessScore(event);
-    if (nextScore > prevScore) {
+    if (shouldPrefer(prev, event)) {
       const dupes = Array.isArray(prev.duplicateIds) ? prev.duplicateIds : [];
       const kept = {
         ...event,
@@ -188,8 +301,65 @@ export function dedupeEventsByNameAndDate(events, opts = {}) {
   }
 
   const deduped = [...winners.values(), ...passthrough];
-  const removed = Math.max(0, list.length - deduped.length);
-  return { events: deduped, removed };
+  const removedSameDay = Math.max(0, list.length - deduped.length);
+
+  // Second pass: same group + weekday-stripped title → keep soonest occurrence only.
+  // Fixes recurring Meetup series like "Saturday Night Networking" vs "Sunday Night Networking".
+  const series = collapseRecurringSeriesEvents(deduped);
+  return {
+    events: series.events,
+    removed: removedSameDay + series.removed,
+    removedSameDay,
+    removedSeries: series.removed,
+  };
+}
+
+/**
+ * Keep the soonest upcoming event per series key (group + title without weekday).
+ * @param {object[]} events
+ * @returns {{ events: object[], removed: number }}
+ */
+export function collapseRecurringSeriesEvents(events) {
+  const list = Array.isArray(events) ? events : [];
+  /** @type {Map<string, object>} */
+  const winners = new Map();
+  /** @type {object[]} */
+  const passthrough = [];
+
+  /**
+   * @param {object} ev
+   * @returns {number}
+   */
+  function startMs(ev) {
+    const t = Date.parse(String(ev?.start || ''));
+    return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+  }
+
+  for (const event of list) {
+    if (!event || typeof event !== 'object') continue;
+    const key = eventSeriesDedupeKey(event);
+    if (!key) {
+      passthrough.push(event);
+      continue;
+    }
+    const prev = winners.get(key);
+    if (!prev) {
+      winners.set(key, event);
+      continue;
+    }
+    const preferNew = startMs(event) < startMs(prev);
+    const keep = preferNew ? event : prev;
+    const drop = preferNew ? prev : event;
+    const dupes = Array.isArray(keep.duplicateIds) ? keep.duplicateIds : [];
+    const dropId = String(drop.id || '').trim();
+    winners.set(key, {
+      ...keep,
+      duplicateIds: dropId && !dupes.includes(dropId) ? [...dupes, dropId] : dupes,
+    });
+  }
+
+  const out = [...winners.values(), ...passthrough];
+  return { events: out, removed: Math.max(0, list.length - out.length) };
 }
 
 /**
@@ -247,7 +417,7 @@ function normalizeRow(event) {
   const description =
     descriptionRaw != null ? String(descriptionRaw).replace(/\s+/g, ' ').trim().slice(0, 2000) || null : null;
   const imageRaw = /** @type {{ imageUrl?: unknown }} */ (event).imageUrl;
-  const imageUrl = imageRaw != null ? String(imageRaw).trim().slice(0, 2000) || null : null;
+  const imageUrl = normalizeEventImageUrl(imageRaw);
 
   /** @type {Record<string, unknown>} */
   const payload = { .../** @type {Record<string, unknown>} */ (event) };
@@ -307,6 +477,20 @@ function migrate(db) {
     CREATE INDEX IF NOT EXISTS idx_events_source ON events(source);
     CREATE INDEX IF NOT EXISTS idx_events_city ON events(city);
     CREATE INDEX IF NOT EXISTS idx_events_last_seen ON events(last_seen_at);
+    CREATE TABLE IF NOT EXISTS skipped_events (
+      id TEXT PRIMARY KEY NOT NULL,
+      url_key TEXT,
+      name_date_key TEXT,
+      title TEXT,
+      start_at TEXT,
+      source TEXT,
+      venue TEXT,
+      city TEXT,
+      image_url TEXT,
+      skipped_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_skipped_events_url ON skipped_events(url_key);
+    CREATE INDEX IF NOT EXISTS idx_skipped_events_name_date ON skipped_events(name_date_key);
   `);
 }
 
@@ -385,7 +569,7 @@ export function upsertEventsFinderEvents(events, env = process.env) {
       lon = excluded.lon,
       online = excluded.online,
       description = excluded.description,
-      image_url = excluded.image_url,
+      image_url = COALESCE(excluded.image_url, events.image_url),
       payload_json = excluded.payload_json,
       last_seen_at = excluded.last_seen_at
   `);
@@ -465,7 +649,9 @@ function rowToEvent(row) {
     online,
     isOnline: online,
     description: row.description != null ? String(row.description) : payload.description ?? null,
-    imageUrl: row.image_url != null ? String(row.image_url) : payload.imageUrl ?? null,
+    imageUrl: normalizeEventImageUrl(
+      row.image_url != null ? String(row.image_url) : payload.imageUrl ?? null,
+    ),
     firstSeenAt: row.first_seen_at != null ? String(row.first_seen_at) : null,
     lastSeenAt: row.last_seen_at != null ? String(row.last_seen_at) : null,
   };
@@ -524,17 +710,16 @@ export function listEventsFinderEventsDeduped(opts = {}) {
 }
 
 /**
- * Drop events that ended (or started) before cutoff.
- * @param {{ env?: NodeJS.ProcessEnv, cutoffIso?: string }} [opts]
+ * Drop events that have ended (end_at in the past).
+ * If end_at is missing, drop when start_at is more than 12 hours ago.
+ * @param {{ env?: NodeJS.ProcessEnv, nowIso?: string }} [opts]
  * @returns {number} deleted count
  */
 export function pruneEventsFinderEvents(opts = {}) {
   const env = opts.env || process.env;
   const db = openEventsFinderDb(env);
-  const cutoff =
-    opts.cutoffIso != null
-      ? String(opts.cutoffIso)
-      : new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+  const now = opts.nowIso != null ? String(opts.nowIso) : new Date().toISOString();
+  const startFallback = new Date(Date.parse(now) - 12 * 60 * 60 * 1000).toISOString();
   const result = db
     .prepare(
       `
@@ -543,8 +728,273 @@ export function pruneEventsFinderEvents(opts = {}) {
          OR (end_at IS NULL AND start_at IS NOT NULL AND start_at < ?)
     `,
     )
-    .run(cutoff, cutoff);
+    .run(now, startFallback);
   return Number(result.changes) || 0;
+}
+
+/**
+ * Delete catalog rows by id (used when the user skips an event).
+ * @param {string[]} ids
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function deleteEventsFinderByIds(ids, env = process.env) {
+  const list = (Array.isArray(ids) ? ids : [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean)
+    .slice(0, 1000);
+  if (!list.length) return 0;
+  const db = openEventsFinderDb(env);
+  const stmt = db.prepare('DELETE FROM events WHERE id = ?');
+  let deleted = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const id of list) {
+      const r = stmt.run(id);
+      deleted += Number(r.changes) || 0;
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
+  return deleted;
+}
+
+/**
+ * @typedef {{
+ *   id: string,
+ *   key: string | null,
+ *   url: string | null,
+ *   title: string | null,
+ *   start: string | null,
+ *   source: string | null,
+ *   venue: string | null,
+ *   city: string | null,
+ *   imageUrl: string | null,
+ *   skippedAt: string,
+ * }} EventsFinderSkippedRow
+ */
+
+/**
+ * @param {Record<string, unknown>} row
+ * @returns {EventsFinderSkippedRow}
+ */
+function skippedDbRowToRecord(row) {
+  return {
+    id: String(row.id || ''),
+    key: row.name_date_key != null ? String(row.name_date_key) : null,
+    url: row.url_key != null ? String(row.url_key) : null,
+    title: row.title != null ? String(row.title) : null,
+    start: row.start_at != null ? String(row.start_at) : null,
+    source: row.source != null ? String(row.source) : null,
+    venue: row.venue != null ? String(row.venue) : null,
+    city: row.city != null ? String(row.city) : null,
+    imageUrl: row.image_url != null ? String(row.image_url) : null,
+    skippedAt: String(row.skipped_at || new Date().toISOString()),
+  };
+}
+
+/**
+ * List skipped events from SQLite (source of truth for hide-from-feed).
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {EventsFinderSkippedRow[]}
+ */
+export function listSkippedEventsFinderRecords(env = process.env) {
+  const db = openEventsFinderDb(env);
+  const rows = db
+    .prepare(
+      `
+      SELECT id, url_key, name_date_key, title, start_at, source, venue, city, image_url, skipped_at
+      FROM skipped_events
+      ORDER BY skipped_at DESC
+      LIMIT 1000
+    `,
+    )
+    .all();
+  return rows.map((row) => skippedDbRowToRecord(/** @type {Record<string, unknown>} */ (row)));
+}
+
+/**
+ * Upsert skip records into SQLite (does not remove other skips).
+ * @param {Array<{
+ *   id?: unknown,
+ *   key?: unknown,
+ *   url?: unknown,
+ *   title?: unknown,
+ *   start?: unknown,
+ *   source?: unknown,
+ *   venue?: unknown,
+ *   city?: unknown,
+ *   imageUrl?: unknown,
+ *   skippedAt?: unknown,
+ * }>} records
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function upsertSkippedEventsFinderRecords(records, env = process.env) {
+  const list = Array.isArray(records) ? records : [];
+  if (!list.length) return 0;
+  const db = openEventsFinderDb(env);
+  const stmt = db.prepare(`
+    INSERT INTO skipped_events (
+      id, url_key, name_date_key, title, start_at, source, venue, city, image_url, skipped_at
+    ) VALUES (
+      @id, @urlKey, @nameDateKey, @title, @startAt, @source, @venue, @city, @imageUrl, @skippedAt
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      url_key = COALESCE(excluded.url_key, skipped_events.url_key),
+      name_date_key = COALESCE(excluded.name_date_key, skipped_events.name_date_key),
+      title = COALESCE(excluded.title, skipped_events.title),
+      start_at = COALESCE(excluded.start_at, skipped_events.start_at),
+      source = COALESCE(excluded.source, skipped_events.source),
+      venue = COALESCE(excluded.venue, skipped_events.venue),
+      city = COALESCE(excluded.city, skipped_events.city),
+      image_url = COALESCE(excluded.image_url, skipped_events.image_url),
+      skipped_at = excluded.skipped_at
+  `);
+  let n = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const rec of list) {
+      const id = String(rec?.id || '').trim().slice(0, 400);
+      if (!id) continue;
+      const title = rec.title != null ? String(rec.title).trim().slice(0, 500) || null : null;
+      const start = rec.start != null ? String(rec.start).trim().slice(0, 40) || null : null;
+      const keyRaw = rec.key != null ? String(rec.key).trim().slice(0, 400) : '';
+      const nameDateKey =
+        keyRaw
+        || (title && start
+          ? eventNameDateDedupeKey({ title, start }, env.WEATHER_TIME_ZONE)
+          : null);
+      const urlKey = rec.url != null ? String(rec.url).trim().slice(0, 500) || null : null;
+      stmt.run({
+        id,
+        urlKey,
+        nameDateKey: nameDateKey || null,
+        title,
+        startAt: start,
+        source: rec.source != null ? String(rec.source).trim().slice(0, 64) || null : null,
+        venue: rec.venue != null ? String(rec.venue).trim().slice(0, 300) || null : null,
+        city: rec.city != null ? String(rec.city).trim().slice(0, 120) || null : null,
+        imageUrl: rec.imageUrl != null ? String(rec.imageUrl).trim().slice(0, 2000) || null : null,
+        skippedAt:
+          rec.skippedAt != null && String(rec.skippedAt).trim()
+            ? String(rec.skippedAt).trim().slice(0, 40)
+            : new Date().toISOString(),
+      });
+      n += 1;
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
+  return n;
+}
+
+/**
+ * Replace the full skipped set in SQLite (used when client sends an explicit list).
+ * @param {Array<object>} records
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function replaceSkippedEventsFinderRecords(records, env = process.env) {
+  const db = openEventsFinderDb(env);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('DELETE FROM skipped_events').run();
+    db.exec('COMMIT');
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
+  return upsertSkippedEventsFinderRecords(records, env);
+}
+
+/**
+ * Remove skip designations by id (Unskip).
+ * @param {string[]} ids
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function deleteSkippedEventsFinderByIds(ids, env = process.env) {
+  const list = (Array.isArray(ids) ? ids : [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean)
+    .slice(0, 1000);
+  if (!list.length) return 0;
+  const db = openEventsFinderDb(env);
+  const stmt = db.prepare('DELETE FROM skipped_events WHERE id = ?');
+  let deleted = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const id of list) {
+      const r = stmt.run(id);
+      deleted += Number(r.changes) || 0;
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
+  return deleted;
+}
+
+/**
+ * Delete catalog rows that match skip records by id or url.
+ * Name/date matches are enforced at feed time via isEventSkipped.
+ * @param {EventsFinderSkippedRow[]} records
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function deleteEventsFinderMatchingSkipped(records, env = process.env) {
+  const list = Array.isArray(records) ? records : [];
+  if (!list.length) return 0;
+  const ids = [];
+  const urls = [];
+  for (const rec of list) {
+    if (rec?.id) ids.push(String(rec.id));
+    if (rec?.url) urls.push(String(rec.url));
+  }
+  const db = openEventsFinderDb(env);
+  const byId = db.prepare('DELETE FROM events WHERE id = ?');
+  const byUrl = db.prepare('DELETE FROM events WHERE lower(url) = lower(?)');
+  let deleted = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const id of ids) {
+      deleted += Number(byId.run(id).changes) || 0;
+    }
+    for (const url of urls) {
+      deleted += Number(byUrl.run(url).changes) || 0;
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
+  return deleted;
 }
 
 /**

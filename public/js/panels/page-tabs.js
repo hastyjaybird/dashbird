@@ -52,6 +52,7 @@ export function mountPageTabs(mountEl, opts) {
     localStorage.setItem(LS_PAGE_KEY, page);
     document.body.classList.toggle('dashy--page-settings', page === 'settings');
     document.body.classList.toggle('dashy--page-house-hunter', page === 'house-hunter');
+    document.dispatchEvent(new CustomEvent('dashbird:page', { detail: { page } }));
     opts.onChange(page);
     if (page === 'main') focusWebSearchInput();
   }

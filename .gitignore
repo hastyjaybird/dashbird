@@ -24,6 +24,12 @@ data/events-finder-criteria.json
 data/gmail-intake-token.json
 data/gmail-intake-tokens/
 data/facebook-events-cache.json
+data/facebook-billing-log.json
+data/meetup-events-cache.json
+data/multiverse-events-cache.json
+data/luma-events-cache.json
+data/gcal-ics-events-cache.json
+data/telegram-events-offset.json
 data/events-finder.db
 data/events-finder.db-wal
 data/events-finder.db-shm
@@ -34,5 +40,7 @@ data/tool-library-assets/*
 !data/tool-library-assets/.gitkeep
 data/web-catalog.json
 data/web-catalog.json.tmp
+data/dev-notes.md
+public/data/telegram-events/
 # Local Vikunja SQLite + uploads + bootstrap credentials
 data/vikunja/

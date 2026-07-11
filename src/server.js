@@ -18,6 +18,7 @@ import eventsFinderStatusRouter from './routes/events-finder-status.js';
 import eventsFinderCriteriaRouter from './routes/events-finder-criteria.js';
 import eventsFinderGmailRouter from './routes/events-finder-gmail.js';
 import eventsFinderEventsRouter from './routes/events-finder-events.js';
+import eventsFinderSourcesRouter from './routes/events-finder-sources.js';
 import openDesktopRouter from './routes/open-desktop.js';
 import networkHealthRouter from './routes/network-health.js';
 import heroAstronomyRouter from './routes/hero-astronomy.js';
@@ -55,6 +56,9 @@ import webCatalogRouter from './routes/web-catalog.js';
 import { startWebCatalogWatchPoller } from './lib/web-catalog-watch.js';
 import { startWebCatalogDiscoveryWorker } from './lib/web-catalog-discovery.js';
 import { startFacebookEventsWeeklyScheduler } from './lib/events-finder-facebook.js';
+import { startTelegramEventsPoller } from './lib/events-finder-telegram.js';
+import eventsFinderTelegramRouter from './routes/events-finder-telegram.js';
+import devNotesRouter from './routes/dev-notes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -130,10 +134,13 @@ app.use('/api/event-types-status', eventTypesStatusRouter);
 app.use('/api/events-finder-status', eventsFinderStatusRouter);
 app.use('/api/events-finder-criteria', eventsFinderCriteriaRouter);
 app.use('/api/events-finder-gmail', eventsFinderGmailRouter);
+app.use('/api/events-finder-sources', eventsFinderSourcesRouter);
 app.use('/api/events-finder/events', eventsFinderEventsRouter);
+app.use('/api/events-finder/telegram', eventsFinderTelegramRouter);
 app.use('/api/open-desktop', openDesktopRouter);
 app.use('/api/tool-library', toolLibraryRouter);
 app.use('/api/web-catalog', webCatalogRouter);
+app.use('/api/dev-notes', devNotesRouter);
 
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api')) {
@@ -158,6 +165,7 @@ app.listen(port, '0.0.0.0', () => {
   startWebCatalogWatchPoller();
   startWebCatalogDiscoveryWorker();
   startFacebookEventsWeeklyScheduler();
+  startTelegramEventsPoller();
   warmGoogleCalendarCache();
   // Prime ZIP → lat/lon so the first page-load fan-out does not wait on Zippopotam.
   void resolveDashboardWeatherLatLon().catch(() => {});

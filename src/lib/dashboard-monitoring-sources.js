@@ -99,7 +99,7 @@ export const DASHBOARD_MONITORING_SOURCES = [
     group: 'Sky & space',
     label: 'Sky strip — aircraft nearby (ADS-B)',
     source:
-      'OpenSky Network states/all bbox · rain-alert address geocode · oakland-aircraft-registry.json',
+      'adsb.fi opendata lat/lon/dist · rain-alert address geocode · oakland-aircraft-registry.json',
   },
   {
     id: 'sky_moonbow',

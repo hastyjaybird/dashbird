@@ -221,19 +221,19 @@ Needs: `APIFY_TOKEN` in `.env` (set); optional Gmail intake for invite mail. Per
 | https://partiful.com/e/JqsqeIT0qcfGa6ole785 | Carmen Sandiego at Euclid |
 | https://partiful.com/e/DMRUVpMFWsuxbTLn1kHB | NYC Climate Week Decompression |
 
-### Luma (events)
+### Luma (calendars + events — wired)
+
+Pin file: [`luma-calendar-pins.md`](luma-calendar-pins.md). Module: `events-finder-luma.js`.
 
 | URL | Title |
 | --- | --- |
+| https://luma.com/sf | San Francisco discover (city feed) |
+| https://luma.com/Big-Brain-SF | Big Brain Lectures - Bay Area |
+| https://luma.com/frontiertower | Frontier Tower SF |
+| https://luma.com/sf-hardware-meetup | SF Hardware Meetup |
+| https://luma.com/tiat | tiat (the intersection of art & technology) |
 | https://luma.com/4esilsg5 | AI Philosophy Nights |
 | https://luma.com/ghnew59o | Create for Good |
-
-### Luma hubs (need canonical calendar URLs)
-
-- Big Brain Lectures - Bay Area
-- Frontier Tower SF
-- SF Hardware Meetup
-- tiat (the intersection of art & technology)
 
 ### Meetup (pins TBD)
 
@@ -265,7 +265,7 @@ Names from your Groups screenshots; URLs from `exampleevents/fblinks.txt`. Slug 
 | Burning Man Classifieds (or BAB Classifieds) | https://www.facebook.com/groups/babclassifieds/ | slug match |
 | Lightning in a Bottle | https://www.facebook.com/groups/libfestival/ | slug match |
 | Bay Area Comedy Showcase | https://www.facebook.com/groups/BAYAREACOMEDYSHOWCASE/ | slug match |
-| 510 Events / Oakland parties? | https://www.facebook.com/groups/510events/ | confirm name |
+| Oakland Parties, Concerts, Undergrounds and Events | https://www.facebook.com/groups/510events/ | from Jay |
 | Brass Tax | https://www.facebook.com/groups/brasstax/ | slug match |
 | Everything Immersive | https://www.facebook.com/groups/everythingimmersive/ | slug match |
 | San Francisco Burners | https://www.facebook.com/groups/sanfranciscoburners/ | slug match |
@@ -278,58 +278,21 @@ Names from your Groups screenshots; URLs from `exampleevents/fblinks.txt`. Slug 
 | (unlabeled — confirm) | https://www.facebook.com/groups/885109698218583/ | numeric only |
 | (unlabeled — confirm) | https://www.facebook.com/groups/1180072779497499/ | numeric only |
 | (unlabeled — confirm) | https://www.facebook.com/groups/138155232972461/ | numeric only |
-| (unlabeled — confirm) | https://www.facebook.com/groups/408645952626168/ | numeric only |
+| Burning Man Art Projects | https://www.facebook.com/groups/408645952626168/ | from Jay |
 | (unlabeled — confirm) | https://www.facebook.com/groups/698593531630485/ | numeric only |
-| (unlabeled — confirm) | https://www.facebook.com/groups/9716795555/ | numeric only |
+| Survival Research Labs | https://www.facebook.com/groups/9716795555/ | from Jay |
 | (unlabeled — confirm) | https://www.facebook.com/groups/211057618333661/ | numeric only |
 | (unlabeled — confirm) | https://www.facebook.com/groups/1135130563921407/ | numeric only |
-| (unlabeled — confirm) | https://www.facebook.com/groups/318196436499494/ | numeric only |
+| Oshan's Event List | https://www.facebook.com/groups/318196436499494/ | from Jay |
 | (unlabeled — confirm) | https://www.facebook.com/groups/1693539184298377/ | numeric only |
 | (unlabeled — confirm) | https://www.facebook.com/groups/1579904642253145/ | numeric only |
+| Nerd Nite San Francisco | https://www.facebook.com/groups/NerdNiteSF/ | public site link |
+| Ephemerisle | https://www.facebook.com/groups/notephemerisle/ | from Jay |
+| Regenerative Changemakers | https://www.facebook.com/groups/416925721848554/ | from Jay |
 
-### Screenshot groups not yet in `fblinks.txt`
+### Screenshot groups — complete
 
-Add URLs when you have them (or drop if not for events ingest):
-
-- Oakland / East Bay HOUSING
-- Bay Area Nonmonogameetups
-- Bay Area free gifting group
-- Friends of the Farmhouse
-- Solar System House Events
-- 4th Of Juplaya - Black Rock Desert
-- Spain Sunset Solar Eclipse August 12, 2026
-- Total Solar Eclipse Travel & Discussion
-- Bay Area Housing / SF Housing / SUBLET groups (many)
-- Contraptionists
-- Burning Man Art Projects
-- Oakland Parties, Concerts, Underground…
-- Buy Nothing West Oakland
-- Eco friendly and Sustainable Living
-- Public Safety Flea Market
-- Victron Powered Camper / Box Truck-to-RV (probably skip for events)
-- Oshan's Event List
-- Video Mapping Projection
-- Bay Area Creative Freaks Unite
-- SF Bay Area Free Stuff and Services
-- East Bay Area Spam-Free Buying & Selling
-- AI: Artificial Intelligence
-- Gift Everything SF
-- Bay Area // SF // Oakland Contemporary Art Scene
-- Survival Research Labs
-- East Bay Stuff Exchange
-- Play Testing to Save the World!
-- Thursday Oakland hangouts list
-- Virtual Yard Sale (Oakland/Berkeley)
-- SF Bay Area Burning Man Classifieds
-- East Bay Community Dance
-- East Bay Fusion Group
-- Regenerative Changemakers
-- Ephemerisle
-- Nerd Nite San Francisco
-- Makers Club SF
-- Bay Area Metal
-- Tiny House Village Bay Area
-- various housing / ukulele / garage-sale groups (likely skip for events)
+High-value event groups from screenshots are pinned and labeled (Ephemerisle, Survival Research Labs, Oshan's Event List, Burning Man Art Projects, Oakland Parties/Concerts/Undergrounds, Regenerative Changemakers, Nerd Nite SF, plus the earlier slug-matched set). No further screenshot URLs outstanding.
 
 ---
 
@@ -374,7 +337,7 @@ https://www.facebook.com/groups/1579904642253145/
 https://www.facebook.com/groups/sfiop/
 ```
 
-**Public (reachable without login):** all Partiful + Luma sample URLs in §6.
+**Public (reachable without login):** all Partiful + Luma pin URLs in §6 / `luma-calendar-pins.md`.
 
 **Implication for ingest:** anonymous HTML fetch cannot read these groups. Facebook path stays Apify (logged-in actor) + Gmail invites + your pinned hosts in Settings — not open-web scrape.
 

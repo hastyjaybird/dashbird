@@ -7,7 +7,7 @@ import { rainAlertQueryString, subscribeDevicePlace } from '../lib/device-locati
 import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
 
 const FALLBACK_TZ = 'America/Los_Angeles';
-/** Matches server OpenSky cache (src/lib/aircraft-nearby.js CACHE_MS). */
+/** Matches server adsb.fi cache (src/lib/aircraft-nearby.js CACHE_MS). */
 const SKY_STRIP_POLL_MS = 90_000;
 const HERO_CACHE_MAX_MS = 45 * 60 * 1000;
 const SKY_CACHE_MAX_MS = 20 * 60 * 1000;

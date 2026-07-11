@@ -14,69 +14,77 @@ Shared pipeline (all sources eventually feed the same shape):
 6. **Taste filter** with Look for / Skip criteria.
 7. **Rank + show** on the main Events card (thumbs ± later).
 
-**Event catalog (implemented):** Node `node:sqlite` file at `EVENTS_FINDER_DB_PATH` (default `data/events-finder.db`). Each feed load upserts Gmail + Facebook hits, prunes stale rows (~14d), then serves from the catalog. **Dedupe:** same normalized title + same local calendar day (`WEATHER_TIME_ZONE`) → keep the richer listing. API includes a `store` block (`count`, `bySource`, `upserted`, `dedupedRemoved`).
+**Event catalog (implemented):** Node `node:sqlite` file at `EVENTS_FINDER_DB_PATH` (default `data/events-finder.db`). Each feed load upserts Gmail + Facebook + public HTML (Partiful/Secret Party/Eventbrite) + Meetup pins + Multiverse ICS + Luma calendar pins, prunes stale rows (~14d), then serves from the catalog. **Telegram** upserts immediately on bot message (text / voice / flyer photo) and appears on the next feed load. **Dedupe:** same normalized title + same local calendar day (`WEATHER_TIME_ZONE`) → keep the richer listing. **Taste:** Skip lines drop unless a Look for line also matches; Look for lines boost rank (`events-finder-taste.js`). API includes a `store` block (`count`, `bySource`, `upserted`, `dedupedRemoved`, `tasteSkipped`).
 
-**Geo + filters (implemented):** `src/lib/events-finder-geo.js` + criteria `filters` (`cities`, `maxMiles`, `dates`, `dateFrom`, `dateTo`, `earliestLocalTime`, `attendance`). Settings → Filter criteria edits all of these. API returns `geo.homeCities` / `geo.bayArea` and `filters`. Online events skip city/distance gates; unknowns are kept when attendance is filtered.
+**Geo + filters (implemented):** `src/lib/events-finder-geo.js` + criteria `filters` (`cities`, `maxMiles`, `dates`, `dateFrom`, `dateTo`, `earliestLocalTime`, `attendance`). Date/time gates use **local** timezone (not UTC). Settings → Filter criteria edits all of these. API returns `geo.homeCities` / `geo.bayArea` and `filters`. Online events skip city/distance gates; unknowns are kept when attendance is filtered.
 
 ---
 
-## 1. Partiful (`partiful.com`) — Public pages + Gmail for private
+## 1. Partiful (`partiful.com`) — Explore SF + Gmail for private
 
 **Constraint:** Public HTML only sees **public** parties. Private / invite-only events are invisible without an account session — do **not** rely on scraping for those.
 
 **Primary path for private:** In the Partiful account, set notification / invite email to **`jay.intake.box@gmail.com`**, then ingest via **Intake Gmail** (already queries `from:partiful.com` + Partiful URLs in body).
 
-**Today:** Site reachable; ingest smoke test finds generic “event” page signals. No list API; parties are mostly share-link based.
-
-**Samples:** 7 public event URLs in [`docs/events-sample-urls.md`](events-sample-urls.md) (all HTTP 200 with real titles). HTML is thin on schema.org — plan Partiful-specific parse (title / `<time>` / embedded JSON) for **public** only.
+**Public path (wired):** `https://partiful.com/explore/sf` → `__NEXT_DATA__` trending + sections + feed (~50 Bay Area public events). Optional extra URLs in [`docs/events-sample-urls.md`](events-sample-urls.md). Override region with `PARTIFUL_EXPLORE_REGION` (default `sf`).
 
 **Roadmap**
 
 | Phase | Work |
 | --- | --- |
 | P0 | Account: route Partiful email notifications → `jay.intake.box@gmail.com`; confirm Gmail intake parses Partiful mailers. |
-| P1 | Parse sample **public** party URLs → title, date/time, host, RSVP link (watchlist optional). |
-| P2 | Dedupe Gmail-sourced Partiful vs public URL watchlist; criteria filter. |
+| P1 | ~~Parse sample public party URLs~~ → **Explore SF listing** (done). |
+| P2 | Dedupe Gmail-sourced Partiful vs Explore/watchlist; criteria filter. |
 
-**Needs from you:** In Partiful settings, set invite/notification email to `jay.intake.box@gmail.com` (one-time).
+**Needs from you:** In Partiful settings, set invite/notification email to `jay.intake.box@gmail.com` (one-time). Public SF discovery needs no action.
 
 ---
 
-## 1b. Secret Party (`secretparty.io`) — Public pages + Gmail for private
+## 1b. Secret Party (`secretparty.io`) — Gmail primary + optional watchlist
 
-**Constraint:** Same as Partiful — public pages cannot see **private** events.
+**Constraint:** Public HTML / unauthenticated API cannot see **private / semi-private** events. Site `robots.txt` Disallows crawling; `api.secretparty.io` returns 401 without auth. Event pages are usually `https://<slug>.secretparty.io/`.
 
-**Primary path for private:** In the Secret Party account, set notification / invite email to **`jay.intake.box@gmail.com`**, then ingest via **Intake Gmail** (`from:secretparty.io` already in the query).
+**Primary path for private:** In the Secret Party account, set notification / invite email to **`jay.intake.box@gmail.com`**, then ingest via **Intake Gmail** (`from:secretparty.io` + `*.secretparty.io` URLs).
 
-**Today:** Source row in Settings (Personal bookmarks → Events → **Secret Party**). Site reachable; strategy **Public pages**. No list API — events are share/invite URL based (similar to Partiful).
+**Today (wired):** Gmail tags Secret Party links as `source: secretparty`. Optional public watchlist in [`docs/events-sample-urls.md`](events-sample-urls.md). Gap checklist: [`docs/secretparty-ingest-plan.md`](secretparty-ingest-plan.md).
 
 **Roadmap**
 
 | Phase | Work |
 | --- | --- |
-| P0 | Account: route Secret Party email notifications → `jay.intake.box@gmail.com`; confirm Gmail intake parses mailers. |
-| P1 | Optional: parse sample **public** event URLs + watchlist refresh. |
-| P2 | Dedupe against Partiful/Luma/Gmail; criteria filter. |
+| P0 | Account: route Secret Party email → intake; confirm Gmail parse (done in code; needs account setting). |
+| P1 | Grow public watchlist when share URLs are known. |
+| P2 | Optional API if credentials ever land. |
 
-**Needs from you:** In Secret Party settings, set invite/notification email to `jay.intake.box@gmail.com` (one-time). Optional: a few public `secretparty.io` URLs for parse fixtures.
+**Needs from you:** In Secret Party settings, set invite/notification email to `jay.intake.box@gmail.com` (one-time). Paste any public `*.secretparty.io` URLs into the sample doc.
 ---
 
-## 2. Luma (`lu.ma` / `luma.com`) — Public pages
+## 2. Luma (`lu.ma` / `luma.com`) — Public pages + calendar API
 
-**Today:** Reachable; HTML smoke test passes. Public event + calendar pages are the realistic path. Event pages expose JSON-LD + `__NEXT_DATA__` (easier than Partiful).
+**Today:** Wired. Pins in [`docs/luma-calendar-pins.md`](luma-calendar-pins.md) →
+`events-finder-luma.js` fetches page HTML (`__NEXT_DATA__`), then:
 
-**Samples:** 2 event URLs + 4 hub names (screenshot) in [`docs/events-sample-urls.md`](events-sample-urls.md).
+- calendar hubs → `api.lu.ma/calendar/get-items`
+- discover places (e.g. [`luma.com/sf`](https://luma.com/sf)) → `api.lu.ma/discover/get-paginated-events`
+- event pages → single-event parse
+
+Cached ~6h. Gmail catches Luma invite mailers.
+
+**Pins:** SF city discover (`/sf`) + Big Brain Lectures BA (`/Big-Brain-SF`), Frontier Tower SF
+(`/frontiertower`), SF Hardware Meetup (`/sf-hardware-meetup`), tiat (`/tiat`), plus a couple
+event-page seeds.
 
 **Roadmap**
 
 | Phase | Work |
 | --- | --- |
-| P0 | Parse sample **event** pages → title, when, host, join URL. |
-| P1 | Subscribe to hub calendars: Big Brain Lectures BA, Frontier Tower SF, SF Hardware Meetup, tiat (need canonical calendar URLs). |
+| P0 | ✅ Parse event + calendar pages → title, when, venue, join URL, price. |
+| P1 | ✅ Subscribe to hub calendars (canonical URLs in pin file). |
+| P1b | ✅ SF discover-place (`luma.com/sf`) via get-paginated-events. |
 | P2 | Optional ICS/export if Luma exposes it for those calendars. |
-| P3 | Location + criteria filter into the shared feed. |
+| P3 | Location + criteria filter into the shared feed (shared pipeline already applies). |
 
-**Needs from you:** canonical Luma **calendar/hub** URLs for the four screenshot calendars (event URLs alone are not enough for ongoing ingest).
+**Needs from you:** add more calendar/discover/event URLs to the pin file as you discover them.
 
 ---
 
@@ -161,6 +169,35 @@ Shared pipeline (all sources eventually feed the same shape):
 
 ---
 
+## 6b. Telegram (`t.me`) — Phone screenshots / voice / text
+
+**Decision:** Push intake via a private Telegram bot (long-poll `getUpdates` — works on LAN Docker without a public webhook).
+
+**Accepts**
+
+| Input | Path |
+| --- | --- |
+| Flyer / text-invite screenshot | Download photo → OpenRouter vision → event JSON |
+| Voice note | Whisper transcription → same NL parse as text |
+| Text | e.g. “event on July 18 called Rooftop Jazz invited by Sam” → OpenRouter JSON |
+
+**Image:** flyer photo is saved under `public/data/telegram-events/` and used as the card art. Text/voice with no graphic → `/assets/tile-telegram.svg`.
+
+**Today:** Modules `src/lib/events-finder-telegram.js` + `events-finder-invite-parse.js`. Status: `/api/events-finder/telegram/status`. Poller starts from `server.js` when `TELEGRAM_BOT_TOKEN` is set.
+
+**Setup**
+
+| Step | Work |
+| --- | --- |
+| 1 | `@BotFather` → create bot → `TELEGRAM_BOT_TOKEN` in `.env` |
+| 2 | `OPENROUTER_API_KEY` (vision + text + Whisper) |
+| 3 | DM the bot `/start` → copy chat id → `TELEGRAM_ALLOWED_CHAT_IDS=` |
+| 4 | Restart stack; send a test text/voice/photo |
+
+**Needs from you:** Bot token + allowlisted chat id(s).
+
+---
+
 ## 7. Intake Gmail (`mail.google.com` / multi-account) — Gmail API
 
 **Decision:** Official **Gmail API** (OAuth, readonly). Not HTML scraping — `mail.google.com` is login-walled.
@@ -204,13 +241,14 @@ Shared pipeline (all sources eventually feed the same shape):
 
 ## Your short to-do list (open)
 
-1. **Intake Gmail** — Google OAuth client + Connect **jay.intake.box@gmail.com** and **julia.hasty@gmail.com** (Settings → Events sources).
-2. **Account email routing (do this in each product UI)** — set notification / invite email to an intake address (`jay.intake.box@gmail.com` or `julia.hasty@gmail.com`) on:
+1. **Account email routing (in each product UI)** — set notification / invite email to an intake address (`jay.intake.box@gmail.com` or `julia.hasty@gmail.com`) on:
    - **Partiful** (private invites won't show on public pages)
    - **Secret Party** (same)
    - **Meetup** (browsing/API discovery is weak; email is the feed)
-3. **Luma** — Paste canonical calendar/hub URLs for Big Brain Lectures, Frontier Tower SF, SF Hardware Meetup, tiat.
-4. **Facebook** — paste `APIFY_TOKEN` in `.env` (Actor already chosen).
-5. **Noisebridge** (optional) — site/calendar/Meetup URL if it should be a source.
+2. **Luma** — ✅ Hub URLs in [`docs/luma-calendar-pins.md`](luma-calendar-pins.md) (add more as you find them).
+3. **Noisebridge** (optional) — site/calendar/Meetup URL if it should be a source.
+4. **Filter window** — in Settings → Filter criteria, widen `dateFrom` / `dateTo` (or clear them) when the sidebar looks empty; a tight week window hides later events.
 
-**Settled:** Fet deferred. Partiful sample event URLs received. Eventbrite = public pages first. Intake Gmail = Gmail API (**jay.intake.box + julia.hasty**). **Partiful / Secret Party private + Meetup → email to intake, not public scrape.** **Bay home cities: SF / Oakland / Emeryville / Berkeley.** Feed filters: city, optional distance, date range, earliest time, online vs in person.
+**Already wired (no action):** Gmail IMAP app passwords for both inboxes; `APIFY_TOKEN`; SQLite catalog; name+date dedupe; Look for / Skip taste; public Partiful + Luma calendar pins + Eventbrite SF listing + Meetup pins + Multiverse ICS.
+
+**Settled:** Fet deferred. Partiful sample event URLs received. Eventbrite = public pages first. Intake Gmail = IMAP app passwords (**jay.intake.box + julia.hasty**). **Partiful / Secret Party private + Meetup → email to intake, not public scrape.** **Bay home cities: SF / Oakland / Emeryville / Berkeley.** Feed filters: city, optional distance, date range, earliest time, online vs in person.

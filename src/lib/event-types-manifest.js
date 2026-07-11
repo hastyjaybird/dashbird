@@ -18,7 +18,7 @@ export const EVENT_TYPE_LIVE_URLS = {
   iridium: 'https://www.heavens-above.com/',
   starlink: 'https://www.heavens-above.com/',
   rocket: 'https://www.nasa.gov/nasalive/',
-  aircraft: 'https://opensky-network.org/',
+  aircraft: 'https://adsb.fi/',
   yosemite_moonbow: 'https://www.yosemitemoonbow.com/',
   usa_npn_spring: 'https://www.usanpn.org/data/maps/spring',
   monarch_spring: 'https://monarchwatch.org/migration/',
@@ -76,7 +76,7 @@ export const SKY_TYPE_DATA_SOURCES = {
   starlink: 'Curated rows in sky-events-calendar.json; 3-day heads-up + look direction; strip only when startsAt is after sunset and before sunrise at WEATHER_LAT/LON.',
   rocket: 'Curated rows in sky-events-calendar.json (launch schedules); 3-day heads-up + look direction; strip only when startsAt is after sunset and before sunrise at WEATHER_LAT/LON.',
   aircraft:
-    'OpenSky within AIRCRAFT_WATCH_RADIUS_MI of rain-alert address; tail labels from src/data/oakland-aircraft-registry.json (nNumber / icao24 / callsign). Excludes airlines and alt <50 ft. SKY_AIRCRAFT_NEARBY=0 disables.',
+    'adsb.fi within AIRCRAFT_WATCH_RADIUS_MI of rain-alert address (registration + type from feed); labels from oakland-aircraft-registry.json when known. Excludes airlines and alt <50 ft. SKY_AIRCRAFT_NEARBY=0 disables.',
 };
 
 /** Earth + moonbow rows (order preserved for Settings table). */

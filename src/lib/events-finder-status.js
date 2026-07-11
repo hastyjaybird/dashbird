@@ -5,9 +5,10 @@
 import { probeFacebookEventsIntake } from './events-finder-facebook.js';
 import { loadEventsFinderSources } from './events-finder-sources.js';
 import {
-  gmailIntakeAddress,
-  probeGmailEventsIntake,
+  normalizeGmailAddress,
+  probeGmailMailbox,
 } from './events-finder-gmail.js';
+import { probeTelegramEventsIntake } from './events-finder-telegram.js';
 
 const FETCH_HEADERS = {
   'User-Agent':
@@ -172,12 +173,13 @@ function interpretProbe(source, probe) {
 
   if (source.strategy === 'official_api') {
     if (source.host === 'mail.google.com') {
-      // Filled by Gmail probe in buildEventsFinderStatus — placeholders only.
+      // Filled by per-mailbox Gmail probe in buildEventsFinderStatus — placeholders only.
+      const inbox = normalizeGmailAddress(source.gmailEmail) || 'intake';
       if (probe.ok) {
         return {
           active: true,
           value: `Gmail host up (${httpBit}) · checking OAuth…`,
-          output: `Intake inbox ${gmailIntakeAddress()}`,
+          output: `Intake inbox ${inbox}`,
         };
       }
       return {
@@ -278,7 +280,14 @@ async function runIngestionTest(source, probe) {
 
   if (source.strategy === 'official_api') {
     if (source.host === 'mail.google.com') {
-      const g = await probeGmailEventsIntake();
+      const email = normalizeGmailAddress(source.gmailEmail);
+      if (!email) {
+        return {
+          ingestOk: null,
+          ingestTest: 'Not wired — missing gmailEmail on source row',
+        };
+      }
+      const g = await probeGmailMailbox(email);
       return {
         ingestOk: g.ingestOk,
         ingestTest: g.ingestTest,
@@ -291,6 +300,14 @@ async function runIngestionTest(source, probe) {
         ingestOk: f.ingestOk,
         ingestTest: f.ingestTest,
         _facebookProbe: f,
+      };
+    }
+    if (source.host === 't.me' || source.host === 'telegram.org') {
+      const t = await probeTelegramEventsIntake();
+      return {
+        ingestOk: t.ingestOk,
+        ingestTest: t.ingestTest,
+        _telegramProbe: t,
       };
     }
     if (!probe.ok) {
@@ -395,6 +412,19 @@ export async function buildEventsFinderStatus() {
           active: f.active,
           value: f.value,
           output: f.output,
+          httpStatus: probe.status,
+          ingestOk: ingest.ingestOk,
+          ingestTest: ingest.ingestTest,
+        };
+      }
+      if ((source.host === 't.me' || source.host === 'telegram.org') && ingest._telegramProbe) {
+        const t = ingest._telegramProbe;
+        return {
+          ...source,
+          pending: false,
+          active: t.active,
+          value: t.value,
+          output: t.output,
           httpStatus: probe.status,
           ingestOk: ingest.ingestOk,
           ingestTest: ingest.ingestTest,

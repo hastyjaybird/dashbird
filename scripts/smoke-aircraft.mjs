@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Smoke: /api/aircraft-nearby (OpenSky ADS-B near rain-alert address).
+ * Smoke: /api/aircraft-nearby (adsb.fi ADS-B near rain-alert address).
  */
 const base = process.env.DASHBIRD_BASE || 'http://127.0.0.1:8787';
 
@@ -19,17 +19,20 @@ if (j.geocodeError) {
   process.exit(1);
 }
 if (j.fetchError) {
-  console.error('opensky failed', j.fetchError);
+  console.error('adsb.fi failed', j.fetchError);
   process.exit(1);
 }
 console.log('ok', {
   radiusMi: j.radiusMi,
-  fetchRadiusMi: j.fetchRadiusMi,
-  openskyStateCount: j.openskyStateCount,
+  fetchRadiusNm: j.fetchRadiusNm,
+  feedCount: j.feedCount,
+  source: j.source,
   aircraft: j.aircraft?.length ?? 0,
   sample: (j.aircraft || []).slice(0, 3).map((a) => ({
-    title: `${a.label} ${a.callsign || a.icao24}`,
+    title: `${a.label} ${a.callsign || a.nNumber || a.icao24}`,
     distMi: a.distMi,
     category: a.category,
+    helicopter: a.helicopter,
+    nNumber: a.nNumber,
   })),
 });

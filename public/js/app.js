@@ -232,6 +232,12 @@ async function main() {
     })
     .catch((e) => console.error('Notes mount failed:', e));
 
+  void import('./panels/dev-sticky-note.js')
+    .then(({ mountDevStickyNote }) => {
+      mountDevStickyNote();
+    })
+    .catch((e) => console.error('Dev sticky mount failed:', e));
+
   /* Refresh notes link if config was painted from cache and live fetch differs. */
   void configPromise.then((fresh) => {
     if (!fresh || typeof fresh !== 'object') return;

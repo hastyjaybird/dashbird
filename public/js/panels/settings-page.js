@@ -1,4 +1,4 @@
-import { createRangeCalendar } from './events-filter-ui.js';
+import { normalizeLocalTime } from './events-filter-ui.js';
 
 const WINDOW_HOURS = 24;
 const GROUPS = ['Sky & space', 'Earth', 'Market & weather'];
@@ -254,6 +254,38 @@ function buildLiveFeedCell(url) {
 }
 
 /**
+ * Site-column links for a Gmail intake row (App Password preferred; OAuth optional).
+ * @param {string} email
+ * @returns {HTMLTableCellElement}
+ */
+function buildGmailConnectCell(email) {
+  const td = document.createElement('td');
+  td.className = 'settings-page__live settings-page__live--gmail';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'settings-page__gmail-row-links';
+
+  const appPw = document.createElement('a');
+  appPw.href =
+    `https://accounts.google.com/AccountChooser?Email=${encodeURIComponent(email)}`
+    + `&continue=${encodeURIComponent('https://myaccount.google.com/apppasswords')}`;
+  appPw.target = '_blank';
+  appPw.rel = 'noopener noreferrer';
+  appPw.textContent = 'App Password';
+  appPw.title =
+    `Create a Google App Password while signed in as ${email}, then set GMAIL_INTAKE_APP_PASSWORD_* in .env`;
+
+  const oauth = document.createElement('a');
+  oauth.href = `/api/events-finder-gmail/oauth/start?email=${encodeURIComponent(email)}`;
+  oauth.textContent = 'OAuth';
+  oauth.title = `OAuth connect ${email} (Gmail API)`;
+
+  wrap.append(appPw, oauth);
+  td.append(wrap);
+  return td;
+}
+
+/**
  * @param {Map<string, HTMLTableSectionElement>} tbodyByGroup
  * @param {Array<{ id: string, label: string, category?: string, dataSource?: string, liveUrl?: string | null }>} types
  */
@@ -360,7 +392,7 @@ async function fetchEventTypesPart(part, windowHours) {
 }
 
 /**
- * Modal to edit Look for / Skip + city / distance / date-time filters.
+ * Modal to edit taste, where/when filters, and Facebook scrape settings.
  */
 function openEventsFilterCriteriaModal() {
   const backdrop = document.createElement('div');
@@ -373,205 +405,364 @@ function openEventsFilterCriteriaModal() {
   modal.setAttribute('aria-modal', 'true');
   modal.setAttribute('aria-labelledby', 'settings-events-criteria-title');
 
+  const header = document.createElement('div');
+  header.className = 'settings-page__modal-header';
+
   const title = document.createElement('h3');
   title.id = 'settings-events-criteria-title';
   title.className = 'settings-page__modal-title';
-  title.textContent = 'Filter criteria';
+  title.textContent = 'Events criteria (ingestion)';
 
   const hint = document.createElement('p');
   hint.className = 'settings-page__modal-hint';
   hint.textContent =
-    'Three discovery paths: (1) Gmail invites, (2) Apify keyword search from Look for, (3) pinned Facebook pages/groups. Scrape budget controls Apify cost.';
+    'Controls what gets scraped into the catalog: keyword lists and Facebook discovery. This is separate from the Events sidebar Filters, which only sort/hide events already in the database.';
 
-  const geoRow = document.createElement('p');
-  geoRow.className = 'settings-page__modal-geo';
-  geoRow.textContent = 'Area: …';
+  header.append(title, hint);
 
-  const scrapeHeading = document.createElement('h4');
-  scrapeHeading.className = 'settings-page__modal-subheading';
-  scrapeHeading.textContent = 'Facebook scrape budget (Apify)';
+  const body = document.createElement('div');
+  body.className = 'settings-page__modal-scroll';
 
-  const scrapeHint = document.createElement('p');
-  scrapeHint.className = 'settings-page__modal-field-hint';
-  scrapeHint.textContent =
-    'Each Look for line can become one paid search. Cap how many run, how many events each returns, and how long results are reused.';
+  /** @type {{ city?: string | null, place?: string | null, zip?: string | null } | null} */
+  let geoState = null;
+  /** @type {Array<{ url: string, name: string, avgEventsPerMonth: number | null, avgComputedAt?: string | null }>} */
+  let pinnedHosts = [];
+  /** @type {object | null} */
+  let facebookBilling = null;
 
-  const maxQueriesLabel = document.createElement('label');
-  maxQueriesLabel.className = 'settings-page__modal-field-label';
-  maxQueriesLabel.htmlFor = 'settings-events-scrape-max-queries';
-  maxQueriesLabel.textContent = 'Max search queries per scrape';
+  const tasteHeading = document.createElement('h4');
+  tasteHeading.className = 'settings-page__modal-subheading';
+  tasteHeading.textContent = '1. Taste keywords (catalog ranking)';
 
-  const maxQueriesHint = document.createElement('p');
-  maxQueriesHint.className = 'settings-page__modal-field-hint';
-  maxQueriesHint.textContent = 'Uses the first N Look for lines (1–12). Default 3 keeps cost down.';
+  const lookLabelRow = document.createElement('div');
+  lookLabelRow.className = 'settings-page__modal-label-row';
+  const lookLabel = document.createElement('label');
+  lookLabel.className = 'settings-page__modal-field-label';
+  lookLabel.htmlFor = 'settings-events-criteria-look';
+  lookLabel.textContent = 'Look for (whitelist)';
+  const lookCount = document.createElement('span');
+  lookCount.className = 'settings-page__modal-count';
+  lookCount.textContent = '';
+  lookLabelRow.append(lookLabel, lookCount);
 
-  const maxQueriesInput = document.createElement('input');
-  maxQueriesInput.id = 'settings-events-scrape-max-queries';
-  maxQueriesInput.className = 'settings-page__modal-input';
-  maxQueriesInput.type = 'number';
-  maxQueriesInput.min = '1';
-  maxQueriesInput.max = '12';
-  maxQueriesInput.step = '1';
-  maxQueriesInput.value = '3';
+  const lookHint = document.createElement('p');
+  lookHint.className = 'settings-page__modal-field-hint';
+  lookHint.textContent =
+    'One idea per line. Ranks and keeps events already in the catalog (all sources). Does not buy Facebook Apify searches — edit those under Facebook discovery below.';
 
-  const maxPerLabel = document.createElement('label');
-  maxPerLabel.className = 'settings-page__modal-field-label';
-  maxPerLabel.htmlFor = 'settings-events-scrape-max-per';
-  maxPerLabel.textContent = 'Max events per query';
+  const lookArea = document.createElement('textarea');
+  lookArea.id = 'settings-events-criteria-look';
+  lookArea.className = 'settings-page__modal-textarea settings-page__modal-textarea--look';
+  lookArea.rows = 10;
+  lookArea.spellcheck = true;
+  lookArea.placeholder = 'Loading…';
 
-  const maxPerHint = document.createElement('p');
-  maxPerHint.className = 'settings-page__modal-field-hint';
-  maxPerHint.textContent = 'Apify bills per event returned. Lower = cheaper (1–100). Default 15.';
+  const skipLabelRow = document.createElement('div');
+  skipLabelRow.className = 'settings-page__modal-label-row';
+  const skipLabel = document.createElement('label');
+  skipLabel.className = 'settings-page__modal-field-label';
+  skipLabel.htmlFor = 'settings-events-criteria-skip';
+  skipLabel.textContent = 'Skip (blacklist)';
+  const skipCount = document.createElement('span');
+  skipCount.className = 'settings-page__modal-count';
+  skipCount.textContent = '';
+  skipLabelRow.append(skipLabel, skipCount);
 
-  const maxPerInput = document.createElement('input');
-  maxPerInput.id = 'settings-events-scrape-max-per';
-  maxPerInput.className = 'settings-page__modal-input';
-  maxPerInput.type = 'number';
-  maxPerInput.min = '1';
-  maxPerInput.max = '100';
-  maxPerInput.step = '1';
-  maxPerInput.value = '15';
+  const skipHint = document.createElement('p');
+  skipHint.className = 'settings-page__modal-field-hint';
+  skipHint.textContent =
+    'Hide matching catalog events from the feed unless a Look for line also matches. Feed-only — does not change what Apify scrapes or what you pay.';
 
-  const cacheHoursLabel = document.createElement('label');
-  cacheHoursLabel.className = 'settings-page__modal-field-label';
-  cacheHoursLabel.htmlFor = 'settings-events-scrape-cache-hours';
-  cacheHoursLabel.textContent = 'Reuse cache for (hours)';
+  const skipArea = document.createElement('textarea');
+  skipArea.id = 'settings-events-criteria-skip';
+  skipArea.className = 'settings-page__modal-textarea';
+  skipArea.rows = 5;
+  skipArea.spellcheck = true;
+  skipArea.placeholder = 'Loading…';
 
-  const cacheHoursHint = document.createElement('p');
-  cacheHoursHint.className = 'settings-page__modal-field-hint';
-  cacheHoursHint.textContent =
-    'Skip paid scrapes while cache is fresh (1–168). Default 6. Force refresh still available via API.';
+  const ingestHeading = document.createElement('h4');
+  ingestHeading.className = 'settings-page__modal-subheading';
+  ingestHeading.textContent = '2. Ingestion window';
 
-  const cacheHoursInput = document.createElement('input');
-  cacheHoursInput.id = 'settings-events-scrape-cache-hours';
-  cacheHoursInput.className = 'settings-page__modal-input';
-  cacheHoursInput.type = 'number';
-  cacheHoursInput.min = '1';
-  cacheHoursInput.max = '168';
-  cacheHoursInput.step = '1';
-  cacheHoursInput.value = '6';
+  const ingestHint = document.createElement('p');
+  ingestHint.className = 'settings-page__modal-field-hint';
+  ingestHint.textContent =
+    'How far ahead to keep scraped events. Browse date picks stay in the sidebar Filters panel.';
 
-  const pinnedLabel = document.createElement('label');
-  pinnedLabel.className = 'settings-page__modal-field-label';
-  pinnedLabel.htmlFor = 'settings-events-scrape-pinned';
-  pinnedLabel.textContent = 'Pinned Facebook hosts';
+  const weeksLabel = document.createElement('label');
+  weeksLabel.className = 'settings-page__modal-field-label';
+  weeksLabel.htmlFor = 'settings-events-criteria-weeks';
+  weeksLabel.textContent = 'Scrape ahead';
 
-  const pinnedHint = document.createElement('p');
-  pinnedHint.className = 'settings-page__modal-field-hint';
-  pinnedHint.textContent =
-    'Pages/groups your circle follows — one per line. Use PageName, groups/GroupName, or a full Facebook URL. We scrape upcoming hosted events (counts toward Apify results).';
+  const weeksSelect = document.createElement('select');
+  weeksSelect.id = 'settings-events-criteria-weeks';
+  weeksSelect.className = 'settings-page__modal-input settings-page__modal-input--select';
+  for (const w of [1, 2, 3, 4, 5]) {
+    const opt = document.createElement('option');
+    opt.value = String(w);
+    opt.textContent =
+      w === 4
+        ? 'Rolling 4 weeks (~30 days)'
+        : w === 5
+          ? 'Rolling 5 weeks'
+          : `Rolling ${w} week${w === 1 ? '' : 's'}`;
+    weeksSelect.append(opt);
+  }
+  weeksSelect.value = '4';
 
-  const pinnedArea = document.createElement('textarea');
-  pinnedArea.id = 'settings-events-scrape-pinned';
-  pinnedArea.className = 'settings-page__modal-textarea';
-  pinnedArea.rows = 4;
-  pinnedArea.spellcheck = false;
-  pinnedArea.placeholder = 'Noisebridge\ngroups/sfhardware\nhttps://www.facebook.com/SomePage';
+  const earliestEnable = document.createElement('label');
+  earliestEnable.className = 'settings-page__modal-check';
+  const earliestCheck = document.createElement('input');
+  earliestCheck.type = 'checkbox';
+  earliestCheck.id = 'settings-events-criteria-earliest-on';
+  const earliestEnableText = document.createElement('span');
+  earliestEnableText.textContent = 'Require earliest start time (optional)';
+  earliestEnable.append(earliestCheck, earliestEnableText);
 
-  const filtersHeading = document.createElement('h4');
-  filtersHeading.className = 'settings-page__modal-subheading';
-  filtersHeading.textContent = 'Feed filters (after scrape — free)';
-
-  const citiesLabel = document.createElement('p');
-  citiesLabel.className = 'settings-page__modal-field-label';
-  citiesLabel.textContent = 'Cities';
-
-  const citiesHint = document.createElement('p');
-  citiesHint.className = 'settings-page__modal-field-hint';
-  citiesHint.textContent = 'Show events in these cities (Bay set when you’re local).';
-
-  const citiesBox = document.createElement('div');
-  citiesBox.className = 'settings-page__modal-checkboxes';
-  citiesBox.setAttribute('role', 'group');
-  citiesBox.setAttribute('aria-label', 'Cities');
-
-  /** @type {Map<string, HTMLInputElement>} */
-  const cityChecks = new Map();
-
-  const milesLabel = document.createElement('label');
-  milesLabel.className = 'settings-page__modal-field-label';
-  milesLabel.htmlFor = 'settings-events-criteria-miles';
-  milesLabel.textContent = 'Max distance (miles)';
-
-  const milesHint = document.createElement('p');
-  milesHint.className = 'settings-page__modal-field-hint';
-  milesHint.textContent =
-    'Optional. Leave blank for city-only. Events without coordinates still pass if the city matches.';
-
-  const milesInput = document.createElement('input');
-  milesInput.id = 'settings-events-criteria-miles';
-  milesInput.className = 'settings-page__modal-input';
-  milesInput.type = 'number';
-  milesInput.min = '1';
-  milesInput.max = '100';
-  milesInput.step = '0.5';
-  milesInput.placeholder = 'Any';
-
-  const datesLabel = document.createElement('p');
-  datesLabel.className = 'settings-page__modal-field-label';
-  datesLabel.textContent = 'Dates';
-
-  const datesHint = document.createElement('p');
-  datesHint.className = 'settings-page__modal-field-hint';
-  datesHint.textContent =
-    'Pick days (toggle individual dates) or switch to Date range for a contiguous span.';
-
-  const calendar = createRangeCalendar({
-    idPrefix: 'settings-events-cal',
-    classPrefix: 'events-cal',
-  });
-
-  const timeLabel = document.createElement('label');
-  timeLabel.className = 'settings-page__modal-field-label';
-  timeLabel.htmlFor = 'settings-events-criteria-earliest';
-  timeLabel.textContent = 'Earliest start time';
-
-  const timeHint = document.createElement('p');
-  timeHint.className = 'settings-page__modal-field-hint';
-  timeHint.textContent = 'Skip events that start before this local time (default 11:00).';
+  const earliestHint = document.createElement('p');
+  earliestHint.className = 'settings-page__modal-field-hint';
+  earliestHint.textContent =
+    'When enabled, drop ingested events that start before this local time. Independent of the sidebar Filters earliest time.';
 
   const timeInput = document.createElement('input');
   timeInput.id = 'settings-events-criteria-earliest';
   timeInput.className = 'settings-page__modal-input settings-page__modal-input--time';
   timeInput.type = 'time';
+  timeInput.step = '60';
   timeInput.value = '11:00';
+  timeInput.disabled = true;
 
-  const lookLabel = document.createElement('label');
-  lookLabel.className = 'settings-page__modal-field-label';
-  lookLabel.htmlFor = 'settings-events-criteria-look';
-  lookLabel.textContent = 'Look for';
+  earliestCheck.addEventListener('change', () => {
+    timeInput.disabled = !earliestCheck.checked;
+  });
 
-  const lookHint = document.createElement('p');
-  lookHint.className = 'settings-page__modal-field-hint';
-  lookHint.textContent =
-    'Themes you want. For Facebook, each line can become a paid Apify search (capped by Max search queries above). Put the best terms first.';
+  const scrapeDetails = document.createElement('details');
+  scrapeDetails.className = 'settings-page__modal-details';
+  scrapeDetails.open = true;
 
-  const lookArea = document.createElement('textarea');
-  lookArea.id = 'settings-events-criteria-look';
-  lookArea.className = 'settings-page__modal-textarea settings-page__modal-textarea--look';
-  lookArea.rows = 12;
-  lookArea.spellcheck = true;
-  lookArea.placeholder = 'Loading…';
+  const scrapeSummary = document.createElement('summary');
+  scrapeSummary.className = 'settings-page__modal-details-summary';
+  scrapeSummary.textContent = '3. Facebook discovery (Apify) — paid';
 
-  const skipLabel = document.createElement('label');
-  skipLabel.className = 'settings-page__modal-field-label';
-  skipLabel.htmlFor = 'settings-events-criteria-skip';
-  skipLabel.textContent = 'Skip';
+  const scrapeBody = document.createElement('div');
+  scrapeBody.className = 'settings-page__modal-details-body';
 
-  const skipHint = document.createElement('p');
-  skipHint.className = 'settings-page__modal-field-hint';
-  skipHint.textContent =
-    'Things to leave out of the feed (post-filter; does not reduce Apify cost yet).';
+  const scrapeHint = document.createElement('p');
+  scrapeHint.className = 'settings-page__modal-field-hint';
+  scrapeHint.textContent =
+    'Gmail invites are free and separate. Paid Apify discovery = keyword searches below + pinned hosts. Taste keywords above only rank the catalog.';
 
-  const skipArea = document.createElement('textarea');
-  skipArea.id = 'settings-events-criteria-skip';
-  skipArea.className = 'settings-page__modal-textarea';
-  skipArea.rows = 6;
-  skipArea.spellcheck = true;
-  skipArea.placeholder = 'Loading…';
+  const billingRow = document.createElement('p');
+  billingRow.className = 'settings-page__modal-billing';
+  billingRow.textContent = 'Billing month: …';
+
+  /** @type {string[]} */
+  let searchQueries = [];
+
+  const fbSearchLabelRow = document.createElement('div');
+  fbSearchLabelRow.className = 'settings-page__modal-label-row';
+  const fbSearchLabel = document.createElement('p');
+  fbSearchLabel.className = 'settings-page__modal-field-label';
+  fbSearchLabel.textContent = 'Facebook keyword searches (paid)';
+  const fbSearchCount = document.createElement('span');
+  fbSearchCount.className = 'settings-page__modal-count';
+  fbSearchCount.textContent = '';
+  fbSearchLabelRow.append(fbSearchLabel, fbSearchCount);
+
+  const fbSearchHint = document.createElement('p');
+  fbSearchHint.className = 'settings-page__modal-field-hint';
+  fbSearchHint.textContent =
+    'Paid Apify keyword searches. Include a city in the query when you want one; otherwise the dashboard city is appended. Max search queries below caps how many run.';
+
+  const fbSearchToolbar = document.createElement('div');
+  fbSearchToolbar.className = 'settings-page__modal-pinned-toolbar';
+  const addSearchBtn = document.createElement('button');
+  addSearchBtn.type = 'button';
+  addSearchBtn.className = 'settings-page__secondary-cancel';
+  addSearchBtn.textContent = 'Add query';
+  const seedSearchBtn = document.createElement('button');
+  seedSearchBtn.type = 'button';
+  seedSearchBtn.className = 'settings-page__secondary-cancel';
+  seedSearchBtn.textContent = 'Seed from Look for';
+  seedSearchBtn.title = 'Copy the first N Look for lines into this list (does not change Look for)';
+  fbSearchToolbar.append(addSearchBtn, seedSearchBtn);
+
+  const fbSearchList = document.createElement('div');
+  fbSearchList.className = 'settings-page__modal-fb-searches';
+
+  const budgetRow = document.createElement('div');
+  budgetRow.className = 'settings-page__modal-budget-row';
+
+  function makeNumField(id, labelText, hintText, min, max, value) {
+    const wrap = document.createElement('div');
+    wrap.className = 'settings-page__modal-budget-field';
+    const lab = document.createElement('label');
+    lab.className = 'settings-page__modal-field-label';
+    lab.htmlFor = id;
+    lab.textContent = labelText;
+    const hintEl = document.createElement('p');
+    hintEl.className = 'settings-page__modal-field-hint';
+    hintEl.textContent = hintText;
+    const input = document.createElement('input');
+    input.id = id;
+    input.className = 'settings-page__modal-input';
+    input.type = 'number';
+    input.min = String(min);
+    input.max = String(max);
+    input.step = '1';
+    input.value = String(value);
+    wrap.append(lab, hintEl, input);
+    return { wrap, input };
+  }
+
+  const maxQueries = makeNumField(
+    'settings-events-scrape-max-queries',
+    'Max search queries',
+    'Run at most this many queries from the list above (1–12).',
+    1,
+    12,
+    3,
+  );
+  const maxPer = makeNumField(
+    'settings-events-scrape-max-per',
+    'Max events / query',
+    'Apify bills per result (1–100).',
+    1,
+    100,
+    15,
+  );
+  const cacheHours = makeNumField(
+    'settings-events-scrape-cache-hours',
+    'Cache hours',
+    'Reuse results while fresh (1–168).',
+    1,
+    168,
+    6,
+  );
+  budgetRow.append(maxQueries.wrap, maxPer.wrap, cacheHours.wrap);
+
+  const pinnedLabelRow = document.createElement('div');
+  pinnedLabelRow.className = 'settings-page__modal-label-row';
+  const pinnedLabel = document.createElement('p');
+  pinnedLabel.className = 'settings-page__modal-field-label';
+  pinnedLabel.textContent = 'Pinned Facebook hosts';
+  const pinnedCount = document.createElement('span');
+  pinnedCount.className = 'settings-page__modal-count';
+  pinnedCount.textContent = '';
+  pinnedLabelRow.append(pinnedLabel, pinnedCount);
+
+  const pinnedHint = document.createElement('p');
+  pinnedHint.className = 'settings-page__modal-field-hint';
+  pinnedHint.textContent =
+    'Groups/pages always scraped. Avg/mo is read-only: events seen on that host over the last 6 months ÷ 6 (via Apify, including past hosted events). Updates after Facebook scrapes.';
+
+  const pinnedToolbar = document.createElement('div');
+  pinnedToolbar.className = 'settings-page__modal-pinned-toolbar';
+
+  const bulkAddBtn = document.createElement('button');
+  bulkAddBtn.type = 'button';
+  bulkAddBtn.className = 'settings-page__secondary-cancel';
+  bulkAddBtn.textContent = 'Bulk add';
+
+  const bulkDeleteBtn = document.createElement('button');
+  bulkDeleteBtn.type = 'button';
+  bulkDeleteBtn.className = 'settings-page__secondary-cancel';
+  bulkDeleteBtn.textContent = 'Delete selected';
+
+  const addRowBtn = document.createElement('button');
+  addRowBtn.type = 'button';
+  addRowBtn.className = 'settings-page__secondary-cancel';
+  addRowBtn.textContent = 'Add row';
+
+  pinnedToolbar.append(addRowBtn, bulkAddBtn, bulkDeleteBtn);
+
+  const tableWrap = document.createElement('div');
+  tableWrap.className = 'settings-page__modal-pinned-wrap';
+
+  const table = document.createElement('table');
+  table.className = 'settings-page__modal-pinned-table';
+  table.innerHTML =
+    '<thead><tr>'
+    + '<th scope="col" class="settings-page__modal-pinned-check"><input type="checkbox" id="settings-pinned-select-all" title="Select all" aria-label="Select all hosts"></th>'
+    + '<th scope="col">Name</th>'
+    + '<th scope="col">URL</th>'
+    + '<th scope="col" class="settings-page__modal-pinned-avg" title="Events in last 6 months ÷ 6">Avg/mo</th>'
+    + '</tr></thead>';
+  const tbody = document.createElement('tbody');
+  table.append(tbody);
+  tableWrap.append(table);
+
+  const selectAll = table.querySelector('#settings-pinned-select-all');
+
+  const bulkAddPanel = document.createElement('div');
+  bulkAddPanel.className = 'settings-page__modal-bulk-add';
+  bulkAddPanel.hidden = true;
+  const bulkAddHint = document.createElement('p');
+  bulkAddHint.className = 'settings-page__modal-field-hint';
+  bulkAddHint.textContent =
+    'One host per line: URL, or Name | URL. Blank lines and # comments ignored.';
+  const bulkAddArea = document.createElement('textarea');
+  bulkAddArea.className = 'settings-page__modal-textarea settings-page__modal-textarea--pinned';
+  bulkAddArea.rows = 6;
+  bulkAddArea.placeholder =
+    'SFBay AcroYoga | https://www.facebook.com/groups/sfbayacro/\ngroups/noisebridge';
+  const bulkAddActions = document.createElement('div');
+  bulkAddActions.className = 'settings-page__modal-pinned-toolbar';
+  const bulkAddConfirm = document.createElement('button');
+  bulkAddConfirm.type = 'button';
+  bulkAddConfirm.className = 'settings-page__rain-save';
+  bulkAddConfirm.textContent = 'Add lines';
+  const bulkAddCancel = document.createElement('button');
+  bulkAddCancel.type = 'button';
+  bulkAddCancel.className = 'settings-page__secondary-cancel';
+  bulkAddCancel.textContent = 'Close';
+  bulkAddActions.append(bulkAddConfirm, bulkAddCancel);
+  bulkAddPanel.append(bulkAddHint, bulkAddArea, bulkAddActions);
+
+  scrapeBody.append(
+    scrapeHint,
+    billingRow,
+    fbSearchLabelRow,
+    fbSearchHint,
+    fbSearchToolbar,
+    fbSearchList,
+    budgetRow,
+    pinnedLabelRow,
+    pinnedHint,
+    pinnedToolbar,
+    tableWrap,
+    bulkAddPanel,
+  );
+  scrapeDetails.append(scrapeSummary, scrapeBody);
+
+  body.append(
+    tasteHeading,
+    lookLabelRow,
+    lookHint,
+    lookArea,
+    skipLabelRow,
+    skipHint,
+    skipArea,
+    ingestHeading,
+    ingestHint,
+    weeksLabel,
+    weeksSelect,
+    earliestEnable,
+    earliestHint,
+    timeInput,
+    scrapeDetails,
+  );
+
+  const footer = document.createElement('div');
+  footer.className = 'settings-page__modal-footer';
+
+  const msg = document.createElement('p');
+  msg.className = 'settings-page__rain-msg';
+  msg.hidden = true;
+  msg.setAttribute('aria-live', 'polite');
 
   const actions = document.createElement('div');
-  actions.className = 'settings-page__modal-actions';
+  actions.className = 'settings-page__modal-actions settings-page__modal-actions--footer';
 
   const cancelBtn = document.createElement('button');
   cancelBtn.type = 'button';
@@ -583,86 +774,303 @@ function openEventsFilterCriteriaModal() {
   saveBtn.className = 'settings-page__rain-save';
   saveBtn.textContent = 'Save';
 
-  const msg = document.createElement('p');
-  msg.className = 'settings-page__rain-msg';
-  msg.hidden = true;
-  msg.setAttribute('aria-live', 'polite');
-
   actions.append(cancelBtn, saveBtn);
+  footer.append(msg, actions);
 
-  const tasteHeading = document.createElement('h4');
-  tasteHeading.className = 'settings-page__modal-subheading';
-  tasteHeading.textContent = 'Taste (Look for / Skip)';
-
-  // Taste + feed filters first — scrape budget / pins are long and used to bury these.
-  modal.append(
-    title,
-    hint,
-    geoRow,
-    tasteHeading,
-    lookLabel,
-    lookHint,
-    lookArea,
-    skipLabel,
-    skipHint,
-    skipArea,
-    filtersHeading,
-    citiesLabel,
-    citiesHint,
-    citiesBox,
-    milesLabel,
-    milesHint,
-    milesInput,
-    datesLabel,
-    datesHint,
-    calendar.root,
-    timeLabel,
-    timeHint,
-    timeInput,
-    scrapeHeading,
-    scrapeHint,
-    maxQueriesLabel,
-    maxQueriesHint,
-    maxQueriesInput,
-    maxPerLabel,
-    maxPerHint,
-    maxPerInput,
-    cacheHoursLabel,
-    cacheHoursHint,
-    cacheHoursInput,
-    pinnedLabel,
-    pinnedHint,
-    pinnedArea,
-    actions,
-    msg,
-  );
+  modal.append(header, body, footer);
   backdrop.append(modal);
   document.body.append(backdrop);
 
   /**
-   * @param {string[]} cities
-   * @param {string[]} selected
+   * @param {string} block
+   * @returns {string[]}
    */
-  function renderCityChecks(cities, selected) {
-    citiesBox.replaceChildren();
-    cityChecks.clear();
-    const selectedSet = new Set((selected || []).map((c) => c.toLowerCase()));
-    for (const city of cities) {
-      const id = `settings-events-city-${city.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-      const row = document.createElement('label');
-      row.className = 'settings-page__modal-check';
-      row.htmlFor = id;
-      const input = document.createElement('input');
-      input.type = 'checkbox';
-      input.id = id;
-      input.value = city;
-      input.checked = selectedSet.size ? selectedSet.has(city.toLowerCase()) : true;
-      cityChecks.set(city, input);
-      const span = document.createElement('span');
-      span.textContent = city;
-      row.append(input, span);
-      citiesBox.append(row);
+  function nonEmptyLines(block) {
+    return String(block || '')
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  /**
+   * @param {HTMLElement} el
+   * @param {number} n
+   * @param {string} unit
+   */
+  function setCount(el, n, unit) {
+    el.textContent = n ? `${n} ${unit}${n === 1 ? '' : 's'}` : '';
+  }
+
+  function readPinnedFromTable() {
+    /** @type {Array<{ url: string, name: string, avgEventsPerMonth: number | null, avgComputedAt?: string | null }>} */
+    const rows = [];
+    const priorByUrl = new Map(
+      pinnedHosts.map((h) => [String(h.url || '').trim().toLowerCase(), h]),
+    );
+    for (const tr of tbody.querySelectorAll('tr')) {
+      const nameInput = /** @type {HTMLInputElement | null} */ (tr.querySelector('[data-field="name"]'));
+      const urlInput = /** @type {HTMLInputElement | null} */ (tr.querySelector('[data-field="url"]'));
+      const url = String(urlInput?.value || '').trim();
+      if (!url) continue;
+      const prior = priorByUrl.get(url.toLowerCase());
+      rows.push({
+        name: String(nameInput?.value || '').trim() || 'Facebook host',
+        url,
+        avgEventsPerMonth: prior?.avgEventsPerMonth ?? null,
+        avgComputedAt: prior?.avgComputedAt ?? null,
+      });
     }
+    pinnedHosts = rows;
+    return rows;
+  }
+
+  function renderPinnedTable() {
+    tbody.replaceChildren();
+    for (const host of pinnedHosts) {
+      const tr = document.createElement('tr');
+      const tdCheck = document.createElement('td');
+      tdCheck.className = 'settings-page__modal-pinned-check';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'settings-page__modal-pinned-row-check';
+      cb.setAttribute('aria-label', `Select ${host.name || host.url}`);
+      tdCheck.append(cb);
+
+      const tdName = document.createElement('td');
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.className = 'settings-page__modal-pinned-input';
+      nameInput.dataset.field = 'name';
+      nameInput.value = host.name || '';
+      nameInput.placeholder = 'Group name';
+      tdName.append(nameInput);
+
+      const tdUrl = document.createElement('td');
+      const urlInput = document.createElement('input');
+      urlInput.type = 'url';
+      urlInput.className = 'settings-page__modal-pinned-input settings-page__modal-pinned-input--url';
+      urlInput.dataset.field = 'url';
+      urlInput.value = host.url || '';
+      urlInput.placeholder = 'https://www.facebook.com/groups/…';
+      tdUrl.append(urlInput);
+
+      const tdAvg = document.createElement('td');
+      tdAvg.className = 'settings-page__modal-pinned-avg';
+      const avgEl = document.createElement('span');
+      avgEl.className = 'settings-page__modal-pinned-avg-value';
+      avgEl.dataset.field = 'avg';
+      if (host.avgEventsPerMonth == null || host.avgEventsPerMonth === '') {
+        avgEl.textContent = '—';
+        avgEl.title = 'Computed after the next Facebook scrape from the last 6 months of events on this host';
+      } else {
+        avgEl.textContent = String(host.avgEventsPerMonth);
+        avgEl.title = host.avgComputedAt
+          ? `Last 6 months ÷ 6 (updated ${new Date(host.avgComputedAt).toLocaleDateString()})`
+          : 'Last 6 months ÷ 6 (from Apify host pages)';
+      }
+      tdAvg.append(avgEl);
+
+      tr.append(tdCheck, tdName, tdUrl, tdAvg);
+      tbody.append(tr);
+    }
+    if (selectAll instanceof HTMLInputElement) selectAll.checked = false;
+    setCount(pinnedCount, pinnedHosts.length, 'host');
+    updateScrapeSummary();
+  }
+
+  function renderBilling() {
+    if (!facebookBilling || typeof facebookBilling !== 'object') {
+      billingRow.textContent = 'Billing month: no runs logged yet.';
+      return;
+    }
+    const month = facebookBilling.month || 'this month';
+    const total = Number(facebookBilling.totalUsd) || 0;
+    const credits = Number(facebookBilling.monthlyCreditsUsd) || 5;
+    const remaining = Number(facebookBilling.remainingCreditsUsd);
+    const runs = Number(facebookBilling.runCount) || 0;
+    const est = Number(facebookBilling.estimatedRunCount) || 0;
+    const remLabel = Number.isFinite(remaining)
+      ? ` · $${remaining.toFixed(2)} of $${credits.toFixed(0)} credits left`
+      : '';
+    const estLabel = est ? ` (${est} estimated)` : '';
+    billingRow.textContent =
+      `${month}: $${total.toFixed(2)} across ${runs} run${runs === 1 ? '' : 's'}${estLabel}${remLabel}`;
+  }
+
+  function updateScrapeSummary() {
+    const q = Math.min(
+      Math.max(Number(maxQueries.input.value) || 3, 1),
+      12,
+      Math.max(searchQueries.filter(Boolean).length, 1),
+    );
+    const per = Number(maxPer.input.value) || 15;
+    const hrs = Number(cacheHours.input.value) || 6;
+    const pins = pinnedHosts.length;
+    scrapeSummary.textContent = `3. Facebook discovery (Apify) — ${q} searches × ${per} events, ${hrs}h cache${
+      pins ? `, ${pins} pinned` : ''
+    }`;
+  }
+
+  function updateTasteCounts() {
+    setCount(lookCount, nonEmptyLines(lookArea.value).length, 'line');
+    setCount(skipCount, nonEmptyLines(skipArea.value).length, 'line');
+  }
+
+  function placeShort() {
+    const place =
+      (geoState && (geoState.city || geoState.place)) ||
+      'San Francisco';
+    return String(place).split(',')[0].trim() || 'San Francisco';
+  }
+
+  /**
+   * @param {string} line
+   */
+  function resolveFbQuery(line) {
+    const s = String(line || '').trim();
+    if (!s) return '';
+    const lower = s.toLowerCase();
+    if (
+      lower.includes('san francisco') ||
+      lower.includes('oakland') ||
+      lower.includes('berkeley') ||
+      lower.includes('emeryville') ||
+      lower.includes('bay area')
+    ) {
+      return s;
+    }
+    return `${s} ${placeShort()}`;
+  }
+
+  function readSearchQueriesFromUi() {
+    searchQueries = [...fbSearchList.querySelectorAll('[data-field="fb-query"]')]
+      .map((el) => (el instanceof HTMLInputElement ? el.value.trim() : ''))
+      .filter(Boolean)
+      .slice(0, 12);
+    return searchQueries;
+  }
+
+  function renderFbSearchList() {
+    fbSearchList.replaceChildren();
+    const n = Math.min(Math.max(Number(maxQueries.input.value) || 3, 1), 12);
+    const rows = searchQueries.length ? [...searchQueries] : [''];
+    rows.forEach((query, index) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'settings-page__modal-fb-search-item';
+      if (index >= n) wrap.classList.add('settings-page__modal-fb-search-item--capped');
+
+      const row = document.createElement('div');
+      row.className = 'settings-page__modal-fb-search-row';
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'settings-page__modal-pinned-input';
+      input.dataset.field = 'fb-query';
+      input.value = query;
+      input.placeholder = 'e.g. hackathon Oakland';
+      input.addEventListener('input', () => refreshFbSearchMeta());
+
+      const upBtn = document.createElement('button');
+      upBtn.type = 'button';
+      upBtn.className = 'settings-page__secondary-cancel';
+      upBtn.textContent = '↑';
+      upBtn.title = 'Move up';
+      upBtn.disabled = index === 0;
+      upBtn.addEventListener('click', () => {
+        const cur = [...fbSearchList.querySelectorAll('[data-field="fb-query"]')].map((el) =>
+          el instanceof HTMLInputElement ? el.value : '',
+        );
+        if (index <= 0) return;
+        [cur[index - 1], cur[index]] = [cur[index], cur[index - 1]];
+        searchQueries = cur;
+        renderFbSearchList();
+      });
+
+      const downBtn = document.createElement('button');
+      downBtn.type = 'button';
+      downBtn.className = 'settings-page__secondary-cancel';
+      downBtn.textContent = '↓';
+      downBtn.title = 'Move down';
+      downBtn.disabled = index >= rows.length - 1;
+      downBtn.addEventListener('click', () => {
+        const cur = [...fbSearchList.querySelectorAll('[data-field="fb-query"]')].map((el) =>
+          el instanceof HTMLInputElement ? el.value : '',
+        );
+        if (index >= cur.length - 1) return;
+        [cur[index + 1], cur[index]] = [cur[index], cur[index + 1]];
+        searchQueries = cur;
+        renderFbSearchList();
+      });
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'settings-page__secondary-cancel';
+      delBtn.textContent = '×';
+      delBtn.title = 'Remove';
+      delBtn.addEventListener('click', () => {
+        const cur = [...fbSearchList.querySelectorAll('[data-field="fb-query"]')].map((el) =>
+          el instanceof HTMLInputElement ? el.value : '',
+        );
+        cur.splice(index, 1);
+        searchQueries = cur.map((s) => String(s || '').trim()).filter(Boolean);
+        renderFbSearchList();
+      });
+
+      row.append(input, upBtn, downBtn, delBtn);
+      wrap.append(row);
+
+      const resolved = resolveFbQuery(query);
+      if (query.trim() && resolved !== query.trim()) {
+        const note = document.createElement('p');
+        note.className = 'settings-page__modal-fb-search-note';
+        note.textContent = `→ ${resolved}`;
+        wrap.append(note);
+      } else if (index >= n && query.trim()) {
+        const note = document.createElement('p');
+        note.className = 'settings-page__modal-fb-search-note';
+        note.textContent = 'Over max — not run until raised or moved up';
+        wrap.append(note);
+      }
+
+      fbSearchList.append(wrap);
+    });
+    refreshFbSearchMeta();
+  }
+
+  function refreshFbSearchMeta() {
+    readSearchQueriesFromUi();
+    const n = Math.min(Math.max(Number(maxQueries.input.value) || 3, 1), 12);
+    const active = Math.min(searchQueries.length, n);
+    fbSearchCount.textContent = searchQueries.length
+      ? active < searchQueries.length
+        ? `${active} of ${searchQueries.length} run`
+        : `${searchQueries.length} quer${searchQueries.length === 1 ? 'y' : 'ies'}`
+      : '';
+    updateScrapeSummary();
+    updateTasteCounts();
+
+    // Refresh capped styling + place notes without full re-render when typing.
+    const items = [...fbSearchList.querySelectorAll('.settings-page__modal-fb-search-item')];
+    items.forEach((item, index) => {
+      item.classList.toggle('settings-page__modal-fb-search-item--capped', index >= n);
+      const input = item.querySelector('[data-field="fb-query"]');
+      const value = input instanceof HTMLInputElement ? input.value.trim() : '';
+      let note = item.querySelector('.settings-page__modal-fb-search-note');
+      const resolved = resolveFbQuery(value);
+      let noteText = '';
+      if (value && resolved !== value) noteText = `→ ${resolved}`;
+      else if (index >= n && value) noteText = 'Over max — not run until raised or moved up';
+      if (noteText) {
+        if (!note) {
+          note = document.createElement('p');
+          note.className = 'settings-page__modal-fb-search-note';
+          item.append(note);
+        }
+        note.textContent = noteText;
+      } else if (note) {
+        note.remove();
+      }
+    });
   }
 
   /**
@@ -670,24 +1078,37 @@ function openEventsFilterCriteriaModal() {
    *   city?: string | null,
    *   place?: string | null,
    *   zip?: string | null,
-   *   bayArea?: boolean,
-   *   homeCities?: string[],
    * } | null | undefined} geo
    */
   function renderGeo(geo) {
-    if (!geo || typeof geo !== 'object') {
-      geoRow.textContent = 'Area: city of dashboard ZIP (when set)';
-      return;
+    geoState = geo && typeof geo === 'object' ? geo : null;
+  }
+
+  /**
+   * @param {string} block
+   */
+  function parseBulkHosts(block) {
+    /** @type {Array<{ url: string, name: string, avgEventsPerMonth: number | null }>} */
+    const out = [];
+    for (const line of String(block || '').split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const parts = trimmed.split('|').map((s) => s.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        const last = parts[parts.length - 1];
+        const first = parts[0];
+        if (/facebook\.com|groups\//i.test(last)) {
+          out.push({ name: parts.slice(0, -1).join(' | '), url: last, avgEventsPerMonth: null });
+        } else if (/facebook\.com|groups\//i.test(first)) {
+          out.push({ name: parts.slice(1).join(' | '), url: first, avgEventsPerMonth: null });
+        } else {
+          out.push({ name: parts.slice(0, -1).join(' | '), url: last, avgEventsPerMonth: null });
+        }
+      } else {
+        out.push({ name: '', url: trimmed, avgEventsPerMonth: null });
+      }
     }
-    const label = geo.place || geo.city || (geo.zip ? `ZIP ${geo.zip}` : null);
-    const homes = Array.isArray(geo.homeCities) ? geo.homeCities.join(', ') : '';
-    if (geo.bayArea && homes) {
-      geoRow.textContent = `Bay Area (${label || 'local'}) · showing ${homes}`;
-    } else if (label) {
-      geoRow.textContent = `Area: ${label} (city-first)`;
-    } else {
-      geoRow.textContent = 'Area: set WEATHER_ZIP for city-based filtering';
-    }
+    return out;
   }
 
   function close() {
@@ -705,26 +1126,115 @@ function openEventsFilterCriteriaModal() {
     if (e.target === backdrop) close();
   });
 
+  lookArea.addEventListener('input', updateTasteCounts);
+  skipArea.addEventListener('input', updateTasteCounts);
+  maxQueries.input.addEventListener('input', () => {
+    renderFbSearchList();
+  });
+  maxPer.input.addEventListener('input', updateScrapeSummary);
+  cacheHours.input.addEventListener('input', updateScrapeSummary);
+
+  addSearchBtn.addEventListener('click', () => {
+    readSearchQueriesFromUi();
+    if (searchQueries.length >= 12) return;
+    searchQueries = [...searchQueries, ''];
+    renderFbSearchList();
+    const last = fbSearchList.querySelector('.settings-page__modal-fb-search-row:last-child [data-field="fb-query"]');
+    if (last instanceof HTMLInputElement) last.focus();
+  });
+
+  seedSearchBtn.addEventListener('click', () => {
+    const n = Math.min(Math.max(Number(maxQueries.input.value) || 3, 1), 12);
+    const seeded = nonEmptyLines(lookArea.value).slice(0, n);
+    if (!seeded.length) return;
+    searchQueries = seeded;
+    renderFbSearchList();
+  });
+
+  addRowBtn.addEventListener('click', () => {
+    readPinnedFromTable();
+    pinnedHosts.push({ name: '', url: '', avgEventsPerMonth: null });
+    renderPinnedTable();
+    const last = tbody.querySelector('tr:last-child [data-field="url"]');
+    if (last instanceof HTMLInputElement) last.focus();
+  });
+
+  bulkAddBtn.addEventListener('click', () => {
+    bulkAddPanel.hidden = !bulkAddPanel.hidden;
+    if (!bulkAddPanel.hidden) bulkAddArea.focus();
+  });
+  bulkAddCancel.addEventListener('click', () => {
+    bulkAddPanel.hidden = true;
+  });
+  bulkAddConfirm.addEventListener('click', () => {
+    readPinnedFromTable();
+    const added = parseBulkHosts(bulkAddArea.value);
+    if (!added.length) return;
+    const seen = new Set(
+      pinnedHosts.map((h) => String(h.url || '').trim().toLowerCase()).filter(Boolean),
+    );
+    for (const host of added) {
+      const key = String(host.url || '').trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      pinnedHosts.push(host);
+    }
+    renderPinnedTable();
+    bulkAddArea.value = '';
+    bulkAddPanel.hidden = true;
+  });
+
+  bulkDeleteBtn.addEventListener('click', () => {
+    const next = [];
+    const priorByUrl = new Map(
+      pinnedHosts.map((h) => [String(h.url || '').trim().toLowerCase(), h]),
+    );
+    for (const tr of tbody.querySelectorAll('tr')) {
+      const cb = tr.querySelector('.settings-page__modal-pinned-row-check');
+      if (cb instanceof HTMLInputElement && cb.checked) continue;
+      const nameInput = /** @type {HTMLInputElement | null} */ (tr.querySelector('[data-field="name"]'));
+      const urlInput = /** @type {HTMLInputElement | null} */ (tr.querySelector('[data-field="url"]'));
+      const url = String(urlInput?.value || '').trim();
+      if (!url && !String(nameInput?.value || '').trim()) continue;
+      const prior = priorByUrl.get(url.toLowerCase());
+      next.push({
+        name: String(nameInput?.value || '').trim() || 'Facebook host',
+        url,
+        avgEventsPerMonth: prior?.avgEventsPerMonth ?? null,
+        avgComputedAt: prior?.avgComputedAt ?? null,
+      });
+    }
+    pinnedHosts = next;
+    renderPinnedTable();
+  });
+
+  if (selectAll instanceof HTMLInputElement) {
+    selectAll.addEventListener('change', () => {
+      for (const cb of tbody.querySelectorAll('.settings-page__modal-pinned-row-check')) {
+        if (cb instanceof HTMLInputElement) cb.checked = selectAll.checked;
+      }
+    });
+  }
+
   const filterControls = [
-    milesInput,
-    timeInput,
     lookArea,
     skipArea,
-    maxQueriesInput,
-    maxPerInput,
-    cacheHoursInput,
-    pinnedArea,
+    weeksSelect,
+    earliestCheck,
+    timeInput,
+    maxQueries.input,
+    maxPer.input,
+    cacheHours.input,
+    addSearchBtn,
+    seedSearchBtn,
+    addRowBtn,
+    bulkAddBtn,
+    bulkDeleteBtn,
   ];
   for (const el of filterControls) el.disabled = true;
-  calendar.setDisabled(true);
   saveBtn.disabled = true;
   msg.hidden = false;
   msg.textContent = 'Loading…';
-
-  // Paint Bay defaults immediately so Look for / cities aren't blank while the API loads.
-  const defaultCities = ['San Francisco', 'Oakland', 'Emeryville', 'Berkeley'];
-  renderCityChecks(defaultCities, defaultCities);
-  for (const input of cityChecks.values()) input.disabled = true;
 
   fetch('/api/events-finder-criteria', { cache: 'no-store' })
     .then(async (r) => {
@@ -737,37 +1247,51 @@ function openEventsFilterCriteriaModal() {
       skipArea.value = typeof data.skip === 'string' ? data.skip : '';
       skipArea.placeholder = 'One idea per line…';
       renderGeo(data.geo);
+      facebookBilling = data.facebookBilling || null;
+      renderBilling();
 
       const scrape = data.scrape && typeof data.scrape === 'object' ? data.scrape : {};
-      maxQueriesInput.value = String(scrape.maxQueries ?? 3);
-      maxPerInput.value = String(scrape.maxEventsPerQuery ?? 15);
-      cacheHoursInput.value = String(scrape.cacheHours ?? 6);
-      pinnedArea.value = typeof scrape.pinnedHosts === 'string' ? scrape.pinnedHosts : '';
-
-      const homeCities =
-        (Array.isArray(data.geo?.homeCities) && data.geo.homeCities.length
-          ? data.geo.homeCities
-          : null) ||
-        (Array.isArray(data.geo?.bayAreaHomeCities) ? data.geo.bayAreaHomeCities : null) ||
-        defaultCities;
-      const selectedCities = Array.isArray(data.filters?.cities) ? data.filters.cities : homeCities;
-      renderCityChecks(homeCities, selectedCities);
-
-      const miles = data.filters?.maxMiles;
-      milesInput.value = miles == null || miles === '' ? '' : String(miles);
-      calendar.setRange(
-        data.filters?.dateFrom || null,
-        data.filters?.dateTo || null,
-        data.filters?.dates || [],
-      );
-      timeInput.value = data.filters?.earliestLocalTime || '11:00';
+      maxQueries.input.value = String(scrape.maxQueries ?? 3);
+      maxPer.input.value = String(scrape.maxEventsPerQuery ?? 15);
+      cacheHours.input.value = String(scrape.cacheHours ?? 6);
+      weeksSelect.value = String(scrape.windowWeeks ?? 4);
+      const ingestEarliest = normalizeLocalTime(scrape.earliestLocalTime);
+      if (ingestEarliest) {
+        earliestCheck.checked = true;
+        timeInput.disabled = false;
+        timeInput.value = ingestEarliest;
+      } else {
+        earliestCheck.checked = false;
+        timeInput.disabled = true;
+        timeInput.value = '11:00';
+      }
+      pinnedHosts = Array.isArray(scrape.pinnedHosts)
+        ? scrape.pinnedHosts.map((h) => ({
+            url: String(h?.url || ''),
+            name: String(h?.name || ''),
+            avgEventsPerMonth:
+              h?.avgEventsPerMonth == null || h?.avgEventsPerMonth === ''
+                ? null
+                : Number(h.avgEventsPerMonth),
+            avgComputedAt: h?.avgComputedAt ? String(h.avgComputedAt) : null,
+          }))
+        : typeof scrape.pinnedHosts === 'string'
+          ? parseBulkHosts(scrape.pinnedHosts)
+          : [];
+      searchQueries = Array.isArray(scrape.searchQueries)
+        ? scrape.searchQueries.map((s) => String(s || '').trim()).filter(Boolean)
+        : typeof scrape.searchQueries === 'string'
+          ? nonEmptyLines(scrape.searchQueries)
+          : [];
+      renderPinnedTable();
+      renderFbSearchList();
 
       for (const el of filterControls) el.disabled = false;
-      calendar.setDisabled(false);
-      for (const input of cityChecks.values()) input.disabled = false;
+      timeInput.disabled = !earliestCheck.checked;
       saveBtn.disabled = false;
       msg.hidden = true;
       msg.textContent = '';
+      updateTasteCounts();
       lookArea.focus();
     })
     .catch((e) => {
@@ -783,34 +1307,43 @@ function openEventsFilterCriteriaModal() {
     msg.classList.remove('settings-page__rain-msg--err');
     msg.textContent = 'Saving…';
     try {
-      const cities = [...cityChecks.entries()]
-        .filter(([, input]) => input.checked)
-        .map(([city]) => city);
-      if (!cities.length) {
-        throw new Error('Pick at least one city.');
+      const earliestRaw = earliestCheck.checked ? String(timeInput.value || '').trim() : '';
+      const earliest = normalizeLocalTime(earliestRaw);
+      if (earliestRaw && !earliest) {
+        throw new Error('Earliest time must look like 11:00.');
       }
-      const milesRaw = milesInput.value.trim();
-      const range = calendar.getRange();
+      const q = Number(maxQueries.input.value);
+      const per = Number(maxPer.input.value);
+      const hrs = Number(cacheHours.input.value);
+      const weeks = Number(weeksSelect.value);
+      if (!Number.isFinite(q) || q < 1 || q > 12) {
+        throw new Error('Max search queries must be 1–12.');
+      }
+      if (!Number.isFinite(per) || per < 1 || per > 100) {
+        throw new Error('Max events per query must be 1–100.');
+      }
+      if (!Number.isFinite(hrs) || hrs < 1 || hrs > 168) {
+        throw new Error('Cache hours must be 1–168.');
+      }
+      if (![1, 2, 3, 4].includes(weeks)) {
+        throw new Error('Scrape ahead must be 1–4 weeks.');
+      }
+      const hosts = readPinnedFromTable();
+      const queries = readSearchQueriesFromUi();
       const r = await fetch('/api/events-finder-criteria', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           lookFor: lookArea.value,
           skip: skipArea.value,
-          filters: {
-            cities,
-            maxMiles: milesRaw === '' ? null : Number(milesRaw),
-            dates: range.dates || [],
-            dateFrom: range.dateFrom,
-            dateTo: range.dateTo,
-            earliestLocalTime: timeInput.value || null,
-            attendance: 'in_person',
-          },
           scrape: {
-            maxQueries: Number(maxQueriesInput.value) || 3,
-            maxEventsPerQuery: Number(maxPerInput.value) || 15,
-            cacheHours: Number(cacheHoursInput.value) || 6,
-            pinnedHosts: pinnedArea.value,
+            maxQueries: q,
+            maxEventsPerQuery: per,
+            cacheHours: hrs,
+            windowWeeks: weeks,
+            earliestLocalTime: earliest || null,
+            searchQueries: queries,
+            pinnedHosts: hosts,
           },
         }),
       });
@@ -826,6 +1359,44 @@ function openEventsFilterCriteriaModal() {
       saveBtn.disabled = false;
     }
   });
+}
+
+
+
+/**
+ * Prompt + POST a new Events source bookmark.
+ * @returns {Promise<boolean>} true if a source was added
+ */
+async function openAddEventSourceDialog() {
+  const label = window.prompt('Source name (e.g. Noisebridge)');
+  if (label == null) return false;
+  const trimmedLabel = String(label).trim();
+  if (!trimmedLabel) {
+    window.alert('Name is required.');
+    return false;
+  }
+  const url = window.prompt('Source URL (https://…)');
+  if (url == null) return false;
+  const trimmedUrl = String(url).trim();
+  if (!/^https?:\/\//i.test(trimmedUrl)) {
+    window.alert('URL must start with http:// or https://');
+    return false;
+  }
+  try {
+    const r = await fetch('/api/events-finder-sources', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: trimmedLabel, url: trimmedUrl }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.ok === false) {
+      throw new Error(data.error || `HTTP ${r.status}`);
+    }
+    return true;
+  } catch (e) {
+    window.alert(e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e));
+    return false;
+  }
 }
 
 /**
@@ -846,61 +1417,29 @@ function buildEventsFinderSourcesBlock(root) {
   const criteriaBtn = document.createElement('button');
   criteriaBtn.type = 'button';
   criteriaBtn.className = 'settings-page__rain-save';
-  criteriaBtn.textContent = 'Filter criteria';
+  criteriaBtn.textContent = 'Edit criteria';
+  criteriaBtn.title =
+    'Ingestion settings: keywords, scrape window, and Facebook discovery (not browse filters)';
   criteriaBtn.addEventListener('click', () => openEventsFilterCriteriaModal());
   toolbar.append(criteriaBtn);
 
-  const gmailConnectHost = document.createElement('span');
-  gmailConnectHost.className = 'settings-page__gmail-connect-host';
-  toolbar.append(gmailConnectHost);
+  const addSourceBtn = document.createElement('button');
+  addSourceBtn.type = 'button';
+  addSourceBtn.className = 'settings-page__rain-save';
+  addSourceBtn.textContent = '+ Event source';
+  addSourceBtn.title = 'Add a site to Personal bookmarks → Events (shows up in this list)';
+  addSourceBtn.addEventListener('click', () => {
+    void openAddEventSourceDialog().then((added) => {
+      if (added) reloadSources();
+    });
+  });
+  toolbar.append(addSourceBtn);
   body.append(toolbar);
-
-  /**
-   * Per-inbox Connect / Reconnect links from Gmail status API.
-   */
-  function renderGmailConnectButtons(summary) {
-    gmailConnectHost.replaceChildren();
-    const accounts = Array.isArray(summary?.accounts) && summary.accounts.length
-      ? summary.accounts
-      : (Array.isArray(summary?.addresses) ? summary.addresses.map((email) => ({
-          email,
-          tokenOnDisk: false,
-          oauthStartPath: `/api/events-finder-gmail/oauth/start?email=${encodeURIComponent(email)}`,
-        })) : [{
-          email: 'jay.intake.box@gmail.com',
-          tokenOnDisk: false,
-          oauthStartPath: '/api/events-finder-gmail/oauth/start?email=jay.intake.box%40gmail.com',
-        }, {
-          email: 'julia.hasty@gmail.com',
-          tokenOnDisk: false,
-          oauthStartPath: '/api/events-finder-gmail/oauth/start?email=julia.hasty%40gmail.com',
-        }]);
-    for (const acct of accounts) {
-      const email = String(acct.email || '').trim();
-      if (!email) continue;
-      const btn = document.createElement('a');
-      btn.className = 'settings-page__rain-save';
-      btn.href = acct.oauthStartPath
-        || `/api/events-finder-gmail/oauth/start?email=${encodeURIComponent(email)}`;
-      btn.textContent = acct.tokenOnDisk ? `Reconnect ${email}` : `Connect ${email}`;
-      btn.title = `OAuth readonly Gmail for ${email} event announcements`;
-      gmailConnectHost.append(btn);
-    }
-  }
-
-  // Fallback buttons immediately; refresh labels after status fetch.
-  renderGmailConnectButtons(null);
-  fetch('/api/events-finder-gmail/status', { cache: 'no-store' })
-    .then(async (r) => {
-      const data = await r.json().catch(() => ({}));
-      if (r.ok && data.ok !== false) renderGmailConnectButtons(data);
-    })
-    .catch(() => { /* keep fallback buttons */ });
 
   const intro = document.createElement('p');
   intro.className = 'settings-page__intro';
   intro.textContent =
-    'From Personal bookmarks → Events. Each site uses its own ingest strategy; status and output update after a live probe. Intake Gmail uses the Gmail API (Connect each inbox) — not page scraping.';
+    'From Personal bookmarks → Events. Each site has its own ingest strategy, development status, and known coverage gaps. Use Edit criteria for taste keywords, scrape window, Facebook keyword searches, and pinned hosts. Browse ZIP/dates live in the Events sidebar Filters. Gmail intake rows link App Password or OAuth in the Site column.';
   body.append(intro);
 
   const loadStatus = document.createElement('p');
@@ -915,7 +1454,16 @@ function buildEventsFinderSourcesBlock(root) {
 
   const thead = document.createElement('thead');
   const hr = document.createElement('tr');
-  for (const label of ['Source', 'Strategy', 'Status', 'Output', 'Ingestion test', 'Site']) {
+  for (const label of [
+    'Source',
+    'Strategy',
+    'Dev status',
+    'Status',
+    'Output',
+    'Missing / gaps',
+    'Ingestion test',
+    'Site',
+  ]) {
     const th = document.createElement('th');
     th.scope = 'col';
     th.textContent = label;
@@ -945,9 +1493,13 @@ function buildEventsFinderSourcesBlock(root) {
    *   id: string,
    *   label: string,
    *   url: string,
+   *   gmailEmail?: string | null,
    *   strategyLabel?: string,
    *   strategyDetail?: string,
    *   strategy?: string,
+   *   devStatus?: string,
+   *   devStatusKind?: string,
+   *   missingEvents?: string,
    *   pending?: boolean,
    *   active?: boolean | null,
    *   value?: string | null,
@@ -981,6 +1533,12 @@ function buildEventsFinderSourcesBlock(root) {
         tdStrat.append(detail);
       }
 
+      const tdDev = document.createElement('td');
+      tdDev.className = 'settings-page__source-dev-status';
+      const kind = String(src.devStatusKind || 'unspecified').toLowerCase();
+      tdDev.classList.add(`settings-page__dev-status--${kind}`);
+      tdDev.textContent = src.devStatus || '—';
+
       const tdStatus = document.createElement('td');
       tdStatus.className = 'settings-page__value settings-page__value--loading settings-page__source-status';
       tdStatus.textContent = 'Loading…';
@@ -989,14 +1547,20 @@ function buildEventsFinderSourcesBlock(root) {
       tdOut.className = 'settings-page__value settings-page__value--loading settings-page__source-output';
       tdOut.textContent = '…';
 
+      const tdMissing = document.createElement('td');
+      tdMissing.className = 'settings-page__source-missing';
+      tdMissing.textContent = src.missingEvents || '—';
+
       const tdIngest = document.createElement('td');
       tdIngest.className =
         'settings-page__value settings-page__value--loading settings-page__source-ingest';
       tdIngest.textContent = '…';
 
-      const tdLive = buildLiveFeedCell(src.url);
+      const tdLive = src.gmailEmail
+        ? buildGmailConnectCell(src.gmailEmail)
+        : buildLiveFeedCell(src.url);
 
-      tr.append(tdName, tdStrat, tdStatus, tdOut, tdIngest, tdLive);
+      tr.append(tdName, tdStrat, tdDev, tdStatus, tdOut, tdMissing, tdIngest, tdLive);
       tbody.append(tr);
       rowById.set(src.id, tr);
     }
@@ -1094,6 +1658,48 @@ function buildEventsFinderSourcesBlock(root) {
       loadStatus.textContent =
         e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
     });
+
+  function reloadSources() {
+    loadStatus.hidden = false;
+    loadStatus.className = 'settings-page__load-status';
+    loadStatus.textContent = 'Reloading Events sources…';
+    note.hidden = true;
+    tbody.replaceChildren();
+    rowById.clear();
+    fetch('/api/events-finder-status?manifest=1', { cache: 'no-store' })
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || data.ok === false || !Array.isArray(data.sources)) {
+          throw new Error(data.error || `HTTP ${r.status}`);
+        }
+        populateRows(data.sources);
+        loadStatus.textContent = 'Probing sources…';
+        return fetch('/api/events-finder-status', { cache: 'no-store' });
+      })
+      .then(async (r) => {
+        if (!r) return;
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || data.ok === false || !Array.isArray(data.sources)) {
+          throw new Error(data.error || `Live HTTP ${r.status}`);
+        }
+        for (const src of data.sources) {
+          const tr = rowById.get(src.id);
+          if (tr) updateSourceRow(tr, src);
+        }
+        loadStatus.textContent = '';
+        loadStatus.hidden = true;
+        note.hidden = false;
+        const when = data.checkedAt
+          ? new Date(data.checkedAt).toLocaleString()
+          : new Date().toLocaleString();
+        note.textContent = `Events sources snapshot: ${when}`;
+      })
+      .catch((e) => {
+        loadStatus.className = 'settings-page__err';
+        loadStatus.textContent =
+          e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+      });
+  }
 }
 
 /**

@@ -5,8 +5,9 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadEventsFinderCriteria } from './events-finder-criteria-store.js';
+import { loadEventsFinderCriteria, saveEventsFinderCriteria, facebookHostSlugKey } from './events-finder-criteria-store.js';
 import { resolveEventsFinderGeo } from './events-finder-geo.js';
+import { appendFacebookBillingRun } from './events-finder-facebook-billing.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..', '..');
@@ -123,9 +124,16 @@ async function apifyFetch(token, apiPath, init = {}) {
 }
 
 /**
- * Build searchQueries: env override, else Look for lines + city/location suffix.
+ * Build searchQueries for Apify.
+ * Prefer explicit scrape.searchQueries (editable in Settings). Env override wins.
+ * Legacy fallback: first N Look for lines.
  * @param {NodeJS.ProcessEnv} [env]
- * @param {{ city?: string | null, lookFor?: string, maxQueries?: number }} [opts]
+ * @param {{
+ *   city?: string | null,
+ *   lookFor?: string,
+ *   maxQueries?: number,
+ *   searchQueries?: string[] | string,
+ * }} [opts]
  * @returns {string[]}
  */
 export function buildFacebookSearchQueries(env = process.env, opts = {}) {
@@ -142,13 +150,22 @@ export function buildFacebookSearchQueries(env = process.env, opts = {}) {
 
   const place = String(opts.city || env.FACEBOOK_EVENTS_LOCATION || 'San Francisco').trim()
     || 'San Francisco';
-  const lookFor = String(opts.lookFor || '')
-    .split('\n')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .slice(0, maxQueries);
 
-  if (!lookFor.length) {
+  /** @type {string[]} */
+  let seeds = [];
+  if (Array.isArray(opts.searchQueries) && opts.searchQueries.length) {
+    seeds = opts.searchQueries.map((s) => String(s || '').trim()).filter(Boolean);
+  } else if (typeof opts.searchQueries === 'string' && opts.searchQueries.trim()) {
+    seeds = opts.searchQueries.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  } else {
+    seeds = String(opts.lookFor || '')
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  seeds = seeds.slice(0, maxQueries);
+
+  if (!seeds.length) {
     return [
       `startup ${place}`,
       `hackathon ${place}`,
@@ -157,9 +174,15 @@ export function buildFacebookSearchQueries(env = process.env, opts = {}) {
     ].slice(0, maxQueries);
   }
 
-  return lookFor.map((line) => {
+  return seeds.map((line) => {
     const lower = line.toLowerCase();
-    if (lower.includes('san francisco') || lower.includes('oakland') || lower.includes('berkeley')) {
+    if (
+      lower.includes('san francisco')
+      || lower.includes('oakland')
+      || lower.includes('berkeley')
+      || lower.includes('emeryville')
+      || lower.includes('bay area')
+    ) {
       return line;
     }
     return `${line} ${place}`;
@@ -167,62 +190,183 @@ export function buildFacebookSearchQueries(env = process.env, opts = {}) {
 }
 
 /**
- * Normalize pinned host lines into Apify-compatible startUrls.
+ * Normalize pinned hosts into Apify-compatible startUrls.
  * Prefer upcoming_hosted_events / groups/.../events (logged-out friendly).
- * @param {string} [pinnedHostsText]
+ * When includePast is true, also add past_hosted_events for pages (for 6‑month avg stats).
+ * @param {string | Array<{ url?: string } | string>} [pinnedHosts]
+ * @param {{ includePast?: boolean }} [opts]
  * @returns {string[]}
  */
-export function buildFacebookStartUrls(pinnedHostsText = '') {
-  const lines = String(pinnedHostsText || '')
-    .split('\n')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .slice(0, 40);
+export function buildFacebookStartUrls(pinnedHosts = '', opts = {}) {
+  const includePast = opts.includePast === true;
+  /** @type {string[]} */
+  const lines = [];
+  if (typeof pinnedHosts === 'string') {
+    for (const line of pinnedHosts.split('\n')) {
+      const s = line.trim();
+      if (s) lines.push(s);
+    }
+  } else if (Array.isArray(pinnedHosts)) {
+    for (const item of pinnedHosts) {
+      if (typeof item === 'string') {
+        if (item.trim()) lines.push(item.trim());
+      } else if (item && typeof item === 'object' && item.url) {
+        const s = String(item.url).trim();
+        if (s) lines.push(s);
+      }
+    }
+  }
 
   /** @type {string[]} */
   const out = [];
   const seen = new Set();
 
-  for (const line of lines) {
-    let url = '';
+  /**
+   * @param {string} url
+   */
+  function pushUrl(url) {
+    if (!url) return;
+    const key = url.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(url);
+  }
+
+  for (const line of lines.slice(0, 40)) {
     const bare = line.replace(/^https?:\/\//i, '').replace(/^www\./i, '');
 
     if (/^groups\//i.test(line) || /^groups\//i.test(bare)) {
       const slug = bare.replace(/^groups\//i, '').split('/')[0];
-      if (slug) url = `https://www.facebook.com/groups/${slug}/events`;
+      if (slug) pushUrl(`https://www.facebook.com/groups/${slug}/events`);
     } else if (/facebook\.com\//i.test(line) || /^fb\.com\//i.test(bare)) {
       try {
         const href = /^https?:\/\//i.test(line) ? line : `https://${bare}`;
         const u = new URL(href);
         const parts = u.pathname.split('/').filter(Boolean);
         if (parts[0] === 'groups' && parts[1]) {
-          url = `https://www.facebook.com/groups/${parts[1]}/events`;
+          pushUrl(`https://www.facebook.com/groups/${parts[1]}/events`);
         } else if (parts[0] === 'events' && parts[1] && /^\d+$/.test(parts[1])) {
-          url = `https://www.facebook.com/events/${parts[1]}`;
+          pushUrl(`https://www.facebook.com/events/${parts[1]}`);
         } else if (parts[0] && parts[0] !== 'events') {
           const page = parts[0];
-          // /Page/events → upcoming_hosted_events (Apify logged-out pattern)
           if (parts[1] === 'upcoming_hosted_events' || parts[1] === 'past_hosted_events') {
-            url = `https://www.facebook.com/${page}/${parts[1]}`;
+            pushUrl(`https://www.facebook.com/${page}/${parts[1]}`);
+            if (includePast && parts[1] === 'upcoming_hosted_events') {
+              pushUrl(`https://www.facebook.com/${page}/past_hosted_events`);
+            }
           } else {
-            url = `https://www.facebook.com/${page}/upcoming_hosted_events`;
+            pushUrl(`https://www.facebook.com/${page}/upcoming_hosted_events`);
+            if (includePast) {
+              pushUrl(`https://www.facebook.com/${page}/past_hosted_events`);
+            }
           }
         }
       } catch {
         /* ignore bad URL */
       }
     } else if (/^[A-Za-z0-9._-]+$/.test(line)) {
-      url = `https://www.facebook.com/${line}/upcoming_hosted_events`;
+      pushUrl(`https://www.facebook.com/${line}/upcoming_hosted_events`);
+      if (includePast) {
+        pushUrl(`https://www.facebook.com/${line}/past_hosted_events`);
+      }
     }
-
-    if (!url) continue;
-    const key = url.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(url);
   }
 
   return out;
+}
+
+/**
+ * Stable fingerprint for cache invalidation when pins change.
+ * @param {unknown} pinnedHosts
+ */
+function pinnedHostsFingerprint(pinnedHosts) {
+  if (typeof pinnedHosts === 'string') return pinnedHosts.trim();
+  if (!Array.isArray(pinnedHosts)) return '';
+  return pinnedHosts
+    .map((h) => {
+      if (typeof h === 'string') return h.trim().toLowerCase();
+      if (h && typeof h === 'object') return String(h.url || '').trim().toLowerCase();
+      return '';
+    })
+    .filter(Boolean)
+    .sort()
+    .join('\n');
+}
+
+/**
+ * Keep events inside the ingestion rolling window (+ optional earliest local time).
+ * @param {object[]} events
+ * @param {{ windowWeeks?: number, earliestLocalTime?: string | null }} scrape
+ * @param {string} [timeZone]
+ */
+export function filterEventsByIngestWindow(events, scrape = {}, timeZone = 'America/Los_Angeles') {
+  // Allow up to ~5 weeks so a 30-day first pass fits; default 4 weeks (~28–30d).
+  const weeks = Math.min(Math.max(Number(scrape.windowWeeks) || 4, 1), 5);
+  const horizonMs = weeks * 7 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const earliest = String(scrape.earliestLocalTime || '').trim();
+  const earliestMatch = earliest.match(/^(\d{1,2}):(\d{2})$/);
+  const earliestMinutes = earliestMatch
+    ? Number(earliestMatch[1]) * 60 + Number(earliestMatch[2])
+    : null;
+
+  return (Array.isArray(events) ? events : []).filter((ev) => {
+    const start = ev?.start;
+    if (!start || !Number.isFinite(Date.parse(start))) return true;
+    const t = Date.parse(start);
+    if (t < now - 12 * 60 * 60 * 1000) return false;
+    if (t > now + horizonMs) return false;
+    if (earliestMinutes == null) return true;
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      }).formatToParts(new Date(t));
+      const hour = Number(parts.find((p) => p.type === 'hour')?.value);
+      const minute = Number(parts.find((p) => p.type === 'minute')?.value);
+      if (!Number.isFinite(hour) || !Number.isFinite(minute)) return true;
+      return hour * 60 + minute >= earliestMinutes;
+    } catch {
+      return true;
+    }
+  });
+}
+
+/**
+ * Avg events/month from host-matched events in the last 6 months.
+ * @param {object[]} events
+ * @param {Array<{ url: string, name: string, avgEventsPerMonth: number | null, avgComputedAt?: string | null }>} hosts
+ */
+export function updatePinnedHostAverages(events, hosts) {
+  const now = Date.now();
+  const sixMonthsMs = 183 * 24 * 60 * 60 * 1000; // ~6 months
+  const computedAt = new Date().toISOString();
+
+  return hosts.map((host) => {
+    const key = facebookHostSlugKey(host.url);
+    if (!key) return host;
+    const needle = key.replace(/^groups\//, '').toLowerCase();
+    let count = 0;
+    for (const ev of events) {
+      const startMs = ev?.start ? Date.parse(ev.start) : NaN;
+      if (!Number.isFinite(startMs)) continue;
+      if (startMs < now - sixMonthsMs || startMs > now + 7 * 24 * 60 * 60 * 1000) continue;
+      const blob = JSON.stringify(ev?.raw || ev || {}).toLowerCase();
+      if (blob.includes(needle) || blob.includes(key.toLowerCase())) count += 1;
+    }
+    // Only update when we saw at least one matching event (keep prior avg otherwise).
+    if (!count && host.avgEventsPerMonth != null) {
+      return host;
+    }
+    const avg = Math.round((count / 6) * 10) / 10;
+    return {
+      ...host,
+      avgEventsPerMonth: avg,
+      avgComputedAt: computedAt,
+    };
+  });
 }
 
 /**
@@ -232,7 +376,8 @@ export function buildFacebookStartUrls(pinnedHostsText = '') {
 export function normalizeApifyFacebookItem(item) {
   if (!item || typeof item !== 'object') return null;
   const raw = /** @type {Record<string, any>} */ (item);
-  if (raw.isCanceled === true || raw.isPast === true) return null;
+  if (raw.isCanceled === true) return null;
+  // Keep past events for pinned-host avg/mo (last 6 months); ingest window drops them later.
 
   const id = String(raw.id || '').trim();
   const url = String(raw.url || '').trim();
@@ -276,6 +421,10 @@ export function normalizeApifyFacebookItem(item) {
   const usersGoing = Number(raw.usersGoing);
   const usersInterested = Number(raw.usersInterested);
 
+  const ticketsInfo =
+    raw.ticketsInfo && typeof raw.ticketsInfo === 'object' ? raw.ticketsInfo : null;
+  const ticketPriceRaw = ticketsInfo?.price ?? raw.ticketPrice ?? raw.price ?? null;
+
   return {
     id: `facebook:${id || url}`,
     title,
@@ -289,11 +438,15 @@ export function normalizeApifyFacebookItem(item) {
     source: 'facebook',
     online: raw.isOnline === true,
     isOnline: raw.isOnline === true,
+    isPast: raw.isPast === true,
     location: venue ? String(venue).slice(0, 200) : null,
     imageUrl,
     description,
     usersGoing: Number.isFinite(usersGoing) ? usersGoing : null,
     usersInterested: Number.isFinite(usersInterested) ? usersInterested : null,
+    ticketsInfo,
+    ticketPrice: ticketPriceRaw != null ? ticketPriceRaw : null,
+    paidContent: raw.paidContent === true,
     raw,
   };
 }
@@ -331,10 +484,13 @@ function cacheFresh(cache, env = process.env, scrape = {}) {
   if (!cache?.cachedAt) return false;
   const age = Date.now() - Date.parse(cache.cachedAt);
   if (!(Number.isFinite(age) && age >= 0 && age < effectiveCacheMs(env, scrape))) return false;
-  // Invalidate when pinned hosts change (otherwise pins wait for TTL).
-  const wantPins = String(scrape.pinnedHosts || '').trim();
-  const hadPins = String(cache.pinnedHosts || '').trim();
+  // Invalidate when pinned hosts or keyword searches change.
+  const wantPins = pinnedHostsFingerprint(scrape.pinnedHosts);
+  const hadPins = pinnedHostsFingerprint(cache.pinnedHosts);
   if (wantPins !== hadPins) return false;
+  const wantQ = JSON.stringify(scrape.searchQueries || []);
+  const hadQ = JSON.stringify(cache.searchQueries || cache.scrape?.searchQueries || []);
+  if (wantQ !== hadQ) return false;
   return true;
 }
 
@@ -364,15 +520,16 @@ async function runApifyFacebookScrape(env = process.env, opts = {}) {
       city: geo.city || 'San Francisco',
       lookFor: criteria.lookFor,
       maxQueries: scrape.maxQueries,
+      searchQueries: scrape.searchQueries,
     });
-  const startUrls = buildFacebookStartUrls(scrape.pinnedHosts);
+  const startUrls = buildFacebookStartUrls(scrape.pinnedHosts, { includePast: true });
 
   // Need at least one discovery source.
   if (!searchQueries.length && !startUrls.length) {
     return {
       ok: false,
       error: 'apify_no_input',
-      hint: 'Add Look for terms or Pinned Facebook hosts in Filter criteria',
+      hint: 'Add Look for terms or Pinned Facebook hosts in Events criteria',
       events: [],
       fromCache: false,
       searchQueries,
@@ -395,24 +552,32 @@ async function runApifyFacebookScrape(env = process.env, opts = {}) {
     maxEvents,
   };
 
-  const runPath =
-    `/acts/${encodeURIComponent(actorId)}/run-sync-get-dataset-items`
-    + `?waitForFinish=${wait}&timeout=${wait + 30}`
+  // Start a run (so we can read usageTotalUsd), wait, then fetch dataset items.
+  const startPath =
+    `/acts/${encodeURIComponent(actorId)}/runs`
+    + `?waitForFinish=${wait}`
+    + `&timeout=${wait + 30}`
     + `&maxTotalChargeUsd=${encodeURIComponent(String(maxChargeUsd))}`
     + `&maxItems=${encodeURIComponent(String(maxEvents))}`;
 
-  const r = await apifyFetch(token, runPath, {
+  const runRes = await apifyFetch(token, startPath, {
     method: 'POST',
     body: JSON.stringify(input),
   });
 
-  if (!r.ok) {
+  const runData = runRes.json?.data && typeof runRes.json.data === 'object'
+    ? runRes.json.data
+    : runRes.json && typeof runRes.json === 'object' && runRes.json.id
+      ? runRes.json
+      : null;
+
+  if (!runRes.ok || !runData?.defaultDatasetId) {
     const errMsg =
-      r.json?.error?.message
-      || r.json?.error
-      || (typeof r.json === 'string' ? r.json : null)
-      || r.text?.slice(0, 200)
-      || `HTTP ${r.status}`;
+      runRes.json?.error?.message
+      || runRes.json?.error
+      || (typeof runRes.json === 'string' ? runRes.json : null)
+      || runRes.text?.slice(0, 200)
+      || `HTTP ${runRes.status}`;
     return {
       ok: false,
       error: 'apify_run_failed',
@@ -424,26 +589,99 @@ async function runApifyFacebookScrape(env = process.env, opts = {}) {
     };
   }
 
-  const items = Array.isArray(r.json) ? r.json : Array.isArray(r.json?.data) ? r.json.data : [];
+  const datasetId = String(runData.defaultDatasetId);
+  const itemsRes = await apifyFetch(
+    token,
+    `/datasets/${encodeURIComponent(datasetId)}/items?format=json&clean=1`,
+  );
+  if (!itemsRes.ok) {
+    return {
+      ok: false,
+      error: 'apify_dataset_failed',
+      hint: `Could not read Apify dataset (${itemsRes.status})`,
+      events: [],
+      fromCache: false,
+      searchQueries,
+      startUrls,
+    };
+  }
+
+  const items = Array.isArray(itemsRes.json)
+    ? itemsRes.json
+    : Array.isArray(itemsRes.json?.data)
+      ? itemsRes.json.data
+      : [];
   /** @type {object[]} */
-  const events = [];
+  const eventsRaw = [];
   const seen = new Set();
   for (const item of items) {
     const norm = normalizeApifyFacebookItem(item);
     if (!norm) continue;
     if (seen.has(norm.id)) continue;
     seen.add(norm.id);
-    events.push(norm);
+    eventsRaw.push(norm);
+  }
+
+  const timeZone =
+    String(env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim() || 'America/Los_Angeles';
+  const events = filterEventsByIngestWindow(eventsRaw, scrape, timeZone);
+
+  let chargeUsd =
+    runData.usageTotalUsd != null && Number.isFinite(Number(runData.usageTotalUsd))
+      ? Number(runData.usageTotalUsd)
+      : null;
+  let estimated = false;
+  if (chargeUsd == null && items.length) {
+    // Fallback estimate when Apify omits usage on the run object.
+    const perEvent = Number(env.FACEBOOK_EVENTS_EST_USD_PER_EVENT);
+    const rate = Number.isFinite(perEvent) && perEvent > 0 ? perEvent : 0.04;
+    chargeUsd = Math.min(maxChargeUsd, Math.round(items.length * rate * 10000) / 10000);
+    estimated = true;
+  }
+
+  try {
+    await appendFacebookBillingRun(
+      {
+        runAt: runData.finishedAt || runData.startedAt || new Date().toISOString(),
+        chargeUsd,
+        runId: runData.id ? String(runData.id) : null,
+        eventsBilled: items.length,
+        eventsKept: events.length,
+        searchQueries,
+        startUrls,
+        estimated,
+      },
+      env,
+    );
+  } catch (billErr) {
+    console.warn('[facebook-events] billing log failed:', billErr?.message || billErr);
+  }
+
+  // Refresh avg events/month from last-6-months matches (includes past_hosted_events).
+  if (Array.isArray(scrape.pinnedHosts) && scrape.pinnedHosts.length) {
+    try {
+      const updatedHosts = updatePinnedHostAverages(eventsRaw, scrape.pinnedHosts);
+      await saveEventsFinderCriteria({
+        lookFor: criteria.lookFor,
+        skip: criteria.skip,
+        scrape: { ...scrape, pinnedHosts: updatedHosts },
+      });
+      scrape.pinnedHosts = updatedHosts;
+    } catch (avgErr) {
+      console.warn('[facebook-events] pinned avg update failed:', avgErr?.message || avgErr);
+    }
   }
 
   const payload = {
     cachedAt: new Date().toISOString(),
     searchQueries,
     startUrls,
-    pinnedHosts: String(scrape.pinnedHosts || ''),
+    pinnedHosts: scrape.pinnedHosts,
     actorId: actorId.replace('~', '/'),
     maxEvents,
     scrape,
+    chargeUsd,
+    runId: runData.id || null,
     count: events.length,
     events,
   };
@@ -457,6 +695,7 @@ async function runApifyFacebookScrape(env = process.env, opts = {}) {
     startUrls,
     scanned: items.length,
     count: events.length,
+    chargeUsd,
     scrape,
   };
 }
@@ -487,15 +726,18 @@ export async function fetchFacebookEvents(env = process.env, opts = {}) {
   const cache = await readCache(env);
 
   if (!force && cacheFresh(cache, env, scrape)) {
+    const timeZone =
+      String(env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim() || 'America/Los_Angeles';
+    const events = filterEventsByIngestWindow(cache.events, scrape, timeZone);
     return {
       ok: true,
-      events: cache.events,
+      events,
       fromCache: true,
       cachedAt: cache.cachedAt,
       searchQueries: cache.searchQueries || [],
       startUrls: cache.startUrls || [],
       scanned: cache.count ?? cache.events.length,
-      count: cache.events.length,
+      count: events.length,
       scrape,
     };
   }
