@@ -294,17 +294,30 @@ export function uniqueEventCities(events) {
 
 /**
  * Soft distance for ranking (null when either side lacks coords).
+ * `Number(null) === 0`, so null/empty must be rejected before coercion or
+ * events without coords look like they're in the Atlantic (0,0).
  * @param {{ lat?: number | null, lon?: number | null }} event
  * @param {{ lat: number, lon: number }} home
  * @returns {number | null}
  */
 export function eventDistanceMiles(event, home) {
-  const elat = Number(event.lat);
-  const elon = Number(event.lon);
-  if (!Number.isFinite(elat) || !Number.isFinite(elon)) return null;
-  if (!Number.isFinite(home.lat) || !Number.isFinite(home.lon)) return null;
-  const d = haversineMiles(home.lat, home.lon, elat, elon);
+  const elat = coordOrNull(event?.lat);
+  const elon = coordOrNull(event?.lon);
+  const hlat = coordOrNull(home?.lat);
+  const hlon = coordOrNull(home?.lon);
+  if (elat == null || elon == null || hlat == null || hlon == null) return null;
+  const d = haversineMiles(hlat, hlon, elat, elon);
   return Number.isFinite(d) ? Math.round(d * 10) / 10 : null;
+}
+
+/**
+ * @param {unknown} value
+ * @returns {number | null}
+ */
+function coordOrNull(value) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 /**

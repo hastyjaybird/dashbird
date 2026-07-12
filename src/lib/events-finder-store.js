@@ -363,6 +363,48 @@ export function collapseRecurringSeriesEvents(events) {
 }
 
 /**
+ * Count how many catalog events share each series key (before collapse).
+ * @param {object[]} events
+ * @returns {Map<string, number>}
+ */
+export function countEventSeriesKeys(events) {
+  /** @type {Map<string, number>} */
+  const counts = new Map();
+  for (const event of Array.isArray(events) ? events : []) {
+    const key = eventSeriesDedupeKey(event);
+    if (!key) continue;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Attach seriesKey / isSeries using pre-collapse counts (and collapse duplicateIds).
+ * @param {object[]} events
+ * @param {Map<string, number>} [seriesCounts]
+ * @returns {object[]}
+ */
+export function annotateEventsWithSeriesInfo(events, seriesCounts) {
+  const list = Array.isArray(events) ? events : [];
+  const counts = seriesCounts instanceof Map ? seriesCounts : countEventSeriesKeys(list);
+  return list.map((event) => {
+    if (!event || typeof event !== 'object') return event;
+    const seriesKey = eventSeriesDedupeKey(event);
+    const seriesCount = seriesKey ? counts.get(seriesKey) || 0 : 0;
+    const dupes = Array.isArray(/** @type {{ duplicateIds?: unknown }} */ (event).duplicateIds)
+      ? /** @type {{ duplicateIds: unknown[] }} */ (event).duplicateIds.length
+      : 0;
+    const isSeries = Boolean(seriesKey && (seriesCount >= 2 || dupes > 0));
+    return {
+      ...event,
+      seriesKey: seriesKey || null,
+      seriesCount: seriesKey ? seriesCount : 0,
+      isSeries,
+    };
+  });
+}
+
+/**
  * @param {object} event
  * @returns {{
  *   id: string,
@@ -492,6 +534,21 @@ function migrate(db) {
     CREATE INDEX IF NOT EXISTS idx_skipped_events_url ON skipped_events(url_key);
     CREATE INDEX IF NOT EXISTS idx_skipped_events_name_date ON skipped_events(name_date_key);
   `);
+  ensureSkippedSeriesKeyColumn(db);
+}
+
+/**
+ * @param {DatabaseSync} db
+ */
+function ensureSkippedSeriesKeyColumn(db) {
+  const cols = db.prepare('PRAGMA table_info(skipped_events)').all();
+  const hasSeries = (Array.isArray(cols) ? cols : []).some(
+    (c) => String(/** @type {{ name?: unknown }} */ (c)?.name || '') === 'series_key',
+  );
+  if (!hasSeries) {
+    db.exec('ALTER TABLE skipped_events ADD COLUMN series_key TEXT');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_skipped_events_series ON skipped_events(series_key)');
 }
 
 /**
@@ -795,6 +852,7 @@ function skippedDbRowToRecord(row) {
     venue: row.venue != null ? String(row.venue) : null,
     city: row.city != null ? String(row.city) : null,
     imageUrl: row.image_url != null ? String(row.image_url) : null,
+    seriesKey: row.series_key != null ? String(row.series_key) : null,
     skippedAt: String(row.skipped_at || new Date().toISOString()),
   };
 }
@@ -809,7 +867,7 @@ export function listSkippedEventsFinderRecords(env = process.env) {
   const rows = db
     .prepare(
       `
-      SELECT id, url_key, name_date_key, title, start_at, source, venue, city, image_url, skipped_at
+      SELECT id, url_key, name_date_key, title, start_at, source, venue, city, image_url, series_key, skipped_at
       FROM skipped_events
       ORDER BY skipped_at DESC
       LIMIT 1000
@@ -842,6 +900,82 @@ export function upsertSkippedEventsFinderRecords(records, env = process.env) {
   const db = openEventsFinderDb(env);
   const stmt = db.prepare(`
     INSERT INTO skipped_events (
+      id, url_key, name_date_key, title, start_at, source, venue, city, image_url, series_key, skipped_at
+    ) VALUES (
+      @id, @urlKey, @nameDateKey, @title, @startAt, @source, @venue, @city, @imageUrl, @seriesKey, @skippedAt
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      url_key = COALESCE(excluded.url_key, skipped_events.url_key),
+      name_date_key = COALESCE(excluded.name_date_key, skipped_events.name_date_key),
+      title = COALESCE(excluded.title, skipped_events.title),
+      start_at = COALESCE(excluded.start_at, skipped_events.start_at),
+      source = COALESCE(excluded.source, skipped_events.source),
+      venue = COALESCE(excluded.venue, skipped_events.venue),
+      city = COALESCE(excluded.city, skipped_events.city),
+      image_url = COALESCE(excluded.image_url, skipped_events.image_url),
+      series_key = COALESCE(excluded.series_key, skipped_events.series_key),
+      skipped_at = excluded.skipped_at
+  `);
+  let n = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const rec of list) {
+      const id = String(rec?.id || '').trim().slice(0, 400);
+      if (!id) continue;
+      const title = rec.title != null ? String(rec.title).trim().slice(0, 500) || null : null;
+      const start = rec.start != null ? String(rec.start).trim().slice(0, 40) || null : null;
+      const keyRaw = rec.key != null ? String(rec.key).trim().slice(0, 400) : '';
+      const nameDateKey =
+        keyRaw
+        || (title && start
+          ? eventNameDateDedupeKey({ title, start }, env.WEATHER_TIME_ZONE)
+          : null);
+      const urlKey = rec.url != null ? String(rec.url).trim().slice(0, 500) || null : null;
+      const seriesKey =
+        rec.seriesKey != null ? String(rec.seriesKey).trim().slice(0, 400) || null : null;
+      stmt.run({
+        id,
+        urlKey,
+        nameDateKey: nameDateKey || null,
+        title,
+        startAt: start,
+        source: rec.source != null ? String(rec.source).trim().slice(0, 64) || null : null,
+        venue: rec.venue != null ? String(rec.venue).trim().slice(0, 300) || null : null,
+        city: rec.city != null ? String(rec.city).trim().slice(0, 120) || null : null,
+        imageUrl: rec.imageUrl != null ? String(rec.imageUrl).trim().slice(0, 2000) || null : null,
+        seriesKey,
+        skippedAt:
+          rec.skippedAt != null && String(rec.skippedAt).trim()
+            ? String(rec.skippedAt).trim().slice(0, 40)
+            : new Date().toISOString(),
+      });
+      n += 1;
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
+  return n;
+}
+
+/**
+ * Replace the full skipped set in SQLite in a single transaction.
+ * Prefer upsert + delete-by-id for normal Skip/Unskip — full replace is only for
+ * rare admin/migration paths and must never leave an empty table on upsert failure.
+ * @param {Array<object>} records
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function replaceSkippedEventsFinderRecords(records, env = process.env) {
+  const list = Array.isArray(records) ? records : [];
+  const db = openEventsFinderDb(env);
+  const stmt = db.prepare(`
+    INSERT INTO skipped_events (
       id, url_key, name_date_key, title, start_at, source, venue, city, image_url, skipped_at
     ) VALUES (
       @id, @urlKey, @nameDateKey, @title, @startAt, @source, @venue, @city, @imageUrl, @skippedAt
@@ -860,6 +994,7 @@ export function upsertSkippedEventsFinderRecords(records, env = process.env) {
   let n = 0;
   db.exec('BEGIN IMMEDIATE');
   try {
+    db.prepare('DELETE FROM skipped_events').run();
     for (const rec of list) {
       const id = String(rec?.id || '').trim().slice(0, 400);
       if (!id) continue;
@@ -899,29 +1034,6 @@ export function upsertSkippedEventsFinderRecords(records, env = process.env) {
     throw e;
   }
   return n;
-}
-
-/**
- * Replace the full skipped set in SQLite (used when client sends an explicit list).
- * @param {Array<object>} records
- * @param {NodeJS.ProcessEnv} [env]
- * @returns {number}
- */
-export function replaceSkippedEventsFinderRecords(records, env = process.env) {
-  const db = openEventsFinderDb(env);
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    db.prepare('DELETE FROM skipped_events').run();
-    db.exec('COMMIT');
-  } catch (e) {
-    try {
-      db.exec('ROLLBACK');
-    } catch {
-      /* ignore */
-    }
-    throw e;
-  }
-  return upsertSkippedEventsFinderRecords(records, env);
 }
 
 /**

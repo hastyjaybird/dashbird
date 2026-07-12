@@ -1,6 +1,7 @@
 /**
- * Events finder taste — Look for / Skip scoring over title, venue, description.
- * Skip hides an event only when no Look for line also matches.
+ * Events finder taste — Look for / grey (skip) / blacklist over title, venue, description.
+ * Grey list (`skip`) hides only when no Look for line also matches.
+ * Blacklist hides regardless of Look for matches.
  * Hyphens, apostrophes, and similar characters in preference lines are kept for matching
  * (e.g. "hands-on" matches "hands-on", "hands on", and "handson").
  */
@@ -88,24 +89,39 @@ function lineMatches(hay, line) {
 
 /**
  * @param {object} event
- * @param {{ lookFor?: string, skip?: string }} criteria
+ * @param {{ lookFor?: string, skip?: string, blacklist?: string }} criteria
  * @returns {{
  *   ok: boolean,
- *   reason?: 'skip',
+ *   reason?: 'skip' | 'blacklist',
  *   score: number,
  *   matchedLookFor: string[],
  *   matchedSkip: string[],
+ *   matchedBlacklist: string[],
  * }}
  */
 export function scoreEventTaste(event, criteria = {}) {
   const hay = eventHaystack(event);
   const lookFor = parseTasteLines(criteria.lookFor);
   const skip = parseTasteLines(criteria.skip);
+  const blacklist = parseTasteLines(criteria.blacklist);
 
   const matchedLookFor = lookFor.filter((line) => lineMatches(hay, line));
   const matchedSkip = skip.filter((line) => lineMatches(hay, line));
+  const matchedBlacklist = blacklist.filter((line) => lineMatches(hay, line));
 
-  // Skip only hides when nothing on Look for also matches (whitelist wins ties).
+  // Blacklist always hides, even when Look for also matches.
+  if (matchedBlacklist.length) {
+    return {
+      ok: false,
+      reason: 'blacklist',
+      score: -2000,
+      matchedLookFor,
+      matchedSkip,
+      matchedBlacklist,
+    };
+  }
+
+  // Grey list (skip) only hides when nothing on Look for also matches.
   if (matchedSkip.length && !matchedLookFor.length) {
     return {
       ok: false,
@@ -113,6 +129,7 @@ export function scoreEventTaste(event, criteria = {}) {
       score: -1000,
       matchedLookFor,
       matchedSkip,
+      matchedBlacklist,
     };
   }
 
@@ -124,6 +141,7 @@ export function scoreEventTaste(event, criteria = {}) {
     score,
     matchedLookFor,
     matchedSkip,
+    matchedBlacklist,
   };
 }
 

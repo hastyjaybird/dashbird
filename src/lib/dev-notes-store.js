@@ -10,6 +10,7 @@ export const DEV_NOTES_PATH = path.join(root, 'data', 'dev-notes.md');
 
 const PAGE_LABELS = {
   main: 'Main',
+  network: 'Network',
   'house-hunter': 'House Hunter',
   settings: 'Settings',
 };

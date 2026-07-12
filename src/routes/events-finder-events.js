@@ -23,6 +23,8 @@ import { fetchMultiverseSchoolEvents } from '../lib/events-finder-multiverse.js'
 import { withEventPrice } from '../lib/events-finder-price.js';
 import { fetchPublicPageEvents } from '../lib/events-finder-public-pages.js';
 import {
+  annotateEventsWithSeriesInfo,
+  countEventSeriesKeys,
   dedupeEventsByNameAndDate,
   deleteEventsFinderMatchingSkipped,
   getEventsFinderStoreStats,
@@ -41,9 +43,217 @@ import { eventsIngestWindowDays } from '../lib/events-finder-window.js';
 
 const router = Router();
 
+/** @type {Promise<object> | null} */
+let eventsFinderIngestInflight = null;
+/** @type {object | null} */
+let lastEventsFinderIngest = null;
+/** @type {number} */
+let lastEventsFinderIngestAt = 0;
+
+/**
+ * Filter + upsert one source batch into the catalog (yields before sync SQLite).
+ * @param {object[]} events
+ * @param {object} criteria
+ * @param {string} timeZone
+ * @param {object[]} skippedRecords
+ */
+async function upsertLiveBatch(events, criteria, timeZone, skippedRecords) {
+  const batchAll = filterEventsByIngestWindow(
+    Array.isArray(events) ? events : [],
+    criteria.scrape || {},
+    timeZone,
+  );
+  const batch = batchAll.filter((ev) => !isEventSkipped(ev, skippedRecords, timeZone));
+  const ingestSkipped = batchAll.length - batch.length;
+  let upserted = 0;
+  let skipped = 0;
+  try {
+    await new Promise((r) => setImmediate(r));
+    const result = upsertEventsFinderEvents(batch, process.env);
+    upserted = result.upserted;
+    skipped = result.skipped;
+  } catch (storeErr) {
+    console.warn('[events-finder] sqlite upsert failed:', storeErr?.message || storeErr);
+  }
+  return { upserted, skipped, ingestSkipped, batch };
+}
+
+/**
+ * Live source fetch + SQLite upsert (single-flight). Each source upserts as soon as it
+ * finishes so the catalog (and polling clients) grow progressively.
+ * @param {{
+ *   forceFacebook?: boolean,
+ *   force?: boolean,
+ *   criteria: object,
+ *   timeZone: string,
+ *   skippedRecords: object[],
+ * }} opts
+ */
+function scheduleEventsFinderIngest(opts) {
+  if (eventsFinderIngestInflight) return eventsFinderIngestInflight;
+
+  const force = opts.force === true || opts.forceFacebook === true;
+  const cooldownMs = (() => {
+    const n = Number(process.env.EVENTS_FINDER_INGEST_COOLDOWN_MS);
+    return Number.isFinite(n) && n >= 10_000 ? n : 2 * 60 * 1000;
+  })();
+  if (
+    !force
+    && lastEventsFinderIngest
+    && Date.now() - lastEventsFinderIngestAt < cooldownMs
+  ) {
+    return Promise.resolve(lastEventsFinderIngest);
+  }
+
+  const { forceFacebook = false, criteria, timeZone, skippedRecords } = opts;
+
+  eventsFinderIngestInflight = (async () => {
+    /** @type {Record<string, object>} */
+    const sources = {};
+    let upserted = 0;
+    let skipped = 0;
+    let ingestSkipped = 0;
+    /** @type {object[]} */
+    const batch = [];
+
+    /**
+     * @param {string} name
+     * @param {Promise<object>} promise
+     */
+    async function take(name, promise) {
+      try {
+        const result = await promise;
+        sources[name] = result;
+        const events = Array.isArray(result?.events) ? result.events : [];
+        const r = await upsertLiveBatch(events, criteria, timeZone, skippedRecords);
+        upserted += r.upserted;
+        skipped += r.skipped;
+        ingestSkipped += r.ingestSkipped;
+        batch.push(...r.batch);
+      } catch (e) {
+        sources[name] = {
+          ok: false,
+          events: [],
+          error: String(e?.message || e),
+        };
+      }
+    }
+
+    await Promise.all([
+      take('gmail', fetchGmailEventAnnouncements(process.env)),
+      take(
+        'facebook',
+        fetchFacebookEvents(process.env, { forceRefresh: forceFacebook }),
+      ),
+      take(
+        'publicPages',
+        fetchPublicPageEvents(process.env).catch((e) => ({
+          ok: false,
+          events: [],
+          sources: { error: String(e?.message || e) },
+        })),
+      ),
+      take(
+        'meetup',
+        fetchMeetupPinnedEvents(process.env).catch((e) => ({
+          ok: false,
+          fromCache: false,
+          stale: false,
+          cachedAt: null,
+          pins: [],
+          groupsOk: 0,
+          groupsFailed: 0,
+          events: [],
+          error: String(e?.message || e),
+        })),
+      ),
+      take(
+        'multiverse',
+        fetchMultiverseSchoolEvents(process.env).catch((e) => ({
+          ok: false,
+          events: [],
+          fromCache: false,
+          error: String(e?.message || e),
+        })),
+      ),
+      take(
+        'luma',
+        fetchLumaPinnedEvents(process.env).catch((e) => ({
+          ok: false,
+          fromCache: false,
+          stale: false,
+          cachedAt: null,
+          pins: [],
+          pinsOk: 0,
+          pinsFailed: 0,
+          events: [],
+          error: String(e?.message || e),
+        })),
+      ),
+      take(
+        'gcalIcs',
+        fetchGcalIcsPinnedEvents(process.env).catch((e) => ({
+          ok: false,
+          fromCache: false,
+          cachedAt: null,
+          pins: [],
+          pinsOk: 0,
+          pinsFailed: 0,
+          events: [],
+          error: String(e?.message || e),
+        })),
+      ),
+    ]);
+
+    let pruned = 0;
+    let deletedSkipped = 0;
+    try {
+      await new Promise((r) => setImmediate(r));
+      pruned = pruneEventsFinderEvents({ env: process.env });
+      deletedSkipped = deleteEventsFinderMatchingSkipped(skippedRecords, process.env);
+    } catch (storeErr) {
+      console.warn('[events-finder] sqlite prune failed:', storeErr?.message || storeErr);
+    }
+
+    return {
+      gmail: sources.gmail || { ok: false, events: [] },
+      facebook: sources.facebook || { ok: false, events: [] },
+      publicPages: sources.publicPages || { ok: false, events: [], sources: {} },
+      meetup: sources.meetup || { ok: false, events: [] },
+      multiverse: sources.multiverse || { ok: false, events: [] },
+      luma: sources.luma || { ok: false, events: [] },
+      gcalIcs: sources.gcalIcs || { ok: false, events: [] },
+      upserted,
+      skipped,
+      pruned,
+      deletedSkipped,
+      ingestSkipped,
+      batch,
+    };
+  })()
+    .then((result) => {
+      lastEventsFinderIngest = result;
+      lastEventsFinderIngestAt = Date.now();
+      return result;
+    })
+    .catch((e) => {
+      console.warn('[events-finder] background ingest failed:', e?.message || e);
+      throw e;
+    })
+    .finally(() => {
+      eventsFinderIngestInflight = null;
+    });
+
+  return eventsFinderIngestInflight;
+}
+
 /**
  * GET /api/events-finder/events — normalized events after geo/feed/taste filters.
+ * Serves the SQLite catalog immediately; live sources refresh in the background and
+ * upsert per-source so polling clients see events appear progressively.
  * Query: ?refreshFacebook=1 — force a live Apify run (bypasses cache).
+ * Query: ?waitIngest=1 — wait for live ingest (manual / cold tooling only).
+ * Query: ?catalogOnly=1 — read catalog only; do not start a new ingest (poll path).
  */
 router.get('/', async (req, res) => {
   try {
@@ -56,55 +266,15 @@ router.get('/', async (req, res) => {
       req.query.refreshFacebook === '1'
       || req.query.refreshFacebook === 'true'
       || String(req.query.refreshFacebook || '').toLowerCase() === 'yes';
+    const waitIngest =
+      req.query.waitIngest === '1'
+      || req.query.waitIngest === 'true'
+      || String(req.query.waitIngest || '').toLowerCase() === 'yes';
+    const catalogOnly =
+      req.query.catalogOnly === '1'
+      || req.query.catalogOnly === 'true'
+      || String(req.query.catalogOnly || '').toLowerCase() === 'yes';
     const skippedRecords = Array.isArray(criteria.skippedEvents) ? criteria.skippedEvents : [];
-
-    const [gmail, facebook, publicPages, meetup, multiverse, luma, gcalIcs] = await Promise.all([
-      fetchGmailEventAnnouncements(process.env),
-      fetchFacebookEvents(process.env, { forceRefresh: forceFacebook }),
-      fetchPublicPageEvents(process.env).catch((e) => ({
-        ok: false,
-        events: [],
-        sources: { error: String(e?.message || e) },
-      })),
-      fetchMeetupPinnedEvents(process.env).catch((e) => ({
-        ok: false,
-        fromCache: false,
-        stale: false,
-        cachedAt: null,
-        pins: [],
-        groupsOk: 0,
-        groupsFailed: 0,
-        events: [],
-        error: String(e?.message || e),
-      })),
-      fetchMultiverseSchoolEvents(process.env).catch((e) => ({
-        ok: false,
-        events: [],
-        fromCache: false,
-        error: String(e?.message || e),
-      })),
-      fetchLumaPinnedEvents(process.env).catch((e) => ({
-        ok: false,
-        fromCache: false,
-        stale: false,
-        cachedAt: null,
-        pins: [],
-        pinsOk: 0,
-        pinsFailed: 0,
-        events: [],
-        error: String(e?.message || e),
-      })),
-      fetchGcalIcsPinnedEvents(process.env).catch((e) => ({
-        ok: false,
-        fromCache: false,
-        cachedAt: null,
-        pins: [],
-        pinsOk: 0,
-        pinsFailed: 0,
-        events: [],
-        error: String(e?.message || e),
-      })),
-    ]);
 
     const originZip =
       typeof criteria.filters?.originZip === 'string' && criteria.filters.originZip.length === 5
@@ -128,40 +298,84 @@ router.get('/', async (req, res) => {
       place: geo.place,
     };
 
-    /** @type {Array<object>} */
-    const batchRaw = [
-      ...(Array.isArray(gmail.events) ? gmail.events : []),
-      ...(Array.isArray(facebook.events) ? facebook.events : []),
-      ...(Array.isArray(publicPages.events) ? publicPages.events : []),
-      ...(Array.isArray(meetup.events) ? meetup.events : []),
-      ...(Array.isArray(multiverse.events) ? multiverse.events : []),
-      ...(Array.isArray(luma.events) ? luma.events : []),
-      ...(Array.isArray(gcalIcs.events) ? gcalIcs.events : []),
-    ];
-    // First-pass horizon: scrape windowWeeks (default ~30d) + optional earliest local time.
-    const batchAll = filterEventsByIngestWindow(
-      batchRaw,
-      criteria.scrape || {},
+    const ingestOpts = {
+      forceFacebook,
+      force: waitIngest || forceFacebook,
+      criteria,
       timeZone,
-    );
-    // Do not re-ingest skipped events (saves DB churn; Apify search still runs by query).
-    const batch = batchAll.filter((ev) => !isEventSkipped(ev, skippedRecords, timeZone));
-    const ingestSkipped = batchAll.length - batch.length;
+      skippedRecords,
+    };
 
-    let upserted = 0;
-    let skipped = 0;
-    let pruned = 0;
-    let deletedSkipped = 0;
-    try {
-      const result = upsertEventsFinderEvents(batch, process.env);
-      upserted = result.upserted;
-      skipped = result.skipped;
-      pruned = pruneEventsFinderEvents({ env: process.env });
-      // Keep catalog clear of anything designated skipped (id or url).
-      deletedSkipped = deleteEventsFinderMatchingSkipped(skippedRecords, process.env);
-    } catch (storeErr) {
-      console.warn('[events-finder] sqlite upsert failed:', storeErr?.message || storeErr);
+    /** @type {object | null} */
+    let ingest = lastEventsFinderIngest;
+    let ingestPending = eventsFinderIngestInflight != null;
+
+    if (waitIngest && !catalogOnly) {
+      // Synchronous fill for tooling only.
+      const ingestPromise = scheduleEventsFinderIngest(ingestOpts);
+      const coldMs = Number(process.env.EVENTS_FINDER_COLD_INGEST_MS);
+      const waitMs = Number.isFinite(coldMs) && coldMs >= 5000 ? coldMs : 45_000;
+      try {
+        ingest = await Promise.race([
+          ingestPromise,
+          new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('ingest_wait_timeout')), waitMs);
+          }),
+        ]);
+        ingestPending = false;
+      } catch (e) {
+        console.warn('[events-finder] ingest wait ended:', e?.message || e);
+        ingestPending = eventsFinderIngestInflight != null;
+        ingest = lastEventsFinderIngest;
+      }
+    } else if (!catalogOnly) {
+      // Defer live ingest until after this response flushes so sync SQLite upserts
+      // cannot stall the catalog paint.
+      const cooldownMs = (() => {
+        const n = Number(process.env.EVENTS_FINDER_INGEST_COOLDOWN_MS);
+        return Number.isFinite(n) && n >= 10_000 ? n : 2 * 60 * 1000;
+      })();
+      const onCooldown =
+        Boolean(lastEventsFinderIngest)
+        && !forceFacebook
+        && Date.now() - lastEventsFinderIngestAt < cooldownMs;
+      ingestPending = eventsFinderIngestInflight != null || !onCooldown;
     }
+
+    const gmail = ingest?.gmail || {
+      ok: true,
+      events: [],
+      hint: ingestPending ? 'Refreshing intake…' : null,
+      fromCache: true,
+      scanned: 0,
+    };
+    const facebook = ingest?.facebook || {
+      ok: true,
+      events: [],
+      hint: ingestPending ? 'Refreshing sources…' : null,
+      fromCache: true,
+      refreshing: ingestPending,
+    };
+    const publicPages = ingest?.publicPages || {
+      ok: true,
+      events: [],
+      sources: ingestPending ? { pending: true } : null,
+    };
+    const meetup = ingest?.meetup || { ok: true, events: [], fromCache: true, stale: ingestPending };
+    const multiverse = ingest?.multiverse || {
+      ok: true,
+      events: [],
+      fromCache: true,
+      stale: ingestPending,
+    };
+    const luma = ingest?.luma || { ok: true, events: [], fromCache: true, stale: ingestPending };
+    const gcalIcs = ingest?.gcalIcs || { ok: true, events: [], fromCache: true };
+    const upserted = ingest?.upserted || 0;
+    const skipped = ingest?.skipped || 0;
+    const pruned = ingest?.pruned || 0;
+    const deletedSkipped = ingest?.deletedSkipped || 0;
+    const ingestSkipped = ingest?.ingestSkipped || 0;
+    const batch = ingest?.batch || [];
 
     let raw;
     try {
@@ -172,13 +386,15 @@ router.get('/', async (req, res) => {
       raw = batch;
     }
 
+    const seriesCounts = countEventSeriesKeys(raw);
     const {
-      events: deduped,
+      events: dedupedRaw,
       removed: dedupedRemoved,
       removedSeries = 0,
     } = dedupeEventsByNameAndDate(raw, {
       timeZone,
     });
+    const deduped = annotateEventsWithSeriesInfo(dedupedRaw, seriesCounts);
 
     const calendarAdded = new Set(
       (Array.isArray(criteria.calendarAddedEventIds) ? criteria.calendarAddedEventIds : []).map(
@@ -286,6 +502,8 @@ router.get('/', async (req, res) => {
           venue: rec.venue,
           city: eventCityLabel(rec),
           imageUrl: rec.imageUrl,
+          seriesKey: rec.seriesKey || null,
+          isSeries: Boolean(rec.seriesKey),
           skipped: true,
           fromSkipLog: true,
           skippedAt: rec.skippedAt || null,
@@ -358,6 +576,9 @@ router.get('/', async (req, res) => {
           accounts: gmail.accounts || null,
           error: gmail.error || null,
           hint: gmail.hint || null,
+          fromCache: gmail.fromCache === true,
+          stale: gmail.stale === true,
+          cachedAt: gmail.cachedAt || null,
           scanned: gmail.scanned ?? 0,
           count: Array.isArray(gmail.events) ? gmail.events.length : 0,
         },
@@ -420,10 +641,11 @@ router.get('/', async (req, res) => {
         },
       },
       store,
+      ingestPending,
       filters: criteria.filters,
       geo,
       availableCities,
-      ingestWindow: eventsIngestWindowDays(process.env),
+      ingestWindow: eventsIngestWindowDays(process.env, { scrape: criteria.scrape }),
       events: filtered,
       skippedEvents: skippedFeed,
       skippedCount: skippedRecords.length,
@@ -431,6 +653,15 @@ router.get('/', async (req, res) => {
       totalDeduped: deduped.length,
       total: filtered.length,
     });
+
+    // Start background ingest only after headers/body are on the wire.
+    if (!catalogOnly && !waitIngest) {
+      setImmediate(() => {
+        scheduleEventsFinderIngest(ingestOpts).catch((e) => {
+          console.warn('[events-finder] deferred ingest failed:', e?.message || e);
+        });
+      });
+    }
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e), events: [] });
   }

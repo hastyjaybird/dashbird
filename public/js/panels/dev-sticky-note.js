@@ -12,7 +12,9 @@ const LS_PAGE_KEY = 'dashbirdPage';
 function currentPageId() {
   try {
     const p = localStorage.getItem(LS_PAGE_KEY);
-    if (p === 'settings' || p === 'house-hunter') return p;
+    if (p === 'settings' || p === 'house-hunter' || p === 'network' || p === 'nrm') {
+      return p === 'nrm' ? 'network' : p;
+    }
   } catch {
     // ignore
   }

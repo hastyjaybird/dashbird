@@ -83,7 +83,7 @@
           try {
             page = localStorage.getItem('dashbirdPage') || '';
           } catch (err) {}
-          if (page !== 'settings' && page !== 'house-hunter') {
+          if (page !== 'settings' && page !== 'house-hunter' && page !== 'network' && page !== 'nrm') {
             input.focus({ preventScroll: true });
           }
         }
@@ -107,6 +107,16 @@
     <div id="page-settings" class="page-view page-view--settings" hidden>
       <main class="settings-page" aria-label="Settings">
         <div id="mount-settings" class="settings-page__body"></div>
+      </main>
+    </div>
+
+    <div id="page-network" class="page-view page-view--network" hidden>
+      <main class="network-page" aria-label="Network">
+        <section class="panel panel--glass panel--network" aria-labelledby="h-network">
+          <h2 id="h-network">Network</h2>
+          <p class="panel__lede muted">People and companies</p>
+          <div id="mount-network" class="panel__body panel__body--network"></div>
+        </section>
       </main>
     </div>
 

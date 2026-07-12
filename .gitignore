@@ -23,6 +23,7 @@ data/secondary-watch-zip.json
 data/events-finder-criteria.json
 data/gmail-intake-token.json
 data/gmail-intake-tokens/
+data/gmail-events-cache.json
 data/facebook-events-cache.json
 data/facebook-billing-log.json
 data/meetup-events-cache.json
@@ -30,6 +31,10 @@ data/multiverse-events-cache.json
 data/luma-events-cache.json
 data/gcal-ics-events-cache.json
 data/telegram-events-offset.json
+data/telegram-intake.db
+data/telegram-intake.db-wal
+data/telegram-intake.db-shm
+data/telegram-intake-media/
 data/events-finder.db
 data/events-finder.db-wal
 data/events-finder.db-shm
@@ -38,6 +43,16 @@ data/fear-greed-last.json
 data/tool-library.json
 data/tool-library-assets/*
 !data/tool-library-assets/.gitkeep
+data/network-contacts.json
+data/network-notes.json
+data/network-organizations.json
+data/network-groups.json
+data/network.db
+data/network.db-wal
+data/network.db-shm
+data/network-assets/*
+!data/network-assets/.gitkeep
+!data/network-assets/julia-hasty.jpg
 data/web-catalog.json
 data/web-catalog.json.tmp
 data/dev-notes.md

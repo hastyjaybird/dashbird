@@ -58,6 +58,7 @@ import { startWebCatalogDiscoveryWorker } from './lib/web-catalog-discovery.js';
 import { startFacebookEventsWeeklyScheduler } from './lib/events-finder-facebook.js';
 import { startTelegramEventsPoller } from './lib/events-finder-telegram.js';
 import eventsFinderTelegramRouter from './routes/events-finder-telegram.js';
+import networkRouter from './routes/network.js';
 import devNotesRouter from './routes/dev-notes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -137,6 +138,7 @@ app.use('/api/events-finder-gmail', eventsFinderGmailRouter);
 app.use('/api/events-finder-sources', eventsFinderSourcesRouter);
 app.use('/api/events-finder/events', eventsFinderEventsRouter);
 app.use('/api/events-finder/telegram', eventsFinderTelegramRouter);
+app.use('/api/network', networkRouter);
 app.use('/api/open-desktop', openDesktopRouter);
 app.use('/api/tool-library', toolLibraryRouter);
 app.use('/api/web-catalog', webCatalogRouter);
@@ -160,13 +162,26 @@ app.listen(port, '0.0.0.0', () => {
   if (!existsSync('/.dockerenv')) {
     printLanUrl();
   }
-  startSuperbloomAgent();
-  startGeospaceMagnetosphereMonitor();
-  startWebCatalogWatchPoller();
-  startWebCatalogDiscoveryWorker();
-  startFacebookEventsWeeklyScheduler();
-  startTelegramEventsPoller();
-  warmGoogleCalendarCache();
-  // Prime ZIP → lat/lon so the first page-load fan-out does not wait on Zippopotam.
-  void resolveDashboardWeatherLatLon().catch(() => {});
+  // Stagger background warmers so the first browser paint is never blocked on
+  // sync SQLite / HDF5 / catalog probes after listen().
+  const kick = (fn, delayMs) => {
+    const t = setTimeout(() => {
+      try {
+        fn();
+      } catch (e) {
+        console.warn('[startup]', e?.message || e);
+      }
+    }, delayMs);
+    if (typeof t.unref === 'function') t.unref();
+  };
+  kick(() => startSuperbloomAgent(), 50);
+  kick(() => startGeospaceMagnetosphereMonitor(), 200);
+  kick(() => startWebCatalogWatchPoller(), 400);
+  kick(() => startWebCatalogDiscoveryWorker(), 600);
+  kick(() => startFacebookEventsWeeklyScheduler(), 800);
+  kick(() => startTelegramEventsPoller(), 1000);
+  kick(() => warmGoogleCalendarCache(), 1200);
+  kick(() => {
+    void resolveDashboardWeatherLatLon().catch(() => {});
+  }, 300);
 });

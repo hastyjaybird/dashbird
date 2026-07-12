@@ -1,6 +1,10 @@
 /**
  * Events finder — Telegram bot intake (text, voice, flyer screenshots).
  * Long-polls getUpdates so LAN Docker does not need a public webhook URL.
+ *
+ * Durable intake: raw updates (+ media) are written to data/telegram-intake.db
+ * before the Telegram offset advances, then drained/replayed so messages survive
+ * the Bot API ~24h pending-update retention window and process crashes.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8,11 +12,33 @@ import { fileURLToPath } from 'node:url';
 import { upsertEventsFinderEvents } from './events-finder-store.js';
 import {
   TELEGRAM_EVENT_LOGO_PATH,
-  enforceInviteIngestWindow,
+  INVITE_VISION_MAX_IMAGES,
   parseInviteImage,
+  parseInviteImages,
   parseInviteText,
   transcribeInviteAudio,
 } from './events-finder-invite-parse.js';
+import { classifyTelegramMessage, parseTelegramTypeOverride } from './telegram-message-classify.js';
+import { createPanelTodo } from './vikunja-client.js';
+import { addNetworkNote } from './network-notes-store.js';
+import { upsertFromTelegram } from './network-contacts-store.js';
+import { enrichContact } from './network-enrich.js';
+import {
+  attachIntakeMediaToMessage,
+  deleteTelegramAlbumBuffer,
+  enqueueTelegramUpdate,
+  extractTelegramMediaRefs,
+  getAttachedIntakeMedia,
+  listTelegramAlbumBuffers,
+  listTelegramIntakeReady,
+  loadTelegramAlbumBuffer,
+  markTelegramIntakeDone,
+  markTelegramIntakeFailed,
+  markTelegramIntakeProcessing,
+  saveIntakeMediaFile,
+  telegramIntakeQueueStats,
+  upsertTelegramAlbumBuffer,
+} from './telegram-intake-queue.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 const TG_API = 'https://api.telegram.org';
@@ -24,6 +50,20 @@ let pollAbort = null;
 let pollInFlight = false;
 /** @type {number | null} */
 let updateOffset = null;
+
+/**
+ * In-memory album debounce timers (state itself lives in SQLite).
+ * @type {Map<string, {
+ *   mediaGroupId: string,
+ *   chatId: string | number,
+ *   timer: ReturnType<typeof setTimeout> | null,
+ *   env: NodeJS.ProcessEnv,
+ * }>}
+ */
+const pendingAlbums = new Map();
+
+/** Wait after last album photo before parsing (ms). */
+const ALBUM_DEBOUNCE_MS = 1500;
 
 /**
  * @param {NodeJS.ProcessEnv} [env]
@@ -161,6 +201,20 @@ export async function telegramSendMessage(chatId, text, env = process.env) {
 }
 
 /**
+ * @param {string} ext
+ */
+function mimeFromExt(ext) {
+  const e = String(ext || '').toLowerCase();
+  if (e === '.jpg' || e === '.jpeg') return 'image/jpeg';
+  if (e === '.png') return 'image/png';
+  if (e === '.webp') return 'image/webp';
+  if (e === '.ogg' || e === '.oga') return 'audio/ogg';
+  if (e === '.mp3') return 'audio/mpeg';
+  if (e === '.mp4') return 'video/mp4';
+  return 'application/octet-stream';
+}
+
+/**
  * @param {string} fileId
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {Promise<{ buffer: Buffer, filePath: string, mimeType: string }>}
@@ -178,14 +232,81 @@ async function downloadTelegramFile(fileId, env = process.env) {
   }
   const ab = await r.arrayBuffer();
   const ext = path.extname(filePath).toLowerCase();
-  let mimeType = 'application/octet-stream';
-  if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
-  else if (ext === '.png') mimeType = 'image/png';
-  else if (ext === '.webp') mimeType = 'image/webp';
-  else if (ext === '.ogg' || ext === '.oga') mimeType = 'audio/ogg';
-  else if (ext === '.mp3') mimeType = 'audio/mpeg';
-  else if (ext === '.mp4') mimeType = 'video/mp4';
-  return { buffer: Buffer.from(ab), filePath, mimeType };
+  return { buffer: Buffer.from(ab), filePath, mimeType: mimeFromExt(ext) };
+}
+
+/**
+ * Prefer durable intake media (downloaded before offset ack) over live Telegram fetch.
+ * @param {any} message
+ * @param {string} kind
+ * @param {string | null | undefined} fileId
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<{ buffer: Buffer, filePath: string, mimeType: string, publicPath?: string | null }>}
+ */
+async function resolveTelegramMedia(message, kind, fileId, env = process.env) {
+  const attached = getAttachedIntakeMedia(message, kind);
+  if (attached?.localPath) {
+    const buffer = fs.readFileSync(attached.localPath);
+    return {
+      buffer,
+      filePath: attached.localPath,
+      mimeType: attached.mimeType || mimeFromExt(path.extname(attached.localPath)),
+      publicPath: attached.publicPath || null,
+    };
+  }
+  if (!fileId) throw new Error('telegram_file_id_missing');
+  const file = await downloadTelegramFile(fileId, env);
+  return { ...file, publicPath: null };
+}
+
+/**
+ * Download media for a raw update and persist under data/telegram-intake-media
+ * before acknowledging the Telegram offset.
+ * @param {any} update
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function downloadUpdateMediaForIntake(update, env = process.env) {
+  const message = update?.message || update?.edited_message;
+  const refs = extractTelegramMediaRefs(message);
+  if (!refs.length) return null;
+
+  const updateId = Number(update?.update_id);
+  /** @type {Array<{ kind: string, fileId: string, localPath: string, mimeType: string, publicPath?: string | null }>} */
+  const out = [];
+  for (const ref of refs) {
+    try {
+      const file = await downloadTelegramFile(ref.fileId, env);
+      const ext = path.extname(file.filePath) || ref.preferredExt || '';
+      const localPath = saveIntakeMediaFile(
+        file.buffer,
+        `u${updateId}_${ref.kind}${ext || '.bin'}`,
+        env,
+      );
+      /** @type {string | null} */
+      let publicPath = null;
+      if (ref.kind === 'photo' || ref.kind === 'document_image') {
+        publicPath = saveMediaPublic(
+          file.buffer,
+          `${message?.chat?.id || 'chat'}_${message?.message_id || updateId}${ext || '.jpg'}`,
+          env,
+        );
+      }
+      out.push({
+        kind: ref.kind,
+        fileId: ref.fileId,
+        localPath,
+        mimeType: file.mimeType,
+        publicPath,
+      });
+    } catch (e) {
+      console.warn(
+        '[telegram-events] intake media download failed',
+        ref.kind,
+        e?.message || e,
+      );
+    }
+  }
+  return out.length ? out : null;
 }
 
 /**
@@ -225,11 +346,14 @@ function chatAllowed(chatId, env = process.env) {
 }
 
 /**
- * Build a stable event id from a Telegram message.
+ * Build a stable event id from a Telegram message or album.
  * @param {any} message
+ * @param {{ mediaGroupId?: string | null }} [opts]
  */
-function eventIdForMessage(message) {
+function eventIdForMessage(message, opts = {}) {
   const chatId = message?.chat?.id;
+  const albumId = clean(opts.mediaGroupId) || clean(message?.media_group_id);
+  if (albumId) return `telegram:${chatId}:album:${albumId}`;
   const messageId = message?.message_id;
   return `telegram:${chatId}:${messageId}`;
 }
@@ -237,15 +361,25 @@ function eventIdForMessage(message) {
 /**
  * @param {Record<string, unknown>} partial
  * @param {any} message
- * @param {{ parseVia: string, transcript?: string | null, imageUrl?: string | null }} meta
+ * @param {{
+ *   parseVia: string,
+ *   transcript?: string | null,
+ *   imageUrl?: string | null,
+ *   mediaGroupId?: string | null,
+ *   messageIds?: Array<number | string>,
+ *   imageUrls?: string[],
+ * }} meta
  */
 function finalizeEvent(partial, message, meta) {
-  const id = eventIdForMessage(message);
+  const id = eventIdForMessage(message, { mediaGroupId: meta.mediaGroupId });
   const imageUrl = meta.imageUrl || TELEGRAM_EVENT_LOGO_PATH;
   const from = message?.from || {};
   const invitedBy =
     clean(/** @type {{ invitedBy?: unknown }} */ (partial).invitedBy)
     || null;
+  const messageIds = Array.isArray(meta.messageIds) && meta.messageIds.length
+    ? meta.messageIds
+    : [message?.message_id].filter((v) => v != null);
 
   return {
     ...partial,
@@ -256,6 +390,9 @@ function finalizeEvent(partial, message, meta) {
     raw: {
       chatId: message?.chat?.id ?? null,
       messageId: message?.message_id ?? null,
+      messageIds,
+      mediaGroupId: meta.mediaGroupId || message?.media_group_id || null,
+      imageUrls: Array.isArray(meta.imageUrls) ? meta.imageUrls : [imageUrl],
       fromId: from.id ?? null,
       fromUsername: from.username ?? null,
       parseVia: meta.parseVia,
@@ -301,7 +438,284 @@ function formatIngestReply(event) {
 }
 
 /**
- * Process one Telegram message into zero or one catalog events.
+ * @param {any} message
+ * @returns {string | null}
+ */
+function imageFileIdFromMessage(message) {
+  const photoId = largestPhotoFileId(message);
+  if (photoId) return photoId;
+  const doc = message?.document;
+  if (doc?.mime_type && String(doc.mime_type).startsWith('image/') && doc.file_id) {
+    return String(doc.file_id);
+  }
+  return null;
+}
+
+/**
+ * @param {string} why
+ * @param {{ transcript?: string | null }} [extra]
+ */
+function ingestFailHint(why, extra = {}) {
+  const hints = {
+    not_an_event: 'That did not look like an event invite.',
+    missing_title: 'Could not find an event name.',
+    missing_start: 'Could not find a date/time.',
+    openrouter_not_configured: 'OPENROUTER_API_KEY is not set on the server.',
+    empty_album: 'Album had no usable images.',
+  };
+  const transcript = extra.transcript ? `\nHeard: “${extra.transcript.slice(0, 200)}”` : '';
+  return `Not ingested: ${hints[why] || why}${transcript}`;
+}
+
+/**
+ * Multi-screenshot album → one catalog event.
+ * @param {any[]} messages
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function processTelegramAlbum(messages, env = process.env) {
+  const list = (Array.isArray(messages) ? messages : [])
+    .filter(Boolean)
+    .sort((a, b) => Number(a?.message_id || 0) - Number(b?.message_id || 0));
+  if (!list.length) return { ok: false, error: 'empty_album' };
+
+  const primary = list[0];
+  const chatId = primary?.chat?.id;
+  const mediaGroupId = clean(primary?.media_group_id) || clean(list.find((m) => m?.media_group_id)?.media_group_id);
+  if (!chatAllowed(chatId, env)) {
+    return { ok: false, error: 'chat_not_allowed' };
+  }
+
+  const caption = list.map((m) => String(m?.caption || '').trim()).filter(Boolean).join('\n');
+
+  /** @type {Array<{ mimeType: string, base64: string, caption?: string, publicPath: string, messageId: unknown }>} */
+  const downloaded = [];
+  try {
+    for (const message of list) {
+      if (downloaded.length >= INVITE_VISION_MAX_IMAGES) break;
+      const fileId = imageFileIdFromMessage(message);
+      const kind = largestPhotoFileId(message) ? 'photo' : 'document_image';
+      if (!fileId && !getAttachedIntakeMedia(message, 'photo') && !getAttachedIntakeMedia(message, 'document_image')) {
+        continue;
+      }
+      const file = await resolveTelegramMedia(message, kind, fileId, env);
+      const publicPath =
+        file.publicPath
+        || saveMediaPublic(
+          file.buffer,
+          `${message.chat.id}_${message.message_id}${path.extname(file.filePath) || '.jpg'}`,
+          env,
+        );
+      downloaded.push({
+        mimeType: file.mimeType.startsWith('image/') ? file.mimeType : 'image/jpeg',
+        base64: file.buffer.toString('base64'),
+        caption: String(message?.caption || '').trim(),
+        publicPath,
+        messageId: message?.message_id,
+      });
+    }
+  } catch (e) {
+    await telegramSendMessage(chatId, `Ingest error: ${String(e?.message || e).slice(0, 200)}`, env);
+    return { ok: false, error: String(e?.message || e) };
+  }
+
+  if (!downloaded.length) {
+    await telegramSendMessage(chatId, ingestFailHint('empty_album'), env);
+    return { ok: false, error: 'empty_album' };
+  }
+
+  const imageUrl = downloaded[0].publicPath;
+  const imageUrls = downloaded.map((d) => d.publicPath);
+  let parsed;
+  try {
+    parsed = await parseInviteImages(
+      downloaded.map((d) => ({
+        mimeType: d.mimeType,
+        base64: d.base64,
+        caption: d.caption || caption,
+      })),
+      env,
+      { defaultImageUrl: imageUrl },
+    );
+  } catch (e) {
+    await telegramSendMessage(chatId, `Ingest error: ${String(e?.message || e).slice(0, 200)}`, env);
+    return { ok: false, error: String(e?.message || e) };
+  }
+
+  if (!parsed.ok || !parsed.event) {
+    const why = parsed.error || 'parse_failed';
+    await telegramSendMessage(chatId, ingestFailHint(why), env);
+    return { ok: false, error: why };
+  }
+
+  const event = finalizeEvent(parsed.event, primary, {
+    parseVia: downloaded.length > 1 ? 'photo_album' : 'photo',
+    imageUrl,
+    mediaGroupId,
+    messageIds: list.map((m) => m?.message_id).filter((v) => v != null),
+    imageUrls,
+  });
+  if (parsed.event.invitedBy) event.invitedBy = parsed.event.invitedBy;
+
+  const upsert = upsertEventsFinderEvents([event], env);
+  const reply = formatIngestReply(event);
+  const albumNote = downloaded.length > 1 ? `\n(${downloaded.length} screenshots → one event)` : '';
+  await telegramSendMessage(chatId, `${reply}${albumNote}`, env);
+
+  return {
+    ok: true,
+    event,
+    upserted: upsert?.upserted ?? 1,
+    parseVia: downloaded.length > 1 ? 'photo_album' : 'photo',
+    albumSize: downloaded.length,
+  };
+}
+
+/**
+ * Flush a durable album buffer (after debounce or on restart).
+ * @param {string} key
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function flushTelegramAlbumBuffer(key, env = process.env) {
+  const bucket = pendingAlbums.get(key);
+  if (bucket?.timer) {
+    clearTimeout(bucket.timer);
+    bucket.timer = null;
+  }
+  pendingAlbums.delete(key);
+
+  const stored = loadTelegramAlbumBuffer(key, env);
+  const messages = stored?.messages?.length ? stored.messages : [];
+  if (!messages.length) {
+    deleteTelegramAlbumBuffer(key, env);
+    return { ok: false, error: 'empty_album' };
+  }
+
+  // Re-attach durable media saved at intake time.
+  for (const message of messages) {
+    const mid = message?.message_id;
+    const media = mid != null ? stored?.mediaByMessage?.[String(mid)] : null;
+    if (Array.isArray(media) && media.length) {
+      attachIntakeMediaToMessage(message, media);
+    }
+  }
+
+  try {
+    const result = await processTelegramAlbum(messages, env);
+    if (result?.ok) {
+      deleteTelegramAlbumBuffer(key, env);
+    } else {
+      // Keep durable album for retry.
+      console.warn('[telegram-events] album ingest incomplete', result?.error || result);
+      armAlbumFlushTimer(key, new Date(Date.now() + 60_000).toISOString(), env);
+    }
+    return result;
+  } catch (e) {
+    console.warn('[telegram-events] album ingest failed', e?.message || e);
+    armAlbumFlushTimer(key, new Date(Date.now() + 60_000).toISOString(), env);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+/**
+ * Schedule (or reschedule) album flush from durable buffer flush_after.
+ * @param {string} key
+ * @param {string} [flushAfterIso]
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function armAlbumFlushTimer(key, flushAfterIso, env = process.env) {
+  let bucket = pendingAlbums.get(key);
+  if (!bucket) {
+    const [chatId, mediaGroupId] = String(key).split(/:(.+)/);
+    bucket = {
+      mediaGroupId: mediaGroupId || key,
+      chatId: chatId || key,
+      timer: null,
+      env,
+    };
+    pendingAlbums.set(key, bucket);
+  }
+  bucket.env = env;
+  if (bucket.timer) clearTimeout(bucket.timer);
+
+  const due = flushAfterIso ? Date.parse(flushAfterIso) : Date.now();
+  const delay = Number.isFinite(due) ? Math.max(0, due - Date.now()) : ALBUM_DEBOUNCE_MS;
+  bucket.timer = setTimeout(() => {
+    flushTelegramAlbumBuffer(key, bucket.env).catch((e) => {
+      console.warn('[telegram-events] album flush failed', e?.message || e);
+    });
+  }, delay);
+  if (typeof bucket.timer.unref === 'function') bucket.timer.unref();
+}
+
+/**
+ * Buffer album photos until Telegram finishes sending the media group.
+ * Persists to SQLite so restarts mid-album do not lose photos.
+ * @param {any} message
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function queueTelegramAlbumMessage(message, env = process.env) {
+  const mediaGroupId = clean(message?.media_group_id);
+  const chatId = message?.chat?.id;
+  if (!mediaGroupId || chatId == null) {
+    return processTelegramEventMessage(message, env);
+  }
+
+  const key = `${chatId}:${mediaGroupId}`;
+  const mediaMap = message?._dashbirdIntakeMedia;
+  /** @type {Array<{ kind: string, fileId: string, localPath: string, mimeType: string, publicPath?: string | null }> | null} */
+  let mediaList = null;
+  if (mediaMap && typeof mediaMap === 'object') {
+    mediaList = Object.entries(mediaMap).map(([kind, v]) => ({
+      kind,
+      fileId: String(/** @type {{ fileId?: string }} */ (v)?.fileId || ''),
+      localPath: String(/** @type {{ localPath?: string }} */ (v)?.localPath || ''),
+      mimeType: String(/** @type {{ mimeType?: string }} */ (v)?.mimeType || 'application/octet-stream'),
+      publicPath: /** @type {{ publicPath?: string | null }} */ (v)?.publicPath || null,
+    })).filter((m) => m.localPath);
+  }
+
+  // Strip non-enumerable helper before JSON persistence (re-attached on flush).
+  const plain = JSON.parse(JSON.stringify(message));
+  const stored = upsertTelegramAlbumBuffer(
+    key,
+    {
+      chatId,
+      mediaGroupId,
+      message: plain,
+      media: mediaList,
+      debounceMs: ALBUM_DEBOUNCE_MS,
+    },
+    env,
+  );
+  armAlbumFlushTimer(key, stored.flushAfter, env);
+
+  return Promise.resolve({
+    ok: true,
+    queued: true,
+    reason: 'album_buffer',
+    mediaGroupId,
+    buffered: stored.buffered,
+  });
+}
+
+/**
+ * Re-arm album flush timers from SQLite (call on poller start).
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function restoreTelegramAlbumBuffers(env = process.env) {
+  const albums = listTelegramAlbumBuffers(env);
+  for (const album of albums) {
+    armAlbumFlushTimer(album.albumKey, album.flushAfter, env);
+  }
+  if (albums.length) {
+    console.log(`[telegram-events] restored ${albums.length} album buffer(s)`);
+  }
+  return albums.length;
+}
+
+/**
+ * Process one Telegram message: classify → event | todo | note | contact.
+ * Flyer photos/albums still prefer the event path.
  * @param {any} message
  * @param {NodeJS.ProcessEnv} [env]
  */
@@ -315,7 +729,7 @@ export async function processTelegramEventMessage(message, env = process.env) {
     await telegramSendMessage(
       chatId,
       allowed
-        ? 'Dashbird Events intake is ready. Send a flyer screenshot, voice note, or text like:\n“Event on July 18 called Rooftop Jazz invited by Sam”'
+        ? 'Dashbird intake is ready. Send text, voice, or a flyer photo.\nI classify as event / todo / note / contact.\nOverrides: /event /todo /note /contact …\nAlbums of screenshots → one event.'
         : `Your Telegram chat id is ${chatId}.\nAdd it to TELEGRAM_ALLOWED_CHAT_IDS in Dashbird .env, then restart.`,
       env,
     );
@@ -325,7 +739,7 @@ export async function processTelegramEventMessage(message, env = process.env) {
   if (text === '/help') {
     await telegramSendMessage(
       chatId,
-      'Send:\n• Photo of a flyer/invite (optional caption)\n• Voice note describing the event\n• Text: “event on DATE called TITLE invited by NAME”\n\nNo flyer graphic → card uses the Telegram logo.',
+      'Send:\n• Flyer photo / album → event\n• Voice or text → auto-classified\n• /todo buy milk\n• /note idea for weekend\n• /contact Sam, met at party, 555-…\n• /event July 18 Rooftop Jazz invited by Maya',
       env,
     );
     return { ok: true, skipped: true, reason: 'help' };
@@ -340,48 +754,53 @@ export async function processTelegramEventMessage(message, env = process.env) {
     return { ok: false, error: 'chat_not_allowed' };
   }
 
+  // Albums arrive as separate messages sharing media_group_id — merge them as events.
+  if (clean(message?.media_group_id) && imageFileIdFromMessage(message)) {
+    return queueTelegramAlbumMessage(message, env);
+  }
+
   const photoId = largestPhotoFileId(message);
   const voiceId = message?.voice?.file_id
     ? String(message.voice.file_id)
     : message?.audio?.file_id
       ? String(message.audio.file_id)
       : null;
-  const doc = message?.document;
-  const docIsImage =
-    doc?.mime_type && String(doc.mime_type).startsWith('image/') && doc.file_id
+  const docIsImage = (() => {
+    const doc = message?.document;
+    return doc?.mime_type && String(doc.mime_type).startsWith('image/') && doc.file_id
       ? String(doc.file_id)
       : null;
+  })();
 
-  /** @type {{ ok: boolean, error?: string | null, event?: Record<string, unknown> | null, confidence?: number }} */
-  let parsed = { ok: false, error: 'unsupported_message', event: null };
+  // Flyer / image → event path (legacy), unless caption has an explicit non-event override.
+  if (
+    photoId
+    || docIsImage
+    || getAttachedIntakeMedia(message, 'photo')
+    || getAttachedIntakeMedia(message, 'document_image')
+  ) {
+    const override = parseTelegramTypeOverride(caption || text);
+    if (override && override.type !== 'event') {
+      return routeNonEventType(override.type, override.rest || caption || text, chatId, env, {
+        force: true,
+      });
+    }
+    return ingestTelegramEventFromMessage(message, env, {
+      photoId: photoId || docIsImage || '',
+      caption,
+      text,
+    });
+  }
+
   /** @type {string | null} */
-  let imageUrl = TELEGRAM_EVENT_LOGO_PATH;
+  let classifyText = text || caption || null;
   /** @type {string | null} */
   let transcript = null;
-  let parseVia = 'unknown';
 
-  try {
-    if (photoId || docIsImage) {
-      parseVia = 'photo';
-      const file = await downloadTelegramFile(photoId || docIsImage, env);
-      const publicPath = saveMediaPublic(
-        file.buffer,
-        `${message.chat.id}_${message.message_id}${path.extname(file.filePath) || '.jpg'}`,
-        env,
-      );
-      imageUrl = publicPath;
-      parsed = await parseInviteImage(
-        {
-          mimeType: file.mimeType.startsWith('image/') ? file.mimeType : 'image/jpeg',
-          base64: file.buffer.toString('base64'),
-          caption: caption || text,
-        },
-        env,
-        { defaultImageUrl: publicPath },
-      );
-    } else if (voiceId) {
-      parseVia = 'voice';
-      const file = await downloadTelegramFile(voiceId, env);
+  if (voiceId || getAttachedIntakeMedia(message, 'voice') || getAttachedIntakeMedia(message, 'audio')) {
+    try {
+      const voiceKind = message?.voice?.file_id || getAttachedIntakeMedia(message, 'voice') ? 'voice' : 'audio';
+      const file = await resolveTelegramMedia(message, voiceKind, voiceId, env);
       const tr = await transcribeInviteAudio(
         file.buffer,
         { filename: path.basename(file.filePath) || 'voice.ogg', mimeType: file.mimeType },
@@ -396,72 +815,312 @@ export async function processTelegramEventMessage(message, env = process.env) {
         return { ok: false, error: tr.error || 'transcribe_failed' };
       }
       transcript = tr.text || null;
-      parsed = await parseInviteText(transcript, env, { defaultImageUrl: TELEGRAM_EVENT_LOGO_PATH });
-      imageUrl = TELEGRAM_EVENT_LOGO_PATH;
-    } else if (text || caption) {
-      parseVia = 'text';
-      parsed = await parseInviteText(text || caption, env, { defaultImageUrl: TELEGRAM_EVENT_LOGO_PATH });
-      imageUrl = TELEGRAM_EVENT_LOGO_PATH;
-    } else {
-      await telegramSendMessage(
-        chatId,
-        'Send a flyer photo, voice note, or text invite. /help for examples.',
-        env,
-      );
-      return { ok: false, error: 'unsupported_message' };
+      classifyText = transcript;
+    } catch (e) {
+      await telegramSendMessage(chatId, `Ingest error: ${String(e?.message || e).slice(0, 200)}`, env);
+      return { ok: false, error: String(e?.message || e) };
     }
+  }
+
+  if (!classifyText) {
+    await telegramSendMessage(
+      chatId,
+      'Send a flyer photo, voice note, or text. /help for examples.',
+      env,
+    );
+    return { ok: false, error: 'unsupported_message' };
+  }
+
+  let classified;
+  try {
+    classified = await classifyTelegramMessage(classifyText, env);
   } catch (e) {
-    await telegramSendMessage(chatId, `Ingest error: ${String(e?.message || e).slice(0, 200)}`, env);
+    await telegramSendMessage(chatId, `Classifier error: ${String(e?.message || e).slice(0, 200)}`, env);
     return { ok: false, error: String(e?.message || e) };
   }
 
-  parsed = enforceInviteIngestWindow(parsed, env);
-
-  if (!parsed.ok || !parsed.event) {
-    const why = parsed.error || 'parse_failed';
-    const hints = {
-      not_an_event: 'That did not look like an event invite.',
-      missing_title: 'Could not find an event name.',
-      missing_start: 'Could not find a date/time.',
-      outside_ingest_window: 'Date is outside the ingest window (past few days → ~30 days ahead).',
-      openrouter_not_configured: 'OPENROUTER_API_KEY is not set on the server.',
-    };
+  if (!classified.ok || !classified.type) {
     await telegramSendMessage(
       chatId,
-      `Not ingested: ${hints[why] || why}${transcript ? `\nHeard: “${transcript.slice(0, 200)}”` : ''}`,
+      `Could not classify (${classified.error || 'unknown'}). Try /event /todo /note /contact.`,
       env,
     );
-    return { ok: false, error: why, transcript };
+    return { ok: false, error: classified.error || 'classify_failed', transcript };
   }
 
-  const event = finalizeEvent(parsed.event, message, { parseVia, transcript, imageUrl });
-  // Keep invitedBy on the top-level for replies / payload.
-  if (parsed.event.invitedBy) event.invitedBy = parsed.event.invitedBy;
+  const confidence = Number(classified.confidence) || 0;
+  if (confidence < 0.55 && classified.reason !== 'command_override') {
+    await telegramSendMessage(
+      chatId,
+      `Not sure if this is an event, todo, note, or contact (confidence ${confidence.toFixed(2)}).\nReply with /event /todo /note or /contact plus the text.`,
+      env,
+    );
+    return { ok: false, error: 'low_confidence', confidence, type: classified.type, transcript };
+  }
 
+  if (classified.type === 'event') {
+    return ingestTelegramEventFromText(classifyText, message, env, { transcript, parseVia: voiceId ? 'voice' : 'text' });
+  }
+
+  return routeNonEventType(classified.type, classifyText, chatId, env, { classified, transcript });
+}
+
+/**
+ * @param {string} type
+ * @param {string} text
+ * @param {number|string} chatId
+ * @param {NodeJS.ProcessEnv} env
+ * @param {{ classified?: object, transcript?: string | null, force?: boolean }} [meta]
+ */
+async function routeNonEventType(type, text, chatId, env, meta = {}) {
+  const classified = meta.classified || {};
+
+  if (type === 'todo') {
+    const todoText = String(classified.todoText || text || '').trim().slice(0, 280);
+    try {
+      const item = await createPanelTodo(todoText, env);
+      await telegramSendMessage(chatId, `Todo added: ${item.text}`, env);
+      return { ok: true, type: 'todo', todo: item };
+    } catch (e) {
+      await telegramSendMessage(
+        chatId,
+        `Todo failed: ${String(e?.code || e?.message || e).slice(0, 200)}`,
+        env,
+      );
+      return { ok: false, error: String(e?.code || e?.message || e), type: 'todo' };
+    }
+  }
+
+  if (type === 'note') {
+    const noteText = String(classified.noteText || text || '').trim();
+    try {
+      const note = await addNetworkNote({ text: noteText, source: 'telegram' }, env);
+      await telegramSendMessage(chatId, `Note saved (${note.id.slice(0, 8)}…):\n${note.text.slice(0, 300)}`, env);
+      return { ok: true, type: 'note', note };
+    } catch (e) {
+      await telegramSendMessage(chatId, `Note failed: ${String(e?.message || e).slice(0, 200)}`, env);
+      return { ok: false, error: String(e?.message || e), type: 'note' };
+    }
+  }
+
+  if (type === 'contact') {
+    const c = classified.contact && typeof classified.contact === 'object' ? classified.contact : {};
+    const displayName =
+      String(c.displayName || '').trim()
+      || String(text).split(/[,\n]/)[0]?.trim()
+      || '';
+    if (!displayName) {
+      await telegramSendMessage(chatId, 'Contact needs a name. Try: /contact Jane Doe, met at …', env);
+      return { ok: false, error: 'contact_name_required', type: 'contact' };
+    }
+    try {
+      const contact = await upsertFromTelegram(
+        {
+          displayName,
+          aliases: Array.isArray(c.aliases) ? c.aliases : [],
+          kinds: c.kind === 'business' ? ['business'] : ['friend'],
+          notes: String(c.notes || text).trim(),
+          org: c.org || '',
+          title: c.title || '',
+          tags: ['telegram'],
+          channels: {
+            email: c.email || null,
+            phone: c.phone || null,
+            telegram: c.telegram || null,
+            linkedin: c.linkedin || null,
+          },
+        },
+        env,
+      );
+      // Best-effort enrich; do not fail the ingest if enrichment fails.
+      let enriched = contact;
+      try {
+        const er = await enrichContact(contact.id, {}, env);
+        if (er.ok && er.contact) enriched = er.contact;
+      } catch {
+        // ignore
+      }
+      await telegramSendMessage(
+        chatId,
+        `Contact saved: ${enriched.displayName}${enriched.org ? ` (${enriched.org})` : ''}`,
+        env,
+      );
+      return { ok: true, type: 'contact', contact: enriched };
+    } catch (e) {
+      await telegramSendMessage(chatId, `Contact failed: ${String(e?.message || e).slice(0, 200)}`, env);
+      return { ok: false, error: String(e?.message || e), type: 'contact' };
+    }
+  }
+
+  await telegramSendMessage(chatId, `Unknown type “${type}”. Use /event /todo /note /contact.`, env);
+  return { ok: false, error: 'unknown_type', type };
+}
+
+/**
+ * @param {string} text
+ * @param {any} message
+ * @param {NodeJS.ProcessEnv} env
+ * @param {{ transcript?: string | null, parseVia?: string }} meta
+ */
+async function ingestTelegramEventFromText(text, message, env, meta = {}) {
+  const chatId = message?.chat?.id;
+  const parsed = await parseInviteText(text, env, { defaultImageUrl: TELEGRAM_EVENT_LOGO_PATH });
+  if (!parsed.ok || !parsed.event) {
+    const why = parsed.error || 'parse_failed';
+    await telegramSendMessage(chatId, ingestFailHint(why, { transcript: meta.transcript }), env);
+    return { ok: false, error: why, transcript: meta.transcript, type: 'event' };
+  }
+  const event = finalizeEvent(parsed.event, message, {
+    parseVia: meta.parseVia || 'text',
+    transcript: meta.transcript || null,
+    imageUrl: TELEGRAM_EVENT_LOGO_PATH,
+  });
+  if (parsed.event.invitedBy) event.invitedBy = parsed.event.invitedBy;
   const upsert = upsertEventsFinderEvents([event], env);
   await telegramSendMessage(chatId, formatIngestReply(event), env);
-
   return {
     ok: true,
+    type: 'event',
     event,
     upserted: upsert?.upserted ?? 1,
-    parseVia,
-    transcript,
+    parseVia: meta.parseVia || 'text',
+    transcript: meta.transcript || null,
   };
 }
 
 /**
+ * @param {any} message
+ * @param {NodeJS.ProcessEnv} env
+ * @param {{ photoId: string, caption: string, text: string }} media
+ */
+async function ingestTelegramEventFromMessage(message, env, media) {
+  const chatId = message?.chat?.id;
+  /** @type {{ ok: boolean, error?: string | null, event?: Record<string, unknown> | null }} */
+  let parsed = { ok: false, error: 'unsupported_message', event: null };
+  /** @type {string | null} */
+  let imageUrl = TELEGRAM_EVENT_LOGO_PATH;
+  const parseVia = 'photo';
+
+  try {
+    const kind = largestPhotoFileId(message) ? 'photo' : 'document_image';
+    const file = await resolveTelegramMedia(message, kind, media.photoId, env);
+    const publicPath =
+      file.publicPath
+      || saveMediaPublic(
+        file.buffer,
+        `${message.chat.id}_${message.message_id}${path.extname(file.filePath) || '.jpg'}`,
+        env,
+      );
+    imageUrl = publicPath;
+    parsed = await parseInviteImage(
+      {
+        mimeType: file.mimeType.startsWith('image/') ? file.mimeType : 'image/jpeg',
+        base64: file.buffer.toString('base64'),
+        caption: media.caption || media.text,
+      },
+      env,
+      { defaultImageUrl: publicPath },
+    );
+  } catch (e) {
+    await telegramSendMessage(chatId, `Ingest error: ${String(e?.message || e).slice(0, 200)}`, env);
+    return { ok: false, error: String(e?.message || e), type: 'event' };
+  }
+
+  if (!parsed.ok || !parsed.event) {
+    const why = parsed.error || 'parse_failed';
+    await telegramSendMessage(chatId, ingestFailHint(why), env);
+    return { ok: false, error: why, type: 'event' };
+  }
+
+  const event = finalizeEvent(parsed.event, message, { parseVia, imageUrl });
+  if (parsed.event.invitedBy) event.invitedBy = parsed.event.invitedBy;
+  const upsert = upsertEventsFinderEvents([event], env);
+  await telegramSendMessage(chatId, formatIngestReply(event), env);
+  return {
+    ok: true,
+    type: 'event',
+    event,
+    upserted: upsert?.upserted ?? 1,
+    parseVia,
+  };
+}
+
+
+/**
  * @param {any} update
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {Array<{ kind: string, fileId: string, localPath: string, mimeType: string, publicPath?: string | null }> | null} [media]
  */
-export async function handleTelegramUpdate(update, env = process.env) {
+export async function handleTelegramUpdate(update, env = process.env, media = null) {
   const message = update?.message || update?.edited_message;
   if (!message) return { ok: true, skipped: true, reason: 'no_message' };
+  if (media?.length) attachIntakeMediaToMessage(message, media);
   return processTelegramEventMessage(message, env);
 }
 
 /**
- * One long-poll cycle.
+ * Errors that should not burn endless retries (allowlist / empty junk).
+ * Classify/parse failures stay queued for retry.
+ * @param {unknown} result
+ */
+function isPermanentIntakeFailure(result) {
+  const err = String(/** @type {{ error?: unknown }} */ (result)?.error || '');
+  return (
+    err === 'chat_not_allowed'
+    || err === 'unsupported_message'
+    || err === 'unknown_type'
+    || err === 'contact_name_required'
+  );
+}
+
+/**
+ * Drain durable queue: classify/parse from disk, keep failures for retry.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function drainTelegramIntakeQueue(env = process.env) {
+  const ready = listTelegramIntakeReady(env, { limit: 25 });
+  let handled = 0;
+  let failed = 0;
+  for (const item of ready) {
+    if (!item.payload) {
+      markTelegramIntakeFailed(item.updateId, 'invalid_payload_json', env, {
+        attempts: item.attempts + 1,
+      });
+      failed += 1;
+      continue;
+    }
+    markTelegramIntakeProcessing(item.updateId, env);
+    try {
+      const result = await handleTelegramUpdate(item.payload, env, item.media);
+      if (result?.ok) {
+        const status = result?.reason === 'album_buffer' ? 'album_buffered' : 'done';
+        markTelegramIntakeDone(item.updateId, result, env, { status });
+        handled += 1;
+      } else if (isPermanentIntakeFailure(result)) {
+        markTelegramIntakeDone(item.updateId, result, env, { status: 'done' });
+        handled += 1;
+      } else {
+        markTelegramIntakeFailed(
+          item.updateId,
+          /** @type {{ error?: unknown }} */ (result)?.error || 'process_failed',
+          env,
+          { attempts: item.attempts + 1 },
+        );
+        failed += 1;
+      }
+    } catch (e) {
+      markTelegramIntakeFailed(item.updateId, e?.message || e, env, {
+        attempts: item.attempts + 1,
+      });
+      console.warn('[telegram-events] intake drain failed', e?.message || e);
+      failed += 1;
+    }
+  }
+  return { ok: true, ready: ready.length, handled, failed };
+}
+
+/**
+ * Persist raw updates (+ media) before acknowledging Telegram offset, then drain.
  * @param {NodeJS.ProcessEnv} [env]
  */
 export async function pollTelegramEventsOnce(env = process.env) {
@@ -478,20 +1137,43 @@ export async function pollTelegramEventsOnce(env = process.env) {
 
   const updates = await tgApi('getUpdates', params, env);
   const list = Array.isArray(updates) ? updates : [];
-  let handled = 0;
+  let enqueued = 0;
+  let ackFailed = 0;
+
   for (const update of list) {
     const updateId = Number(update?.update_id);
-    if (Number.isFinite(updateId)) {
-      saveOffset(updateId + 1, env);
+    if (!Number.isFinite(updateId)) {
+      console.warn('[telegram-events] skip update without update_id');
+      continue;
     }
     try {
-      await handleTelegramUpdate(update, env);
-      handled += 1;
+      // 1) Download media while Telegram still has the update.
+      const media = await downloadUpdateMediaForIntake(update, env);
+      // 2) Durable write — only then acknowledge (advance offset).
+      enqueueTelegramUpdate(update, media, env);
+      saveOffset(updateId + 1, env);
+      enqueued += 1;
     } catch (e) {
-      console.warn('[telegram-events] update failed', e?.message || e);
+      // Do NOT advance offset — Telegram will redeliver until we can persist.
+      ackFailed += 1;
+      console.warn(
+        '[telegram-events] durable enqueue failed; offset not advanced',
+        updateId,
+        e?.message || e,
+      );
+      break;
     }
   }
-  return { ok: true, count: list.length, handled };
+
+  const drained = await drainTelegramIntakeQueue(env);
+  return {
+    ok: true,
+    count: list.length,
+    enqueued,
+    ackFailed,
+    handled: drained.handled,
+    drainFailed: drained.failed,
+  };
 }
 
 /**
@@ -513,6 +1195,7 @@ export async function probeTelegramEventsIntake(env = process.env) {
       ingestTest: 'Not wired — bot token missing',
       allowedChatIds: allowed,
       openRouter,
+      queue: telegramIntakeQueueStats(env),
     };
   }
 
@@ -529,6 +1212,7 @@ export async function probeTelegramEventsIntake(env = process.env) {
         bot: me,
         allowedChatIds: allowed,
         openRouter,
+        queue: telegramIntakeQueueStats(env),
       };
     }
     if (!openRouter) {
@@ -541,17 +1225,19 @@ export async function probeTelegramEventsIntake(env = process.env) {
         bot: me,
         allowedChatIds: allowed,
         openRouter,
+        queue: telegramIntakeQueueStats(env),
       };
     }
     return {
       active: true,
       value: `Bot ${username} · polling`,
-      output: `Allowlist ${allowed.length} chat(s). Text, voice, and flyer screenshots → Events catalog.`,
+      output: `Allowlist ${allowed.length} chat(s). Text, voice, and flyer screenshots → Events catalog. Durable intake queue survives Bot API 24h retention.`,
       ingestOk: true,
       ingestTest: `Pass — ${username} ready (${allowed.length} chat id(s))`,
       bot: me,
       allowedChatIds: allowed,
       openRouter,
+      queue: telegramIntakeQueueStats(env),
     };
   } catch (e) {
     return {
@@ -562,6 +1248,7 @@ export async function probeTelegramEventsIntake(env = process.env) {
       ingestTest: `Fail — ${String(e?.message || e).slice(0, 160)}`,
       allowedChatIds: allowed,
       openRouter,
+      queue: telegramIntakeQueueStats(env),
     };
   }
 }
@@ -577,7 +1264,16 @@ export function startTelegramEventsPoller(env = process.env) {
   }
   if (pollTimer) return;
 
-  console.log('[telegram-events] poller starting (long-poll getUpdates)');
+  console.log('[telegram-events] poller starting (long-poll getUpdates + durable intake)');
+  try {
+    restoreTelegramAlbumBuffers(env);
+  } catch (e) {
+    console.warn('[telegram-events] album restore failed', e?.message || e);
+  }
+  // Replay anything left from a prior crash before the first long-poll.
+  drainTelegramIntakeQueue(env).catch((e) => {
+    console.warn('[telegram-events] startup drain failed', e?.message || e);
+  });
 
   const tick = async () => {
     if (pollInFlight) return;
@@ -587,6 +1283,12 @@ export function startTelegramEventsPoller(env = process.env) {
       await pollTelegramEventsOnce(env);
     } catch (e) {
       console.warn('[telegram-events] poll failed', e?.message || e);
+      // Still try to drain leftover durable rows even if getUpdates failed.
+      try {
+        await drainTelegramIntakeQueue(env);
+      } catch (drainErr) {
+        console.warn('[telegram-events] drain failed', drainErr?.message || drainErr);
+      }
     } finally {
       pollInFlight = false;
       pollAbort = null;
@@ -608,6 +1310,10 @@ export function stopTelegramEventsPoller() {
     clearTimeout(pollTimer);
     pollTimer = null;
   }
+  for (const bucket of pendingAlbums.values()) {
+    if (bucket.timer) clearTimeout(bucket.timer);
+  }
+  pendingAlbums.clear();
   try {
     pollAbort?.abort();
   } catch {

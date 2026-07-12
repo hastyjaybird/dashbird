@@ -161,12 +161,12 @@ const HOST_STRATEGIES = {
     strategy: 'official_api',
     strategyLabel: 'Telegram bot (intake)',
     strategyDetail:
-      'Long-poll Telegram Bot API. Accept flyer screenshots (vision), voice notes (Whisper → NL parse), and text like “event on DATE called TITLE invited by NAME”. Upserts into the Events catalog immediately.',
-    outputHint: 'Phone screenshots, voice, and text invites → title, date, venue, invited-by when present.',
-    devStatus: 'Wired — bot poll + OpenRouter',
+      'Long-poll Telegram Bot API. Classifies messages as event / todo / note / contact. Events: flyer screenshots (vision; albums merge), voice, or text invites. Todos → Vikunja. Notes → Network notes. Contacts → Network CRM. Overrides: /event /todo /note /contact.',
+    outputHint: 'Events, todos, notes, and contacts from one allowlisted chat.',
+    devStatus: 'Wired — bot poll + classifier + OpenRouter',
     devStatusKind: 'wired',
     missingEvents:
-      'Chats not in TELEGRAM_ALLOWED_CHAT_IDS. Invites outside the ingest window. Messages the model cannot parse as events.',
+      'Chats not in TELEGRAM_ALLOWED_CHAT_IDS. Low-confidence messages without /event|/todo|/note|/contact override.',
   },
 };
 

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { loadEventsFinderCriteria, saveEventsFinderCriteria, facebookHostSlugKey } from './events-finder-criteria-store.js';
 import { resolveEventsFinderGeo } from './events-finder-geo.js';
 import { appendFacebookBillingRun } from './events-finder-facebook-billing.js';
+import { eventsIngestWindowDays } from './events-finder-window.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..', '..');
@@ -300,9 +301,8 @@ function pinnedHostsFingerprint(pinnedHosts) {
  * @param {string} [timeZone]
  */
 export function filterEventsByIngestWindow(events, scrape = {}, timeZone = 'America/Los_Angeles') {
-  // Allow up to ~5 weeks so a 30-day first pass fits; default 4 weeks (~28–30d).
-  const weeks = Math.min(Math.max(Number(scrape.windowWeeks) || 4, 1), 5);
-  const horizonMs = weeks * 7 * 24 * 60 * 60 * 1000;
+  const { futureDays } = eventsIngestWindowDays(process.env, { scrape });
+  const horizonMs = futureDays * 24 * 60 * 60 * 1000;
   const now = Date.now();
   const earliest = String(scrape.earliestLocalTime || '').trim();
   const earliestMatch = earliest.match(/^(\d{1,2}):(\d{2})$/);

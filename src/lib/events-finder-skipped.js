@@ -3,11 +3,12 @@
  * SQLite `skipped_events` is the source of truth; criteria JSON mirrors it.
  */
 import {
+  deleteSkippedEventsFinderByIds,
   eventLocalDateKey,
   eventNameDateDedupeKey,
+  eventSeriesDedupeKey,
   listSkippedEventsFinderRecords,
   normalizeEventTitleKey,
-  replaceSkippedEventsFinderRecords,
   upsertSkippedEventsFinderRecords,
 } from './events-finder-store.js';
 
@@ -22,6 +23,7 @@ import {
  *   venue: string | null,
  *   city: string | null,
  *   imageUrl: string | null,
+ *   seriesKey?: string | null,
  *   skippedAt: string,
  * }} SkippedEventRecord
  */
@@ -94,6 +96,8 @@ export function normalizeSkippedEvents(raw, timeZone) {
       venue: row.venue != null ? String(row.venue).trim().slice(0, 300) || null : null,
       city: row.city != null ? String(row.city).trim().slice(0, 120) || null : null,
       imageUrl: row.imageUrl != null ? String(row.imageUrl).trim().slice(0, 2000) || null : null,
+      seriesKey:
+        row.seriesKey != null ? String(row.seriesKey).trim().slice(0, 400) || null : null,
       skippedAt:
         row.skippedAt != null && String(row.skippedAt).trim()
           ? String(row.skippedAt).trim().slice(0, 40)
@@ -129,6 +133,7 @@ export function mergeHiddenIdsIntoSkipped(skipped, hiddenIds) {
       venue: null,
       city: null,
       imageUrl: null,
+      seriesKey: null,
       skippedAt: now,
     });
     if (list.length >= MAX_SKIPPED) break;
@@ -205,22 +210,50 @@ export function loadSkippedEventsFromStore(criteriaSkipped = [], env = process.e
 }
 
 /**
- * Write the authoritative skipped set to SQLite.
+ * Merge (upsert) skip records into SQLite without deleting other skips.
+ * Stale/partial client lists must never wipe the table.
  * @param {SkippedEventRecord[]} records
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {SkippedEventRecord[]}
  */
 export function syncSkippedEventsToStore(records, env = process.env) {
   const normalized = normalizeSkippedEvents(records);
-  try {
-    replaceSkippedEventsFinderRecords(normalized, env);
-  } catch (e) {
-    console.warn('[events-finder] skipped sqlite sync failed:', e?.message || e);
+  if (normalized.length) {
+    try {
+      upsertSkippedEventsFinderRecords(normalized, env);
+    } catch (e) {
+      console.warn('[events-finder] skipped sqlite upsert failed:', e?.message || e);
+    }
   }
   try {
     return listSkippedEventsFinderRecords(env);
   } catch {
-    return normalized;
+    return loadSkippedEventsFromStore(normalized, env);
+  }
+}
+
+/**
+ * Remove skip designations by id (Unskip).
+ * @param {unknown} ids
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {SkippedEventRecord[]}
+ */
+export function removeSkippedEventsFromStore(ids, env = process.env) {
+  const list = (Array.isArray(ids) ? ids : [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean)
+    .slice(0, 1000);
+  if (list.length) {
+    try {
+      deleteSkippedEventsFinderByIds(list, env);
+    } catch (e) {
+      console.warn('[events-finder] skipped sqlite delete failed:', e?.message || e);
+    }
+  }
+  try {
+    return listSkippedEventsFinderRecords(env);
+  } catch {
+    return [];
   }
 }
 
@@ -249,6 +282,41 @@ export function skippedRecordFromEvent(event, timeZone) {
     city: event?.city != null ? String(event.city).trim().slice(0, 120) || null : null,
     imageUrl:
       event?.imageUrl != null ? String(event.imageUrl).trim().slice(0, 2000) || null : null,
+    seriesKey: null,
+    skippedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Skip an entire recurring series (Meetup group + weekday-stripped title, etc.).
+ * @param {object} event
+ * @param {string} [timeZone]
+ * @returns {SkippedEventRecord | null}
+ */
+export function skippedSeriesRecordFromEvent(event, timeZone) {
+  const seriesKey =
+    (event?.seriesKey != null ? String(event.seriesKey).trim() : '')
+    || eventSeriesDedupeKey(event)
+    || '';
+  if (!seriesKey) return null;
+  const id = `series:${seriesKey}`.slice(0, 400);
+  const title = String(event?.title || '').trim().slice(0, 500) || null;
+  const start = event?.start != null ? String(event.start).trim().slice(0, 40) || null : null;
+  return {
+    id,
+    key: null,
+    url: null,
+    title,
+    start,
+    source: event?.source != null ? String(event.source).trim().slice(0, 64) || null : null,
+    venue:
+      event?.venue != null || event?.location != null
+        ? String(event.venue || event.location || '').trim().slice(0, 300) || null
+        : null,
+    city: event?.city != null ? String(event.city).trim().slice(0, 120) || null : null,
+    imageUrl:
+      event?.imageUrl != null ? String(event.imageUrl).trim().slice(0, 2000) || null : null,
+    seriesKey: seriesKey.slice(0, 400),
     skippedAt: new Date().toISOString(),
   };
 }
@@ -295,9 +363,14 @@ export function isEventSkipped(event, skipped, timeZone) {
   const key = eventNameDateDedupeKey(event, tz);
   const titleKey = normalizeEventTitleKey(event.title);
   const eventDay = eventLocalDateKey(event.start, tz);
+  const seriesKey =
+    (event.seriesKey != null ? String(event.seriesKey).trim() : '')
+    || eventSeriesDedupeKey(event)
+    || '';
 
   for (const s of list) {
     if (id && s.id === id) return true;
+    if (seriesKey && s.seriesKey && seriesKey === s.seriesKey) return true;
     if (url && s.url && url === s.url) return true;
     if (key && s.key && key === s.key) return true;
     // Same title on same local calendar day even if key formatting drifted

@@ -174,9 +174,9 @@ export const EARTH_EVENT_MANIFEST = [
 export const SERVICE_EVENT_MANIFEST = [
   {
     id: 'fear_greed_index',
-    label: 'F&G Index',
+    label: 'F & G Index',
     category: 'Market & weather',
-    dataSource: 'CNN Markets F&G Index (scraped)',
+    dataSource: 'CNN Markets F & G Index (scraped)',
   },
   {
     id: 'weather_radar',

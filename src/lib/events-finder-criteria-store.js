@@ -1,5 +1,5 @@
 /**
- * Events finder taste + feed filters (Look for / Skip + ZIP / distance / date-time).
+ * Events finder taste + feed filters (Look for / grey skip / blacklist + ZIP / distance / date-time).
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -8,9 +8,11 @@ import {
   loadSkippedEventsFromStore,
   mergeHiddenIdsIntoSkipped,
   normalizeSkippedEvents,
+  removeSkippedEventsFromStore,
   skippedEventIds,
   syncSkippedEventsToStore,
 } from './events-finder-skipped.js';
+import { rollingLocalDatesForWindowWeeks } from './events-finder-window.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
@@ -99,9 +101,12 @@ const KNOWN_PINNED_HOST_NAMES = /** @type {Record<string, string>} */ ({
 
 const DEFAULT_CRITERIA = {
   lookFor:
-    'hack-a-thons\nclimate\nsustainability\nai and climate\ncommunity\nstartup\nfounder dating\nfounder meetup\ninteractive\ncircus\nburlesque\nsoiled dove\nvaudevere\ncampout\nexistential\nplaya\nburningman\nqueer\npride\ncomedy\npotluck\nai\nflea\nmarket\nthrift\nguild\nfundraiser\nair pusher\nsolstice\nequinox\nmeltdown\nmutant\noddity\noddities\ncuriosities\nexpo\nbirthday\nanniversary\nobtainium\nstreet fair\nreggae down the river\nfestival\noptimism\nearth day\nartificial\nUN\nfail night\nretreat\nclimate cocktails\ngreen drinks\nbox shop\ntowne cycles\nobtainium works\nfairyland\nomni commons\nnoisebridge\ntiat\nathletic playground\nwasteland weekend\nneotropolis (producers of wasteland)\nbombay beach\nthe institute\nphage\nnerd night\nexploratorium\nmakerfare\nopen sauce\nruckas\njamie de wolf\ncrucible\ngala\ndorkbot\ngood people',
+    'ai\nai and climate\nair pusher\nanniversary\nartificial\nathletic playground\nbirthday\nbombay beach\nbox shop\nburlesque\nburningman\ncampout\ncircus\nclimate\nclimate cocktails\ncomedy\ncommunity\ncrucible\ncuriosities\ndorkbot\nearth day\nequinox\nexistential\nexploratorium\nexpo\nfail night\nfairyland\nfestival\nflea\nfounder dating\nfounder meetup\nfundraiser\ngala\ngood people\ngreen drinks\nguild\nhack-a-thons\ninteractive\njamie de wolf\nmakerfare\nmarket\nmeltdown\nmutant\nneotropolis (producers of wasteland)\nnerd night\nnoisebridge\nobtainium\nobtainium works\noddities\noddity\nomni commons\nopen sauce\noptimism\nphage\nplaya\npotluck\npride\nqueer\nreggae down the river\nretreat\nruckas\nsoiled dove\nsolstice\nstartup\nstreet fair\nsustainability\nthe institute\nthrift\ntiat\ntowne cycles\nUN\nvaudevere\nwasteland weekend',
+  /** Grey list: hide only when no Look for line also matches. */
   skip:
-    'beach clean up\nbeach cleanups\nconcerts\nmarathon\nsound bath\nmeditation\nhike\nanything before 11am\nif DJs are the only point of interest',
+    'anything before 11am\nbeach clean up\nbeach cleanups\nconcerts\nhike\nif DJs are the only point of interest\nmarathon\nmeditation\nsound bath',
+  /** Blacklist: always hide, even when Look for also matches. */
+  blacklist: '',
   filters: { ...DEFAULT_FILTERS, cities: [] },
   scrape: { ...DEFAULT_SCRAPE },
   /** Event ids the user hid from the feed. */
@@ -169,6 +174,27 @@ function normalizeAttendance(raw) {
   if (s === 'online' || s === 'virtual') return 'online';
   if (s === 'in_person' || s === 'inperson' || s === 'offline') return 'in_person';
   return 'any';
+}
+
+/**
+ * One idea per line; trim, drop blanks/dupes, sort A→Z (case-insensitive).
+ * @param {string} raw
+ * @returns {string}
+ */
+function normalizeKeywordList(raw) {
+  const seen = new Set();
+  /** @type {string[]} */
+  const out = [];
+  for (const line of String(raw || '').split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  out.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  return out.join('\n');
 }
 
 /**
@@ -471,11 +497,11 @@ function seedSearchQueriesFromLookFor(lookFor, maxQueries) {
 
 /**
  * @param {unknown} raw
- * @returns {1 | 2 | 3 | 4}
+ * @returns {1 | 2 | 3 | 4 | 5}
  */
 function normalizeWindowWeeks(raw) {
   const n = normalizeInt(raw, DEFAULT_SCRAPE.windowWeeks, 1, 5);
-  return /** @type {1 | 2 | 3 | 4} */ (n);
+  return /** @type {1 | 2 | 3 | 4 | 5} */ (n);
 }
 
 /**
@@ -541,6 +567,7 @@ function normalizeHiddenEventIds(raw) {
  * @returns {{
  *   lookFor: string,
  *   skip: string,
+ *   blacklist: string,
  *   filters: EventsFinderFilters,
  *   scrape: EventsFinderScrapeBudget,
  *   hiddenEventIds: string[],
@@ -550,14 +577,21 @@ function normalizeHiddenEventIds(raw) {
  * }}
  */
 function normalize(raw) {
-  const lookFor =
+  const lookFor = normalizeKeywordList(
     raw && typeof raw === 'object' && typeof /** @type {{ lookFor?: unknown }} */ (raw).lookFor === 'string'
       ? /** @type {{ lookFor: string }} */ (raw).lookFor
-      : DEFAULT_CRITERIA.lookFor;
-  const skip =
+      : DEFAULT_CRITERIA.lookFor,
+  );
+  const skip = normalizeKeywordList(
     raw && typeof raw === 'object' && typeof /** @type {{ skip?: unknown }} */ (raw).skip === 'string'
       ? /** @type {{ skip: string }} */ (raw).skip
-      : DEFAULT_CRITERIA.skip;
+      : DEFAULT_CRITERIA.skip,
+  );
+  const blacklist = normalizeKeywordList(
+    raw && typeof raw === 'object' && typeof /** @type {{ blacklist?: unknown }} */ (raw).blacklist === 'string'
+      ? /** @type {{ blacklist: string }} */ (raw).blacklist
+      : DEFAULT_CRITERIA.blacklist,
+  );
   const filters =
     raw && typeof raw === 'object' && 'filters' in /** @type {object} */ (raw)
       ? normalizeFilters(/** @type {{ filters?: unknown }} */ (raw).filters)
@@ -589,6 +623,7 @@ function normalize(raw) {
   return {
     lookFor,
     skip,
+    blacklist,
     filters,
     scrape,
     hiddenEventIds,
@@ -614,6 +649,7 @@ async function ensureFile() {
  * @returns {Promise<{
  *   lookFor: string,
  *   skip: string,
+ *   blacklist: string,
  *   filters: EventsFinderFilters,
  *   scrape: EventsFinderScrapeBudget,
  *   hiddenEventIds: string[],
@@ -633,6 +669,7 @@ export async function loadEventsFinderCriteria() {
     base = {
       lookFor: DEFAULT_CRITERIA.lookFor,
       skip: DEFAULT_CRITERIA.skip,
+      blacklist: DEFAULT_CRITERIA.blacklist,
       filters: { ...DEFAULT_FILTERS, cities: [] },
       scrape: { ...DEFAULT_SCRAPE },
       hiddenEventIds: [],
@@ -654,10 +691,12 @@ export async function loadEventsFinderCriteria() {
  * @param {{
  *   lookFor?: unknown,
  *   skip?: unknown,
+ *   blacklist?: unknown,
  *   filters?: unknown,
  *   scrape?: unknown,
  *   hiddenEventIds?: unknown,
  *   skippedEvents?: unknown,
+ *   unskipEventIds?: unknown,
  *   favoriteEventIds?: unknown,
  *   calendarAddedEventIds?: unknown,
  * }} body
@@ -666,6 +705,7 @@ export async function loadEventsFinderCriteria() {
  *       ok: true,
  *       lookFor: string,
  *       skip: string,
+ *       blacklist: string,
  *       filters: EventsFinderFilters,
  *       scrape: EventsFinderScrapeBudget,
  *       hiddenEventIds: string[],
@@ -683,54 +723,100 @@ export async function saveEventsFinderCriteria(body) {
   if (typeof body.lookFor !== 'string' || typeof body.skip !== 'string') {
     return { ok: false, error: 'invalid_fields' };
   }
-  if (body.lookFor.length > 20000 || body.skip.length > 20000) {
+  if (body.blacklist !== undefined && typeof body.blacklist !== 'string') {
+    return { ok: false, error: 'invalid_fields' };
+  }
+  if (
+    body.lookFor.length > 20000
+    || body.skip.length > 20000
+    || (typeof body.blacklist === 'string' && body.blacklist.length > 20000)
+  ) {
     return { ok: false, error: 'too_long' };
   }
   const existing = await loadEventsFinderCriteria();
   let skippedEvents = existing.skippedEvents;
+  const unskipIds = Array.isArray(body.unskipEventIds)
+    ? body.unskipEventIds.map((id) => String(id || '').trim()).filter(Boolean)
+    : [];
+  if (unskipIds.length) {
+    // Explicit Unskip — delete by id only; never infer removals from a partial list.
+    skippedEvents = removeSkippedEventsFromStore(unskipIds, process.env);
+  }
   if (body.skippedEvents !== undefined) {
-    // Explicit skip list from Skip / Unskip — sync to SQLite as source of truth.
+    // Skip / thumbs-down — upsert into SQLite. Partial client lists must not wipe others.
     skippedEvents = syncSkippedEventsToStore(
       normalizeSkippedEvents(body.skippedEvents),
       process.env,
     );
-  } else if (body.hiddenEventIds !== undefined) {
-    // Legacy clients may only send ids — keep rich records when possible.
-    const wantIds = new Set(normalizeHiddenEventIds(body.hiddenEventIds));
-    skippedEvents = existing.skippedEvents.filter((s) => wantIds.has(s.id));
-    for (const id of wantIds) {
-      if (!skippedEvents.some((s) => s.id === id)) {
-        skippedEvents.push({
-          id,
-          key: null,
-          url: null,
-          title: null,
-          start: null,
-          source: null,
-          venue: null,
-          city: null,
-          imageUrl: null,
-          skippedAt: new Date().toISOString(),
-        });
-      }
+  } else if (body.hiddenEventIds !== undefined && !unskipIds.length) {
+    // Legacy clients may only send ids — upsert missing ids; do not delete others.
+    const wantIds = normalizeHiddenEventIds(body.hiddenEventIds);
+    const toAdd = wantIds
+      .filter((id) => !skippedEvents.some((s) => s.id === id))
+      .map((id) => ({
+        id,
+        key: null,
+        url: null,
+        title: null,
+        start: null,
+        source: null,
+        venue: null,
+        city: null,
+        imageUrl: null,
+        skippedAt: new Date().toISOString(),
+      }));
+    if (toAdd.length) {
+      skippedEvents = syncSkippedEventsToStore(
+        normalizeSkippedEvents([...skippedEvents, ...toAdd]),
+        process.env,
+      );
+    } else {
+      skippedEvents = loadSkippedEventsFromStore(existing.skippedEvents, process.env);
     }
-    skippedEvents = syncSkippedEventsToStore(
-      normalizeSkippedEvents(skippedEvents),
-      process.env,
-    );
-  } else {
+  } else if (!unskipIds.length) {
     // Filter-only save: never touch skips (SQLite + existing criteria).
     skippedEvents = loadSkippedEventsFromStore(existing.skippedEvents, process.env);
   }
+  const lookFor = normalizeKeywordList(body.lookFor);
+  const skip = normalizeKeywordList(body.skip);
+  // Omit blacklist to preserve (filter-only / thumbs / Facebook avg saves).
+  const blacklist =
+    typeof body.blacklist === 'string'
+      ? normalizeKeywordList(body.blacklist)
+      : existing.blacklist;
   // Ingestion-only saves omit filters; browse-filter saves omit scrape — preserve the other.
+  const nextScrape = body.scrape === undefined
+    ? existing.scrape
+    : normalizeScrape(body.scrape, { lookFor });
+  let nextFilters =
+    body.filters === undefined ? existing.filters : normalizeFilters(body.filters);
+
+  // Scrape ahead is the dynamic horizon: when weeks change, roll the browse
+  // calendar to match (unless the client sent an explicit dates list in this PUT).
+  const weeksChanged =
+    body.scrape !== undefined
+    && Number(nextScrape.windowWeeks) !== Number(existing.scrape?.windowWeeks);
+  const clientSentDates =
+    body.filters
+    && typeof body.filters === 'object'
+    && (Array.isArray(/** @type {Record<string, unknown>} */ (body.filters).dates)
+      || /** @type {Record<string, unknown>} */ (body.filters).dateFrom != null
+      || /** @type {Record<string, unknown>} */ (body.filters).dateTo != null);
+  if (weeksChanged && !clientSentDates) {
+    nextFilters = {
+      ...nextFilters,
+      dates: rollingLocalDatesForWindowWeeks(nextScrape.windowWeeks),
+      dateFrom: null,
+      dateTo: null,
+    };
+  }
+
   const next = {
-    lookFor: body.lookFor,
-    skip: body.skip,
-    filters:
-      body.filters === undefined ? existing.filters : normalizeFilters(body.filters),
-    scrape: body.scrape === undefined
-      ? existing.scrape
-      : normalizeScrape(body.scrape, { lookFor: body.lookFor }),
+    lookFor,
+    skip,
+    blacklist,
+    filters: nextFilters,
+    scrape: nextScrape,
     skippedEvents,
     hiddenEventIds: skippedEventIds(skippedEvents),
     favoriteEventIds:

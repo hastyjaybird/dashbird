@@ -147,7 +147,12 @@ export async function fetchGmailEventsViaImap(email, appPassword, env = process.
       events.push(...eventsFromGmailMessage(shaped, 'America/Los_Angeles', { mailbox: address }));
     }
 
-    const windowDays = eventsIngestWindowDays(env);
+    const windowDays =
+      opts.windowDays
+      || eventsIngestWindowDays(env, {
+        scrape: opts.scrape,
+        windowWeeks: opts.windowWeeks,
+      });
     const filtered = filterEventsToIngestWindow(events, {
       pastDays: windowDays.pastDays,
       futureDays: windowDays.futureDays,

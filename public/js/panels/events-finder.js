@@ -291,7 +291,7 @@ function tasteLineMatchesClient(hay, line) {
 
 /**
  * @param {object} event
- * @param {{ lookFor?: string, skip?: string } | null | undefined} criteria
+ * @param {{ lookFor?: string, skip?: string, blacklist?: string } | null | undefined} criteria
  * @returns {boolean}
  */
 function eventPassesTasteClient(event, criteria) {
@@ -299,18 +299,22 @@ function eventPassesTasteClient(event, criteria) {
   const hay = eventHaystackClient(event);
   const lookFor = parseTasteLinesClient(criteria.lookFor);
   const skip = parseTasteLinesClient(criteria.skip);
+  const blacklist = parseTasteLinesClient(criteria.blacklist);
   const matchedLookFor = lookFor.filter((line) => tasteLineMatchesClient(hay, line));
   const matchedSkip = skip.filter((line) => tasteLineMatchesClient(hay, line));
-  // Skip only hides when nothing on Look for also matches (whitelist wins ties).
+  const matchedBlacklist = blacklist.filter((line) => tasteLineMatchesClient(hay, line));
+  // Blacklist always hides, even when Look for also matches.
+  if (matchedBlacklist.length) return false;
+  // Grey list (skip) only hides when nothing on Look for also matches.
   if (matchedSkip.length && !matchedLookFor.length) return false;
   return true;
 }
 
 /**
- * Drop feed events that fail current Skip / Look for taste rules, or that were
+ * Drop feed events that fail current grey / black / Look for taste rules, or that were
  * already added to Google Calendar (tracked ids — not Skip).
  * @param {object} data
- * @param {{ lookFor?: string, skip?: string, calendarAddedEventIds?: string[] } | null | undefined} criteria
+ * @param {{ lookFor?: string, skip?: string, blacklist?: string, calendarAddedEventIds?: string[] } | null | undefined} criteria
  * @returns {object}
  */
 function applyTasteToEventsPayload(data, criteria) {
@@ -468,12 +472,6 @@ export function mountEventsFinder(root) {
   filterPanel.className = 'events-finder__filters';
   filterPanel.hidden = true;
 
-  const browseHint = document.createElement('p');
-  browseHint.className = 'events-finder__browse-hint muted';
-  browseHint.textContent =
-    'Browse the saved catalog only. Ingestion keywords & scrape window: Settings → Edit criteria.';
-  filterPanel.append(browseHint);
-
   const areaRow = document.createElement('div');
   areaRow.className = 'events-finder__field-row';
 
@@ -599,7 +597,7 @@ export function mountEventsFinder(root) {
 
   root.append(toolbar, filterPanel, listEl);
 
-  /** @type {{ lookFor: string, skip: string, scrape?: object, hiddenEventIds: string[], skippedEvents: object[], favoriteEventIds: string[], calendarAddedEventIds: string[] } | null} */
+  /** @type {{ lookFor: string, skip: string, blacklist: string, scrape?: object, hiddenEventIds: string[], skippedEvents: object[], favoriteEventIds: string[], calendarAddedEventIds: string[] } | null} */
   let taste = null;
   let filtersReady = false;
   let showSkipped = false;
@@ -663,6 +661,32 @@ export function mountEventsFinder(root) {
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
     if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
     return { lat, lon };
+  }
+
+  /** Round coords so near-identical venue pins group together (~11 m). */
+  function coordGroupKey(lat, lon) {
+    return `${lat.toFixed(4)},${lon.toFixed(4)}`;
+  }
+
+  /**
+   * Fan co-located pins into a small circle so each is clickable.
+   * @param {number} lat
+   * @param {number} lon
+   * @param {number} index
+   * @param {number} total
+   * @returns {[number, number]}
+   */
+  function offsetCoLocatedPin(lat, lon, index, total) {
+    if (total <= 1) return [lat, lon];
+    // ~28 m base radius; grow slightly when many share a spot so markers don't stack.
+    const radiusM = 28 + Math.max(0, total - 4) * 6;
+    const angle = (2 * Math.PI * index) / total - Math.PI / 2;
+    const metersPerDegLat = 111320;
+    const metersPerDegLon = Math.max(1e-6, 111320 * Math.cos((lat * Math.PI) / 180));
+    return [
+      lat + (radiusM * Math.sin(angle)) / metersPerDegLat,
+      lon + (radiusM * Math.cos(angle)) / metersPerDegLon,
+    ];
   }
 
   /**
@@ -735,36 +759,59 @@ export function mountEventsFinder(root) {
           });
         }
         markersLayer.clearLayers();
-        /** @type {any[]} */
-        const latLngs = [];
+        /** @type {Map<string, { ev: object, c: { lat: number, lon: number } }[]>} */
+        const byLocation = new Map();
         for (const ev of mappable) {
           const c = eventCoords(ev);
           if (!c) continue;
-          const ll = [c.lat, c.lon];
-          latLngs.push(ll);
-          const marker = L.circleMarker(ll, {
-            radius: 8,
-            color: '#6ec8ff',
-            weight: 2,
-            fillColor: '#7bffce',
-            fillOpacity: 0.85,
+          const key = coordGroupKey(c.lat, c.lon);
+          let group = byLocation.get(key);
+          if (!group) {
+            group = [];
+            byLocation.set(key, group);
+          }
+          group.push({ ev, c });
+        }
+        /** @type {any[]} */
+        const latLngs = [];
+        for (const group of byLocation.values()) {
+          const total = group.length;
+          group.forEach(({ ev, c }, index) => {
+            const ll = offsetCoLocatedPin(c.lat, c.lon, index, total);
+            latLngs.push(ll);
+            // Thin stem from true venue to offset pin when fanned out.
+            if (total > 1) {
+              L.polyline([[c.lat, c.lon], ll], {
+                color: '#6ec8ff',
+                weight: 1.5,
+                opacity: 0.55,
+                interactive: false,
+              }).addTo(markersLayer);
+            }
+            const marker = L.circleMarker(ll, {
+              radius: 8,
+              color: '#6ec8ff',
+              weight: 2,
+              fillColor: '#7bffce',
+              fillOpacity: 0.85,
+            });
+            marker.on('click', () => {
+              if (!mapInstance || mapViewBeforePopup) return;
+              const center = mapInstance.getCenter();
+              mapViewBeforePopup = {
+                lat: center.lat,
+                lng: center.lng,
+                zoom: mapInstance.getZoom(),
+              };
+            });
+            marker.bindPopup(buildMapPopup(ev), {
+              maxWidth: 340,
+              minWidth: 280,
+              className: 'events-finder__map-popup-tip',
+              autoPanPadding: [36, 36],
+            });
+            markersLayer.addLayer(marker);
           });
-          marker.on('click', () => {
-            if (!mapInstance || mapViewBeforePopup) return;
-            const center = mapInstance.getCenter();
-            mapViewBeforePopup = {
-              lat: center.lat,
-              lng: center.lng,
-              zoom: mapInstance.getZoom(),
-            };
-          });
-          marker.bindPopup(buildMapPopup(ev), {
-            maxWidth: 340,
-            minWidth: 280,
-            className: 'events-finder__map-popup-tip',
-            autoPanPadding: [36, 36],
-          });
-          markersLayer.addLayer(marker);
         }
         const homeLat = Number(data?.geo?.lat);
         const homeLon = Number(data?.geo?.lon);
@@ -930,7 +977,7 @@ export function mountEventsFinder(root) {
 
   /**
    * Persist current taste + feed filters (and optional hidden/favorite ids).
-   * @param {{ lookFor?: string, skip?: string, hiddenEventIds?: string[], skippedEvents?: object[], favoriteEventIds?: string[], calendarAddedEventIds?: string[], silent?: boolean, waitForIdle?: boolean }} [patch]
+   * @param {{ lookFor?: string, skip?: string, blacklist?: string, hiddenEventIds?: string[], skippedEvents?: object[], unskipEventIds?: string[], favoriteEventIds?: string[], calendarAddedEventIds?: string[], silent?: boolean, waitForIdle?: boolean }} [patch]
    * @returns {Promise<boolean>}
    */
   async function saveCriteria(patch = {}) {
@@ -961,6 +1008,7 @@ export function mountEventsFinder(root) {
     try {
       const lookFor = patch.lookFor ?? taste?.lookFor ?? '';
       const skip = patch.skip ?? taste?.skip ?? '';
+      const blacklist = patch.blacklist ?? taste?.blacklist ?? '';
       const favoriteEventIds = patch.favoriteEventIds ?? taste?.favoriteEventIds ?? [];
       const calendarAddedEventIds =
         patch.calendarAddedEventIds ?? taste?.calendarAddedEventIds ?? [];
@@ -968,6 +1016,7 @@ export function mountEventsFinder(root) {
       const body = {
         lookFor,
         skip,
+        blacklist,
         favoriteEventIds,
         calendarAddedEventIds,
         scrape: taste?.scrape,
@@ -1011,8 +1060,11 @@ export function mountEventsFinder(root) {
           originZip,
         };
       }
-      // Only send skip lists when explicitly patching them — filter-only saves must not
-      // overwrite SQLite skips with a stale/empty client copy.
+      // Only send skip mutations when explicitly patching — filter-only saves must not
+      // touch SQLite skips. Skips upsert; unskips delete by id (never full-table replace).
+      if (Array.isArray(patch.unskipEventIds) && patch.unskipEventIds.length) {
+        body.unskipEventIds = patch.unskipEventIds.map(String).filter(Boolean);
+      }
       if (patch.skippedEvents !== undefined) {
         body.skippedEvents = patch.skippedEvents;
         body.hiddenEventIds =
@@ -1035,6 +1087,7 @@ export function mountEventsFinder(root) {
       taste = {
         lookFor: typeof data.lookFor === 'string' ? data.lookFor : lookFor,
         skip: typeof data.skip === 'string' ? data.skip : skip,
+        blacklist: typeof data.blacklist === 'string' ? data.blacklist : blacklist,
         scrape: data.scrape && typeof data.scrape === 'object' ? data.scrape : taste?.scrape,
         hiddenEventIds: Array.isArray(data.hiddenEventIds)
           ? data.hiddenEventIds.map(String)
@@ -1054,6 +1107,7 @@ export function mountEventsFinder(root) {
       writePanelCache(CRITERIA_CACHE_KEY, {
         lookFor: taste.lookFor,
         skip: taste.skip,
+        blacklist: taste.blacklist,
         scrape: taste.scrape,
         hiddenEventIds: taste.hiddenEventIds,
         skippedEvents: taste.skippedEvents,
@@ -1091,8 +1145,8 @@ export function mountEventsFinder(root) {
   }
 
   /**
-   * Immediately drop feed cards that match current Skip words (before slow server refresh).
-   * @param {{ lookFor?: string, skip?: string } | null} [criteria]
+   * Immediately drop feed cards that match current grey / black list words (before slow server refresh).
+   * @param {{ lookFor?: string, skip?: string, blacklist?: string } | null} [criteria]
    */
   function refilterFeedForTaste(criteria) {
     const c = criteria || taste;
@@ -1123,7 +1177,9 @@ export function mountEventsFinder(root) {
     const backdrop = document.createElement('div');
     backdrop.className = 'events-finder__modal-backdrop';
     const modal = document.createElement('div');
-    modal.className = 'events-finder__modal';
+    modal.className = wantMore
+      ? 'events-finder__modal'
+      : 'events-finder__modal events-finder__modal--taste-down';
     modal.setAttribute('role', 'dialog');
     modal.setAttribute('aria-modal', 'true');
 
@@ -1135,18 +1191,65 @@ export function mountEventsFinder(root) {
     hint.className = 'events-finder__modal-hint';
     hint.textContent = wantMore
       ? 'Add ideas to Look for (one per line). These steer discovery toward similar events.'
-      : 'Add Skip words (one per line). This event is skipped, and matching events leave the feed right away.';
+      : 'This event is skipped. Add grey-list and/or black-list words (one per line). Grey hides only when no Look for word matches; black always hides.';
 
     const eventLabel = document.createElement('p');
     eventLabel.className = 'events-finder__modal-event';
     eventLabel.textContent = ev.title || 'Untitled event';
 
-    const area = document.createElement('textarea');
-    area.className = 'events-finder__modal-textarea';
-    area.rows = 6;
-    area.spellcheck = true;
-    area.placeholder = 'One idea per line…';
-    area.value = suggestPreferenceLines(ev, vibe);
+    /** @type {HTMLTextAreaElement} */
+    let area;
+    /** @type {HTMLTextAreaElement | null} */
+    let greyArea = null;
+    /** @type {HTMLTextAreaElement | null} */
+    let blackArea = null;
+    /** @type {HTMLElement[]} */
+    const fieldNodes = [];
+
+    if (wantMore) {
+      area = document.createElement('textarea');
+      area.className = 'events-finder__modal-textarea';
+      area.rows = 6;
+      area.spellcheck = true;
+      area.placeholder = 'One idea per line…';
+      area.value = suggestPreferenceLines(ev, vibe);
+      fieldNodes.push(area);
+    } else {
+      const suggested = suggestPreferenceLines(ev, vibe);
+
+      const greyLabel = document.createElement('label');
+      greyLabel.className = 'events-finder__modal-field-label';
+      greyLabel.htmlFor = 'events-finder-pref-grey';
+      greyLabel.textContent = 'Grey list';
+      const greyHint = document.createElement('p');
+      greyHint.className = 'events-finder__modal-field-hint';
+      greyHint.textContent = 'Hide matching events only if no Look for word also matches.';
+      greyArea = document.createElement('textarea');
+      greyArea.id = 'events-finder-pref-grey';
+      greyArea.className = 'events-finder__modal-textarea events-finder__modal-textarea--compact';
+      greyArea.rows = 4;
+      greyArea.spellcheck = true;
+      greyArea.placeholder = 'One idea per line…';
+      greyArea.value = suggested;
+
+      const blackLabel = document.createElement('label');
+      blackLabel.className = 'events-finder__modal-field-label';
+      blackLabel.htmlFor = 'events-finder-pref-black';
+      blackLabel.textContent = 'Black list';
+      const blackHint = document.createElement('p');
+      blackHint.className = 'events-finder__modal-field-hint';
+      blackHint.textContent = 'Always hide matching events, even if a Look for word matches.';
+      blackArea = document.createElement('textarea');
+      blackArea.id = 'events-finder-pref-black';
+      blackArea.className = 'events-finder__modal-textarea events-finder__modal-textarea--compact';
+      blackArea.rows = 4;
+      blackArea.spellcheck = true;
+      blackArea.placeholder = 'One idea per line…';
+      blackArea.value = '';
+
+      fieldNodes.push(greyLabel, greyHint, greyArea, blackLabel, blackHint, blackArea);
+      area = greyArea;
+    }
 
     const msg = document.createElement('p');
     msg.className = 'events-finder__modal-msg';
@@ -1161,7 +1264,7 @@ export function mountEventsFinder(root) {
     const save = document.createElement('button');
     save.type = 'button';
     save.className = 'events-finder__modal-btn events-finder__modal-btn--primary';
-    save.textContent = wantMore ? 'Add to Look for' : 'Add to skipped';
+    save.textContent = wantMore ? 'Add to Look for' : 'Save & skip event';
 
     const close = () => backdrop.remove();
     cancel.addEventListener('click', close);
@@ -1174,31 +1277,49 @@ export function mountEventsFinder(root) {
         msg.textContent = 'Filters still loading — try again in a moment.';
         return;
       }
-      const additions = area.value;
-      if (!String(additions).trim()) {
+      const lookAdditions = wantMore ? area.value : '';
+      const greyAdditions = wantMore ? '' : (greyArea?.value || '');
+      const blackAdditions = wantMore ? '' : (blackArea?.value || '');
+      const hasLook = Boolean(String(lookAdditions).trim());
+      const hasGrey = Boolean(String(greyAdditions).trim());
+      const hasBlack = Boolean(String(blackAdditions).trim());
+      if (wantMore && !hasLook) {
         msg.hidden = false;
         msg.textContent = 'Add at least one preference line.';
+        return;
+      }
+      if (!wantMore && !hasGrey && !hasBlack) {
+        msg.hidden = false;
+        msg.textContent = 'Add at least one grey-list or black-list line (or both).';
         return;
       }
       save.disabled = true;
       msg.hidden = false;
       msg.textContent = 'Saving…';
       const nextLook = wantMore
-        ? mergeTasteLines(taste?.lookFor ?? '', additions)
+        ? mergeTasteLines(taste?.lookFor ?? '', lookAdditions)
         : taste?.lookFor ?? '';
       const nextSkip = wantMore
         ? taste?.skip ?? ''
-        : mergeTasteLines(taste?.skip ?? '', additions);
+        : hasGrey
+          ? mergeTasteLines(taste?.skip ?? '', greyAdditions)
+          : taste?.skip ?? '';
+      const nextBlacklist = wantMore
+        ? taste?.blacklist ?? ''
+        : hasBlack
+          ? mergeTasteLines(taste?.blacklist ?? '', blackAdditions)
+          : taste?.blacklist ?? '';
 
-      /** @type {{ lookFor: string, skip: string, skippedEvents?: object[], hiddenEventIds?: string[], silent: boolean, waitForIdle: boolean }} */
+      /** @type {{ lookFor: string, skip: string, blacklist: string, skippedEvents?: object[], hiddenEventIds?: string[], silent: boolean, waitForIdle: boolean }} */
       const patch = {
         lookFor: nextLook,
         skip: nextSkip,
+        blacklist: nextBlacklist,
         silent: true,
         waitForIdle: true,
       };
 
-      // Thumbs-down: also skip this event, then refilter the whole feed for new Skip words.
+      // Thumbs-down: also skip this event, then refilter the whole feed for new list words.
       if (!wantMore) {
         const id = String(ev.id || '').trim();
         if (id) {
@@ -1208,8 +1329,15 @@ export function mountEventsFinder(root) {
             record,
             ...prevSkipped.filter((s) => String(s?.id || '') !== id),
           ].filter(Boolean);
-          patch.skippedEvents = nextSkipped;
-          patch.hiddenEventIds = nextSkipped.map((s) => String(s.id));
+          // Upsert only this record — server merges; never send a stale full list.
+          patch.skippedEvents = record ? [record] : [];
+          if (taste) {
+            taste = {
+              ...taste,
+              skippedEvents: nextSkipped,
+              hiddenEventIds: nextSkipped.map((s) => String(s.id)),
+            };
+          }
         }
       }
 
@@ -1220,7 +1348,7 @@ export function mountEventsFinder(root) {
         return;
       }
       close();
-      // Optimistic: hide this card + any others matching new Skip words; server refresh confirms.
+      // Optimistic: hide this card + any others matching new grey/black words; server refresh confirms.
       if (!wantMore && lastEventsPayload) {
         const id = String(ev.id || '').trim();
         if (id && Array.isArray(lastEventsPayload.events)) {
@@ -1249,7 +1377,7 @@ export function mountEventsFinder(root) {
     });
 
     actions.append(cancel, save);
-    modal.append(title, hint, eventLabel, area, msg, actions);
+    modal.append(title, hint, eventLabel, ...fieldNodes, msg, actions);
     backdrop.append(modal);
     document.body.append(backdrop);
     area.focus();
@@ -1258,9 +1386,26 @@ export function mountEventsFinder(root) {
   /**
    * @param {object} ev
    */
-  function skippedRecordFromEventLocal(ev) {
+  function skippedRecordFromEventLocal(ev, opts = {}) {
     const id = String(ev?.id || '').trim();
     if (!id) return null;
+    const seriesKey = String(ev?.seriesKey || '').trim() || null;
+    if (opts.series) {
+      if (!seriesKey) return null;
+      return {
+        id: `series:${seriesKey}`.slice(0, 400),
+        key: null,
+        url: null,
+        title: String(ev.title || '').trim() || null,
+        start: ev.start != null ? String(ev.start) : null,
+        source: ev.source != null ? String(ev.source) : null,
+        venue: String(ev.venue || ev.location || '').trim() || null,
+        city: ev.city != null ? String(ev.city) : null,
+        imageUrl: String(ev.imageUrl || '').trim() || null,
+        seriesKey,
+        skippedAt: new Date().toISOString(),
+      };
+    }
     return {
       id,
       key: null,
@@ -1271,12 +1416,13 @@ export function mountEventsFinder(root) {
       venue: String(ev.venue || ev.location || '').trim() || null,
       city: ev.city != null ? String(ev.city) : null,
       imageUrl: String(ev.imageUrl || '').trim() || null,
+      seriesKey: null,
       skippedAt: new Date().toISOString(),
     };
   }
 
   /**
-   * Client-side skip match (id / url / title+day) so filter repaints never revive skips.
+   * Client-side skip match (id / url / title+day / series) so filter repaints never revive skips.
    * @param {object} event
    * @param {object[]} skipped
    * @returns {boolean}
@@ -1288,8 +1434,11 @@ export function mountEventsFinder(root) {
     const url = String(event.url || '').trim().toLowerCase();
     const title = String(event.title || '').trim().toLowerCase();
     const day = event.start != null ? String(event.start).slice(0, 10) : '';
+    const seriesKey = String(event.seriesKey || '').trim();
     for (const s of list) {
       if (id && String(s?.id || '') === id) return true;
+      const sSeries = String(s?.seriesKey || '').trim();
+      if (seriesKey && sSeries && seriesKey === sSeries) return true;
       const sUrl = String(s?.url || '').trim().toLowerCase();
       if (url && sUrl && (url === sUrl || url.includes(sUrl) || sUrl.includes(url))) return true;
       const sTitle = String(s?.title || '').trim().toLowerCase();
@@ -1301,33 +1450,54 @@ export function mountEventsFinder(root) {
 
   /**
    * @param {object} ev
+   * @param {{ series?: boolean }} [opts]
    */
-  async function hideEvent(ev) {
+  async function hideEvent(ev, opts = {}) {
     const id = String(ev.id || '').trim();
     if (!id) return;
     if (!filtersReady) return;
+    if (opts.series && !ev.isSeries) return;
     // Zoom/pan stay put via mapDidInitialFit (do not touch mapViewBeforePopup —
     // that stash is only for restoring the pre-pin-popup view).
-    const record = skippedRecordFromEventLocal(ev);
+    const record = skippedRecordFromEventLocal(ev, { series: Boolean(opts.series) });
+    if (!record) return;
+    const recordId = String(record.id || '');
+    const seriesKey = String(record.seriesKey || '').trim();
     const prevSkipped = Array.isArray(taste?.skippedEvents) ? [...taste.skippedEvents] : [];
     const nextSkipped = [
       record,
-      ...prevSkipped.filter((s) => String(s?.id || '') !== id),
+      ...prevSkipped.filter((s) => String(s?.id || '') !== recordId),
     ].filter(Boolean);
     const nextHidden = nextSkipped.map((s) => String(s.id));
     if (taste) {
       taste = { ...taste, skippedEvents: nextSkipped, hiddenEventIds: nextHidden };
     }
-    // Optimistic remove from main feed
+    // Optimistic remove from main feed (whole series when requested).
     if (lastEventsPayload && Array.isArray(lastEventsPayload.events)) {
-      const removed = lastEventsPayload.events.find((e) => String(e?.id || '') === id);
+      const removed = lastEventsPayload.events.filter((e) => {
+        if (String(e?.id || '') === id) return true;
+        if (seriesKey && String(e?.seriesKey || '') === seriesKey) return true;
+        return false;
+      });
+      const removedIds = new Set(removed.map((e) => String(e?.id || '')).filter(Boolean));
       lastEventsPayload = {
         ...lastEventsPayload,
-        events: lastEventsPayload.events.filter((e) => String(e?.id || '') !== id),
+        events: lastEventsPayload.events.filter((e) => {
+          if (removedIds.has(String(e?.id || ''))) return false;
+          if (seriesKey && String(e?.seriesKey || '') === seriesKey) return false;
+          return true;
+        }),
         skippedEvents: [
-          { ...(removed || ev), skipped: true, skippedAt: record?.skippedAt || new Date().toISOString() },
+          {
+            ...(removed[0] || ev),
+            id: recordId,
+            skipped: true,
+            skippedAt: record.skippedAt,
+            seriesKey: seriesKey || null,
+            isSeries: Boolean(opts.series),
+          },
           ...(Array.isArray(lastEventsPayload.skippedEvents)
-            ? lastEventsPayload.skippedEvents.filter((e) => String(e?.id || '') !== id)
+            ? lastEventsPayload.skippedEvents.filter((e) => String(e?.id || '') !== recordId)
             : []),
         ],
         skippedCount: nextSkipped.length,
@@ -1335,8 +1505,7 @@ export function mountEventsFinder(root) {
       paintEvents(lastEventsPayload);
     }
     const ok = await saveCriteria({
-      skippedEvents: nextSkipped,
-      hiddenEventIds: nextHidden,
+      skippedEvents: [record],
       silent: true,
       waitForIdle: true,
     });
@@ -1369,8 +1538,7 @@ export function mountEventsFinder(root) {
       paintEvents(lastEventsPayload);
     }
     const ok = await saveCriteria({
-      skippedEvents: nextSkipped,
-      hiddenEventIds: nextHidden,
+      unskipEventIds: [id],
       silent: true,
       waitForIdle: true,
     });
@@ -1686,12 +1854,28 @@ export function mountEventsFinder(root) {
     } else {
       hideBtn.className = 'events-finder__card-action events-finder__card-action--hide';
       hideBtn.setAttribute('aria-label', 'Skip this event');
-      hideBtn.title = 'Not interested — skip';
+      hideBtn.title = 'Not interested — skip this occurrence';
       hideBtn.textContent = 'Skip';
       hideBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
         void hideEvent(ev);
+      });
+    }
+
+    /** @type {HTMLButtonElement | null} */
+    let seriesBtn = null;
+    if (!opts.skippedMode && ev.isSeries && String(ev.seriesKey || '').trim()) {
+      seriesBtn = document.createElement('button');
+      seriesBtn.type = 'button';
+      seriesBtn.className = 'events-finder__card-action events-finder__card-action--hide-series';
+      seriesBtn.setAttribute('aria-label', 'Skip this series');
+      seriesBtn.title = 'Skip this recurring series (all upcoming occurrences)';
+      seriesBtn.textContent = 'Skip series';
+      seriesBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void hideEvent(ev, { series: true });
       });
     }
 
@@ -1708,11 +1892,17 @@ export function mountEventsFinder(root) {
       void markCalendarAdded(ev, calBtn);
     });
 
-    actions.append(upBtn, downBtn, hideBtn, calBtn);
+    if (seriesBtn) actions.append(upBtn, downBtn, hideBtn, seriesBtn, calBtn);
+    else actions.append(upBtn, downBtn, hideBtn, calBtn);
 
     const footerBits = [];
     const sourceLabel = eventSourceLabel(ev);
     if (sourceLabel) footerBits.push(sourceLabel);
+    if (opts.skippedMode && (ev.seriesKey || String(ev.id || '').startsWith('series:'))) {
+      footerBits.push('series skip');
+    } else if (!opts.skippedMode && ev.isSeries) {
+      footerBits.push('series');
+    }
     const footer = document.createElement('p');
     footer.className = 'events-finder__card-footer';
     if (footerBits.length) {
@@ -1848,12 +2038,23 @@ export function mountEventsFinder(root) {
     lastFilteredEvents = events;
     const gmail = data.sources?.gmail;
     const facebook = data.sources?.facebook;
+    const hadCards = listEl.querySelector('.events-finder__card') != null;
     listEl.replaceChildren();
+    if (data.ingestPending === true && !showSkipped) {
+      const updating = document.createElement('p');
+      updating.className = 'events-finder__stub events-finder__updating muted';
+      updating.textContent = 'Updating from sources…';
+      listEl.append(updating);
+    }
     if (!events.length) {
-      if (opts.fromCache && !showSkipped) {
+      if ((opts.fromCache || data.ingestPending) && !showSkipped) {
         listStatus.className = 'events-finder__stub muted';
-        listStatus.textContent = 'Refreshing events…';
-        listEl.append(listStatus);
+        listStatus.textContent = data.ingestPending
+          ? 'Updating from sources…'
+          : 'Refreshing events…';
+        if (!listEl.contains(listStatus) && !listEl.querySelector('.events-finder__updating')) {
+          listEl.append(listStatus);
+        }
         if (mapBackdrop) syncMap([], data);
         return;
       }
@@ -1869,8 +2070,8 @@ export function mountEventsFinder(root) {
         empty.textContent =
           gmail.hint ||
           'Connect Intake Gmail (invites) in Settings → Events sources, set APIFY_TOKEN, and/or pin Facebook hosts in Filter criteria.';
-      } else if (facebook?.refreshing) {
-        empty.textContent = 'Facebook scrape running — refresh in a minute.';
+      } else if (facebook?.refreshing || data.ingestPending) {
+        empty.textContent = 'Updating from sources…';
       } else {
         empty.textContent =
           'No upcoming events matched your filters. Add Look for terms, pin hosts, or connect Gmail for invites.';
@@ -1888,27 +2089,87 @@ export function mountEventsFinder(root) {
     for (const ev of events) {
       listEl.append(buildEventCard(ev, { ...opts, skippedMode: showSkipped }));
     }
-    if (mapBackdrop) syncMap(events, data);
+    if (mapBackdrop && (hadCards || !opts.fromCache || events.length)) {
+      syncMap(events, data);
+    }
   }
 
-  async function loadEvents() {
-    const hadCache = listEl.querySelector('.events-finder__card') != null;
-    if (!hadCache) {
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let ingestPollTimer = null;
+  let ingestPollGen = 0;
+
+  function stopIngestPoll() {
+    if (ingestPollTimer != null) {
+      clearTimeout(ingestPollTimer);
+      ingestPollTimer = null;
+    }
+    ingestPollGen += 1;
+  }
+
+  /**
+   * Poll catalog-only while background ingest upserts sources progressively.
+   */
+  function startIngestPoll() {
+    const gen = ++ingestPollGen;
+    if (ingestPollTimer != null) {
+      clearTimeout(ingestPollTimer);
+      ingestPollTimer = null;
+    }
+    let attempts = 0;
+    const maxAttempts = 24;
+
+    const tick = () => {
+      if (gen !== ingestPollGen) return;
+      attempts += 1;
+      void loadEvents({ catalogOnly: true, quiet: true, pollAttempt: attempts }).then((pending) => {
+        if (gen !== ingestPollGen) return;
+        if (pending && attempts < maxAttempts) {
+          ingestPollTimer = setTimeout(tick, attempts < 4 ? 1500 : 3000);
+        } else {
+          ingestPollTimer = null;
+        }
+      });
+    };
+    ingestPollTimer = setTimeout(tick, 1500);
+  }
+
+  /**
+   * @param {{ catalogOnly?: boolean, quiet?: boolean, pollAttempt?: number }} [opts]
+   * @returns {Promise<boolean>} whether ingest is still pending
+   */
+  async function loadEvents(opts = {}) {
+    const quiet = opts.quiet === true;
+    const catalogOnly = opts.catalogOnly === true;
+    const hadDomCache = listEl.querySelector('.events-finder__card') != null;
+    const hadStorageCache = Boolean(readPanelCache(EVENTS_CACHE_KEY, EVENTS_CACHE_MAX_MS));
+    const hasSomething = hadDomCache || Boolean(lastEventsPayload) || hadStorageCache;
+
+    if (!quiet && !hasSomething) {
       listStatus.hidden = false;
       listStatus.className = 'events-finder__stub muted';
       listStatus.textContent = 'Loading events…';
       if (!listEl.contains(listStatus)) listEl.replaceChildren(listStatus);
     }
+
     try {
-      const r = await fetch('/api/events-finder/events', { cache: 'no-store' });
+      const url = catalogOnly
+        ? '/api/events-finder/events?catalogOnly=1'
+        : '/api/events-finder/events';
+      const r = await fetch(url, { cache: 'no-store' });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || data.ok === false) {
         throw new Error(data.error || data.hint || `HTTP ${r.status}`);
       }
       writePanelCache(EVENTS_CACHE_KEY, data);
-      paintEvents(data);
+      paintEvents(data, { fromCache: quiet && data.ingestPending === true });
+      if (data.ingestPending === true) {
+        if (!catalogOnly || opts.pollAttempt == null) startIngestPoll();
+        return true;
+      }
+      if (!catalogOnly) stopIngestPoll();
+      return false;
     } catch (e) {
-      if (hadCache) return;
+      if (hasSomething) return Boolean(opts.pollAttempt);
       listEl.replaceChildren();
       const err = document.createElement('p');
       err.className = 'events-finder__stub events-finder__msg--err';
@@ -1917,6 +2178,7 @@ export function mountEventsFinder(root) {
           ? String(e.message)
           : 'Could not load events.';
       listEl.append(err);
+      return false;
     }
   }
 
@@ -2074,6 +2336,7 @@ export function mountEventsFinder(root) {
     taste = {
       lookFor: typeof data.lookFor === 'string' ? data.lookFor : '',
       skip: typeof data.skip === 'string' ? data.skip : '',
+      blacklist: typeof data.blacklist === 'string' ? data.blacklist : '',
       scrape: data.scrape && typeof data.scrape === 'object' ? data.scrape : undefined,
       hiddenEventIds: Array.isArray(data.hiddenEventIds)
         ? data.hiddenEventIds.map(String)
@@ -2123,16 +2386,12 @@ export function mountEventsFinder(root) {
 
   const cachedCriteria = readPanelCache(CRITERIA_CACHE_KEY, CRITERIA_CACHE_MAX_MS);
   if (cachedCriteria && typeof cachedCriteria === 'object') {
+    // Enable filters UI from cache, but do not paint events until network criteria
+    // arrives — stale localStorage skip lists were reviving already-skipped cards.
     applyCriteria(cachedCriteria, { enable: true });
   }
 
   const cachedEvents = readPanelCache(EVENTS_CACHE_KEY, EVENTS_CACHE_MAX_MS);
-  if (cachedEvents && typeof cachedEvents === 'object') {
-    const painted = taste
-      ? applyTasteToEventsPayload(cachedEvents, taste)
-      : cachedEvents;
-    paintEvents(painted, { fromCache: true });
-  }
 
   void loadEvents();
 
@@ -2144,9 +2403,25 @@ export function mountEventsFinder(root) {
       }
       writePanelCache(CRITERIA_CACHE_KEY, data);
       applyCriteria(data, { enable: true });
+      // Paint cached events only after authoritative skips are loaded.
+      if (cachedEvents && typeof cachedEvents === 'object' && !lastEventsPayload) {
+        const painted = taste
+          ? applyTasteToEventsPayload(cachedEvents, taste)
+          : cachedEvents;
+        paintEvents(painted, { fromCache: true });
+      }
     })
     .catch((e) => {
-      if (filtersReady) return;
+      if (filtersReady) {
+        // Criteria fetch failed but cache enabled UI — still show cached events.
+        if (cachedEvents && typeof cachedEvents === 'object' && !lastEventsPayload) {
+          const painted = taste
+            ? applyTasteToEventsPayload(cachedEvents, taste)
+            : cachedEvents;
+          paintEvents(painted, { fromCache: true });
+        }
+        return;
+      }
       filterMsg.classList.add('events-finder__msg--err');
       filterMsg.textContent =
         e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Could not load filters.';

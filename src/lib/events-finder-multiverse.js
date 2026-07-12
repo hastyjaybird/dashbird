@@ -248,7 +248,7 @@ export async function fetchMultiverseSchoolEvents(env = process.env, opts = {}) 
   let weeks = 2;
   try {
     const criteria = await loadEventsFinderCriteria();
-    weeks = Math.min(Math.max(Number(criteria.scrape?.windowWeeks) || 2, 1), 4);
+    weeks = Math.min(Math.max(Number(criteria.scrape?.windowWeeks) || 2, 1), 5);
   } catch {
     /* defaults */
   }

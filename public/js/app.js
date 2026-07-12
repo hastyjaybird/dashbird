@@ -57,15 +57,18 @@ function renderTopbarContext(el, place) {
 
 let settingsLoaded = false;
 let houseHunterLoaded = false;
+let networkLoaded = false;
 
-/** @param {'main' | 'house-hunter' | 'settings'} page */
+/** @param {'main' | 'network' | 'house-hunter' | 'settings'} page */
 function showPage(page) {
   const main = document.getElementById('page-main');
   const settings = document.getElementById('page-settings');
   const houseHunter = document.getElementById('page-house-hunter');
+  const network = document.getElementById('page-network');
   if (main) main.hidden = page !== 'main';
   if (settings) settings.hidden = page !== 'settings';
   if (houseHunter) houseHunter.hidden = page !== 'house-hunter';
+  if (network) network.hidden = page !== 'network';
   if (page === 'settings' && !settingsLoaded) {
     settingsLoaded = true;
     mountSettingsPage(document.getElementById('mount-settings'));
@@ -77,6 +80,14 @@ function showPage(page) {
         mountHouseHunter(document.getElementById('mount-house-hunter'));
       })
       .catch((e) => console.error('House Hunter mount failed:', e));
+  }
+  if (page === 'network' && !networkLoaded) {
+    networkLoaded = true;
+    import('./panels/network.js')
+      .then(({ mountNetwork }) => {
+        mountNetwork(document.getElementById('mount-network'));
+      })
+      .catch((e) => console.error('Network mount failed:', e));
   }
 }
 

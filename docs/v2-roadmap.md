@@ -36,10 +36,10 @@ Cross-reference: v1 ships the dashboard shell and core panels; v2 items mount in
 ### 4. Events
 
 - **UI slot today:** left sidebar card `Events` — filters + feed from ingest (Gmail intake first); Settings has sources table, filter criteria, and ingestion smoke tests.
-- **Live ingest:** Intake Gmail (`jay.intake.box@gmail.com`) via Gmail API OAuth — see Events sources roadmap §7. Facebook via Apify when configured.
+- **Live ingest:** Intake Gmail (`jay.intake.box@gmail.com`) via Gmail API OAuth — see Events sources roadmap §7. Facebook via Apify when configured. **Telegram** bot poller when `TELEGRAM_BOT_TOKEN` is set (`src/lib/events-finder-telegram.js`).
+- **Map view — live:** Leaflet map alongside the list feed (`public/js/panels/events-finder.js`, geo from venue / criteria).
 - **Event catalog:** local SQLite at `data/events-finder.db` (`src/lib/events-finder-store.js`) — sources upsert; feed reads the catalog. Criteria remain in `data/events-finder-criteria.json`.
 - **V2 build:** more curated sources (Meetup, Eventbrite, Luma/Partiful), thumbs up/down + optional feedback window, preference store and ranking.
-- **Later:** **map view** — plot catalog events on a map (geo from venue / criteria), alongside the list feed.
 - **Per-source ingest plan:** [`docs/events-sources-roadmap.md`](events-sources-roadmap.md).
 
 ### 5. Personal / local news
@@ -47,10 +47,11 @@ Cross-reference: v1 ships the dashboard shell and core panels; v2 items mount in
 - **UI slot today:** left sidebar card `Local News` — **visual placeholder only**.
 - **V2 build:** personal/local feed with the same preference-learning pattern as Events.
 
-### 6. Friend CRM
+### 6. Network (CRM)
 
-- **Later build:** personal friend/contact CRM in the dashboard (people, notes, last contact, tags — exact schema TBD).
-- **Ingest:** new-friend capture via **Telegram** (bot or channel → CRM create/update), so meeting someone can land in the CRM without manual entry.
+- **Tab:** topbar **Network** page (`page-network`) — friends + business contacts CRM.
+- **Fields:** people, notes, last contact, tags, org/title, channels, enrichment.
+- **Ingest:** Telegram classifier routes contact messages into Network (same bot as events; distinct destination).
 
 ### 7. Optional expansions (v2 or later)
 

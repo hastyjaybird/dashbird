@@ -2,7 +2,7 @@ import { focusWebSearchInput } from './web-search.js';
 
 const LS_PAGE_KEY = 'dashbirdPage';
 
-/** @typedef {'main' | 'house-hunter' | 'settings'} DashbirdPage */
+/** @typedef {'main' | 'network' | 'house-hunter' | 'settings'} DashbirdPage */
 
 /**
  * @param {{ onChange: (page: DashbirdPage) => void }} opts
@@ -17,9 +17,10 @@ export function mountPageTabs(mountEl, opts) {
   tabsWrap.setAttribute('aria-label', 'Dashboard pages');
 
   /** @type {{ id: DashbirdPage, label: string, el: HTMLButtonElement }[]} */
+  // House Hunter tab omitted until work starts (page mount still exists for later).
   const tabs = [
     { id: 'main', label: 'Main', el: document.createElement('button') },
-    { id: 'house-hunter', label: 'House Hunter', el: document.createElement('button') },
+    { id: 'network', label: 'Network', el: document.createElement('button') },
     { id: 'settings', label: 'Settings', el: document.createElement('button') },
   ];
 
@@ -38,7 +39,11 @@ export function mountPageTabs(mountEl, opts) {
   /** @returns {DashbirdPage} */
   function loadPage() {
     const p = localStorage.getItem(LS_PAGE_KEY);
-    if (p === 'settings' || p === 'house-hunter') return p;
+    // house-hunter hidden for now — fall back to main if last page was that tab
+    if (p === 'house-hunter') return 'main';
+    if (p === 'settings' || p === 'network' || p === 'nrm') {
+      return p === 'nrm' ? 'network' : p;
+    }
     return 'main';
   }
 
@@ -52,6 +57,7 @@ export function mountPageTabs(mountEl, opts) {
     localStorage.setItem(LS_PAGE_KEY, page);
     document.body.classList.toggle('dashy--page-settings', page === 'settings');
     document.body.classList.toggle('dashy--page-house-hunter', page === 'house-hunter');
+    document.body.classList.toggle('dashy--page-network', page === 'network');
     document.dispatchEvent(new CustomEvent('dashbird:page', { detail: { page } }));
     opts.onChange(page);
     if (page === 'main') focusWebSearchInput();

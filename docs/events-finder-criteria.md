@@ -14,95 +14,128 @@ Source scraps: `exampleevents/whitelist.txt`, `exampleevents/fblinks.txt`, `exam
 Saved in criteria `lookFor` (one idea per line). Used for ranking and Facebook Apify `searchQueries`.
 
 ```
-hack-a-thons
+ai
+air pusher
+anniversary
+artificial
+athletic playground
+birthday
+bombay beach
+box shop
+BRC
+burlesque
+burningman
+campout
+circus
 climate
-sustainability
-ai and climate
+climate cocktails
+Clothing Swap
+comedy
 community
-startup
+crucible
+curiosities
+dorkbot
+earth day
+energy
+equinox
+existential
+exploratorium
+expo
+fail night
+fairyland
+festival
+flea
+founder
 founder dating
 founder meetup
-interactive
-circus
-burlesque
-soiled dove
-vaudevere
-campout
-existential
-playa
-burningman
-queer
-pride
-comedy
-potluck
-ai
-flea
-market
-thrift
-guild
 fundraiser
-air pusher
-solstice
-equinox
+gala
+good people
+green drinks
+guild
+hack-a-thons
+hands on
+interactive
+jamie de wolf
+makerfare
+Makers
+market
 meltdown
 mutant
-oddity
-oddities
-curiosities
-expo
-birthday
-anniversary
-obtainium
-street fair
-reggae down the river
-festival
-optimism
-earth day
-artificial
-UN
-fail night
-retreat
-climate cocktails
-green drinks
-box shop
-towne cycles
-obtainium works
-fairyland
-omni commons
-noisebridge
-tiat
-athletic playground
-wasteland weekend
 neotropolis (producers of wasteland)
-bombay beach
-the institute
-phage
 nerd night
-exploratorium
-makerfare
+noisebridge
+obtainium
+obtainium works
+oddities
+oddity
+omni commons
 open sauce
+optimism
+optimist
+phage
+philosophy
+playa
+potluck
+pride
+queer
+reggae down the river
+retreat
 ruckas
-jamie de wolf
-crucible
-gala
-dorkbot
-good people
+science
+society
+soiled dove
+solstice
+startup
+street fair
+sustainability
+technology
+the institute
+thrift
+tiat
+towne cycles
+UN
+vaudevere
+wasteland weekend
 ```
 
-## 2. Skip (taste — Settings)
+## 2. Grey list (taste — Settings)
 
-Saved in criteria `skip`.
+Saved in criteria `skip`. Hides matching events **only when no Look for (whitelist) line also matches**.
 
 ```
+anything before 10am
 beach clean up
 beach cleanups
+bowling
+certification
 concerts
-marathon
-sound bath
-meditation
+conscious
+disco
+film festival
+Finals
 hike
-anything before 11am
 if DJs are the only point of interest
+justice
+kaiser
+marathon
+meditation
+Reggaeton
+Soccer
+soul
+sound bath
+tasting
+Watch Party
+watercolor
+wellness
+```
+
+## 2b. Black list (taste — Settings)
+
+Saved in criteria `blacklist`. Always hides matching events, **even when a Look for line also matches**.
+
+```
+(empty by default — add hard blocks in Settings → Filter criteria)
 ```
 
 ## 3. Keyword whitelist (from `exampleevents/`)
@@ -110,77 +143,74 @@ if DJs are the only point of interest
 Source list from `exampleevents/whitelist.txt`. Deduped and appended into **Look for** (Settings) above.
 
 ```
-interactive
-circus
+ai
+air pusher
+anniversary
+artificial
+athletic playground
+birthday
+bombay beach
+box shop
 burlesque
-soiled dove
-vaudevere
-campout
-existential
-playa
 burningman
-queer
-pride
+campout
+circus
+climate
+climate cocktails
 comedy
 community
-potluck
-ai
-climate
-sustainability
-flea
-market
-thrift
-guild
-fundraiser
-air pusher
-solstice
+crucible
+curiosities
+dorkbot
+earth day
 equinox
+existential
+exploratorium
+expo
+fail night
+fairyland
+festival
+flea
+fundraiser
+gala
+good people
+green drinks
+guild
+interactive
+jamie de wolf
+makerfare
+market
 meltdown
 mutant
-oddity
-oddities
-curiosities
-expo
-birthday
-anniversary
-obtainium
-street fair
-reggae down the river
-festival
-optimism
-earth day
-artificial
-ai
-UN
-fail night
-retreat
-climate cocktails
-green drinks
-comedy
-box shop
-air pusher
-towne cycles
-obtainium works
-fairyland
-omni commons
-noisebridge
-tiat
-athletic playground
-wasteland weekend
 neotropolis (producers of wasteland)
-bombay beach
-the institute
-phage
 nerd night
-exploratorium
-makerfare
+noisebridge
+obtainium
+obtainium works
+oddities
+oddity
+omni commons
 open sauce
+optimism
+phage
+playa
+potluck
+pride
+queer
+reggae down the river
+retreat
 ruckas
-jamie de wolf
-crucible
-gala
-dorkbot
-good people
+soiled dove
+solstice
+street fair
+sustainability
+the institute
+thrift
+tiat
+towne cycles
+UN
+vaudevere
+wasteland weekend
 ```
 
 ## 4. Feed filters (Settings)

@@ -11,6 +11,7 @@ import {
   eventsIngestWindowDays,
   filterEventsToIngestWindow,
 } from './events-finder-window.js';
+import { loadEventsFinderCriteria } from './events-finder-criteria-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..', '..');
@@ -26,6 +27,82 @@ export const GMAIL_EVENTS_SCOPE = 'https://www.googleapis.com/auth/gmail.readonl
 const TOKEN_URI = 'https://oauth2.googleapis.com/token';
 const AUTH_URI = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1';
+
+/** @type {Promise<object> | null} */
+let gmailEventsInflight = null;
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {string}
+ */
+export function gmailEventsCachePath(env = process.env) {
+  const override = String(env.GMAIL_EVENTS_CACHE_PATH || '').trim();
+  if (override) {
+    return path.isAbsolute(override) ? override : path.join(root, override);
+  }
+  return path.join(root, 'data', 'gmail-events-cache.json');
+}
+
+/**
+ * Disk TTL for intake parse results. IMAP is ~10–20s; do not re-hit on every sidebar open.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+function gmailEventsCacheTtlMs(env = process.env) {
+  const raw = Number(env.GMAIL_EVENTS_CACHE_MS);
+  if (Number.isFinite(raw) && raw >= 60_000) return raw;
+  return 30 * 60 * 1000;
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function readGmailEventsCache(env = process.env) {
+  try {
+    const raw = await readFile(gmailEventsCachePath(env), 'utf8');
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object' || !Array.isArray(data.events)) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {object} payload
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function writeGmailEventsCache(payload, env = process.env) {
+  const p = gmailEventsCachePath(env);
+  await mkdir(path.dirname(p), { recursive: true });
+  await writeFile(p, JSON.stringify(payload, null, 2), 'utf8');
+}
+
+/**
+ * @param {string[]} addresses
+ * @param {string} query
+ * @param {{ pastDays?: number, futureDays?: number, windowWeeks?: number } | null | undefined} windowDays
+ */
+function gmailCacheFingerprint(addresses, query, windowDays) {
+  return JSON.stringify({
+    addresses: [...addresses].map((a) => String(a || '').toLowerCase()).sort(),
+    query: String(query || ''),
+    pastDays: windowDays?.pastDays ?? null,
+    futureDays: windowDays?.futureDays ?? null,
+    windowWeeks: windowDays?.windowWeeks ?? null,
+  });
+}
+
+/**
+ * @param {object | null} cache
+ * @param {string} fingerprint
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function gmailCacheFresh(cache, fingerprint, env = process.env) {
+  if (!cache?.cachedAt || cache.fingerprint !== fingerprint) return false;
+  const age = Date.now() - Date.parse(cache.cachedAt);
+  return Number.isFinite(age) && age >= 0 && age < gmailEventsCacheTtlMs(env);
+}
 
 const DEFAULT_QUERY =
   'newer_than:35d (filename:ics OR subject:(invite OR invitation OR RSVP OR event OR meetup OR "you\'re invited" OR "join us") OR from:(partiful.com OR secretparty.io OR lu.ma OR eventbrite.com OR meetup.com OR facebookmail.com OR metamail.com OR facebook.com))';
@@ -963,7 +1040,12 @@ export async function fetchGmailEventAnnouncementsFor(email, env = process.env, 
   if (appPassword) {
     try {
       const { fetchGmailEventsViaImap } = await import('./events-finder-gmail-imap.js');
-      return await fetchGmailEventsViaImap(address, appPassword, env, { maxMessages });
+      return await fetchGmailEventsViaImap(address, appPassword, env, {
+        maxMessages,
+        windowDays: opts.windowDays,
+        scrape: opts.scrape,
+        windowWeeks: opts.windowWeeks,
+      });
     } catch (e) {
       return {
         ok: false,
@@ -1007,7 +1089,12 @@ export async function fetchGmailEventAnnouncementsFor(email, env = process.env, 
       events.push(...eventsFromGmailMessage(msg, 'America/Los_Angeles', { mailbox }));
     }
 
-    const windowDays = eventsIngestWindowDays(env);
+    const windowDays =
+      opts.windowDays
+      || eventsIngestWindowDays(env, {
+        scrape: opts.scrape,
+        windowWeeks: opts.windowWeeks,
+      });
     const filtered = filterEventsToIngestWindow(events, {
       pastDays: windowDays.pastDays,
       futureDays: windowDays.futureDays,
@@ -1035,61 +1122,146 @@ export async function fetchGmailEventAnnouncementsFor(email, env = process.env, 
 
 /**
  * Fetch + parse event announcements from all configured intake inboxes.
+ * Horizon follows Scrape ahead (criteria.scrape.windowWeeks) unless opts override.
+ * Disk cache + single-flight avoid ~10–20s IMAP on every Events sidebar load.
  * @param {NodeJS.ProcessEnv} [env]
- * @param {{ maxMessages?: number }} [opts]
+ * @param {{
+ *   maxMessages?: number,
+ *   forceRefresh?: boolean,
+ *   scrape?: { windowWeeks?: number } | null,
+ *   windowWeeks?: number,
+ *   windowDays?: { pastDays: number, futureDays: number, windowWeeks?: number },
+ * }} [opts]
  */
 export async function fetchGmailEventAnnouncements(env = process.env, opts = {}) {
+  let scrape = opts.scrape;
+  if (!opts.windowDays && scrape == null && opts.windowWeeks == null) {
+    try {
+      const criteria = await loadEventsFinderCriteria();
+      scrape = criteria?.scrape || null;
+    } catch {
+      scrape = null;
+    }
+  }
+  const windowDays =
+    opts.windowDays || eventsIngestWindowDays(env, { scrape, windowWeeks: opts.windowWeeks });
+  const fetchOpts = { ...opts, scrape, windowDays };
+  const force = opts.forceRefresh === true;
+
   const addresses = gmailIntakeAddresses(env);
-  const results = await Promise.all(
-    addresses.map((addr) => fetchGmailEventAnnouncementsFor(addr, env, opts)),
-  );
+  const query = gmailEventsQuery(env);
+  const fingerprint = gmailCacheFingerprint(addresses, query, windowDays);
 
-  /** @type {Awaited<ReturnType<typeof eventsFromGmailMessage>>} */
-  const events = [];
-  /** @type {string[]} */
-  const emailsOk = [];
-  /** @type {string[]} */
-  const hints = [];
-  let scanned = 0;
-  let anyOk = false;
-
-  for (const r of results) {
-    scanned += r.scanned || 0;
-    if (r.ok) {
-      anyOk = true;
-      if (r.email) emailsOk.push(r.email);
-      events.push(...(r.events || []));
-    } else if (r.hint) {
-      hints.push(`${r.email}: ${r.hint}`);
+  if (!force) {
+    const cache = await readGmailEventsCache(env);
+    if (gmailCacheFresh(cache, fingerprint, env)) {
+      return {
+        ...cache,
+        ok: true,
+        fromCache: true,
+        stale: false,
+        cachedAt: cache.cachedAt || null,
+        events: Array.isArray(cache.events) ? cache.events : [],
+        windowDays: cache.windowDays || windowDays,
+      };
     }
   }
 
-  // Dedupe by platform URL when present, else by id
-  const seen = new Set();
-  /** @type {typeof events} */
-  const deduped = [];
-  for (const ev of events) {
-    const urlKey = ev.url && !ev.url.includes('mail.google.com')
-      ? `url:${String(ev.url).split('#')[0].toLowerCase()}`
-      : `id:${ev.id}`;
-    if (seen.has(urlKey)) continue;
-    seen.add(urlKey);
-    deduped.push(ev);
+  if (!force && gmailEventsInflight) {
+    return gmailEventsInflight;
   }
 
-  deduped.sort((a, b) => {
-    const am = a.start ? Date.parse(a.start) : Number.POSITIVE_INFINITY;
-    const bm = b.start ? Date.parse(b.start) : Number.POSITIVE_INFINITY;
-    return am - bm;
-  });
+  const run = (async () => {
+    const results = await Promise.all(
+      addresses.map((addr) => fetchGmailEventAnnouncementsFor(addr, env, fetchOpts)),
+    );
 
-  if (!anyOk) {
-    return {
-      ok: false,
-      error: results[0]?.error || 'gmail_auth',
-      hint: hints.join(' · ') || results[0]?.hint || 'Connect Gmail intake',
-      email: addresses.join(', '),
-      emails: addresses,
+    /** @type {Awaited<ReturnType<typeof eventsFromGmailMessage>>} */
+    const events = [];
+    /** @type {string[]} */
+    const emailsOk = [];
+    /** @type {string[]} */
+    const hints = [];
+    let scanned = 0;
+    let anyOk = false;
+
+    for (const r of results) {
+      scanned += r.scanned || 0;
+      if (r.ok) {
+        anyOk = true;
+        if (r.email) emailsOk.push(r.email);
+        events.push(...(r.events || []));
+      } else if (r.hint) {
+        hints.push(`${r.email}: ${r.hint}`);
+      }
+    }
+
+    // Dedupe by platform URL when present, else by id
+    const seen = new Set();
+    /** @type {typeof events} */
+    const deduped = [];
+    for (const ev of events) {
+      const urlKey = ev.url && !ev.url.includes('mail.google.com')
+        ? `url:${String(ev.url).split('#')[0].toLowerCase()}`
+        : `id:${ev.id}`;
+      if (seen.has(urlKey)) continue;
+      seen.add(urlKey);
+      deduped.push(ev);
+    }
+
+    deduped.sort((a, b) => {
+      const am = a.start ? Date.parse(a.start) : Number.POSITIVE_INFINITY;
+      const bm = b.start ? Date.parse(b.start) : Number.POSITIVE_INFINITY;
+      return am - bm;
+    });
+
+    if (!anyOk) {
+      const failed = {
+        ok: false,
+        fromCache: false,
+        stale: false,
+        cachedAt: null,
+        error: results[0]?.error || 'gmail_auth',
+        hint: hints.join(' · ') || results[0]?.hint || 'Connect Gmail intake',
+        email: addresses.join(', '),
+        emails: addresses,
+        accounts: results.map((r) => ({
+          email: r.email,
+          ok: r.ok,
+          error: r.error || null,
+          hint: r.hint || null,
+          scanned: r.scanned || 0,
+          count: Array.isArray(r.events) ? r.events.length : 0,
+        })),
+        scanned,
+        events: [],
+        windowDays,
+      };
+      // Prefer stale cache over empty failure (sidebar still paints prior intake).
+      const stale = await readGmailEventsCache(env);
+      if (stale && Array.isArray(stale.events) && stale.events.length) {
+        return {
+          ...stale,
+          ok: true,
+          fromCache: true,
+          stale: true,
+          error: failed.error,
+          hint: failed.hint || 'Using stale Gmail cache',
+          events: stale.events,
+          windowDays: stale.windowDays || windowDays,
+        };
+      }
+      return failed;
+    }
+
+    const payload = {
+      ok: true,
+      fromCache: false,
+      stale: false,
+      cachedAt: new Date().toISOString(),
+      fingerprint,
+      email: emailsOk.join(', '),
+      emails: emailsOk,
       accounts: results.map((r) => ({
         email: r.email,
         ok: r.ok,
@@ -1098,28 +1270,26 @@ export async function fetchGmailEventAnnouncements(env = process.env, opts = {})
         scanned: r.scanned || 0,
         count: Array.isArray(r.events) ? r.events.length : 0,
       })),
+      query,
       scanned,
-      events: [],
+      events: deduped,
+      windowDays,
+      hint: hints.length ? hints.join(' · ') : null,
+      error: null,
     };
-  }
+    try {
+      await writeGmailEventsCache(payload, env);
+    } catch (e) {
+      console.warn('[events-finder] gmail cache write failed:', e?.message || e);
+    }
+    return payload;
+  })();
 
-  return {
-    ok: true,
-    email: emailsOk.join(', '),
-    emails: emailsOk,
-    accounts: results.map((r) => ({
-      email: r.email,
-      ok: r.ok,
-      error: r.error || null,
-      hint: r.hint || null,
-      scanned: r.scanned || 0,
-      count: Array.isArray(r.events) ? r.events.length : 0,
-    })),
-    query: gmailEventsQuery(env),
-    scanned,
-    events: deduped,
-    hint: hints.length ? hints.join(' · ') : null,
-  };
+  gmailEventsInflight = run;
+  run.finally(() => {
+    if (gmailEventsInflight === run) gmailEventsInflight = null;
+  });
+  return run;
 }
 
 /**

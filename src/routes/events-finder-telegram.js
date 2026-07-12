@@ -8,6 +8,7 @@ import {
   telegramBotToken,
   telegramEventsEnabled,
 } from '../lib/events-finder-telegram.js';
+import { telegramIntakeQueueStats } from '../lib/telegram-intake-queue.js';
 
 const router = Router();
 
@@ -23,6 +24,7 @@ router.get('/status', async (_req, res) => {
       enabled: telegramEventsEnabled(),
       tokenConfigured: Boolean(telegramBotToken()),
       allowedChatIds: [...telegramAllowedChatIds()],
+      queue: telegramIntakeQueueStats(),
       probe,
     });
   } catch (e) {

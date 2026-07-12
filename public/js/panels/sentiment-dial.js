@@ -17,8 +17,8 @@ export function createSentimentDialBlock() {
   head.href = FNG_PAGE;
   head.target = '_blank';
   head.rel = 'noopener noreferrer';
-  head.textContent = 'F&G Index';
-  head.title = 'CNN Business F&G Index (opens in new tab)';
+  head.textContent = 'F & G Index';
+  head.title = 'CNN Business F & G Index (opens in new tab)';
 
   const dialMount = document.createElement('div');
   dialMount.className = 'sentiment-dial__dial-mount';
@@ -29,7 +29,7 @@ export function createSentimentDialBlock() {
 
   section.append(head, dialMount, status);
 
-  const dial = createIndicatorDial(dialMount, { ariaLabel: 'F&G Index dial' });
+  const dial = createIndicatorDial(dialMount, { ariaLabel: 'F & G Index dial' });
 
   /** @type {{ score: number, label: string } | null} */
   let lastGood = null;

@@ -462,7 +462,7 @@ function openEventsFilterCriteriaModal() {
   const skipLabel = document.createElement('label');
   skipLabel.className = 'settings-page__modal-field-label';
   skipLabel.htmlFor = 'settings-events-criteria-skip';
-  skipLabel.textContent = 'Skip (blacklist)';
+  skipLabel.textContent = 'Grey list';
   const skipCount = document.createElement('span');
   skipCount.className = 'settings-page__modal-count';
   skipCount.textContent = '';
@@ -471,7 +471,7 @@ function openEventsFilterCriteriaModal() {
   const skipHint = document.createElement('p');
   skipHint.className = 'settings-page__modal-field-hint';
   skipHint.textContent =
-    'Hide matching catalog events from the feed unless a Look for line also matches. Feed-only — does not change what Apify scrapes or what you pay.';
+    'Hide matching catalog events only when no Look for (whitelist) line also matches. Feed-only — does not change what Apify scrapes or what you pay.';
 
   const skipArea = document.createElement('textarea');
   skipArea.id = 'settings-events-criteria-skip';
@@ -480,6 +480,29 @@ function openEventsFilterCriteriaModal() {
   skipArea.spellcheck = true;
   skipArea.placeholder = 'Loading…';
 
+  const blackLabelRow = document.createElement('div');
+  blackLabelRow.className = 'settings-page__modal-label-row';
+  const blackLabel = document.createElement('label');
+  blackLabel.className = 'settings-page__modal-field-label';
+  blackLabel.htmlFor = 'settings-events-criteria-blacklist';
+  blackLabel.textContent = 'Black list';
+  const blackCount = document.createElement('span');
+  blackCount.className = 'settings-page__modal-count';
+  blackCount.textContent = '';
+  blackLabelRow.append(blackLabel, blackCount);
+
+  const blackHint = document.createElement('p');
+  blackHint.className = 'settings-page__modal-field-hint';
+  blackHint.textContent =
+    'Always hide matching catalog events, even if a Look for (whitelist) line also matches. Feed-only.';
+
+  const blackArea = document.createElement('textarea');
+  blackArea.id = 'settings-events-criteria-blacklist';
+  blackArea.className = 'settings-page__modal-textarea';
+  blackArea.rows = 5;
+  blackArea.spellcheck = true;
+  blackArea.placeholder = 'Loading…';
+
   const ingestHeading = document.createElement('h4');
   ingestHeading.className = 'settings-page__modal-subheading';
   ingestHeading.textContent = '2. Ingestion window';
@@ -487,7 +510,7 @@ function openEventsFilterCriteriaModal() {
   const ingestHint = document.createElement('p');
   ingestHint.className = 'settings-page__modal-field-hint';
   ingestHint.textContent =
-    'How far ahead to keep scraped events. Browse date picks stay in the sidebar Filters panel.';
+    'Scrape ahead limits bulk discovery (Gmail, Facebook, Multiverse) and rolls the Events sidebar date picks. Telegram intake is not gated — far-future invites are saved when you send them.';
 
   const weeksLabel = document.createElement('label');
   weeksLabel.className = 'settings-page__modal-field-label';
@@ -497,18 +520,40 @@ function openEventsFilterCriteriaModal() {
   const weeksSelect = document.createElement('select');
   weeksSelect.id = 'settings-events-criteria-weeks';
   weeksSelect.className = 'settings-page__modal-input settings-page__modal-input--select';
-  for (const w of [1, 2, 3, 4, 5]) {
-    const opt = document.createElement('option');
-    opt.value = String(w);
-    opt.textContent =
-      w === 4
-        ? 'Rolling 4 weeks (~30 days)'
-        : w === 5
-          ? 'Rolling 5 weeks'
-          : `Rolling ${w} week${w === 1 ? '' : 's'}`;
-    weeksSelect.append(opt);
+
+  /**
+   * @param {number} [selected]
+   */
+  function renderWeeksOptions(selected = 4) {
+    weeksSelect.replaceChildren();
+    for (const w of [1, 2, 3, 4, 5]) {
+      const opt = document.createElement('option');
+      opt.value = String(w);
+      const days = w * 7;
+      opt.textContent = `Rolling ${w} week${w === 1 ? '' : 's'} (~${days} days)`;
+      weeksSelect.append(opt);
+    }
+    weeksSelect.value = String(selected);
   }
-  weeksSelect.value = '4';
+  renderWeeksOptions(4);
+
+  const weeksLiveHint = document.createElement('p');
+  weeksLiveHint.className = 'settings-page__modal-field-hint';
+  weeksLiveHint.id = 'settings-events-criteria-weeks-hint';
+
+  /**
+   * @param {number} [weeks]
+   * @param {{ futureDays?: number } | null} [ingestWindow]
+   */
+  function updateWeeksLiveHint(weeks, ingestWindow = null) {
+    const w = Number(weeks) || Number(weeksSelect.value) || 4;
+    const days = ingestWindow?.futureDays || w * 7;
+    weeksLiveHint.textContent = `Keeps events from ~2 days ago through ~${days} days ahead (rolling ${w} week${w === 1 ? '' : 's'} from today).`;
+  }
+  updateWeeksLiveHint(4);
+  weeksSelect.addEventListener('change', () => {
+    updateWeeksLiveHint(Number(weeksSelect.value));
+  });
 
   const earliestEnable = document.createElement('label');
   earliestEnable.className = 'settings-page__modal-check';
@@ -743,10 +788,14 @@ function openEventsFilterCriteriaModal() {
     skipLabelRow,
     skipHint,
     skipArea,
+    blackLabelRow,
+    blackHint,
+    blackArea,
     ingestHeading,
     ingestHint,
     weeksLabel,
     weeksSelect,
+    weeksLiveHint,
     earliestEnable,
     earliestHint,
     timeInput,
@@ -914,6 +963,7 @@ function openEventsFilterCriteriaModal() {
   function updateTasteCounts() {
     setCount(lookCount, nonEmptyLines(lookArea.value).length, 'line');
     setCount(skipCount, nonEmptyLines(skipArea.value).length, 'line');
+    setCount(blackCount, nonEmptyLines(blackArea.value).length, 'line');
   }
 
   function placeShort() {
@@ -1128,6 +1178,7 @@ function openEventsFilterCriteriaModal() {
 
   lookArea.addEventListener('input', updateTasteCounts);
   skipArea.addEventListener('input', updateTasteCounts);
+  blackArea.addEventListener('input', updateTasteCounts);
   maxQueries.input.addEventListener('input', () => {
     renderFbSearchList();
   });
@@ -1219,6 +1270,7 @@ function openEventsFilterCriteriaModal() {
   const filterControls = [
     lookArea,
     skipArea,
+    blackArea,
     weeksSelect,
     earliestCheck,
     timeInput,
@@ -1246,6 +1298,8 @@ function openEventsFilterCriteriaModal() {
       lookArea.placeholder = 'One idea per line…';
       skipArea.value = typeof data.skip === 'string' ? data.skip : '';
       skipArea.placeholder = 'One idea per line…';
+      blackArea.value = typeof data.blacklist === 'string' ? data.blacklist : '';
+      blackArea.placeholder = 'One idea per line…';
       renderGeo(data.geo);
       facebookBilling = data.facebookBilling || null;
       renderBilling();
@@ -1255,6 +1309,11 @@ function openEventsFilterCriteriaModal() {
       maxPer.input.value = String(scrape.maxEventsPerQuery ?? 15);
       cacheHours.input.value = String(scrape.cacheHours ?? 6);
       weeksSelect.value = String(scrape.windowWeeks ?? 4);
+      renderWeeksOptions(Number(scrape.windowWeeks) || 4);
+      updateWeeksLiveHint(
+        Number(scrape.windowWeeks) || 4,
+        data.ingestWindow && typeof data.ingestWindow === 'object' ? data.ingestWindow : null,
+      );
       const ingestEarliest = normalizeLocalTime(scrape.earliestLocalTime);
       if (ingestEarliest) {
         earliestCheck.checked = true;
@@ -1325,8 +1384,8 @@ function openEventsFilterCriteriaModal() {
       if (!Number.isFinite(hrs) || hrs < 1 || hrs > 168) {
         throw new Error('Cache hours must be 1–168.');
       }
-      if (![1, 2, 3, 4].includes(weeks)) {
-        throw new Error('Scrape ahead must be 1–4 weeks.');
+      if (![1, 2, 3, 4, 5].includes(weeks)) {
+        throw new Error('Scrape ahead must be 1–5 weeks.');
       }
       const hosts = readPinnedFromTable();
       const queries = readSearchQueriesFromUi();
@@ -1336,6 +1395,7 @@ function openEventsFilterCriteriaModal() {
         body: JSON.stringify({
           lookFor: lookArea.value,
           skip: skipArea.value,
+          blacklist: blackArea.value,
           scrape: {
             maxQueries: q,
             maxEventsPerQuery: per,
@@ -1351,6 +1411,10 @@ function openEventsFilterCriteriaModal() {
       if (!r.ok || data.ok === false) {
         throw new Error(data.error || `HTTP ${r.status}`);
       }
+      updateWeeksLiveHint(
+        Number(data.scrape?.windowWeeks) || weeks,
+        data.ingestWindow && typeof data.ingestWindow === 'object' ? data.ingestWindow : null,
+      );
       close();
     } catch (e) {
       msg.classList.add('settings-page__rain-msg--err');

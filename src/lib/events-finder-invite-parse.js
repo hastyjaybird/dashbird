@@ -6,7 +6,6 @@ import {
   extractPlatformUrls,
   sourceFromPlatformUrls,
 } from './events-finder-gmail.js';
-import { eventsIngestWindowDays, eventStartInIngestWindow } from './events-finder-window.js';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
@@ -239,34 +238,53 @@ export async function parseInviteText(text, env = process.env, opts = {}) {
   });
 }
 
+/** Max flyer screenshots per album vision call (payload size). */
+export const INVITE_VISION_MAX_IMAGES = 8;
+
 /**
- * @param {{ mimeType: string, base64: string, caption?: string }} image
+ * @param {Array<{ mimeType?: string, base64?: string, caption?: string }>} images
  * @param {NodeJS.ProcessEnv} [env]
  * @param {{ defaultImageUrl?: string | null }} [opts]
  */
-export async function parseInviteImage(image, env = process.env, opts = {}) {
+export async function parseInviteImages(images, env = process.env, opts = {}) {
   const key = openRouterKey(env);
   if (!key) {
     return { ok: false, error: 'openrouter_not_configured', event: null };
   }
-  const mime = String(image?.mimeType || 'image/jpeg').trim() || 'image/jpeg';
-  const b64 = String(image?.base64 || '').trim();
-  if (!b64) {
+  const list = (Array.isArray(images) ? images : [])
+    .map((img) => ({
+      mimeType: String(img?.mimeType || 'image/jpeg').trim() || 'image/jpeg',
+      base64: String(img?.base64 || '').trim(),
+      caption: String(img?.caption || '').trim(),
+    }))
+    .filter((img) => img.base64)
+    .slice(0, INVITE_VISION_MAX_IMAGES);
+  if (!list.length) {
     return { ok: false, error: 'empty_image', event: null };
   }
-  const caption = String(image?.caption || '').trim();
-  const dataUrl = `data:${mime};base64,${b64}`;
+
+  const captions = list.map((img) => img.caption).filter(Boolean);
+  const captionBlob = [...new Set(captions)].join('\n').slice(0, 2000);
+  const multi = list.length > 1;
 
   /** @type {Array<{ type: string, text?: string, image_url?: { url: string } }>} */
   const userContent = [
     {
       type: 'text',
       text:
-        `Timezone hint: America/Los_Angeles.\nExtract the event from this flyer/screenshot.`
-        + (caption ? `\nCaption from sender:\n${caption.slice(0, 2000)}` : ''),
+        `Timezone hint: America/Los_Angeles.\n`
+        + (multi
+          ? `These ${list.length} screenshots are parts of the SAME event (flyer, details, map, tickets, etc.). Merge them into one event — do not invent multiple events.`
+          : `Extract the event from this flyer/screenshot.`)
+        + (captionBlob ? `\nCaption from sender:\n${captionBlob}` : ''),
     },
-    { type: 'image_url', image_url: { url: dataUrl } },
   ];
+  for (const img of list) {
+    userContent.push({
+      type: 'image_url',
+      image_url: { url: `data:${img.mimeType};base64,${img.base64}` },
+    });
+  }
 
   const r = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
     method: 'POST',
@@ -296,9 +314,18 @@ export async function parseInviteImage(image, env = process.env, opts = {}) {
   const content = j?.choices?.[0]?.message?.content;
   const parsed = parseJsonObject(typeof content === 'string' ? content : '');
   return normalizeInviteParse(parsed, {
-    textHint: caption,
+    textHint: captionBlob,
     defaultImageUrl: opts.defaultImageUrl ?? TELEGRAM_EVENT_LOGO_PATH,
   });
+}
+
+/**
+ * @param {{ mimeType: string, base64: string, caption?: string }} image
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ defaultImageUrl?: string | null }} [opts]
+ */
+export async function parseInviteImage(image, env = process.env, opts = {}) {
+  return parseInviteImages([image], env, opts);
 }
 
 /**
@@ -345,24 +372,4 @@ export async function transcribeInviteAudio(audioBuf, meta = {}, env = process.e
     return { ok: false, error: 'whisper_empty' };
   }
   return { ok: true, text };
-}
-
-/**
- * Drop parses whose start is outside the Events ingest window.
- * @param {{ ok: boolean, event?: Record<string, unknown> | null, error?: string | null }} result
- * @param {NodeJS.ProcessEnv} [env]
- */
-export function enforceInviteIngestWindow(result, env = process.env) {
-  if (!result?.ok || !result.event) return result;
-  const { pastDays, futureDays } = eventsIngestWindowDays(env);
-  const start = /** @type {{ start?: string | null }} */ (result.event).start;
-  if (!eventStartInIngestWindow(start, { pastDays, futureDays, allowMissingStart: false })) {
-    return {
-      ok: false,
-      error: start ? 'outside_ingest_window' : 'missing_start',
-      event: result.event,
-      confidence: result.confidence,
-    };
-  }
-  return result;
 }

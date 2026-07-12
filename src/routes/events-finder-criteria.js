@@ -10,6 +10,7 @@ import {
 } from '../lib/events-finder-geo.js';
 import { resolveEventsFinderGoogleCalendar } from '../lib/events-finder-google-calendar.js';
 import { getFacebookBillingMonthSummary } from '../lib/events-finder-facebook-billing.js';
+import { eventsIngestWindowDays } from '../lib/events-finder-window.js';
 
 const router = Router();
 router.use(express.json({ limit: '512kb' }));
@@ -48,6 +49,7 @@ router.get('/', async (_req, res) => {
       googleCalendar: resolveEventsFinderGoogleCalendar(),
       geo: geoPayload(geo),
       facebookBilling,
+      ingestWindow: eventsIngestWindowDays(process.env, { scrape: criteria.scrape }),
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
@@ -70,6 +72,7 @@ router.put('/', async (req, res) => {
       ok: true,
       lookFor: saved.lookFor,
       skip: saved.skip,
+      blacklist: saved.blacklist,
       filters: saved.filters,
       scrape: saved.scrape,
       hiddenEventIds: saved.hiddenEventIds,
@@ -79,6 +82,7 @@ router.put('/', async (req, res) => {
       googleCalendar: resolveEventsFinderGoogleCalendar(),
       geo: geoPayload(geo),
       facebookBilling,
+      ingestWindow: eventsIngestWindowDays(process.env, { scrape: saved.scrape }),
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });

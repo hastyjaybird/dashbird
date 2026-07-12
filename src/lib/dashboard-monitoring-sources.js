@@ -36,8 +36,8 @@ export const DASHBOARD_MONITORING_SOURCES = [
   {
     id: 'market_fear_greed',
     group: 'Earth',
-    label: 'Market Watch — CNN F&G Index',
-    source: 'CNN Business production.dataviz.cnn.io F&G Index JSON',
+    label: 'Market Watch — CNN F & G Index',
+    source: 'CNN Business production.dataviz.cnn.io F & G Index JSON',
   },
   {
     id: 'firefly_season',

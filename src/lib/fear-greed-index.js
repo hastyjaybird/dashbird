@@ -116,7 +116,7 @@ async function fetchCnnFearGreedIndexUncached() {
           ? block.timestamp.trim()
           : undefined,
       sourceUrl: CNN_FNG_PAGE,
-      source: 'CNN Business F&G Index',
+      source: 'CNN Business F & G Index',
       fetchedAt: new Date().toISOString(),
     };
   } catch (e) {
