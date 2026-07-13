@@ -19,11 +19,19 @@ const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '
 
 export { JULIA_CONTACT_ID, JULIA_SEED_ID };
 
-export const CONTACT_KINDS = ['friend', 'business', 'community'];
+export const CONTACT_KINDS = ['friend', 'organizer', 'business'];
 
-export const CONTACT_RATINGS = ['Ride or Die', 'Hot', 'Warm', 'Cold'];
+export const CONTACT_RATINGS = ['Hot', 'Warm', 'Cold'];
 
-export const CONTACT_RELATIONSHIP_STATUSES = ['Active', 'Dormant', 'Former'];
+export const CONTACT_RELATIONSHIP_STATUSES = [
+  'Lead',
+  'Cultivating',
+  'Collaborator',
+  'Family',
+  'Acquaintance',
+  'Paused',
+  'Former',
+];
 
 /** @deprecated use CONTACT_RELATIONSHIP_STATUSES */
 export const CONTACT_LIFECYCLES = ['Lead', 'Active', 'Dormant', 'Former'];
@@ -99,18 +107,21 @@ export function normalizeKinds(raw) {
   if (fromArray) {
     const out = [];
     for (const k of fromArray) {
-      const s = cleanStr(k, 40).toLowerCase();
+      let s = cleanStr(k, 40).toLowerCase();
       if (s === 'self') {
         if (!out.includes('friend')) out.push('friend');
         continue;
       }
-      if ((s === 'friend' || s === 'business' || s === 'community') && !out.includes(s)) out.push(s);
+      if (s === 'community' || s === 'scene' || s === 'orgainzer') s = 'organizer';
+      if ((s === 'friend' || s === 'organizer' || s === 'business') && !out.includes(s)) out.push(s);
     }
     return out.length ? out : ['friend'];
   }
   const legacy = cleanStr(raw?.kind ?? raw, 40).toLowerCase();
   if (legacy === 'business') return ['business'];
-  if (legacy === 'community') return ['community'];
+  if (legacy === 'community' || legacy === 'scene' || legacy === 'organizer' || legacy === 'orgainzer') {
+    return ['organizer'];
+  }
   if (legacy === 'friend' || legacy === 'self' || !legacy) return ['friend'];
   return ['friend'];
 }
@@ -143,6 +154,7 @@ function normalizeChannels(channels) {
     signal: cleanStr(c.signal, 120) || null,
     whatsapp: cleanStr(c.whatsapp, 120) || null,
     linkedin: cleanStr(c.linkedin, 500) || null,
+    other: cleanStr(c.other, 320) || null,
     urls,
   };
 }
@@ -161,17 +173,32 @@ function cleanEnum(v, allowed) {
 }
 
 /**
- * Map relationshipStatus, migrating legacy lifecycleStatus when needed.
+ * Map relationshipStatus, migrating legacy lifecycleStatus / old enums when needed.
  * @param {object} raw
  */
 function normalizeRelationshipStatus(raw) {
   const direct = cleanEnum(raw.relationshipStatus, CONTACT_RELATIONSHIP_STATUSES);
   if (direct) return direct;
-  const legacy = cleanStr(raw.lifecycleStatus, 80).toLowerCase();
-  if (!legacy) return '';
-  if (legacy === 'lead' || legacy === 'active') return 'Active';
-  if (legacy === 'dormant') return 'Dormant';
-  if (legacy === 'former') return 'Former';
+
+  const legacyVal = cleanStr(raw.relationshipStatus || raw.lifecycleStatus, 80).toLowerCase();
+  if (!legacyVal) return '';
+
+  /** @type {Record<string, string>} */
+  const legacyMap = {
+    lead: 'Lead',
+    active: 'Collaborator',
+    cultivating: 'Cultivating',
+    collaborator: 'Collaborator',
+    family: 'Family',
+    polyfam: 'Family',
+    acquaintance: 'Acquaintance',
+    aquaintance: 'Acquaintance',
+    dormant: 'Paused',
+    paused: 'Paused',
+    retired: 'Former',
+    former: 'Former',
+  };
+  if (legacyMap[legacyVal]) return legacyMap[legacyVal];
   return cleanEnum(raw.lifecycleStatus, CONTACT_RELATIONSHIP_STATUSES);
 }
 
@@ -214,6 +241,7 @@ export function normalizeContact(raw) {
   return {
     id,
     displayName,
+    nickname: cleanStr(raw.nickname, 120),
     aliases: cleanStrList(raw.aliases, 20),
     kinds,
     summary,
@@ -228,7 +256,11 @@ export function normalizeContact(raw) {
     department: cleanStr(raw.department, 300),
     location: cleanStr(raw.location, 300),
     region: cleanStr(raw.region, 300),
-    rating: cleanEnum(raw.rating, CONTACT_RATINGS),
+    rating: (() => {
+      const legacy = cleanStr(raw.rating, 80).toLowerCase();
+      if (legacy === 'ride or die') return 'Hot';
+      return cleanEnum(raw.rating, CONTACT_RATINGS);
+    })(),
     relationshipStatus: normalizeRelationshipStatus(raw),
     nextStep: cleanStr(raw.nextStep, 2000),
     preferredContactMethods: normalizePreferredMethods(raw.preferredContactMethods),
@@ -364,8 +396,9 @@ export async function addContactsBulk(names, defaults = {}, env = process.env) {
   const existingNames = new Set(
     contacts.flatMap((c) => [
       String(c.displayName || '').toLowerCase(),
+      String(c.nickname || '').toLowerCase(),
       ...(c.aliases || []).map((a) => String(a).toLowerCase()),
-    ]),
+    ].filter(Boolean)),
   );
 
   const created = [];
@@ -560,6 +593,7 @@ export async function findContactByNameOrAlias(name, env = process.env) {
   const { contacts } = await loadNetworkContacts(env);
   for (const c of contacts) {
     if (String(c.displayName || '').toLowerCase() === needle) return c;
+    if (String(c.nickname || '').toLowerCase() === needle) return c;
     if ((c.aliases || []).some((a) => String(a).toLowerCase() === needle)) return c;
   }
   return null;

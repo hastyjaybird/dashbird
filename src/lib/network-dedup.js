@@ -194,6 +194,8 @@ function normalizeLinkedin(url) {
 }
 
 /**
+ * Hard identity keys for a contact.
+ * Only personal identifiers — not arbitrary webpage URLs (enrichment sources must not trigger merges).
  * @param {object} channels
  * @returns {string[]}
  */
@@ -211,9 +213,19 @@ function contactHardKeys(channels) {
   if (signal) keys.push(`signal:${signal}`);
   const li = normalizeLinkedin(c.linkedin);
   if (li) keys.push(li);
+  // Profile URLs only (LinkedIn / Facebook profile). Generic pages are enrichment noise.
   for (const u of Array.isArray(c.urls) ? c.urls : []) {
     const n = normalizeUrl(u);
-    if (n) keys.push(`url:${n}`);
+    if (!n) continue;
+    const liFromUrl = normalizeLinkedin(u);
+    if (liFromUrl) {
+      keys.push(liFromUrl);
+      continue;
+    }
+    const fb = n.match(/(?:^|\.)facebook\.com\/(?!pages\/|groups\/|events\/|watch\/)([^/?#]+)/);
+    if (fb?.[1] && !['profile.php', 'people', 'public'].includes(fb[1].toLowerCase())) {
+      keys.push(`facebook:${fb[1].toLowerCase()}`);
+    }
   }
   return [...new Set(keys)];
 }
@@ -248,7 +260,11 @@ function sharedKeys(a, b) {
  * @param {object} contact
  */
 function contactNamePool(contact) {
-  const names = [cleanStr(contact?.displayName, 200), ...(Array.isArray(contact?.aliases) ? contact.aliases : [])]
+  const names = [
+    cleanStr(contact?.displayName, 200),
+    cleanStr(contact?.nickname, 120),
+    ...(Array.isArray(contact?.aliases) ? contact.aliases : []),
+  ]
     .map((n) => cleanStr(n, 200))
     .filter(Boolean);
   return [...new Set(names.map((n) => n.toLowerCase()))].map((n) =>
@@ -302,7 +318,19 @@ export function scoreContactPair(a, b) {
 
   if (hard.length) {
     reasons.push(`hard:${hard[0]}`);
-    // Hard identifier match is near-certain even when names differ (maiden name, nickname).
+    const softHard = hard.every(
+      (k) => k.startsWith('linkedin:') || k.startsWith('facebook:') || k.startsWith('url:'),
+    );
+    // Email / phone / signal: near-certain even when names differ (nickname, maiden name).
+    // LinkedIn / Facebook alone: reject when names are clearly different (bad enrich pollution).
+    if (softHard && nameScore < 0.4) {
+      return {
+        score: 0,
+        hardMatch: false,
+        reasons: [...reasons, 'hard_id_name_conflict'],
+        nameScore,
+      };
+    }
     return { score: 0.97, hardMatch: true, reasons, nameScore };
   }
 
@@ -526,6 +554,7 @@ export function buildMergedContact(keep, drop) {
     signal: preferStr(keep.channels?.signal, drop.channels?.signal) || null,
     whatsapp: preferStr(keep.channels?.whatsapp, drop.channels?.whatsapp) || null,
     linkedin: preferStr(keep.channels?.linkedin, drop.channels?.linkedin) || null,
+    other: preferStr(keep.channels?.other, drop.channels?.other) || null,
     urls: unionStrList(keep.channels?.urls, drop.channels?.urls, 20),
   };
 
@@ -535,6 +564,7 @@ export function buildMergedContact(keep, drop) {
 
   return {
     ...keep,
+    nickname: preferStr(keep.nickname, drop.nickname),
     aliases,
     kinds: unionStrList(keep.kinds, drop.kinds, 10),
     summary: joinUniqueText(keep.summary, drop.summary, 8000),
@@ -551,6 +581,7 @@ export function buildMergedContact(keep, drop) {
     channels,
     avatarUrl: keep.avatarUrl || drop.avatarUrl || null,
     lastContactAt: useDropLast ? drop.lastContactAt : keep.lastContactAt,
+    lastContactPrecision: useDropLast ? drop.lastContactPrecision : keep.lastContactPrecision,
     lastContactChannel: useDropLast ? drop.lastContactChannel : keep.lastContactChannel,
     enrichment: {
       sources: unionStrList(keep.enrichment?.sources, drop.enrichment?.sources, 30),

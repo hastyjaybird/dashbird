@@ -113,6 +113,7 @@ async function fetchRatingViaOpenRouter(toolName) {
     body: JSON.stringify({
       model,
       temperature: 0.1,
+      max_tokens: 256,
       response_format: { type: 'json_object' },
       messages: [
         {

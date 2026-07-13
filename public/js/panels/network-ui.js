@@ -17,6 +17,21 @@ const METHOD_LABELS = {
 
 const DEFAULT_METHODS = Object.keys(METHOD_LABELS);
 
+/** Friendly local display for ISO timestamps (enriched / created / updated). */
+function formatNetworkTimestamp(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString('en-US', {
+    timeZone: 'America/Los_Angeles',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 /**
  * @param {HTMLElement} root
  */
@@ -48,7 +63,15 @@ export function mountNetworkUi(root) {
   companiesTab.id = 'network-tab-companies';
   companiesTab.textContent = 'Companies';
 
-  tabs.append(peopleTab, companiesTab);
+  const groupsTab = document.createElement('button');
+  groupsTab.type = 'button';
+  groupsTab.className = 'network-crm__tab';
+  groupsTab.setAttribute('role', 'tab');
+  groupsTab.setAttribute('aria-selected', 'false');
+  groupsTab.id = 'network-tab-groups';
+  groupsTab.textContent = 'Groups';
+
+  tabs.append(peopleTab, companiesTab, groupsTab);
 
   const toolbar = document.createElement('div');
   toolbar.className = 'network-crm__toolbar';
@@ -83,20 +106,110 @@ export function mountNetworkUi(root) {
   bulkBtn.className = 'network-crm__btn';
   bulkBtn.textContent = 'Bulk add';
 
-  const groupsBtn = document.createElement('button');
-  groupsBtn.type = 'button';
-  groupsBtn.className = 'network-crm__btn network-crm__btn--primary';
-  groupsBtn.textContent = 'Start a group';
+  const peopleDefaultActions = document.createElement('div');
+  peopleDefaultActions.className = 'network-crm__toolbar-actions';
+  peopleDefaultActions.dataset.mode = 'default';
+  peopleDefaultActions.append(addBtn, bulkBtn);
+
+  const peopleSelectionActions = document.createElement('div');
+  peopleSelectionActions.className = 'network-crm__toolbar-actions';
+  peopleSelectionActions.dataset.mode = 'selection';
+  peopleSelectionActions.hidden = true;
+
+  const startGroupSelBtn = document.createElement('button');
+  startGroupSelBtn.type = 'button';
+  startGroupSelBtn.className = 'network-crm__btn network-crm__btn--primary';
+  startGroupSelBtn.textContent = 'Start group';
 
   const addToGroupBtn = document.createElement('button');
   addToGroupBtn.type = 'button';
   addToGroupBtn.className = 'network-crm__btn';
   addToGroupBtn.textContent = 'Add to group';
-  addToGroupBtn.hidden = true;
 
-  peopleActions.append(addBtn, bulkBtn, groupsBtn, addToGroupBtn);
+  const mergeBtn = document.createElement('button');
+  mergeBtn.type = 'button';
+  mergeBtn.className = 'network-crm__btn';
+  mergeBtn.textContent = 'Merge';
+
+  const deleteSelBtn = document.createElement('button');
+  deleteSelBtn.type = 'button';
+  deleteSelBtn.className = 'network-crm__btn network-crm__btn--danger';
+  deleteSelBtn.textContent = 'Delete';
+
+  const enhanceSelBtn = document.createElement('button');
+  enhanceSelBtn.type = 'button';
+  enhanceSelBtn.className = 'network-crm__btn';
+  enhanceSelBtn.textContent = 'Enhance';
+
+  peopleSelectionActions.append(
+    enhanceSelBtn,
+    addToGroupBtn,
+    startGroupSelBtn,
+    mergeBtn,
+    deleteSelBtn,
+  );
+
+  peopleActions.append(peopleDefaultActions, peopleSelectionActions);
   companyActions.append(addCompanyBtn);
   toolbar.append(search, peopleActions, companyActions);
+
+  const peopleFilterBar = document.createElement('div');
+  peopleFilterBar.className = 'network-crm__filters';
+  peopleFilterBar.setAttribute('aria-label', 'Filter people');
+
+  /**
+   * @param {string} label
+   * @param {string} name
+   * @param {(string | { value: string, label: string })[]} options
+   */
+  function makeFilterSelect(label, name, options) {
+    const wrapEl = document.createElement('label');
+    wrapEl.className = 'network-crm__filter';
+    const span = document.createElement('span');
+    span.textContent = label;
+    const sel = document.createElement('select');
+    sel.className = 'network-crm__input network-crm__filter-select';
+    sel.name = name;
+    sel.setAttribute('aria-label', label);
+    const all = document.createElement('option');
+    all.value = '';
+    all.textContent = 'All';
+    sel.append(all);
+    for (const opt of options) {
+      const el = document.createElement('option');
+      if (typeof opt === 'string') {
+        el.value = opt;
+        el.textContent = opt;
+      } else {
+        el.value = opt.value;
+        el.textContent = opt.label;
+      }
+      sel.append(el);
+    }
+    wrapEl.append(span, sel);
+    return { wrapEl, sel };
+  }
+
+  const kindFilter = makeFilterSelect('Kind', 'filter-kind', [
+    { value: 'friend', label: 'Friend' },
+    { value: 'organizer', label: 'Organizer' },
+    { value: 'business', label: 'Business' },
+  ]);
+  const relationshipFilter = makeFilterSelect('Relationship', 'filter-relationship', [
+    'Lead',
+    'Cultivating',
+    'Collaborator',
+    'Family',
+    'Acquaintance',
+    'Paused',
+    'Former',
+  ]);
+  const statusFilter = makeFilterSelect('Status', 'filter-status', [
+    'Hot',
+    'Warm',
+    'Cold',
+  ]);
+  peopleFilterBar.append(kindFilter.wrapEl, relationshipFilter.wrapEl, statusFilter.wrapEl);
 
   const bulkPanel = document.createElement('div');
   bulkPanel.className = 'network-crm__bulk';
@@ -108,8 +221,8 @@ export function mountNetworkUi(root) {
     </label>
     <div class="network-crm__checks">
       <label class="network-crm__check"><input type="checkbox" name="bulk-friend" checked> Friend</label>
+      <label class="network-crm__check"><input type="checkbox" name="bulk-organizer"> Organizer</label>
       <label class="network-crm__check"><input type="checkbox" name="bulk-business"> Business</label>
-      <label class="network-crm__check"><input type="checkbox" name="bulk-community"> Community</label>
     </div>
     <div class="network-crm__bulk-actions">
       <button type="button" class="network-crm__btn network-crm__btn--primary" data-bulk-submit>Add all</button>
@@ -137,13 +250,23 @@ export function mountNetworkUi(root) {
   layout.append(list, detail);
   const mainPane = document.createElement('div');
   mainPane.className = 'network-crm__main';
-  mainPane.append(tabs, toolbar, bulkPanel, layout, status);
+  mainPane.append(toolbar, peopleFilterBar, bulkPanel, layout, status);
 
   const groupsPane = document.createElement('div');
   groupsPane.className = 'network-crm__groups-pane';
   groupsPane.hidden = true;
 
-  wrap.append(mainPane, groupsPane);
+  wrap.append(tabs, mainPane, groupsPane);
+
+  const voiceBar = document.createElement('div');
+  voiceBar.className = 'network-crm__voice-bar';
+  voiceBar.hidden = true;
+  voiceBar.innerHTML = `
+    <span class="network-crm__voice-bar-dot" aria-hidden="true"></span>
+    <span class="network-crm__voice-bar-label">Recording…</span>
+    <button type="button" class="network-crm__btn network-crm__btn--primary" data-voice-stop>Stop &amp; enrich</button>
+  `;
+  wrap.append(voiceBar);
   root.append(wrap);
 
   /** @type {object[]} */
@@ -154,22 +277,29 @@ export function mountNetworkUi(root) {
   let methodOptions = DEFAULT_METHODS;
   /** @type {string | null} */
   let selectedId = null;
-  /** @type {'people' | 'companies'} */
+  /** @type {'people' | 'companies' | 'groups'} */
   let view = 'people';
+  /** @type {boolean} */
+  let groupsUiMounted = false;
   /** @type {string | null} */
   let selectedOrgId = null;
   /** @type {Set<string>} */
   const selectedContactIds = new Set();
+  /** @type {Set<string>} */
+  const selectedOrgIds = new Set();
   let query = '';
-  /** Session flag: org detail "Show attributes" panel open */
+  /** @type {{ kind: string, relationship: string, status: string }} */
+  let peopleFilters = { kind: '', relationship: '', status: '' };
+  /** Session flag: org detail "More attributes" panel open */
   let orgAttrsExpanded = false;
-  /** Session flag: contact detail "Show attributes" panel open */
+  /** Session flag: contact detail "More attributes" panel open */
   let contactAttrsExpanded = false;
   /** Bumps when detail pane is remounted; cancels stale autosaves */
   let detailGeneration = 0;
   /** @type {ReturnType<typeof setTimeout> | null} */
   let detailAutosaveTimer = null;
-  const AUTOSAVE_MS = 700;
+  /** Debounce after typing stops before persisting the detail form. */
+  const AUTOSAVE_MS = 400;
   const MAX_UNDO = 25;
   /** @type {Map<string, object[]>} */
   const contactUndoStacks = new Map();
@@ -195,6 +325,7 @@ export function mountNetworkUi(root) {
   function contactToPutBody(c) {
     return {
       displayName: c.displayName || '',
+      nickname: c.nickname || '',
       title: c.title || '',
       org: c.org || '',
       kinds: Array.isArray(c.kinds) && c.kinds.length ? [...c.kinds] : ['friend'],
@@ -222,6 +353,7 @@ export function mountNetworkUi(root) {
         signal: c.channels?.signal || null,
         whatsapp: c.channels?.whatsapp || null,
         linkedin: c.channels?.linkedin || null,
+        other: c.channels?.other || null,
         urls: Array.isArray(c.channels?.urls) ? [...c.channels.urls] : [],
       },
     };
@@ -263,31 +395,57 @@ export function mountNetworkUi(root) {
 
   function syncTabs() {
     const onPeople = view === 'people';
+    const onCompanies = view === 'companies';
+    const onGroups = view === 'groups';
     peopleTab.classList.toggle('network-crm__tab--active', onPeople);
-    companiesTab.classList.toggle('network-crm__tab--active', !onPeople);
+    companiesTab.classList.toggle('network-crm__tab--active', onCompanies);
+    groupsTab.classList.toggle('network-crm__tab--active', onGroups);
     peopleTab.setAttribute('aria-selected', onPeople ? 'true' : 'false');
-    companiesTab.setAttribute('aria-selected', onPeople ? 'false' : 'true');
-    search.placeholder = onPeople ? 'Search people…' : 'Search companies…';
+    companiesTab.setAttribute('aria-selected', onCompanies ? 'true' : 'false');
+    groupsTab.setAttribute('aria-selected', onGroups ? 'true' : 'false');
+    search.placeholder = onPeople ? 'Search people…' : onCompanies ? 'Search companies…' : 'Search groups…';
     peopleActions.hidden = !onPeople;
-    companyActions.hidden = onPeople;
+    companyActions.hidden = !onCompanies;
+    peopleFilterBar.hidden = !onPeople;
+    mainPane.hidden = onGroups;
+    groupsPane.hidden = !onGroups;
     if (!onPeople) bulkPanel.hidden = true;
-    syncAddToGroupBtn();
+    syncSelectionActions();
   }
 
-  function syncAddToGroupBtn() {
+  function syncSelectionActions() {
     const n = selectedContactIds.size;
-    addToGroupBtn.hidden = n === 0 || view !== 'people';
-    addToGroupBtn.textContent = n ? `Add to group (${n})` : 'Add to group';
+    const selecting = n > 0 && view === 'people';
+    peopleDefaultActions.hidden = selecting;
+    peopleSelectionActions.hidden = !selecting;
+    const count = n ? ` (${n})` : '';
+    startGroupSelBtn.textContent = `Start group${count}`;
+    addToGroupBtn.textContent = `Add to group${count}`;
+    mergeBtn.textContent = n >= 2 ? `Merge (${n})` : 'Merge';
+    mergeBtn.disabled = n < 2;
+    deleteSelBtn.textContent = `Delete${count}`;
+    enhanceSelBtn.textContent = `Enhance${count}`;
   }
 
   /**
-   * @param {'people' | 'companies'} next
-   * @param {{ selectOrgId?: string | null }} [opts]
+   * @param {'people' | 'companies' | 'groups'} next
+   * @param {{ selectOrgId?: string | null, selectGroupId?: string | null }} [opts]
    */
   async function setView(next, opts = {}) {
     view = next;
     syncTabs();
+    if (next === 'groups') {
+      list.setAttribute('aria-label', 'Groups');
+      list.setAttribute('aria-labelledby', 'network-tab-groups');
+      await openGroupsUi({ selectGroupId: opts.selectGroupId || null });
+      return;
+    }
+    if (groupsUiMounted) {
+      groupsPane.replaceChildren();
+      groupsUiMounted = false;
+    }
     list.setAttribute('aria-label', next === 'people' ? 'People' : 'Companies');
+    list.setAttribute('aria-labelledby', next === 'people' ? 'network-tab-people' : 'network-tab-companies');
     if (next === 'companies') {
       await loadOrganizations();
       selectedOrgId = opts.selectOrgId ?? selectedOrgId ?? organizations[0]?.id ?? null;
@@ -314,10 +472,21 @@ export function mountNetworkUi(root) {
 
   function filtered() {
     const q = query.trim().toLowerCase();
-    if (!q) return contacts;
     return contacts.filter((c) => {
+      if (peopleFilters.kind) {
+        const kinds = Array.isArray(c.kinds) ? c.kinds.map((k) => String(k).toLowerCase()) : [];
+        if (!kinds.includes(peopleFilters.kind.toLowerCase())) return false;
+      }
+      if (peopleFilters.relationship) {
+        if (String(c.relationshipStatus || '') !== peopleFilters.relationship) return false;
+      }
+      if (peopleFilters.status) {
+        if (String(c.rating || '') !== peopleFilters.status) return false;
+      }
+      if (!q) return true;
       const hay = [
         c.displayName,
+        c.nickname,
         ...(c.aliases || []),
         ...(c.kinds || []),
         ...(c.alignedActivities || []),
@@ -327,8 +496,12 @@ export function mountNetworkUi(root) {
         c.networkCircles,
         c.org,
         c.title,
+        c.department,
         c.bio,
         c.notes,
+        c.relationshipStatus,
+        c.rating,
+        c.location,
       ]
         .filter(Boolean)
         .join(' ')
@@ -378,14 +551,42 @@ export function mountNetworkUi(root) {
     return box;
   }
 
+  function logoEl(org, className) {
+    const box = document.createElement('div');
+    box.className = className;
+    if (org.logoUrl) {
+      const img = document.createElement('img');
+      img.src = `${org.logoUrl}${org.logoUrl.includes('?') ? '&' : '?'}t=${encodeURIComponent(org.updatedAt || '')}`;
+      img.alt = '';
+      img.width = 48;
+      img.height = 48;
+      box.append(img);
+    } else {
+      const initials = String(org.name || '?')
+        .split(/\s+/)
+        .slice(0, 2)
+        .map((p) => p[0] || '')
+        .join('')
+        .toUpperCase();
+      box.textContent = initials || '?';
+    }
+    return box;
+  }
+
   /**
-   * Image-candidate picker in a pop-out dialog. Skips broken previews; supports Search further.
+   * Image-candidate picker in a pop-out dialog. Skips broken previews.
+   * People photos use the morning path (Search further, no keyword box).
+   * When `querySearch` is true (logos), a top text box drives image search.
    * @param {{
    *   candidatesUrl: string,
    *   applyUrl: string,
    *   buttonLabel?: string,
    *   emptyLabel?: string,
    *   dialogTitle?: string,
+   *   queryPlaceholder?: string,
+   *   querySearch?: boolean,
+   *   defaultQuery?: string | (() => string),
+   *   uploadUrl?: string,
    *   onApplied: (entity: object) => void,
    * }} opts
    */
@@ -398,10 +599,15 @@ export function mountNetworkUi(root) {
     findBtn.className = 'network-crm__btn network-crm__btn--tiny';
     findBtn.textContent = opts.buttonLabel || 'Find other photos';
 
+    const querySearch = Boolean(opts.querySearch);
+    const uploadUrl = String(opts.uploadUrl || '').trim();
+
     /** @type {number} */
     let nextOffset = 0;
     /** @type {boolean} */
     let hasMore = false;
+    /** @type {string} */
+    let activeQuery = '';
     /** @type {Set<string>} */
     const shownUrls = new Set();
     /** @type {HTMLElement | null} */
@@ -417,6 +623,11 @@ export function mountNetworkUi(root) {
 
     function onKeydown(e) {
       if (e.key === 'Escape') closeDialog();
+    }
+
+    function resolveDefaultQuery() {
+      if (typeof opts.defaultQuery === 'function') return String(opts.defaultQuery() || '').trim();
+      return String(opts.defaultQuery || '').trim();
     }
 
     /**
@@ -442,7 +653,9 @@ export function mountNetworkUi(root) {
         btn.hidden = true;
         const img = document.createElement('img');
         img.alt = '';
-        img.loading = 'lazy';
+        // Eager: items start hidden; lazy often never fires for hidden imgs.
+        img.loading = 'eager';
+        img.decoding = 'async';
         img.referrerPolicy = 'no-referrer';
         let triedFull = thumb === url;
         img.addEventListener('error', () => {
@@ -451,7 +664,6 @@ export function mountNetworkUi(root) {
             img.src = url;
             return;
           }
-          // No usable preview — discard; do not offer "Preview unavailable".
           btn.remove();
           shownUrls.delete(url);
           if (!grid.querySelector('.network-crm__img-pick-item')) {
@@ -465,11 +677,16 @@ export function mountNetworkUi(root) {
         img.addEventListener('load', () => {
           grid.querySelector('[data-empty="1"]')?.remove();
           btn.hidden = false;
+          const statusEl = backdrop?.querySelector('.network-crm__img-pick-status');
+          if (statusEl) {
+            const visible = grid.querySelectorAll('.network-crm__img-pick-item:not([hidden])').length;
+            statusEl.textContent = visible ? `Pick one · ${visible} shown` : 'Waiting for previews…';
+          }
         });
         img.src = thumb;
         btn.append(img);
         btn.addEventListener('click', async () => {
-          if (btn.hidden) return;
+          if (btn.hidden || btn.disabled) return;
           btn.disabled = true;
           findBtn.disabled = true;
           showStatus('Saving image…');
@@ -504,22 +721,38 @@ export function mountNetworkUi(root) {
       const grid = backdrop.querySelector('.network-crm__img-pick-grid');
       const furtherBtn = backdrop.querySelector('.network-crm__img-pick-further');
       const statusEl = backdrop.querySelector('.network-crm__img-pick-status');
+      const queryInput = backdrop.querySelector('.network-crm__img-pick-query');
+      const searchBtn = backdrop.querySelector('.network-crm__img-pick-search');
       if (!grid || !furtherBtn || !statusEl) return;
+
+      const query = querySearch ? String(queryInput?.value || '').trim().slice(0, 160) : '';
+      if (querySearch && !query) {
+        showStatus('Enter text to search', true);
+        queryInput?.focus();
+        return;
+      }
 
       const reset = Boolean(fetchOpts.reset);
       if (reset) {
         nextOffset = 0;
         hasMore = false;
+        activeQuery = query;
         shownUrls.clear();
         grid.replaceChildren();
       }
 
       furtherBtn.disabled = true;
+      if (searchBtn) searchBtn.disabled = true;
+      if (queryInput) queryInput.disabled = true;
       findBtn.disabled = true;
       const loading = document.createElement('p');
       loading.className = 'muted network-crm__img-pick-hint';
       loading.dataset.loading = '1';
-      loading.textContent = reset ? 'Looking up images…' : 'Searching further…';
+      loading.textContent = reset
+        ? query
+          ? `Searching “${query}”…`
+          : 'Looking up images…'
+        : 'Searching further…';
       grid.append(loading);
       statusEl.textContent = reset ? 'Searching…' : 'Loading next results…';
       showStatus(reset ? 'Finding images…' : 'Searching further…');
@@ -528,7 +761,11 @@ export function mountNetworkUi(root) {
         const r = await fetch(opts.candidatesUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ offset: nextOffset, limit: 5 }),
+          body: JSON.stringify({
+            offset: nextOffset,
+            limit: 5,
+            ...(query ? { query } : {}),
+          }),
         });
         const j = await r.json();
         if (!j.ok) throw new Error(j.error || 'candidates_failed');
@@ -537,6 +774,7 @@ export function mountNetworkUi(root) {
         const candidates = Array.isArray(j.candidates) ? j.candidates : [];
         nextOffset = Number(j.nextOffset) >= 0 ? Number(j.nextOffset) : nextOffset + candidates.length;
         hasMore = Boolean(j.hasMore);
+        activeQuery = query;
 
         const added = renderCandidates(grid, candidates, { append: !reset });
         if (!grid.querySelector('.network-crm__img-pick-item') && !candidates.length) {
@@ -573,11 +811,14 @@ export function mountNetworkUi(root) {
         furtherBtn.disabled = !hasMore;
       } finally {
         findBtn.disabled = false;
+        if (searchBtn) searchBtn.disabled = false;
+        if (queryInput) queryInput.disabled = false;
       }
     }
 
     function openDialog() {
       closeDialog();
+      activeQuery = '';
       backdrop = document.createElement('div');
       backdrop.className = 'network-crm__img-pick-backdrop';
       backdrop.setAttribute('role', 'presentation');
@@ -612,6 +853,33 @@ export function mountNetworkUi(root) {
 
       const actions = document.createElement('div');
       actions.className = 'network-crm__img-pick-dialog-actions';
+
+      if (querySearch) {
+        const queryInput = document.createElement('input');
+        queryInput.type = 'search';
+        queryInput.className = 'network-crm__img-pick-query';
+        queryInput.placeholder = opts.queryPlaceholder || 'Type to search for logos…';
+        queryInput.autocomplete = 'off';
+        queryInput.spellcheck = true;
+        queryInput.setAttribute('aria-label', 'Search logos');
+        queryInput.value = resolveDefaultQuery();
+        const searchBtn = document.createElement('button');
+        searchBtn.type = 'button';
+        searchBtn.className =
+          'network-crm__btn network-crm__btn--primary network-crm__btn--tiny network-crm__img-pick-search';
+        searchBtn.textContent = 'Search';
+        searchBtn.addEventListener('click', () => {
+          void loadCandidates({ reset: true });
+        });
+        queryInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            void loadCandidates({ reset: true });
+          }
+        });
+        actions.append(queryInput, searchBtn);
+      }
+
       const furtherBtn = document.createElement('button');
       furtherBtn.type = 'button';
       furtherBtn.className = 'network-crm__btn network-crm__img-pick-further';
@@ -622,6 +890,45 @@ export function mountNetworkUi(root) {
       });
       actions.append(furtherBtn);
 
+      if (uploadUrl) {
+        const uploadBtn = document.createElement('button');
+        uploadBtn.type = 'button';
+        uploadBtn.className = 'network-crm__btn network-crm__btn--tiny network-crm__img-pick-upload';
+        uploadBtn.textContent = 'Upload';
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = 'image/*';
+        fileInput.hidden = true;
+        uploadBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', async () => {
+          const file = fileInput.files?.[0];
+          if (!file) return;
+          uploadBtn.disabled = true;
+          findBtn.disabled = true;
+          showStatus('Uploading…');
+          try {
+            const dataUrl = await readFileAsDataUrl(file);
+            const r = await fetch(uploadUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ dataUrl }),
+            });
+            const j = await r.json();
+            if (!j.ok) throw new Error(j.error || 'upload_failed');
+            closeDialog();
+            showStatus('Image updated');
+            opts.onApplied(j.contact || j.organization);
+          } catch (err) {
+            showStatus(String(err?.message || err), true);
+            uploadBtn.disabled = false;
+            findBtn.disabled = false;
+          } finally {
+            fileInput.value = '';
+          }
+        });
+        actions.append(uploadBtn, fileInput);
+      }
+
       dialog.append(header, hint, statusEl, grid, actions);
       backdrop.append(dialog);
       backdrop.addEventListener('click', (e) => {
@@ -629,7 +936,15 @@ export function mountNetworkUi(root) {
       });
       document.body.append(backdrop);
       document.addEventListener('keydown', onKeydown);
-      void loadCandidates({ reset: true });
+
+      if (querySearch) {
+        const queryInput = backdrop.querySelector('.network-crm__img-pick-query');
+        queryInput?.focus();
+        if (queryInput?.value.trim()) void loadCandidates({ reset: true });
+        else queryInput?.select();
+      } else {
+        void loadCandidates({ reset: true });
+      }
     }
 
     findBtn.addEventListener('click', () => openDialog());
@@ -663,12 +978,12 @@ export function mountNetworkUi(root) {
       check.type = 'checkbox';
       check.className = 'network-crm__select';
       check.checked = selectedContactIds.has(c.id);
-      check.title = 'Select for group';
+      check.title = 'Select';
       check.addEventListener('click', (e) => e.stopPropagation());
       check.addEventListener('change', () => {
         if (check.checked) selectedContactIds.add(c.id);
         else selectedContactIds.delete(c.id);
-        syncAddToGroupBtn();
+        syncSelectionActions();
       });
 
       const av = avatarEl(c, 'network-crm__avatar');
@@ -676,7 +991,15 @@ export function mountNetworkUi(root) {
       meta.className = 'network-crm__row-meta';
       const name = document.createElement('div');
       name.className = 'network-crm__row-name';
-      name.textContent = c.displayName || 'Untitled';
+      const nameText = document.createElement('span');
+      nameText.textContent = c.displayName || 'Untitled';
+      name.append(nameText);
+      if (c.nickname) {
+        const nick = document.createElement('span');
+        nick.className = 'network-crm__row-nick muted';
+        nick.textContent = c.nickname;
+        name.append(document.createTextNode(' '), nick);
+      }
       const sub = document.createElement('div');
       sub.className = 'network-crm__row-sub muted';
       const bits = [kindsLabel(c), c.networkCircles].filter(Boolean);
@@ -707,7 +1030,22 @@ export function mountNetworkUi(root) {
       const li = document.createElement('li');
       li.className = 'network-crm__row';
       li.classList.toggle('network-crm__row--active', o.id === selectedOrgId);
+      li.setAttribute('role', 'option');
+      li.setAttribute('aria-selected', o.id === selectedOrgId ? 'true' : 'false');
       li.tabIndex = 0;
+
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.className = 'network-crm__select';
+      check.checked = selectedOrgIds.has(o.id);
+      check.title = 'Select';
+      check.addEventListener('click', (e) => e.stopPropagation());
+      check.addEventListener('change', () => {
+        if (check.checked) selectedOrgIds.add(o.id);
+        else selectedOrgIds.delete(o.id);
+      });
+
+      const icon = logoEl(o, 'network-crm__avatar');
       const meta = document.createElement('div');
       meta.className = 'network-crm__row-meta';
       const name = document.createElement('div');
@@ -715,10 +1053,16 @@ export function mountNetworkUi(root) {
       name.textContent = o.name || 'Untitled company';
       const sub = document.createElement('div');
       sub.className = 'network-crm__row-sub muted';
-      sub.textContent = [o.location, o.website].filter(Boolean).join(' · ');
+      sub.textContent = [o.industry || o.type, o.location, o.website].filter(Boolean).join(' · ');
       meta.append(name, sub);
-      li.append(meta);
+      li.append(check, icon, meta);
       li.addEventListener('click', () => openOrganization(o.id));
+      li.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openOrganization(o.id);
+        }
+      });
       list.append(li);
     }
   }
@@ -768,48 +1112,47 @@ export function mountNetworkUi(root) {
 
     const avWrap = document.createElement('div');
     avWrap.className = 'network-crm__avatar-wrap';
-    avWrap.append(avatarEl(current, 'network-crm__avatar network-crm__avatar--lg'));
 
-    const changePhoto = document.createElement('button');
-    changePhoto.type = 'button';
-    changePhoto.className = 'network-crm__btn network-crm__btn--tiny';
-    changePhoto.textContent = 'Change photo';
-    const fileInput = document.createElement('input');
-    fileInput.type = 'file';
-    fileInput.accept = 'image/*';
-    fileInput.hidden = true;
-    changePhoto.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', async () => {
-      const file = fileInput.files?.[0];
-      if (!file) return;
-      showStatus('Uploading photo…');
-      try {
-        const dataUrl = await readFileAsDataUrl(file);
-        const r = await fetch(`/api/network/contacts/${encodeURIComponent(current.id)}/avatar`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dataUrl }),
-        });
-        const j = await r.json();
-        if (!j.ok) throw new Error(j.error || 'avatar_failed');
-        const idx = contacts.findIndex((x) => x.id === current.id);
-        if (idx >= 0) contacts[idx] = j.contact;
-        showStatus('Photo updated');
-        renderList();
-        renderDetail(j.contact);
-      } catch (err) {
-        showStatus(String(err?.message || err), true);
-      } finally {
-        fileInput.value = '';
-      }
-    });
-    avWrap.append(changePhoto, fileInput);
+    const avFrame = document.createElement('div');
+    avFrame.className = 'network-crm__avatar-frame';
+    avFrame.append(avatarEl(current, 'network-crm__avatar network-crm__avatar--lg'));
+    if (current.avatarUrl) {
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.className = 'network-crm__avatar-clear';
+      clearBtn.title = 'Remove photo';
+      clearBtn.setAttribute('aria-label', 'Remove photo');
+      clearBtn.textContent = '×';
+      clearBtn.addEventListener('click', async () => {
+        showStatus('Removing photo…');
+        try {
+          const r = await fetch(`/api/network/contacts/${encodeURIComponent(current.id)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ avatarUrl: null }),
+          });
+          const j = await r.json();
+          if (!j.ok) throw new Error(j.error || 'remove_failed');
+          const idx = contacts.findIndex((x) => x.id === j.contact.id);
+          if (idx >= 0) contacts[idx] = j.contact;
+          showStatus('Photo removed');
+          renderList();
+          renderDetail(j.contact);
+        } catch (err) {
+          showStatus(String(err?.message || err), true);
+        }
+      });
+      avFrame.append(clearBtn);
+    }
+    avWrap.append(avFrame);
+
     const pickWrap = mountImageCandidatePicker({
       candidatesUrl: `/api/network/contacts/${encodeURIComponent(current.id)}/avatar-candidates`,
       applyUrl: `/api/network/contacts/${encodeURIComponent(current.id)}/avatar-from-url`,
+      uploadUrl: `/api/network/contacts/${encodeURIComponent(current.id)}/avatar`,
       buttonLabel: 'Find other photos',
       dialogTitle: 'Pick a photo',
-      emptyLabel: 'No photos found — try Enrich or upload',
+      emptyLabel: 'No photos found — try Enrich or Upload',
       onApplied: (entity) => {
         const idx = contacts.findIndex((x) => x.id === entity.id);
         if (idx >= 0) contacts[idx] = entity;
@@ -824,10 +1167,16 @@ export function mountNetworkUi(root) {
     const h = document.createElement('h3');
     h.className = 'network-crm__detail-name';
     h.textContent = current.displayName || 'Untitled';
+    if (current.nickname) {
+      const nick = document.createElement('span');
+      nick.className = 'network-crm__detail-nick muted';
+      nick.textContent = current.nickname;
+      h.append(document.createTextNode(' '), nick);
+    }
     if (!current.avatarUrl) {
       const hint = document.createElement('p');
       hint.className = 'muted network-crm__aliases';
-      hint.textContent = 'No photo yet — change photo, find other photos, or Enrich';
+      hint.textContent = 'No photo yet — find photos, Upload, or Enrich';
       titles.append(h, hint);
     } else {
       titles.append(h);
@@ -893,7 +1242,7 @@ export function mountNetworkUi(root) {
     kindsLabelEl.textContent = 'Kinds';
     kindsBox.append(kindsLabelEl);
     const kinds = new Set(c.kinds || ['friend']);
-    for (const k of ['friend', 'business', 'community']) {
+    for (const k of ['friend', 'organizer', 'business']) {
       const lab = document.createElement('label');
       lab.className = 'network-crm__check';
       const cb = document.createElement('input');
@@ -914,7 +1263,54 @@ export function mountNetworkUi(root) {
       signal: field('Signal', 'signal', c.channels?.signal || ''),
       whatsapp: field('WhatsApp', 'whatsapp', c.channels?.whatsapp || ''),
       linkedin: field('LinkedIn', 'linkedin', c.channels?.linkedin || '', { type: 'url' }),
+      other: field('Other', 'other', c.channels?.other || ''),
     };
+
+    /**
+     * Wrap a Signal/WhatsApp field with a "Same as phone" checkbox that copies
+     * a filled phone (or other messaging) number into this blank field.
+     * @param {'signal' | 'whatsapp'} targetName
+     */
+    function attachSameAsPhone(targetName) {
+      const fieldEl = channelFieldsByMethod[targetName];
+      if (!fieldEl) return;
+      const stack = document.createElement('div');
+      stack.className = 'network-crm__field-stack';
+      fieldEl.replaceWith(stack);
+      stack.append(fieldEl);
+      channelFieldsByMethod[targetName] = stack;
+
+      const same = document.createElement('label');
+      same.className = 'network-crm__check network-crm__same-as-phone';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.name = `same-phone-${targetName}`;
+      same.append(cb, document.createTextNode(' Same as phone'));
+      cb.addEventListener('change', () => {
+        if (!cb.checked) return;
+        const target = /** @type {HTMLInputElement | null} */ (fieldEl.querySelector(`[name="${targetName}"]`));
+        if (!target) return;
+        if (String(target.value || '').trim()) {
+          // Already filled — leave it; uncheck so the box matches state.
+          cb.checked = false;
+          return;
+        }
+        const phone = String(form.querySelector('[name="phone"]')?.value || '').trim();
+        const otherName = targetName === 'signal' ? 'whatsapp' : 'signal';
+        const other = String(form.querySelector(`[name="${otherName}"]`)?.value || '').trim();
+        const num = phone || other;
+        if (!num) {
+          cb.checked = false;
+          showStatus('Fill phone first', true);
+          return;
+        }
+        target.value = num;
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      stack.append(same);
+    }
+    attachSameAsPhone('signal');
+    attachSameAsPhone('whatsapp');
     const contactUrls = [
       ...new Set([...(c.channels?.urls || []), ...(c.enrichment?.sources || [])].filter(Boolean)),
     ];
@@ -927,10 +1323,6 @@ export function mountNetworkUi(root) {
 
     const methodsBox = document.createElement('div');
     methodsBox.className = 'network-crm__checks network-crm__checks--wrap';
-    const methodsLabel = document.createElement('span');
-    methodsLabel.className = 'network-crm__checks-label';
-    methodsLabel.textContent = 'Preferred contact methods';
-    methodsBox.append(methodsLabel);
 
     /** @type {Map<string, HTMLInputElement>} */
     const prefChecks = new Map();
@@ -958,7 +1350,7 @@ export function mountNetworkUi(root) {
     }
     syncChannelFieldVisibility();
 
-    const moreChannels = section('Contact methods', [
+    const moreChannels = section('Preferred contact methods', [
       methodsBox,
       ...Object.values(channelFieldsByMethod),
     ]);
@@ -978,8 +1370,9 @@ export function mountNetworkUi(root) {
     attrsPanel.hidden = !contactAttrsExpanded;
     attrsPanel.append(
       orgField,
-      field('Aliases (comma-separated)', 'aliases', (c.aliases || []).join(', ')),
+      field('Role', 'title', c.title),
       field('Department', 'department', c.department || ''),
+      field('Aliases (comma-separated)', 'aliases', (c.aliases || []).join(', ')),
       urlsField,
       field('Private Notes', 'notes', c.notes || '', { rows: 3 }),
     );
@@ -990,21 +1383,23 @@ export function mountNetworkUi(root) {
       typeof c.enrichment?.confidence === 'number'
         ? ` · confidence ${Math.round(c.enrichment.confidence * 100)}%`
         : '';
-    const enriched = c.enrichment?.enrichedAt ? `Enriched ${c.enrichment.enrichedAt}${conf}` : 'Not enriched yet';
-    const created = c.createdAt ? ` · created ${c.createdAt}` : '';
-    const updated = c.updatedAt ? ` · updated ${c.updatedAt}` : '';
+    const enriched = c.enrichment?.enrichedAt
+      ? `Enriched ${formatNetworkTimestamp(c.enrichment.enrichedAt)}${conf}`
+      : 'Not enriched yet';
+    const created = c.createdAt ? ` · created ${formatNetworkTimestamp(c.createdAt)}` : '';
+    const updated = c.updatedAt ? ` · updated ${formatNetworkTimestamp(c.updatedAt)}` : '';
     enrichMeta.textContent = `${enriched} · source: ${c.source || '—'}${created}${updated}`;
     attrsPanel.append(enrichMeta);
 
     const toggleAttrs = document.createElement('button');
     toggleAttrs.type = 'button';
     toggleAttrs.className = 'network-crm__btn network-crm__btn--attrs';
-    toggleAttrs.textContent = contactAttrsExpanded ? 'Hide attributes' : 'Show attributes';
+    toggleAttrs.textContent = contactAttrsExpanded ? 'Fewer attributes' : 'More attributes';
     toggleAttrs.setAttribute('aria-expanded', contactAttrsExpanded ? 'true' : 'false');
     toggleAttrs.addEventListener('click', () => {
       contactAttrsExpanded = !contactAttrsExpanded;
       attrsPanel.hidden = !contactAttrsExpanded;
-      toggleAttrs.textContent = contactAttrsExpanded ? 'Hide attributes' : 'Show attributes';
+      toggleAttrs.textContent = contactAttrsExpanded ? 'Fewer attributes' : 'More attributes';
       toggleAttrs.setAttribute('aria-expanded', contactAttrsExpanded ? 'true' : 'false');
     });
 
@@ -1026,18 +1421,26 @@ export function mountNetworkUi(root) {
 
     form.append(
       field('Name', 'displayName', c.displayName),
-      field('Role', 'title', c.title),
+      field('Nickname', 'nickname', c.nickname || ''),
+      field('Scene', 'networkCircles', c.networkCircles || ''),
       field('Location', 'location', c.location),
-      kindsBox,
-      field('Rating', 'rating', c.rating || '', {
-        options: ['Ride or Die', 'Hot', 'Warm', 'Cold'],
+      field('Relationship', 'relationshipStatus', c.relationshipStatus || '', {
+        options: [
+          'Lead',
+          'Cultivating',
+          'Collaborator',
+          'Family',
+          'Acquaintance',
+          'Paused',
+          'Former',
+        ],
       }),
-      field('Relationship status', 'relationshipStatus', c.relationshipStatus || '', {
-        options: ['Active', 'Dormant', 'Former'],
+      field('Status', 'rating', c.rating || '', {
+        options: ['Hot', 'Warm', 'Cold'],
       }),
       lastContactField,
+      kindsBox,
       moreChannels,
-      field('Community', 'networkCircles', c.networkCircles || '', { rows: 2 }),
       field('Bio', 'bio', c.bio || '', { rows: 3 }),
       field('How we met', 'howWeMet', c.howWeMet || '', { rows: 3 }),
       field(
@@ -1069,7 +1472,7 @@ export function mountNetworkUi(root) {
     const enrichBtn = document.createElement('button');
     enrichBtn.type = 'button';
     enrichBtn.className = 'network-crm__btn';
-    enrichBtn.textContent = 'Enrich from web';
+    enrichBtn.textContent = 'Enrich';
 
     const delBtn = document.createElement('button');
     delBtn.type = 'button';
@@ -1099,10 +1502,11 @@ export function mountNetworkUi(root) {
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean);
-      const kindsSel = ['friend', 'business', 'community'].filter((k) => form.querySelector(`[name="kind-${k}"]`)?.checked);
+      const kindsSel = ['friend', 'organizer', 'business'].filter((k) => form.querySelector(`[name="kind-${k}"]`)?.checked);
       const prefs = methodOptions.filter((m) => form.querySelector(`[name="pref-${m}"]`)?.checked);
       return {
         displayName: String(fd.get('displayName') || '').trim(),
+        nickname: String(fd.get('nickname') || '').trim(),
         title: String(fd.get('title') || '').trim(),
         org: String(fd.get('org') || '').trim(),
         kinds: kindsSel.length ? kindsSel : ['friend'],
@@ -1129,6 +1533,7 @@ export function mountNetworkUi(root) {
           signal: String(fd.get('signal') ?? current.channels?.signal ?? '').trim() || null,
           whatsapp: String(fd.get('whatsapp') ?? current.channels?.whatsapp ?? '').trim() || null,
           linkedin: String(fd.get('linkedin') ?? current.channels?.linkedin ?? '').trim() || null,
+          other: String(fd.get('other') ?? current.channels?.other ?? '').trim() || null,
           urls: String(fd.get('urls') ?? (current.channels?.urls || []).join('\n') ?? '')
             .split(/\n+/)
             .map((s) => s.trim())
@@ -1141,7 +1546,7 @@ export function mountNetworkUi(root) {
     let dirtyWhileSaving = false;
 
     /**
-     * @param {{ remount?: boolean, fromUndo?: boolean, bodyOverride?: object }} [opts]
+     * @param {{ remount?: boolean, fromUndo?: boolean, bodyOverride?: object, silent?: boolean }} [opts]
      */
     async function persistContact(opts = {}) {
       if (gen !== detailGeneration) return;
@@ -1150,7 +1555,8 @@ export function mountNetworkUi(root) {
         return;
       }
       saveInFlight = true;
-      showStatus(opts.fromUndo ? 'Undoing…' : 'Saving…');
+      const silent = Boolean(opts.silent) && !opts.fromUndo;
+      if (!silent) showStatus(opts.fromUndo ? 'Undoing…' : 'Saving…');
       try {
         do {
           dirtyWhileSaving = false;
@@ -1188,29 +1594,52 @@ export function mountNetworkUi(root) {
 
           current = saved;
 
-          await loadOrganizations();
-          if (gen !== detailGeneration) return;
+          // Org ensure/create only matters when the org name changed.
+          if (String(body.org || '') !== String(priorBody.org || '')) {
+            await loadOrganizations();
+            if (gen !== detailGeneration) return;
+          }
 
           if (mergedAway || opts.remount || opts.fromUndo) {
-            showStatus(opts.fromUndo ? 'Undone' : mergedAway ? 'Saved (merged duplicate)' : 'Saved');
+            if (!silent || opts.fromUndo || mergedAway) {
+              showStatus(opts.fromUndo ? 'Undone' : mergedAway ? 'Saved (merged duplicate)' : 'Saved');
+            }
             renderList();
             renderDetail(saved);
             return;
           }
 
-          h.textContent = saved.displayName || 'Untitled';
+          h.replaceChildren();
+          h.append(document.createTextNode(saved.displayName || 'Untitled'));
+          if (saved.nickname) {
+            const nick = document.createElement('span');
+            nick.className = 'network-crm__detail-nick muted';
+            nick.textContent = saved.nickname;
+            h.append(document.createTextNode(' '), nick);
+          }
           const confSaved =
             typeof saved.enrichment?.confidence === 'number'
               ? ` · confidence ${Math.round(saved.enrichment.confidence * 100)}%`
               : '';
           const enrichedSaved = saved.enrichment?.enrichedAt
-            ? `Enriched ${saved.enrichment.enrichedAt}${confSaved}`
+            ? `Enriched ${formatNetworkTimestamp(saved.enrichment.enrichedAt)}${confSaved}`
             : 'Not enriched yet';
-          const createdSaved = saved.createdAt ? ` · created ${saved.createdAt}` : '';
-          const updatedSaved = saved.updatedAt ? ` · updated ${saved.updatedAt}` : '';
+          const createdSaved = saved.createdAt
+            ? ` · created ${formatNetworkTimestamp(saved.createdAt)}`
+            : '';
+          const updatedSaved = saved.updatedAt
+            ? ` · updated ${formatNetworkTimestamp(saved.updatedAt)}`
+            : '';
           enrichMeta.textContent = `${enrichedSaved} · source: ${saved.source || '—'}${createdSaved}${updatedSaved}`;
-          showStatus('Saved');
-          renderList();
+          if (!silent) showStatus('Saved');
+
+          // Sidebar only shows name / nick / kinds / circles — skip full rebuild for notes etc.
+          const listLabelChanged =
+            String(saved.displayName || '') !== String(priorBody.displayName || '')
+            || String(saved.nickname || '') !== String(priorBody.nickname || '')
+            || !sameJson(saved.kinds || [], priorBody.kinds || [])
+            || String(saved.networkCircles || '') !== String(priorBody.networkCircles || '');
+          if (listLabelChanged) renderList();
         } while (dirtyWhileSaving && gen === detailGeneration);
       } catch (err) {
         if (gen === detailGeneration) showStatus(String(err?.message || err), true);
@@ -1235,7 +1664,7 @@ export function mountNetworkUi(root) {
       detailAutosaveTimer = setTimeout(() => {
         detailAutosaveTimer = null;
         if (gen !== detailGeneration) return;
-        void persistContact();
+        void persistContact({ silent: true });
       }, AUTOSAVE_MS);
     }
 
@@ -1274,29 +1703,120 @@ export function mountNetworkUi(root) {
       await persistContact();
     });
 
-    enrichBtn.addEventListener('click', async (ev) => {
-      enrichBtn.disabled = true;
-      beginWaitCursor(ev);
-      showStatus('Enriching from web…');
-      try {
-        const r = await fetch(`/api/network/contacts/${encodeURIComponent(current.id)}/enrich`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-        const j = await r.json();
-        if (!j.ok) throw new Error(j.error || 'enrich_failed');
-        const idx = contacts.findIndex((x) => x.id === current.id);
-        if (idx >= 0) contacts[idx] = j.contact;
-        showStatus('Enriched');
-        renderList();
-        renderDetail(j.contact);
-      } catch (err) {
-        showStatus(String(err?.message || err), true);
-      } finally {
-        endWaitCursor();
-        enrichBtn.disabled = false;
+    enrichBtn.addEventListener('click', () => {
+      const enrichErr = (j) => {
+        const err = String(j?.error || 'enrich_failed');
+        if (err === 'enrich_timeout' || err.includes('TimeoutError') || err.includes('aborted')) {
+          return 'Enrich timed out — try again, or add a LinkedIn / website URL first';
+        }
+        if (err.includes('openrouter_http_402')) {
+          return 'OpenRouter needs credits (or a free model). Check API key / billing.';
+        }
+        if (err.includes('openrouter_http_429')) {
+          return 'OpenRouter is rate-limited — try again in a minute';
+        }
+        if (err === 'openrouter_not_configured') return 'OpenRouter API key not configured';
+        if (err === 'no_shared_emails') {
+          return 'No shared emails found — add their email or connect Gmail in Settings';
+        }
+        if (err === 'no_email_or_name') return 'Add a name or email first';
+        if (err === 'gmail_search_failed') return j.detail || 'Gmail search failed — check Gmail connection';
+        if (err === 'unsupported_file_type') return 'Unsupported file type — try txt, html, vcard, or an image';
+        return err;
+      };
+
+      if (detailAutosaveTimer) {
+        clearTimeout(detailAutosaveTimer);
+        detailAutosaveTimer = null;
       }
+      const contactId = current.id;
+      const card = buildContactBody();
+
+      /**
+       * @param {string} path
+       * @param {object} body
+       * @param {string} okMsg
+       * @param {number} [timeoutMs]
+       */
+      async function postEnrich(path, body, okMsg, timeoutMs = 95_000) {
+        const save = await fetch(`/api/network/contacts/${encodeURIComponent(contactId)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(card),
+        });
+        const saved = await save.json();
+        if (!saved.ok) throw new Error(saved.error || 'save_failed');
+        if (saved.contact) {
+          const idx = contacts.findIndex((x) => x.id === contactId || x.id === saved.contact.id);
+          if (idx >= 0) contacts[idx] = saved.contact;
+        }
+        let r;
+        try {
+          r = await fetch(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(timeoutMs),
+          });
+        } catch (e) {
+          const name = String(e?.name || '');
+          if (name === 'TimeoutError' || name === 'AbortError') {
+            throw new Error(enrichErr({ error: 'enrich_timeout' }));
+          }
+          throw e;
+        }
+        const j = await r.json();
+        if (!j.ok) throw new Error(enrichErr(j));
+        applyEnrichedContact(j.contact, okMsg);
+        return j;
+      }
+
+      openEnrichOptionsDialog({
+        title: 'Enrich',
+        modes: ['web', 'file', 'email', 'voice'],
+        onWeb: async () => {
+          await postEnrich(
+            `/api/network/contacts/${encodeURIComponent(contactId)}/enrich`,
+            { card },
+            'Enriched from web',
+          );
+        },
+        onFile: async (file) => {
+          const dataUrl = await readFileAsDataUrl(file);
+          await postEnrich(
+            `/api/network/contacts/${encodeURIComponent(contactId)}/enrich-from-file`,
+            {
+              card,
+              dataUrl,
+              filename: file.name,
+              mimeType: file.type || undefined,
+            },
+            'Enriched from file',
+          );
+        },
+        onEmail: async () => {
+          const j = await postEnrich(
+            `/api/network/contacts/${encodeURIComponent(contactId)}/enrich-from-email`,
+            { card },
+            'Enriched from email',
+          );
+          const n = Number(j.emailCount) || 0;
+          if (n) showStatus(`Enriched from ${n} email${n === 1 ? '' : 's'}`);
+        },
+        onVoiceStart: async () => {
+          await startVoiceEnrichOnScreen({
+            contactId,
+            card,
+            onVoice: async (dataUrl, mimeType) => {
+              await postEnrich(
+                `/api/network/contacts/${encodeURIComponent(contactId)}/enrich-from-voice`,
+                { card, dataUrl, mimeType },
+                'Enriched from voice',
+              );
+            },
+          });
+        },
+      });
     });
 
     delBtn.addEventListener('click', async () => {
@@ -1321,6 +1841,320 @@ export function mountNetworkUi(root) {
   }
 
   /**
+   * Close the enrich picker and run work on the Network screen.
+   * @param {string} pendingMsg
+   * @param {() => Promise<void>} work
+   */
+  function runEnrichInBackground(pendingMsg, work) {
+    showStatus(pendingMsg);
+    beginWaitCursor();
+    void (async () => {
+      try {
+        await work();
+      } catch (err) {
+        showStatus(String(err?.message || err), true);
+      } finally {
+        endWaitCursor();
+      }
+    })();
+  }
+
+  /**
+   * Apply an enriched contact if still on People; always refresh the list row.
+   * @param {object} contact
+   * @param {string} [okMsg]
+   */
+  function applyEnrichedContact(contact, okMsg) {
+    if (!contact?.id) return;
+    const idx = contacts.findIndex((x) => x.id === contact.id);
+    if (idx >= 0) contacts[idx] = contact;
+    else contacts.push(contact);
+    renderList();
+    if (view === 'people' && selectedId === contact.id) {
+      selectContact(contact.id);
+    }
+    if (okMsg) showStatus(okMsg);
+  }
+
+  /**
+   * @param {object} organization
+   * @param {string} [okMsg]
+   */
+  function applyEnrichedOrganization(organization, okMsg) {
+    if (!organization?.id) return;
+    const idx = organizations.findIndex((x) => x.id === organization.id);
+    if (idx >= 0) organizations[idx] = organization;
+    else organizations.push(organization);
+    renderList();
+    if (view === 'companies' && selectedOrgId === organization.id) {
+      openOrganization(organization.id);
+    }
+    if (okMsg) showStatus(okMsg);
+  }
+
+  /** @type {{
+   *   recorder: MediaRecorder | null,
+   *   stream: MediaStream | null,
+   *   chunks: Blob[],
+   *   contactId: string | null,
+   *   card: object | null,
+   *   onVoice: ((dataUrl: string, mimeType: string) => Promise<void>) | null,
+   * }} */
+  const voiceSession = {
+    recorder: null,
+    stream: null,
+    chunks: [],
+    contactId: null,
+    card: null,
+    onVoice: null,
+  };
+
+  function stopVoiceSessionMic() {
+    if (voiceSession.recorder && voiceSession.recorder.state !== 'inactive') {
+      try {
+        voiceSession.recorder.stop();
+      } catch {
+        // ignore
+      }
+    }
+    voiceSession.recorder = null;
+    if (voiceSession.stream) {
+      for (const t of voiceSession.stream.getTracks()) t.stop();
+      voiceSession.stream = null;
+    }
+  }
+
+  function hideVoiceBar() {
+    stopVoiceSessionMic();
+    voiceBar.hidden = true;
+    voiceSession.contactId = null;
+    voiceSession.card = null;
+    voiceSession.onVoice = null;
+    voiceSession.chunks = [];
+  }
+
+  /**
+   * Start mic on the Network screen (dialog already closed).
+   * @param {{
+   *   contactId: string,
+   *   card: object,
+   *   onVoice: (dataUrl: string, mimeType: string) => Promise<void>,
+   * }} args
+   */
+  async function startVoiceEnrichOnScreen(args) {
+    hideVoiceBar();
+    voiceSession.contactId = args.contactId;
+    voiceSession.card = args.card;
+    voiceSession.onVoice = args.onVoice;
+    voiceSession.chunks = [];
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Microphone not available in this browser');
+    }
+    voiceSession.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : '';
+    voiceSession.recorder = mimeType
+      ? new MediaRecorder(voiceSession.stream, { mimeType })
+      : new MediaRecorder(voiceSession.stream);
+    voiceSession.recorder.addEventListener('dataavailable', (e) => {
+      if (e.data?.size) voiceSession.chunks.push(e.data);
+    });
+    voiceSession.recorder.start();
+    const label = voiceBar.querySelector('.network-crm__voice-bar-label');
+    if (label) label.textContent = 'Recording… talk freely, then Stop & enrich';
+    voiceBar.hidden = false;
+    showStatus('Recording voice note…');
+  }
+
+  voiceBar.querySelector('[data-voice-stop]')?.addEventListener('click', () => {
+    const recorder = voiceSession.recorder;
+    const onVoice = voiceSession.onVoice;
+    if (!recorder || !onVoice) return;
+    const stopBtn = /** @type {HTMLButtonElement | null} */ (voiceBar.querySelector('[data-voice-stop]'));
+    if (stopBtn) stopBtn.disabled = true;
+    const mimeType = recorder.mimeType || 'audio/webm';
+    const chunks = voiceSession.chunks;
+    runEnrichInBackground('Transcribing and enriching…', async () => {
+      try {
+        const blob = await new Promise((resolve, reject) => {
+          recorder.addEventListener('stop', () => {
+            resolve(new Blob(chunks, { type: mimeType }));
+          });
+          recorder.addEventListener('error', () => reject(new Error('record_failed')));
+          try {
+            recorder.stop();
+          } catch (e) {
+            reject(e);
+          }
+        });
+        stopVoiceSessionMic();
+        voiceBar.hidden = true;
+        if (!blob.size) throw new Error('No audio captured');
+        const dataUrl = await readFileAsDataUrl(blob);
+        await onVoice(dataUrl, mimeType);
+      } finally {
+        hideVoiceBar();
+        if (stopBtn) stopBtn.disabled = false;
+      }
+    });
+  });
+
+  /**
+   * Enrich options dialog: from web / file / email / voice.
+   * Choosing an option closes immediately and continues on the Network screen.
+   * @param {{
+   *   title?: string,
+   *   modes?: Array<'web' | 'file' | 'email' | 'voice'>,
+   *   onWeb: () => Promise<void>,
+   *   onFile: (file: File) => Promise<void>,
+   *   onEmail: () => Promise<void>,
+   *   onVoiceStart?: () => Promise<void>,
+   * }} opts
+   */
+  function openEnrichOptionsDialog(opts) {
+    const modes = new Set(opts.modes || ['web', 'file', 'email', 'voice']);
+    const backdrop = document.createElement('div');
+    backdrop.className = 'network-crm__img-pick-backdrop network-crm__enrich-backdrop';
+    backdrop.setAttribute('role', 'presentation');
+
+    const dialog = document.createElement('div');
+    dialog.className = 'network-crm__img-pick-dialog network-crm__enrich-dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-label', opts.title || 'Enrich');
+
+    const header = document.createElement('div');
+    header.className = 'network-crm__img-pick-dialog-header';
+    const title = document.createElement('h3');
+    title.className = 'network-crm__img-pick-dialog-title';
+    title.textContent = opts.title || 'Enrich';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'network-crm__btn network-crm__btn--tiny';
+    closeBtn.textContent = 'Close';
+    header.append(title, closeBtn);
+
+    const hint = document.createElement('p');
+    hint.className = 'network-crm__img-pick-hint muted';
+    hint.textContent = 'Choose a source — work continues on the Network screen.';
+
+    const listEl = document.createElement('div');
+    listEl.className = 'network-crm__enrich-options';
+
+    function close() {
+      document.removeEventListener('keydown', onKey);
+      backdrop.remove();
+    }
+
+    function onKey(e) {
+      if (e.key === 'Escape') close();
+    }
+
+    /**
+     * @param {string} label
+     * @param {string} desc
+     * @param {() => void | Promise<void>} onClick
+     * @param {{ iconHtml?: string, className?: string }} [extra]
+     */
+    function addOption(label, desc, onClick, extra = {}) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `network-crm__enrich-option${extra.className ? ` ${extra.className}` : ''}`;
+      if (extra.iconHtml) {
+        const icon = document.createElement('span');
+        icon.className = 'network-crm__enrich-option-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.innerHTML = extra.iconHtml;
+        btn.append(icon);
+      }
+      const textWrap = document.createElement('span');
+      textWrap.className = 'network-crm__enrich-option-text';
+      const strong = document.createElement('strong');
+      strong.textContent = label;
+      const p = document.createElement('span');
+      p.className = 'muted';
+      p.textContent = desc;
+      textWrap.append(strong, p);
+      btn.append(textWrap);
+      btn.addEventListener('click', () => {
+        void Promise.resolve(onClick());
+      });
+      listEl.append(btn);
+      return btn;
+    }
+
+    if (modes.has('web')) {
+      addOption('From web', 'Search public pages and fill empty fields', () => {
+        close();
+        runEnrichInBackground('Enriching from web (up to ~90s)…', () => opts.onWeb());
+      });
+    }
+
+    if (modes.has('file')) {
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept =
+        '.txt,.md,.csv,.json,.html,.htm,.vcf,.vcard,text/*,image/*,.png,.jpg,.jpeg,.webp,.gif';
+      fileInput.hidden = true;
+      addOption('From file', 'Upload a resume, bio, notes, or screenshot', () => {
+        fileInput.click();
+      });
+      fileInput.addEventListener('change', () => {
+        const file = fileInput.files?.[0];
+        fileInput.value = '';
+        if (!file) return;
+        close();
+        runEnrichInBackground(`Reading ${file.name}…`, () => opts.onFile(file));
+      });
+      dialog.append(fileInput);
+    }
+
+    if (modes.has('email')) {
+      addOption('From email', 'Look up emails you’ve been on together', () => {
+        close();
+        runEnrichInBackground('Searching shared emails…', () => opts.onEmail());
+      });
+    }
+
+    if (modes.has('voice')) {
+      const playIcon =
+        '<svg class="network-crm__enrich-play" viewBox="0 0 24 24" width="22" height="22" focusable="false">' +
+        '<circle cx="12" cy="12" r="11" fill="currentColor" opacity="0.18"/>' +
+        '<path d="M9.5 7.5v9l8-4.5-8-4.5z" fill="currentColor"/>' +
+        '</svg>';
+      addOption(
+        'From voice',
+        'Press to record — we transcribe and file the facts',
+        async () => {
+          close();
+          try {
+            if (typeof opts.onVoiceStart === 'function') {
+              await opts.onVoiceStart();
+            }
+          } catch (err) {
+            hideVoiceBar();
+            showStatus(String(err?.message || err), true);
+          }
+        },
+        { iconHtml: playIcon, className: 'network-crm__enrich-option--voice' },
+      );
+    }
+
+    closeBtn.addEventListener('click', () => close());
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) close();
+    });
+
+    dialog.append(header, hint, listEl);
+    backdrop.append(dialog);
+    document.body.append(backdrop);
+    document.addEventListener('keydown', onKey);
+  }
+
+  /**
    * @param {File} file
    */
   function readFileAsDataUrl(file) {
@@ -1336,10 +2170,15 @@ export function mountNetworkUi(root) {
    * @param {string} id
    */
   function openOrganization(id) {
+    if (groupsUiMounted) {
+      groupsPane.replaceChildren();
+      groupsUiMounted = false;
+    }
     view = 'companies';
     selectedOrgId = id;
     syncTabs();
     list.setAttribute('aria-label', 'Companies');
+    list.setAttribute('aria-labelledby', 'network-tab-companies');
     renderList();
     const o = organizations.find((x) => x.id === id);
     if (!o) {
@@ -1391,7 +2230,14 @@ export function mountNetworkUi(root) {
       applyUrl: `/api/network/organizations/${encodeURIComponent(current.id)}/logo-from-url`,
       buttonLabel: 'Find other logos',
       dialogTitle: 'Pick a logo',
-      emptyLabel: 'No logos found — try Enrich',
+      emptyLabel: 'No logos found — try a different search',
+      querySearch: true,
+      queryPlaceholder: 'Type a company or brand name…',
+      defaultQuery: () => {
+        const live = detail.querySelector('.network-crm__form [name="name"]');
+        const name = String(live?.value || current.name || '').trim();
+        return name ? `${name} logo` : '';
+      },
       onApplied: (entity) => {
         const idx = organizations.findIndex((x) => x.id === entity.id);
         if (idx >= 0) organizations[idx] = entity;
@@ -1463,7 +2309,7 @@ export function mountNetworkUi(root) {
     );
     const linkedNameKeys = new Set(
       linkedPeople.flatMap((c) =>
-        [c.displayName, ...(c.aliases || [])]
+        [c.displayName, c.nickname, ...(c.aliases || [])]
           .filter(Boolean)
           .map((n) => String(n).toLowerCase()),
       ),
@@ -1606,7 +2452,7 @@ export function mountNetworkUi(root) {
         });
         inNetwork.append(
           personRow({
-            name: p.displayName,
+            name: p.nickname ? `${p.displayName} (${p.nickname})` : p.displayName,
             sub: [p.title, 'in network'].filter(Boolean).join(' · '),
             actions: [openBtn, renameBtn, unlinkBtn],
           }),
@@ -1809,19 +2655,19 @@ export function mountNetworkUi(root) {
         ? ` · confidence ${Math.round(o.enrichment.confidence * 100)}%`
         : '';
     enrichMeta.textContent = o.enrichment?.enrichedAt
-      ? `Enriched ${o.enrichment.enrichedAt}${conf}`
+      ? `Enriched ${formatNetworkTimestamp(o.enrichment.enrichedAt)}${conf}`
       : 'Not enriched yet';
     attrsPanel.append(enrichMeta);
 
     const toggleAttrs = document.createElement('button');
     toggleAttrs.type = 'button';
     toggleAttrs.className = 'network-crm__btn network-crm__btn--attrs';
-    toggleAttrs.textContent = orgAttrsExpanded ? 'Hide attributes' : 'Show attributes';
+    toggleAttrs.textContent = orgAttrsExpanded ? 'Fewer attributes' : 'More attributes';
     toggleAttrs.setAttribute('aria-expanded', orgAttrsExpanded ? 'true' : 'false');
     toggleAttrs.addEventListener('click', () => {
       orgAttrsExpanded = !orgAttrsExpanded;
       attrsPanel.hidden = !orgAttrsExpanded;
-      toggleAttrs.textContent = orgAttrsExpanded ? 'Hide attributes' : 'Show attributes';
+      toggleAttrs.textContent = orgAttrsExpanded ? 'Fewer attributes' : 'More attributes';
       toggleAttrs.setAttribute('aria-expanded', orgAttrsExpanded ? 'true' : 'false');
     });
 
@@ -1857,7 +2703,7 @@ export function mountNetworkUi(root) {
     const enrichBtn = document.createElement('button');
     enrichBtn.type = 'button';
     enrichBtn.className = 'network-crm__btn';
-    enrichBtn.textContent = 'Enrich from web';
+    enrichBtn.textContent = 'Enrich';
     actions.append(saveBtn, undoBtn, enrichBtn);
     form.append(actions, peopleBox);
 
@@ -1916,7 +2762,7 @@ export function mountNetworkUi(root) {
     let dirtyWhileSaving = false;
 
     /**
-     * @param {{ fromUndo?: boolean, bodyOverride?: object, remount?: boolean }} [opts]
+     * @param {{ fromUndo?: boolean, bodyOverride?: object, remount?: boolean, silent?: boolean }} [opts]
      */
     async function persistOrg(opts = {}) {
       if (gen !== detailGeneration) return;
@@ -1925,7 +2771,8 @@ export function mountNetworkUi(root) {
         return;
       }
       saveInFlight = true;
-      showStatus(opts.fromUndo ? 'Undoing…' : 'Saving…');
+      const silent = Boolean(opts.silent) && !opts.fromUndo;
+      if (!silent) showStatus(opts.fromUndo ? 'Undoing…' : 'Saving…');
       try {
         do {
           dirtyWhileSaving = false;
@@ -1963,15 +2810,24 @@ export function mountNetworkUi(root) {
           current = saved;
 
           if (mergedAway || opts.fromUndo || opts.remount) {
-            showStatus(opts.fromUndo ? 'Undone' : mergedAway ? 'Saved (merged duplicate)' : 'Saved');
+            if (!silent || opts.fromUndo || mergedAway) {
+              showStatus(opts.fromUndo ? 'Undone' : mergedAway ? 'Saved (merged duplicate)' : 'Saved');
+            }
             renderList();
             renderOrgDetail(saved);
             return;
           }
 
           h.textContent = saved.name || 'Untitled company';
-          showStatus('Saved');
-          renderList();
+          if (!silent) showStatus('Saved');
+
+          const listLabelChanged =
+            String(saved.name || '') !== String(priorBody.name || '')
+            || String(saved.industry || '') !== String(priorBody.industry || '')
+            || String(saved.type || '') !== String(priorBody.type || '')
+            || String(saved.location || '') !== String(priorBody.location || '')
+            || String(saved.website || '') !== String(priorBody.website || '');
+          if (listLabelChanged) renderList();
         } while (dirtyWhileSaving && gen === detailGeneration);
       } catch (err) {
         if (gen === detailGeneration) showStatus(String(err?.message || err), true);
@@ -1996,7 +2852,7 @@ export function mountNetworkUi(root) {
       detailAutosaveTimer = setTimeout(() => {
         detailAutosaveTimer = null;
         if (gen !== detailGeneration) return;
-        void persistOrg();
+        void persistOrg({ silent: true });
       }, AUTOSAVE_MS);
     }
 
@@ -2034,32 +2890,61 @@ export function mountNetworkUi(root) {
       await persistOrg();
     });
 
-    enrichBtn.addEventListener('click', async (ev) => {
-      enrichBtn.disabled = true;
-      beginWaitCursor(ev);
-      showStatus('Enriching organization…');
-      try {
-        const r = await fetch(`/api/network/organizations/${encodeURIComponent(current.id)}/enrich`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-        const j = await r.json();
-        if (!j.ok) throw new Error(j.error || 'enrich_failed');
-        const idx = organizations.findIndex((x) => x.id === current.id);
-        if (idx >= 0) organizations[idx] = j.organization;
-        const found = Array.isArray(j.organization?.suggestedPeople)
-          ? j.organization.suggestedPeople.filter((p) => p.status === 'pending').length
-          : 0;
-        showStatus(found ? `Enriched · ${found} people found` : 'Enriched');
-        renderList();
-        renderOrgDetail(j.organization);
-      } catch (err) {
-        showStatus(String(err?.message || err), true);
-      } finally {
-        endWaitCursor();
-        enrichBtn.disabled = false;
+    enrichBtn.addEventListener('click', () => {
+      if (detailAutosaveTimer) {
+        clearTimeout(detailAutosaveTimer);
+        detailAutosaveTimer = null;
       }
+      const orgId = current.id;
+      const card = buildOrgBody();
+      openEnrichOptionsDialog({
+        title: 'Enrich company',
+        modes: ['web'],
+        onWeb: async () => {
+          const save = await fetch(`/api/network/organizations/${encodeURIComponent(orgId)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(card),
+          });
+          const saved = await save.json();
+          if (!saved.ok) throw new Error(saved.error || 'save_failed');
+          if (saved.organization) {
+            const idx = organizations.findIndex((x) => x.id === orgId || x.id === saved.organization.id);
+            if (idx >= 0) organizations[idx] = saved.organization;
+          }
+          let r;
+          try {
+            r = await fetch(`/api/network/organizations/${encodeURIComponent(orgId)}/enrich`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ card }),
+              signal: AbortSignal.timeout(95_000),
+            });
+          } catch (e) {
+            const name = String(e?.name || '');
+            if (name === 'TimeoutError' || name === 'AbortError') {
+              throw new Error('Enrich timed out — try again, or add a website URL first');
+            }
+            throw e;
+          }
+          const j = await r.json();
+          if (!j.ok) {
+            if (j.error === 'enrich_timeout') {
+              throw new Error('Enrich timed out — try again, or add a website URL first');
+            }
+            throw new Error(j.error || 'enrich_failed');
+          }
+          const found = Array.isArray(j.organization?.suggestedPeople)
+            ? j.organization.suggestedPeople.filter((p) => p.status === 'pending').length
+            : 0;
+          applyEnrichedOrganization(
+            j.organization,
+            found ? `Enriched · ${found} people found` : 'Enriched from web',
+          );
+        },
+        onFile: async () => {},
+        onEmail: async () => {},
+      });
     });
 
     detail.append(head, form);
@@ -2081,24 +2966,25 @@ export function mountNetworkUi(root) {
   companiesTab.addEventListener('click', () => {
     void setView('companies');
   });
+  groupsTab.addEventListener('click', () => {
+    void setView('groups');
+  });
 
-  groupsBtn.addEventListener('click', async () => {
-    mainPane.hidden = true;
-    groupsPane.hidden = false;
+  /**
+   * @param {{ selectGroupId?: string | null }} [opts]
+   */
+  async function openGroupsUi(opts = {}) {
     const { mountNetworkGroupsUi } = await import('./network-groups-ui.js');
+    groupsUiMounted = true;
     mountNetworkGroupsUi(groupsPane, {
       contacts,
       getContacts: () => contacts,
+      selectGroupId: opts.selectGroupId || null,
+      embedded: true,
       onClose: () => {
-        groupsPane.hidden = true;
-        groupsPane.replaceChildren();
-        mainPane.hidden = false;
-        load();
+        void setView('people');
       },
       onOpenContact: (id) => {
-        groupsPane.hidden = true;
-        groupsPane.replaceChildren();
-        mainPane.hidden = false;
         selectedId = id;
         void setView('people');
       },
@@ -2106,6 +2992,33 @@ export function mountNetworkUi(root) {
         await load();
       },
     });
+  }
+
+  startGroupSelBtn.addEventListener('click', async () => {
+    const ids = [...selectedContactIds];
+    if (!ids.length) return;
+    const name = prompt(`Group name for ${ids.length} people?`) || '';
+    if (!name.trim()) {
+      showStatus('Cancelled');
+      return;
+    }
+    showStatus('Creating group…');
+    try {
+      const r = await fetch('/api/network/groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), memberIds: ids }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'create_failed');
+      selectedContactIds.clear();
+      syncSelectionActions();
+      renderList();
+      showStatus(`Started ${j.group?.name || 'group'}`);
+      await setView('groups', { selectGroupId: j.group?.id || null });
+    } catch (err) {
+      showStatus(String(err?.message || err), true);
+    }
   });
 
   addToGroupBtn.addEventListener('click', async () => {
@@ -2118,7 +3031,7 @@ export function mountNetworkUi(root) {
       if (!j.ok) throw new Error(j.error || 'groups_failed');
       const groups = Array.isArray(j.groups) ? j.groups : [];
       if (!groups.length) {
-        showStatus('No groups yet — open Start a group first', true);
+        showStatus('No groups yet — open the Groups tab first', true);
         return;
       }
       const labels = groups.map((g, i) => `${i + 1}. ${g.name || 'Untitled'} (${(g.memberIds || []).length})`).join('\n');
@@ -2137,11 +3050,118 @@ export function mountNetworkUi(root) {
       const aj = await ar.json();
       if (!aj.ok) throw new Error(aj.error || 'add_failed');
       selectedContactIds.clear();
-      syncAddToGroupBtn();
+      syncSelectionActions();
       renderList();
       showStatus(`Added to ${group.name || 'group'}`);
     } catch (err) {
       showStatus(String(err?.message || err), true);
+    }
+  });
+
+  mergeBtn.addEventListener('click', async () => {
+    const ids = [...selectedContactIds];
+    if (ids.length < 2) return;
+    const names = ids
+      .map((id) => contacts.find((c) => c.id === id)?.displayName || id)
+      .join(', ');
+    if (!confirm(`Merge ${ids.length} contacts into one?\n\n${names}`)) return;
+    showStatus('Merging…');
+    try {
+      const r = await fetch('/api/network/contacts/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'merge_failed');
+      selectedContactIds.clear();
+      syncSelectionActions();
+      await load();
+      if (j.contact?.id) {
+        selectedId = j.contact.id;
+        selectContact(selectedId);
+      }
+      showStatus(`Merged into ${j.contact?.displayName || 'one contact'}`);
+    } catch (err) {
+      showStatus(String(err?.message || err), true);
+    }
+  });
+
+  deleteSelBtn.addEventListener('click', async () => {
+    const ids = [...selectedContactIds];
+    if (!ids.length) return;
+    const names = ids
+      .map((id) => contacts.find((c) => c.id === id)?.displayName || 'contact')
+      .slice(0, 8)
+      .join(', ');
+    const more = ids.length > 8 ? ` (+${ids.length - 8} more)` : '';
+    if (!confirm(`Delete ${ids.length} contact(s)?\n\n${names}${more}`)) return;
+    showStatus('Deleting…');
+    try {
+      const r = await fetch('/api/network/contacts/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'delete_failed');
+      const drop = new Set(ids);
+      contacts = contacts.filter((c) => !drop.has(c.id));
+      for (const id of ids) contactUndoStacks.delete(id);
+      if (selectedId && drop.has(selectedId)) selectedId = contacts[0]?.id || null;
+      selectedContactIds.clear();
+      syncSelectionActions();
+      showStatus(`Deleted ${j.deleted || ids.length}`);
+      renderList();
+      if (selectedId) selectContact(selectedId);
+      else detail.innerHTML = '<p class="muted">Select a person</p>';
+    } catch (err) {
+      showStatus(String(err?.message || err), true);
+    }
+  });
+
+  enhanceSelBtn.addEventListener('click', async (ev) => {
+    const ids = [...selectedContactIds];
+    if (!ids.length) return;
+    enhanceSelBtn.disabled = true;
+    beginWaitCursor(ev);
+    let ok = 0;
+    let fail = 0;
+    try {
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        const name = contacts.find((c) => c.id === id)?.displayName || id;
+        showStatus(`Enhancing ${i + 1}/${ids.length}: ${name}…`);
+        try {
+          const r = await fetch(`/api/network/contacts/${encodeURIComponent(id)}/enrich`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+            signal: AbortSignal.timeout(95_000),
+          });
+          const j = await r.json();
+          if (!j.ok) throw new Error(j.error || 'enrich_failed');
+          const idx = contacts.findIndex((x) => x.id === id);
+          if (idx >= 0) contacts[idx] = j.contact;
+          ok += 1;
+        } catch {
+          fail += 1;
+        }
+      }
+      selectedContactIds.clear();
+      syncSelectionActions();
+      renderList();
+      if (selectedId) {
+        const cur = contacts.find((c) => c.id === selectedId);
+        if (cur) renderDetail(cur);
+      }
+      showStatus(
+        fail ? `Enhanced ${ok}, failed ${fail}` : `Enhanced ${ok}`,
+        Boolean(fail && !ok),
+      );
+    } finally {
+      endWaitCursor();
+      enhanceSelBtn.disabled = false;
     }
   });
 
@@ -2199,8 +3219,8 @@ export function mountNetworkUi(root) {
     const text = bulkPanel.querySelector('.network-crm__bulk-text')?.value || '';
     const kinds = [];
     if (bulkPanel.querySelector('[name="bulk-friend"]')?.checked) kinds.push('friend');
+    if (bulkPanel.querySelector('[name="bulk-organizer"]')?.checked) kinds.push('organizer');
     if (bulkPanel.querySelector('[name="bulk-business"]')?.checked) kinds.push('business');
-    if (bulkPanel.querySelector('[name="bulk-community"]')?.checked) kinds.push('community');
     showStatus('Bulk adding…');
     try {
       const r = await fetch('/api/network/contacts/bulk', {
@@ -2232,6 +3252,18 @@ export function mountNetworkUi(root) {
     query = search.value;
     renderList();
   });
+
+  function syncPeopleFiltersFromUi() {
+    peopleFilters = {
+      kind: kindFilter.sel.value || '',
+      relationship: relationshipFilter.sel.value || '',
+      status: statusFilter.sel.value || '',
+    };
+    renderList();
+  }
+  kindFilter.sel.addEventListener('change', syncPeopleFiltersFromUi);
+  relationshipFilter.sel.addEventListener('change', syncPeopleFiltersFromUi);
+  statusFilter.sel.addEventListener('change', syncPeopleFiltersFromUi);
 
   async function load() {
     showStatus('Loading…');

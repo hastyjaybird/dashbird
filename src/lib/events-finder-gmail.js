@@ -1334,3 +1334,139 @@ export async function gmailTokenExists(email, env = process.env) {
     return false;
   }
 }
+
+/**
+ * Find emails across Gmail intake mailboxes that involve this person
+ * (from/to/cc their email, or their name in the message).
+ *
+ * @param {{
+ *   email?: string | null,
+ *   displayName?: string | null,
+ *   aliases?: string[],
+ * }} contact
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ maxMessages?: number }} [opts]
+ * @returns {Promise<{
+ *   ok: boolean,
+ *   error?: string,
+ *   detail?: string,
+ *   query?: string,
+ *   messages?: Array<{
+ *     id: string,
+ *     mailbox: string,
+ *     subject: string,
+ *     from: string,
+ *     to: string,
+ *     date: string,
+ *     snippet: string,
+ *     text: string,
+ *   }>,
+ *   combinedText?: string,
+ * }>}
+ */
+export async function fetchSharedEmailsWithContact(contact, env = process.env, opts = {}) {
+  const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 12, 1), 25);
+  const email = normalizeGmailAddress(contact?.email || '');
+  const name = String(contact?.displayName || '').trim();
+  const aliases = Array.isArray(contact?.aliases)
+    ? contact.aliases.map((a) => String(a || '').trim()).filter(Boolean)
+    : [];
+
+  /** @type {string[]} */
+  const clauses = [];
+  if (email) {
+    clauses.push(`from:${email}`, `to:${email}`, `cc:${email}`);
+  }
+  for (const n of [name, ...aliases].filter(Boolean).slice(0, 4)) {
+    const q = /\s/.test(n) ? `"${n.replace(/"/g, '')}"` : n.replace(/"/g, '');
+    if (q) clauses.push(q);
+  }
+  if (!clauses.length) {
+    return { ok: false, error: 'no_email_or_name' };
+  }
+  const query = `(${[...new Set(clauses)].join(' OR ')})`;
+
+  const mailboxes = gmailIntakeAddresses(env);
+  /** @type {Array<{ id: string, mailbox: string, subject: string, from: string, to: string, date: string, snippet: string, text: string }>} */
+  const messages = [];
+  /** @type {string[]} */
+  const errors = [];
+
+  for (const mailbox of mailboxes) {
+    let accessToken;
+    try {
+      accessToken = await getGmailAccessTokenFor(mailbox, env);
+    } catch (e) {
+      errors.push(`${mailbox}: ${e?.message || e}`);
+      continue;
+    }
+    if (!accessToken) {
+      errors.push(`${mailbox}: not_connected`);
+      continue;
+    }
+
+    try {
+      const list = await gmailGet(
+        accessToken,
+        `/users/me/messages?maxResults=${maxMessages}&q=${encodeURIComponent(query)}`,
+      );
+      const ids = Array.isArray(list?.messages) ? list.messages.map((m) => String(m.id || '')).filter(Boolean) : [];
+      for (const id of ids.slice(0, maxMessages)) {
+        if (messages.some((m) => m.id === id && m.mailbox === mailbox)) continue;
+        const full = await gmailGet(accessToken, `/users/me/messages/${encodeURIComponent(id)}?format=full`);
+        const headers = full?.payload?.headers || [];
+        const subject = headerValue(headers, 'Subject') || '(no subject)';
+        const from = headerValue(headers, 'From');
+        const to = headerValue(headers, 'To');
+        const date = headerValue(headers, 'Date');
+        /** @type {{ texts: string[], htmls: string[], ics: string[] }} */
+        const bag = { texts: [], htmls: [], ics: [] };
+        collectMimeParts(full?.payload, bag);
+        const text = [...bag.texts, ...bag.htmls.map(stripHtml)]
+          .join('\n')
+          .replace(/\s+\n/g, '\n')
+          .trim()
+          .slice(0, 8_000);
+        messages.push({
+          id,
+          mailbox,
+          subject,
+          from,
+          to,
+          date,
+          snippet: String(full?.snippet || '').trim().slice(0, 280),
+          text: text || String(full?.snippet || '').trim(),
+        });
+        if (messages.length >= maxMessages) break;
+      }
+    } catch (e) {
+      errors.push(`${mailbox}: ${e?.message || e}`);
+    }
+    if (messages.length >= maxMessages) break;
+  }
+
+  if (!messages.length) {
+    return {
+      ok: false,
+      error: errors.length ? 'gmail_search_failed' : 'no_shared_emails',
+      detail: errors.slice(0, 4).join('; ') || undefined,
+    };
+  }
+
+  messages.sort((a, b) => (Date.parse(b.date || '') || 0) - (Date.parse(a.date || '') || 0));
+
+  const combinedText = messages
+    .map(
+      (m) =>
+        `Email (${m.mailbox})\nFrom: ${m.from}\nTo: ${m.to}\nDate: ${m.date}\nSubject: ${m.subject}\n\n${m.text || m.snippet}`,
+    )
+    .join('\n\n==========\n\n')
+    .slice(0, 28_000);
+
+  return {
+    ok: true,
+    query,
+    messages: messages.map((m) => ({ ...m, text: String(m.text || '').slice(0, 500) })),
+    combinedText,
+  };
+}

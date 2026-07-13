@@ -29,6 +29,11 @@ router.post('/chat/completions', async (req, res) => {
 
   try {
     const model = String(body.model || process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini');
+    // Free-tier OpenRouter rejects uncapped completion budgets (defaults to 16k → HTTP 402).
+    const max_tokens =
+      body.max_tokens != null
+        ? body.max_tokens
+        : Number(process.env.OPENROUTER_MAX_TOKENS) || 4096;
     const upstream = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -40,6 +45,7 @@ router.post('/chat/completions', async (req, res) => {
       body: JSON.stringify({
         ...body,
         model,
+        max_tokens,
       }),
     });
 

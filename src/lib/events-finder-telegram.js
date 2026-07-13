@@ -36,6 +36,7 @@ import {
   markTelegramIntakeFailed,
   markTelegramIntakeProcessing,
   saveIntakeMediaFile,
+  scheduleTelegramAlbumFlush,
   telegramIntakeQueueStats,
   upsertTelegramAlbumBuffer,
 } from './telegram-intake-queue.js';
@@ -606,12 +607,16 @@ async function flushTelegramAlbumBuffer(key, env = process.env) {
     } else {
       // Keep durable album for retry.
       console.warn('[telegram-events] album ingest incomplete', result?.error || result);
-      armAlbumFlushTimer(key, new Date(Date.now() + 60_000).toISOString(), env);
+      const flushAfter = new Date(Date.now() + 60_000).toISOString();
+      scheduleTelegramAlbumFlush(key, flushAfter, env);
+      armAlbumFlushTimer(key, flushAfter, env);
     }
     return result;
   } catch (e) {
     console.warn('[telegram-events] album ingest failed', e?.message || e);
-    armAlbumFlushTimer(key, new Date(Date.now() + 60_000).toISOString(), env);
+    const flushAfter = new Date(Date.now() + 60_000).toISOString();
+    scheduleTelegramAlbumFlush(key, flushAfter, env);
+    armAlbumFlushTimer(key, flushAfter, env);
     return { ok: false, error: String(e?.message || e) };
   }
 }
@@ -714,12 +719,92 @@ export function restoreTelegramAlbumBuffers(env = process.env) {
 }
 
 /**
+ * Lightweight offline classify when OpenRouter is rate/credit limited.
+ * @param {string} text
+ * @returns {{ ok: true, type: string, confidence: number, reason: string, todoText: string | null, noteText: string | null, contact: object | null } | null}
+ */
+function heuristicTelegramClassify(text) {
+  const body = String(text || '').trim();
+  if (!body) return null;
+  const lower = body.toLowerCase();
+  if (
+    /^(todo|to-do|task)[:\s-]/i.test(body)
+    || /\bremind me\b/i.test(body)
+    || /^(buy|call|email|text|schedule|book|pick up)\b/i.test(body)
+  ) {
+    return {
+      ok: true,
+      type: 'todo',
+      confidence: 0.55,
+      reason: 'heuristic_todo',
+      todoText: body.replace(/^(todo|to-do|task)[:\s-]*/i, '').trim() || body,
+      noteText: null,
+      contact: null,
+    };
+  }
+  if (/^(note|notes)[:\s-]/i.test(body)) {
+    return {
+      ok: true,
+      type: 'note',
+      confidence: 0.55,
+      reason: 'heuristic_note',
+      todoText: null,
+      noteText: body.replace(/^(note|notes)[:\s-]*/i, '').trim() || body,
+      contact: null,
+    };
+  }
+  if (
+    /^(contact|friend|met)\b/i.test(body)
+    || /\b(add contact|new contact|phone|linkedin)\b/i.test(lower)
+  ) {
+    const name = body.split(/[,\n]/)[0]?.replace(/^(contact|friend|met)\b[:\s-]*/i, '').trim() || body;
+    return {
+      ok: true,
+      type: 'contact',
+      confidence: 0.5,
+      reason: 'heuristic_contact',
+      todoText: null,
+      noteText: null,
+      contact: { displayName: name, notes: body, aliases: [], kind: 'friend' },
+    };
+  }
+  // Bare invite / ticket URLs are almost certainly events.
+  if (
+    /\b(luma\.com|lu\.ma|partiful\.com|eventbrite\.com|meetup\.com|facebook\.com\/events|fb\.me\/e|secretparty|posh\.vip)\b/i.test(
+      body,
+    )
+  ) {
+    return {
+      ok: true,
+      type: 'event',
+      confidence: 0.85,
+      reason: 'heuristic_event_url',
+      todoText: null,
+      noteText: null,
+      contact: null,
+    };
+  }
+  // Default remaining freeform to event (legacy Telegram flyer/text invite path).
+  return {
+    ok: true,
+    type: 'event',
+    confidence: 0.4,
+    reason: 'heuristic_default_event',
+    todoText: null,
+    noteText: null,
+    contact: null,
+  };
+}
+
+/**
  * Process one Telegram message: classify → event | todo | note | contact.
  * Flyer photos/albums still prefer the event path.
  * @param {any} message
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ notifyUser?: boolean }} [opts]
  */
-export async function processTelegramEventMessage(message, env = process.env) {
+export async function processTelegramEventMessage(message, env = process.env, opts = {}) {
+  const notifyUser = opts.notifyUser !== false;
   const chatId = message?.chat?.id;
   const text = String(message?.text || '').trim();
   const caption = String(message?.caption || '').trim();
@@ -746,10 +831,11 @@ export async function processTelegramEventMessage(message, env = process.env) {
   }
 
   if (!chatAllowed(chatId, env)) {
-    await telegramSendMessage(
+    await notifyIntake(
       chatId,
       `Chat ${chatId} is not allowlisted. Add TELEGRAM_ALLOWED_CHAT_IDS=${chatId} in Dashbird .env.`,
       env,
+      { notifyUser },
     );
     return { ok: false, error: 'chat_not_allowed' };
   }
@@ -789,6 +875,7 @@ export async function processTelegramEventMessage(message, env = process.env) {
       photoId: photoId || docIsImage || '',
       caption,
       text,
+      notifyUser,
     });
   }
 
@@ -807,26 +894,28 @@ export async function processTelegramEventMessage(message, env = process.env) {
         env,
       );
       if (!tr.ok) {
-        await telegramSendMessage(
+        await notifyIntake(
           chatId,
           `Could not transcribe voice (${tr.error || 'unknown'}). Try text or a screenshot.`,
           env,
+          { notifyUser },
         );
         return { ok: false, error: tr.error || 'transcribe_failed' };
       }
       transcript = tr.text || null;
       classifyText = transcript;
     } catch (e) {
-      await telegramSendMessage(chatId, `Ingest error: ${String(e?.message || e).slice(0, 200)}`, env);
+      await notifyIntake(chatId, `Ingest error: ${String(e?.message || e).slice(0, 200)}`, env, { notifyUser });
       return { ok: false, error: String(e?.message || e) };
     }
   }
 
   if (!classifyText) {
-    await telegramSendMessage(
+    await notifyIntake(
       chatId,
       'Send a flyer photo, voice note, or text. /help for examples.',
       env,
+      { notifyUser },
     );
     return { ok: false, error: 'unsupported_message' };
   }
@@ -835,34 +924,49 @@ export async function processTelegramEventMessage(message, env = process.env) {
   try {
     classified = await classifyTelegramMessage(classifyText, env);
   } catch (e) {
-    await telegramSendMessage(chatId, `Classifier error: ${String(e?.message || e).slice(0, 200)}`, env);
+    await notifyIntake(chatId, `Classifier error: ${String(e?.message || e).slice(0, 200)}`, env, { notifyUser });
     return { ok: false, error: String(e?.message || e) };
   }
 
+  // When OpenRouter is credit/rate limited, keep intake usable with light heuristics.
   if (!classified.ok || !classified.type) {
-    await telegramSendMessage(
+    const heur = heuristicTelegramClassify(classifyText);
+    if (heur) {
+      classified = heur;
+      console.warn('[telegram-events] classifier fallback heuristic', classified.error || classified.reason);
+    }
+  }
+
+  if (!classified.ok || !classified.type) {
+    await notifyIntake(
       chatId,
       `Could not classify (${classified.error || 'unknown'}). Try /event /todo /note /contact.`,
       env,
+      { notifyUser },
     );
     return { ok: false, error: classified.error || 'classify_failed', transcript };
   }
 
   const confidence = Number(classified.confidence) || 0;
   if (confidence < 0.55 && classified.reason !== 'command_override') {
-    await telegramSendMessage(
+    await notifyIntake(
       chatId,
       `Not sure if this is an event, todo, note, or contact (confidence ${confidence.toFixed(2)}).\nReply with /event /todo /note or /contact plus the text.`,
       env,
+      { notifyUser },
     );
     return { ok: false, error: 'low_confidence', confidence, type: classified.type, transcript };
   }
 
   if (classified.type === 'event') {
-    return ingestTelegramEventFromText(classifyText, message, env, { transcript, parseVia: voiceId ? 'voice' : 'text' });
+    return ingestTelegramEventFromText(classifyText, message, env, {
+      transcript,
+      parseVia: voiceId ? 'voice' : 'text',
+      notifyUser,
+    });
   }
 
-  return routeNonEventType(classified.type, classifyText, chatId, env, { classified, transcript });
+  return routeNonEventType(classified.type, classifyText, chatId, env, { classified, transcript, notifyUser });
 }
 
 /**
@@ -960,14 +1064,20 @@ async function routeNonEventType(type, text, chatId, env, meta = {}) {
  * @param {string} text
  * @param {any} message
  * @param {NodeJS.ProcessEnv} env
- * @param {{ transcript?: string | null, parseVia?: string }} meta
+ * @param {{ transcript?: string | null, parseVia?: string, notifyUser?: boolean }} meta
  */
 async function ingestTelegramEventFromText(text, message, env, meta = {}) {
   const chatId = message?.chat?.id;
-  const parsed = await parseInviteText(text, env, { defaultImageUrl: TELEGRAM_EVENT_LOGO_PATH });
+  const notifyUser = meta.notifyUser !== false;
+  let parsed = await parseInviteText(text, env, { defaultImageUrl: TELEGRAM_EVENT_LOGO_PATH });
+  // Bare platform URLs should still ingest when the LLM is rate/credit limited.
+  if ((!parsed.ok || !parsed.event) && looksLikeEventPlatformUrl(text)) {
+    const fromUrl = await parseInviteFromEventUrl(text, env);
+    if (fromUrl.ok && fromUrl.event) parsed = fromUrl;
+  }
   if (!parsed.ok || !parsed.event) {
     const why = parsed.error || 'parse_failed';
-    await telegramSendMessage(chatId, ingestFailHint(why, { transcript: meta.transcript }), env);
+    await notifyIntake(chatId, ingestFailHint(why, { transcript: meta.transcript }), env, { notifyUser });
     return { ok: false, error: why, transcript: meta.transcript, type: 'event' };
   }
   const event = finalizeEvent(parsed.event, message, {
@@ -989,12 +1099,124 @@ async function ingestTelegramEventFromText(text, message, env, meta = {}) {
 }
 
 /**
+ * @param {string} text
+ */
+function looksLikeEventPlatformUrl(text) {
+  return /\b(luma\.com|lu\.ma|partiful\.com|eventbrite\.com|meetup\.com|facebook\.com\/events|fb\.me\/e|secretparty|posh\.vip)\b/i.test(
+    String(text || ''),
+  );
+}
+
+/**
+ * Best-effort event from a platform URL (og:title) without OpenRouter.
+ * @param {string} text
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function parseInviteFromEventUrl(text, env = process.env) {
+  const urlMatch = String(text || '').match(/https?:\/\/[^\s<>"']+/i);
+  if (!urlMatch) return { ok: false, error: 'no_url', event: null };
+  let url = urlMatch[0].replace(/[),.]+$/g, '');
+  try {
+    url = new URL(url).href.split('#')[0];
+  } catch {
+    return { ok: false, error: 'bad_url', event: null };
+  }
+
+  let title = null;
+  let description = null;
+  try {
+    const r = await fetch(url, {
+      redirect: 'follow',
+      headers: { 'User-Agent': 'Mozilla/5.0 DashbirdTelegramIntake/1.0', Accept: 'text/html' },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (r.ok) {
+      const html = await r.text();
+      title =
+        (html.match(/property=["']og:title["']\s+content=["']([^"']+)["']/i)
+          || html.match(/content=["']([^"']+)["']\s+property=["']og:title["']/i)
+          || html.match(/<title[^>]*>([^<]+)/i)
+          || [])[1] || null;
+      description =
+        (html.match(/property=["']og:description["']\s+content=["']([^"']+)["']/i)
+          || html.match(/content=["']([^"']+)["']\s+property=["']og:description["']/i)
+          || [])[1] || null;
+      if (title) {
+        title = title
+          .replace(/\s*[·|].*Luma\s*$/i, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+      }
+      if (description) {
+        description = description
+          .replace(/&(#\d+|#x[0-9a-f]+|[a-z]+);/gi, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 400);
+      }
+    }
+  } catch {
+    /* fall through to slug title */
+  }
+
+  if (!title) {
+    try {
+      const slug = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() || '');
+      title = slug
+        .replace(/[-_]+/g, ' ')
+        .replace(/\bjul(\d{1,2})\b/i, 'Jul $1')
+        .replace(/\b(\d{4})\b/, '$1')
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+        .trim() || 'Event';
+    } catch {
+      title = 'Event';
+    }
+  }
+
+  // Pull a date hint from slug like ...-jul15-2026
+  let start = null;
+  const m = String(url).match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*-?(\d{1,2})-?(\d{4})\b/i);
+  if (m) {
+    const months = {
+      jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+      jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+    };
+    const mon = months[m[1].slice(0, 3).toLowerCase()];
+    const day = Number(m[2]);
+    const year = Number(m[3]);
+    if (Number.isFinite(mon) && day >= 1 && day <= 31 && year >= 2020) {
+      // Noon PT as a placeholder when time is unknown.
+      start = new Date(Date.UTC(year, mon, day, 19, 0, 0)).toISOString();
+    }
+  }
+
+  return {
+    ok: true,
+    error: null,
+    event: {
+      title,
+      start,
+      end: null,
+      venue: null,
+      city: null,
+      url,
+      source: 'telegram',
+      online: false,
+      description,
+      imageUrl: TELEGRAM_EVENT_LOGO_PATH,
+      invitedBy: null,
+    },
+  };
+}
+
+/**
  * @param {any} message
  * @param {NodeJS.ProcessEnv} env
- * @param {{ photoId: string, caption: string, text: string }} media
+ * @param {{ photoId: string, caption: string, text: string, notifyUser?: boolean }} media
  */
 async function ingestTelegramEventFromMessage(message, env, media) {
   const chatId = message?.chat?.id;
+  const notifyUser = media.notifyUser !== false;
   /** @type {{ ok: boolean, error?: string | null, event?: Record<string, unknown> | null }} */
   let parsed = { ok: false, error: 'unsupported_message', event: null };
   /** @type {string | null} */
@@ -1022,13 +1244,13 @@ async function ingestTelegramEventFromMessage(message, env, media) {
       { defaultImageUrl: publicPath },
     );
   } catch (e) {
-    await telegramSendMessage(chatId, `Ingest error: ${String(e?.message || e).slice(0, 200)}`, env);
+    await notifyIntake(chatId, `Ingest error: ${String(e?.message || e).slice(0, 200)}`, env, { notifyUser });
     return { ok: false, error: String(e?.message || e), type: 'event' };
   }
 
   if (!parsed.ok || !parsed.event) {
     const why = parsed.error || 'parse_failed';
-    await telegramSendMessage(chatId, ingestFailHint(why), env);
+    await notifyIntake(chatId, ingestFailHint(why), env, { notifyUser });
     return { ok: false, error: why, type: 'event' };
   }
 
@@ -1050,17 +1272,18 @@ async function ingestTelegramEventFromMessage(message, env, media) {
  * @param {any} update
  * @param {NodeJS.ProcessEnv} [env]
  * @param {Array<{ kind: string, fileId: string, localPath: string, mimeType: string, publicPath?: string | null }> | null} [media]
+ * @param {{ notifyUser?: boolean }} [opts]
  */
-export async function handleTelegramUpdate(update, env = process.env, media = null) {
+export async function handleTelegramUpdate(update, env = process.env, media = null, opts = {}) {
   const message = update?.message || update?.edited_message;
   if (!message) return { ok: true, skipped: true, reason: 'no_message' };
   if (media?.length) attachIntakeMediaToMessage(message, media);
-  return processTelegramEventMessage(message, env);
+  return processTelegramEventMessage(message, env, opts);
 }
 
 /**
- * Errors that should not burn endless retries (allowlist / empty junk).
- * Classify/parse failures stay queued for retry.
+ * Errors that should not burn endless retries (allowlist / empty junk / needs human).
+ * Transient classify/parse failures (402/429/network) stay queued for retry.
  * @param {unknown} result
  */
 function isPermanentIntakeFailure(result) {
@@ -1070,7 +1293,20 @@ function isPermanentIntakeFailure(result) {
     || err === 'unsupported_message'
     || err === 'unknown_type'
     || err === 'contact_name_required'
+    // User already got the /event|/todo prompt — retrying the same text just spams chat.
+    || err === 'low_confidence'
   );
+}
+
+/**
+ * @param {number|string|null|undefined} chatId
+ * @param {string} text
+ * @param {NodeJS.ProcessEnv} env
+ * @param {{ notifyUser?: boolean }} [opts]
+ */
+async function notifyIntake(chatId, text, env, opts = {}) {
+  if (opts.notifyUser === false) return { ok: true, skipped: true, reason: 'notify_suppressed' };
+  return telegramSendMessage(chatId, text, env);
 }
 
 /**
@@ -1091,7 +1327,10 @@ export async function drainTelegramIntakeQueue(env = process.env) {
     }
     markTelegramIntakeProcessing(item.updateId, env);
     try {
-      const result = await handleTelegramUpdate(item.payload, env, item.media);
+      // Only ping Telegram on the first attempt — retries otherwise re-spam the same fail text.
+      const result = await handleTelegramUpdate(item.payload, env, item.media, {
+        notifyUser: item.attempts === 0,
+      });
       if (result?.ok) {
         const status = result?.reason === 'album_buffer' ? 'album_buffered' : 'done';
         markTelegramIntakeDone(item.updateId, result, env, { status });

@@ -785,6 +785,7 @@ async function fetchPricingViaOpenRouter(toolName, context = {}) {
     body: JSON.stringify({
       model,
       temperature: 0.1,
+      max_tokens: 512,
       response_format: { type: 'json_object' },
       messages: [
         {

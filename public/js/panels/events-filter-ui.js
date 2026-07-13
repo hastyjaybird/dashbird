@@ -139,6 +139,7 @@ export function checksToAttendance(checks) {
  *   dateFrom?: string | null,
  *   dateTo?: string | null,
  *   dates?: string[] | null,
+ *   onChange?: () => void,
  * }} [opts]
  * @returns {{
  *   root: HTMLElement,
@@ -150,6 +151,7 @@ export function checksToAttendance(checks) {
 export function createRangeCalendar(opts = {}) {
   const prefix = opts.classPrefix || 'events-cal';
   const idPrefix = opts.idPrefix || 'events-cal';
+  const onChange = typeof opts.onChange === 'function' ? opts.onChange : null;
 
   const root = document.createElement('div');
   root.className = prefix;
@@ -210,24 +212,37 @@ export function createRangeCalendar(opts = {}) {
   let dragMode = null;
   /** @type {number | null} */
   let dragPointerId = null;
+  /** True when the current drag actually changed selection. */
+  let dragDirty = false;
+
+  function emitChange() {
+    if (onChange) onChange();
+  }
 
   /**
    * @param {string} ymd
    * @param {HTMLElement} btn
    * @param {'add' | 'remove'} mode
    */
+  /**
+   * @param {string} ymd
+   * @param {HTMLElement} btn
+   * @param {'add' | 'remove'} mode
+   * @returns {boolean} whether selection changed
+   */
   function applyDay(ymd, btn, mode) {
     if (mode === 'add') {
-      if (selectedDays.has(ymd)) return;
+      if (selectedDays.has(ymd)) return false;
       selectedDays.add(ymd);
       btn.classList.add(`${prefix}__day--selected`);
       btn.setAttribute('aria-pressed', 'true');
-    } else {
-      if (!selectedDays.has(ymd)) return;
-      selectedDays.delete(ymd);
-      btn.classList.remove(`${prefix}__day--selected`);
-      btn.setAttribute('aria-pressed', 'false');
+      return true;
     }
+    if (!selectedDays.has(ymd)) return false;
+    selectedDays.delete(ymd);
+    btn.classList.remove(`${prefix}__day--selected`);
+    btn.setAttribute('aria-pressed', 'false');
+    return true;
   }
 
   /**
@@ -246,9 +261,12 @@ export function createRangeCalendar(opts = {}) {
 
   function endDrag() {
     if (!dragMode) return;
+    const dirty = dragDirty;
     dragMode = null;
     dragPointerId = null;
+    dragDirty = false;
     root.classList.remove(`${prefix}--dragging`);
+    if (dirty) emitChange();
   }
 
   function paint() {
@@ -300,8 +318,9 @@ export function createRangeCalendar(opts = {}) {
     const ymd = btn.dataset.ymd;
     dragMode = selectedDays.has(ymd) ? 'remove' : 'add';
     dragPointerId = e.pointerId;
+    dragDirty = false;
     root.classList.add(`${prefix}--dragging`);
-    applyDay(ymd, btn, dragMode);
+    if (applyDay(ymd, btn, dragMode)) dragDirty = true;
     try {
       grid.setPointerCapture(e.pointerId);
     } catch {
@@ -313,7 +332,7 @@ export function createRangeCalendar(opts = {}) {
     if (!dragMode || (dragPointerId != null && e.pointerId !== dragPointerId)) return;
     const btn = dayButtonAt(e.clientX, e.clientY);
     if (!btn || !btn.dataset.ymd) return;
-    applyDay(btn.dataset.ymd, btn, dragMode);
+    if (applyDay(btn.dataset.ymd, btn, dragMode)) dragDirty = true;
   });
 
   grid.addEventListener('pointerup', endDrag);
@@ -329,7 +348,7 @@ export function createRangeCalendar(opts = {}) {
     e.preventDefault();
     const ymd = btn.dataset.ymd;
     const mode = selectedDays.has(ymd) ? 'remove' : 'add';
-    applyDay(ymd, btn, mode);
+    if (applyDay(ymd, btn, mode)) emitChange();
   });
 
   prevBtn.addEventListener('click', () => {
@@ -354,8 +373,10 @@ export function createRangeCalendar(opts = {}) {
 
   clearBtn.addEventListener('click', () => {
     if (disabled) return;
+    if (!selectedDays.size) return;
     selectedDays = new Set();
     paint();
+    emitChange();
   });
 
   paint();

@@ -51,10 +51,13 @@ data/network.db
 data/network.db-wal
 data/network.db-shm
 data/network-assets/*
+data/friendzies-2025-import.json
 !data/network-assets/.gitkeep
 !data/network-assets/julia-hasty.jpg
 data/web-catalog.json
 data/web-catalog.json.tmp
+# Atomic-write leftovers (foo.json.<pid>.<ts>.tmp) — Cursor treats *.json* as JSON and nags
+data/*.tmp
 data/dev-notes.md
 public/data/telegram-events/
 # Local Vikunja SQLite + uploads + bootstrap credentials

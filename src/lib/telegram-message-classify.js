@@ -3,6 +3,12 @@
  */
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
+const DEFAULT_TEXT_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
+const TEXT_FALLBACK_MODELS = [
+  'meta-llama/llama-3.3-70b-instruct:free',
+  'google/gemma-4-31b-it:free',
+];
+
 const CLASSIFY_SYSTEM = `You classify a short message sent to a personal dashboard Telegram bot.
 Return JSON only:
 {
@@ -46,8 +52,19 @@ function openRouterKey(env = process.env) {
  */
 function textModel(env = process.env) {
   return String(
-    env.TELEGRAM_CLASSIFIER_MODEL || env.TELEGRAM_EVENTS_TEXT_MODEL || env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
+    env.TELEGRAM_CLASSIFIER_MODEL
+      || env.TELEGRAM_EVENTS_TEXT_MODEL
+      || env.OPENROUTER_FREE_TEXT_MODEL
+      || DEFAULT_TEXT_MODEL,
   ).trim();
+}
+
+/**
+ * @param {string} primary
+ * @param {string[]} fallbacks
+ */
+function modelChain(primary, fallbacks) {
+  return [...new Set([String(primary || '').trim(), ...fallbacks].filter(Boolean))];
 }
 
 /**
@@ -116,47 +133,60 @@ export async function classifyTelegramMessage(text, env = process.env) {
     return { ok: true, type: 'event', confidence: 0.4, reason: 'openrouter_missing_default_event', todoText: null, noteText: null, contact: null };
   }
 
-  const r = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${openRouterKey(env)}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': env.OPENROUTER_HTTP_REFERER || 'http://localhost',
-      'X-Title': env.OPENROUTER_X_TITLE || 'dashbird-telegram-classifier',
-    },
-    body: JSON.stringify({
-      model: textModel(env),
-      temperature: 0.1,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: CLASSIFY_SYSTEM },
-        { role: 'user', content: body.slice(0, 4000) },
-      ],
-    }),
-    signal: AbortSignal.timeout(45_000),
-  });
+  const models = modelChain(textModel(env), TEXT_FALLBACK_MODELS);
+  let lastError = 'openrouter_failed';
+  for (const model of models) {
+    const r = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${openRouterKey(env)}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': env.OPENROUTER_HTTP_REFERER || 'http://localhost',
+        'X-Title': env.OPENROUTER_X_TITLE || 'dashbird-telegram-classifier',
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.1,
+        // Free-tier OpenRouter rejects uncapped completion budgets (defaults to 16k → HTTP 402).
+        max_tokens: 1024,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: CLASSIFY_SYSTEM },
+          { role: 'user', content: body.slice(0, 4000) },
+        ],
+      }),
+      signal: AbortSignal.timeout(45_000),
+    });
 
-  if (!r.ok) {
-    return { ok: false, error: `openrouter_http_${r.status}` };
-  }
-  const j = await r.json();
-  const parsed = extractJsonObject(j?.choices?.[0]?.message?.content);
-  if (!parsed || typeof parsed !== 'object') {
-    return { ok: false, error: 'parse_failed' };
+    if (!r.ok) {
+      lastError = `openrouter_http_${r.status}`;
+      if (r.status === 401 || r.status === 403) break;
+      if (r.status === 402 || r.status === 429 || r.status >= 500) continue;
+      break;
+    }
+    const j = await r.json();
+    const parsed = extractJsonObject(j?.choices?.[0]?.message?.content);
+    if (!parsed || typeof parsed !== 'object') {
+      lastError = 'parse_failed';
+      continue;
+    }
+
+    const type = String(parsed.type || '').toLowerCase();
+    if (!['event', 'todo', 'note', 'contact'].includes(type)) {
+      lastError = 'bad_type';
+      continue;
+    }
+
+    return {
+      ok: true,
+      type,
+      confidence: Number(parsed.confidence) || 0,
+      reason: String(parsed.reason || '').slice(0, 400) || null,
+      todoText: parsed.todoText != null ? String(parsed.todoText).trim() : null,
+      noteText: parsed.noteText != null ? String(parsed.noteText).trim() : body,
+      contact: parsed.contact && typeof parsed.contact === 'object' ? parsed.contact : null,
+    };
   }
 
-  const type = String(parsed.type || '').toLowerCase();
-  if (!['event', 'todo', 'note', 'contact'].includes(type)) {
-    return { ok: false, error: 'bad_type' };
-  }
-
-  return {
-    ok: true,
-    type,
-    confidence: Number(parsed.confidence) || 0,
-    reason: String(parsed.reason || '').slice(0, 400) || null,
-    todoText: parsed.todoText != null ? String(parsed.todoText).trim() : null,
-    noteText: parsed.noteText != null ? String(parsed.noteText).trim() : body,
-    contact: parsed.contact && typeof parsed.contact === 'object' ? parsed.contact : null,
-  };
+  return { ok: false, error: lastError };
 }

@@ -462,6 +462,22 @@ function parseAlbumRow(row) {
 
 /**
  * @param {string} albumKey
+ * @param {string} flushAfterIso
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function scheduleTelegramAlbumFlush(albumKey, flushAfterIso, env = process.env) {
+  const db = openTelegramIntakeDb(env);
+  const flushAfter = String(flushAfterIso || nowIso());
+  db.prepare(
+    `UPDATE telegram_album_buffers
+     SET flush_after = ?, updated_at = ?
+     WHERE album_key = ?`,
+  ).run(flushAfter, nowIso(), String(albumKey));
+  return flushAfter;
+}
+
+/**
+ * @param {string} albumKey
  * @param {NodeJS.ProcessEnv} [env]
  */
 export function deleteTelegramAlbumBuffer(albumKey, env = process.env) {

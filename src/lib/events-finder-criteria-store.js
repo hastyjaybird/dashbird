@@ -830,8 +830,13 @@ export async function saveEventsFinderCriteria(body) {
   };
   const live = await ensureFile();
   const tmp = `${live}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-  await fs.rename(tmp, live);
+  try {
+    await fs.writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+    await fs.rename(tmp, live);
+  } catch (err) {
+    await fs.unlink(tmp).catch(() => {});
+    throw err;
+  }
   return { ok: true, ...next };
 }
 

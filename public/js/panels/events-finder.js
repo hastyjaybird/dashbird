@@ -8,6 +8,8 @@ import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
 import { beginWaitCursor, endWaitCursor } from '../lib/wait-cursor.js';
 
 const FILTERS_OPEN_KEY = 'dashbird.events.filtersOpen';
+const SHOW_SKIPPED_KEY = 'dashbird.events.showSkipped';
+const FILTER_AUTOSAVE_MS = 650;
 const EVENTS_CACHE_KEY = 'events-finder:events';
 const EVENTS_CACHE_MAX_MS = 6 * 60 * 60 * 1000;
 const CRITERIA_CACHE_KEY = 'events-finder:criteria';
@@ -71,6 +73,28 @@ function readFiltersOpen() {
 function writeFiltersOpen(open) {
   try {
     localStorage.setItem(FILTERS_OPEN_KEY, open ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * @returns {boolean}
+ */
+function readShowSkipped() {
+  try {
+    return localStorage.getItem(SHOW_SKIPPED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {boolean} on
+ */
+function writeShowSkipped(on) {
+  try {
+    localStorage.setItem(SHOW_SKIPPED_KEY, on ? '1' : '0');
   } catch {
     /* ignore */
   }
@@ -527,6 +551,7 @@ export function mountEventsFinder(root) {
           ? selected
           : null;
       paintEvents(lastEventsPayload);
+      scheduleFilterAutosave();
     },
   });
   citiesField.append(cityChecks.root);
@@ -546,6 +571,9 @@ export function mountEventsFinder(root) {
   const calendar = createRangeCalendar({
     idPrefix: 'events-finder-cal',
     classPrefix: 'events-cal',
+    onChange: () => {
+      scheduleFilterAutosave({ reload: true });
+    },
   });
   datesField.append(calendar.root);
   filterPanel.append(datesField);
@@ -600,8 +628,14 @@ export function mountEventsFinder(root) {
   /** @type {{ lookFor: string, skip: string, blacklist: string, scrape?: object, hiddenEventIds: string[], skippedEvents: object[], favoriteEventIds: string[], calendarAddedEventIds: string[] } | null} */
   let taste = null;
   let filtersReady = false;
-  let showSkipped = false;
+  /** Suppress autosave while applying server/cache criteria into the form. */
+  let applyingCriteria = false;
+  let showSkipped = readShowSkipped();
   let saveInFlight = false;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let filterAutosaveTimer = null;
+  /** @type {boolean} */
+  let filterAutosaveReload = false;
   /** @type {any} */
   let mapInstance = null;
   /** @type {any} */
@@ -962,6 +996,78 @@ export function mountEventsFinder(root) {
   }
 
   /**
+   * Build browse filters from the form, or null if values are incomplete/invalid
+   * (e.g. user still typing a ZIP).
+   * @returns {Record<string, unknown> | null}
+   */
+  function readFiltersFromForm() {
+    const originZipDigits = String(zipInput.value || '').replace(/\D/g, '').slice(0, 5);
+    if (originZipDigits && originZipDigits.length !== 5) return null;
+    const originZip = originZipDigits.length === 5 ? originZipDigits : '';
+    const milesRaw = milesInput.value.trim();
+    const maxMiles = milesRaw === '' ? 25 : Number(milesRaw);
+    if (!Number.isFinite(maxMiles) || maxMiles <= 0 || maxMiles > 100) return null;
+    const range = calendar.getRange();
+    const earliestRaw = String(timeInput.value || '').trim();
+    const earliest = normalizeLocalTime(earliestRaw);
+    if (earliestRaw && !earliest) return null;
+    return {
+      cities: (() => {
+        const selected = cityChecks.getSelected();
+        const available = Array.isArray(lastEventsPayload?.availableCities)
+          ? lastEventsPayload.availableCities
+          : [];
+        // Empty = all cities (no city filter). Only persist when a subset is checked.
+        if (!available.length || selected.length === available.length) return [];
+        return selected;
+      })(),
+      maxMiles,
+      dates: range.dates || [],
+      dateFrom: range.dateFrom,
+      dateTo: range.dateTo,
+      earliestLocalTime: earliest || null,
+      attendance: 'in_person',
+      originZip,
+    };
+  }
+
+  /**
+   * Debounced persist of browse filters so the last state survives reload.
+   * @param {{ reload?: boolean }} [opts]
+   */
+  function scheduleFilterAutosave(opts = {}) {
+    if (!filtersReady || applyingCriteria) return;
+    if (opts.reload) filterAutosaveReload = true;
+    if (filterAutosaveTimer) clearTimeout(filterAutosaveTimer);
+    filterAutosaveTimer = setTimeout(() => {
+      filterAutosaveTimer = null;
+      void autosaveFilters();
+    }, FILTER_AUTOSAVE_MS);
+  }
+
+  /**
+   * @returns {Promise<boolean>}
+   */
+  async function autosaveFilters() {
+    if (!filtersReady || applyingCriteria) return false;
+    const reload = filterAutosaveReload;
+    filterAutosaveReload = false;
+    const filters = readFiltersFromForm();
+    if (!filters) return false;
+    const ok = await saveCriteria({
+      silent: true,
+      includeFilters: true,
+      waitForIdle: true,
+      filters,
+    });
+    if (ok && reload) {
+      refilterFeedForTaste();
+      void loadEvents();
+    }
+    return ok;
+  }
+
+  /**
    * Wait until any in-flight criteria save finishes (for silent favorite/hide patches).
    * @param {number} [timeoutMs]
    */
@@ -977,7 +1083,7 @@ export function mountEventsFinder(root) {
 
   /**
    * Persist current taste + feed filters (and optional hidden/favorite ids).
-   * @param {{ lookFor?: string, skip?: string, blacklist?: string, hiddenEventIds?: string[], skippedEvents?: object[], unskipEventIds?: string[], favoriteEventIds?: string[], calendarAddedEventIds?: string[], silent?: boolean, waitForIdle?: boolean }} [patch]
+   * @param {{ lookFor?: string, skip?: string, blacklist?: string, hiddenEventIds?: string[], skippedEvents?: object[], unskipEventIds?: string[], favoriteEventIds?: string[], calendarAddedEventIds?: string[], silent?: boolean, includeFilters?: boolean, filters?: Record<string, unknown>, waitForIdle?: boolean }} [patch]
    * @returns {Promise<boolean>}
    */
   async function saveCriteria(patch = {}) {
@@ -1021,44 +1127,31 @@ export function mountEventsFinder(root) {
         calendarAddedEventIds,
         scrape: taste?.scrape,
       };
-      // Silent saves (Skip / favorite / taste chips) must not rewrite browse filters from
-      // the form — omit filters so the server keeps the last saved ZIP/radius/dates.
-      if (!patch.silent) {
-        // ZIP/radius optional: blank ZIP clears origin; blank radius → default 25.
-        const originZipDigits = String(zipInput.value || '').replace(/\D/g, '').slice(0, 5);
-        if (originZipDigits && originZipDigits.length !== 5) {
-          throw new Error('Enter a 5-digit ZIP (or leave blank).');
+      // Silent taste/skip saves omit filters so they don't clobber ZIP/radius/dates.
+      // Autosave and explicit Save pass includeFilters (or non-silent) to persist browse state.
+      const writeFilters = !patch.silent || patch.includeFilters === true;
+      if (writeFilters) {
+        let filters = patch.filters || null;
+        if (!filters) {
+          filters = readFiltersFromForm();
+          if (!filters) {
+            const originZipDigits = String(zipInput.value || '').replace(/\D/g, '').slice(0, 5);
+            if (originZipDigits && originZipDigits.length !== 5) {
+              throw new Error('Enter a 5-digit ZIP (or leave blank).');
+            }
+            const milesRaw = milesInput.value.trim();
+            const maxMiles = milesRaw === '' ? 25 : Number(milesRaw);
+            if (!Number.isFinite(maxMiles) || maxMiles <= 0 || maxMiles > 100) {
+              throw new Error('Set radius (1–100 miles), or leave blank for 25.');
+            }
+            const earliestRaw = String(timeInput.value || '').trim();
+            if (earliestRaw && !normalizeLocalTime(earliestRaw)) {
+              throw new Error('Earliest time must look like 11:00.');
+            }
+            throw new Error('Could not read filters.');
+          }
         }
-        const originZip = originZipDigits.length === 5 ? originZipDigits : '';
-        const milesRaw = milesInput.value.trim();
-        const maxMiles = milesRaw === '' ? 25 : Number(milesRaw);
-        if (!Number.isFinite(maxMiles) || maxMiles <= 0 || maxMiles > 100) {
-          throw new Error('Set radius (1–100 miles), or leave blank for 25.');
-        }
-        const range = calendar.getRange();
-        const earliestRaw = String(timeInput.value || '').trim();
-        const earliest = normalizeLocalTime(earliestRaw);
-        if (earliestRaw && !earliest) {
-          throw new Error('Earliest time must look like 11:00.');
-        }
-        body.filters = {
-          cities: (() => {
-            const selected = cityChecks.getSelected();
-            const available = Array.isArray(lastEventsPayload?.availableCities)
-              ? lastEventsPayload.availableCities
-              : [];
-            // Empty = all cities (no city filter). Only persist when a subset is checked.
-            if (!available.length || selected.length === available.length) return [];
-            return selected;
-          })(),
-          maxMiles,
-          dates: range.dates || [],
-          dateFrom: range.dateFrom,
-          dateTo: range.dateTo,
-          earliestLocalTime: earliest || null,
-          attendance: 'in_person',
-          originZip,
-        };
+        body.filters = filters;
       }
       // Only send skip mutations when explicitly patching — filter-only saves must not
       // touch SQLite skips. Skips upsert; unskips delete by id (never full-table replace).
@@ -1121,7 +1214,7 @@ export function mountEventsFinder(root) {
       }
       if (Array.isArray(data.filters?.cities) && data.filters.cities.length) {
         savedCitySelection = data.filters.cities.map(String);
-      } else {
+      } else if (writeFilters) {
         savedCitySelection = null;
       }
       if (!patch.silent) {
@@ -1559,6 +1652,7 @@ export function mountEventsFinder(root) {
 
   showSkippedBtn.addEventListener('click', () => {
     showSkipped = !showSkipped;
+    writeShowSkipped(showSkipped);
     syncShowSkippedButton();
     if (lastEventsPayload) paintEvents(lastEventsPayload);
   });
@@ -2315,6 +2409,10 @@ export function mountEventsFinder(root) {
       return;
     }
     if (filtersReady) {
+      if (filterAutosaveTimer) {
+        clearTimeout(filterAutosaveTimer);
+        filterAutosaveTimer = null;
+      }
       const ok = await saveFilters();
       if (!ok) return;
     }
@@ -2333,55 +2431,60 @@ export function mountEventsFinder(root) {
    * @param {{ enable?: boolean }} [opts]
    */
   function applyCriteria(data, opts = {}) {
-    taste = {
-      lookFor: typeof data.lookFor === 'string' ? data.lookFor : '',
-      skip: typeof data.skip === 'string' ? data.skip : '',
-      blacklist: typeof data.blacklist === 'string' ? data.blacklist : '',
-      scrape: data.scrape && typeof data.scrape === 'object' ? data.scrape : undefined,
-      hiddenEventIds: Array.isArray(data.hiddenEventIds)
-        ? data.hiddenEventIds.map(String)
-        : [],
-      skippedEvents: Array.isArray(data.skippedEvents) ? data.skippedEvents : [],
-      favoriteEventIds: Array.isArray(data.favoriteEventIds)
-        ? data.favoriteEventIds.map(String)
-        : [],
-      calendarAddedEventIds: Array.isArray(data.calendarAddedEventIds)
-        ? data.calendarAddedEventIds.map(String)
-        : [],
-    };
-    applyGoogleCalendarConfig(data.googleCalendar);
-    syncShowSkippedButton();
+    applyingCriteria = true;
+    try {
+      taste = {
+        lookFor: typeof data.lookFor === 'string' ? data.lookFor : '',
+        skip: typeof data.skip === 'string' ? data.skip : '',
+        blacklist: typeof data.blacklist === 'string' ? data.blacklist : '',
+        scrape: data.scrape && typeof data.scrape === 'object' ? data.scrape : undefined,
+        hiddenEventIds: Array.isArray(data.hiddenEventIds)
+          ? data.hiddenEventIds.map(String)
+          : [],
+        skippedEvents: Array.isArray(data.skippedEvents) ? data.skippedEvents : [],
+        favoriteEventIds: Array.isArray(data.favoriteEventIds)
+          ? data.favoriteEventIds.map(String)
+          : [],
+        calendarAddedEventIds: Array.isArray(data.calendarAddedEventIds)
+          ? data.calendarAddedEventIds.map(String)
+          : [],
+      };
+      applyGoogleCalendarConfig(data.googleCalendar);
+      syncShowSkippedButton();
 
-    const miles = data.filters?.maxMiles;
-    milesInput.value = miles == null || miles === '' ? '25' : String(miles);
-    zipInput.value =
-      typeof data.filters?.originZip === 'string' && data.filters.originZip
-        ? data.filters.originZip
-        : typeof data.geo?.zip === 'string' && data.geo.zip
-          ? data.geo.zip
-          : '';
-    calendar.setRange(
-      data.filters?.dateFrom || null,
-      data.filters?.dateTo || null,
-      data.filters?.dates || [],
-    );
-    timeInput.value = normalizeLocalTime(data.filters?.earliestLocalTime) || '';
-    if (Array.isArray(data.filters?.cities) && data.filters.cities.length) {
-      savedCitySelection = data.filters.cities.map(String);
-    } else {
-      savedCitySelection = null;
+      const miles = data.filters?.maxMiles;
+      milesInput.value = miles == null || miles === '' ? '25' : String(miles);
+      zipInput.value =
+        typeof data.filters?.originZip === 'string' && data.filters.originZip
+          ? data.filters.originZip
+          : typeof data.geo?.zip === 'string' && data.geo.zip
+            ? data.geo.zip
+            : '';
+      calendar.setRange(
+        data.filters?.dateFrom || null,
+        data.filters?.dateTo || null,
+        data.filters?.dates || [],
+      );
+      timeInput.value = normalizeLocalTime(data.filters?.earliestLocalTime) || '';
+      if (Array.isArray(data.filters?.cities) && data.filters.cities.length) {
+        savedCitySelection = data.filters.cities.map(String);
+      } else {
+        savedCitySelection = null;
+      }
+
+      if (opts.enable !== false) {
+        for (const el of controls) el.disabled = false;
+        calendar.setDisabled(false);
+        cityChecks.setDisabled(false);
+        filtersReady = true;
+        filterMsg.hidden = true;
+        filterMsg.textContent = '';
+      }
+
+      if (lastEventsPayload) refilterFeedForTaste(taste);
+    } finally {
+      applyingCriteria = false;
     }
-
-    if (opts.enable !== false) {
-      for (const el of controls) el.disabled = false;
-      calendar.setDisabled(false);
-      cityChecks.setDisabled(false);
-      filtersReady = true;
-      filterMsg.hidden = true;
-      filterMsg.textContent = '';
-    }
-
-    if (lastEventsPayload) refilterFeedForTaste(taste);
   }
 
   const cachedCriteria = readPanelCache(CRITERIA_CACHE_KEY, CRITERIA_CACHE_MAX_MS);
@@ -2429,7 +2532,24 @@ export function mountEventsFinder(root) {
     });
 
   saveBtn.addEventListener('click', async () => {
+    if (filterAutosaveTimer) {
+      clearTimeout(filterAutosaveTimer);
+      filterAutosaveTimer = null;
+    }
     const ok = await saveFilters();
     if (ok) setFiltersOpen(false);
+  });
+
+  zipInput.addEventListener('input', () => {
+    scheduleFilterAutosave({ reload: true });
+  });
+  milesInput.addEventListener('input', () => {
+    scheduleFilterAutosave({ reload: true });
+  });
+  timeInput.addEventListener('change', () => {
+    scheduleFilterAutosave({ reload: true });
+  });
+  timeInput.addEventListener('input', () => {
+    scheduleFilterAutosave({ reload: true });
   });
 }

@@ -18,10 +18,21 @@ const UA =
 
 const FALLBACK_PINS = [
   'https://luma.com/sf',
+  'https://luma.com/9zero',
   'https://luma.com/Big-Brain-SF',
+  'https://luma.com/genai-sf',
+  'https://luma.com/buildercommunityanz',
+  'https://luma.com/claudecommunity',
+  'https://luma.com/climatecafe',
+  'https://luma.com/climatedraft-community',
   'https://luma.com/frontiertower',
+  'https://luma.com/netzeroinsights',
+  'https://luma.com/outinclimate',
+  'https://luma.com/sf-builders-collective',
   'https://luma.com/sf-hardware-meetup',
+  'https://luma.com/theclimateparty',
   'https://luma.com/tiat',
+  'https://luma.com/h.h',
   'https://luma.com/4esilsg5',
   'https://luma.com/ghnew59o',
 ];

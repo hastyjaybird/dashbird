@@ -61,6 +61,7 @@ function compactContact(c) {
   return {
     id: c.id,
     displayName: c.displayName,
+    nickname: c.nickname || '',
     aliases: c.aliases || [],
     kinds: c.kinds || [],
     org: c.org || null,
@@ -112,6 +113,8 @@ export async function analyzeGroupCommonalities(groupId, env = process.env) {
     body: JSON.stringify({
       model: textModel(env),
       temperature: 0.2,
+      // Free-tier OpenRouter rejects uncapped completion budgets (defaults to 16k → HTTP 402).
+      max_tokens: 2048,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM },
