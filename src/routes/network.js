@@ -30,6 +30,7 @@ import {
   deleteOrganizations,
   getOrganizationById,
   loadNetworkOrganizations,
+  saveOrganizationLogo,
   updateOrganization,
 } from '../lib/network-organizations-store.js';
 import {
@@ -415,6 +416,21 @@ router.post('/organizations/:id/enrich', async (req, res) => {
     res.json(result);
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+router.post('/organizations/:id/logo', async (req, res) => {
+  try {
+    const organization = await saveOrganizationLogo(String(req.params.id || ''), req.body || {});
+    res.json({ ok: true, organization });
+  } catch (e) {
+    const map = {
+      not_found: 404,
+      invalid_image: 400,
+      invalid_image_size: 400,
+    };
+    const status = map[e?.code] || 500;
+    res.status(status).json({ ok: false, error: String(e?.code || e?.message || e) });
   }
 });
 

@@ -322,6 +322,7 @@ export function mountNetworkUi(root) {
     return {
       displayName: c.displayName || '',
       nickname: c.nickname || '',
+      memoryJog: c.memoryJog || '',
       title: c.title || '',
       org: c.org || '',
       kinds: Array.isArray(c.kinds) && c.kinds.length ? [...c.kinds] : ['friend'],
@@ -483,6 +484,7 @@ export function mountNetworkUi(root) {
       const hay = [
         c.displayName,
         c.nickname,
+        c.memoryJog,
         ...(c.aliases || []),
         ...(c.kinds || []),
         ...(c.alignedActivities || []),
@@ -583,6 +585,7 @@ export function mountNetworkUi(root) {
    *   querySearch?: boolean,
    *   defaultQuery?: string | (() => string),
    *   uploadUrl?: string,
+   *   clear?: { url: string, body: object, label?: string } | null,
    *   onApplied: (entity: object) => void,
    * }} opts
    */
@@ -597,6 +600,14 @@ export function mountNetworkUi(root) {
 
     const querySearch = Boolean(opts.querySearch);
     const uploadUrl = String(opts.uploadUrl || '').trim();
+    const clearOpts =
+      opts.clear && typeof opts.clear === 'object' && String(opts.clear.url || '').trim()
+        ? {
+            url: String(opts.clear.url).trim(),
+            body: opts.clear.body && typeof opts.clear.body === 'object' ? opts.clear.body : {},
+            label: String(opts.clear.label || 'Remove current image').trim() || 'Remove current image',
+          }
+        : null;
 
     /** @type {number} */
     let nextOffset = 0;
@@ -925,6 +936,36 @@ export function mountNetworkUi(root) {
         actions.append(uploadBtn, fileInput);
       }
 
+      if (clearOpts) {
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className =
+          'network-crm__btn network-crm__btn--tiny network-crm__btn--danger network-crm__img-pick-clear';
+        removeBtn.textContent = clearOpts.label;
+        removeBtn.addEventListener('click', async () => {
+          removeBtn.disabled = true;
+          findBtn.disabled = true;
+          showStatus('Removing image…');
+          try {
+            const r = await fetch(clearOpts.url, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(clearOpts.body),
+            });
+            const j = await r.json();
+            if (!j.ok) throw new Error(j.error || 'remove_failed');
+            closeDialog();
+            showStatus('Image removed');
+            opts.onApplied(j.contact || j.organization);
+          } catch (err) {
+            showStatus(String(err?.message || err), true);
+            removeBtn.disabled = false;
+            findBtn.disabled = false;
+          }
+        });
+        actions.append(removeBtn);
+      }
+
       dialog.append(header, hint, statusEl, grid, actions);
       backdrop.append(dialog);
       backdrop.addEventListener('click', (e) => {
@@ -1112,34 +1153,6 @@ export function mountNetworkUi(root) {
     const avFrame = document.createElement('div');
     avFrame.className = 'network-crm__avatar-frame';
     avFrame.append(avatarEl(current, 'network-crm__avatar network-crm__avatar--lg'));
-    if (current.avatarUrl) {
-      const clearBtn = document.createElement('button');
-      clearBtn.type = 'button';
-      clearBtn.className = 'network-crm__avatar-clear';
-      clearBtn.title = 'Remove photo';
-      clearBtn.setAttribute('aria-label', 'Remove photo');
-      clearBtn.textContent = '×';
-      clearBtn.addEventListener('click', async () => {
-        showStatus('Removing photo…');
-        try {
-          const r = await fetch(`/api/network/contacts/${encodeURIComponent(current.id)}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ avatarUrl: null }),
-          });
-          const j = await r.json();
-          if (!j.ok) throw new Error(j.error || 'remove_failed');
-          const idx = contacts.findIndex((x) => x.id === j.contact.id);
-          if (idx >= 0) contacts[idx] = j.contact;
-          showStatus('Photo removed');
-          renderList();
-          renderDetail(j.contact);
-        } catch (err) {
-          showStatus(String(err?.message || err), true);
-        }
-      });
-      avFrame.append(clearBtn);
-    }
     avWrap.append(avFrame);
 
     const pickWrap = mountImageCandidatePicker({
@@ -1149,6 +1162,13 @@ export function mountNetworkUi(root) {
       buttonLabel: 'Find other photos',
       dialogTitle: 'Pick a photo',
       emptyLabel: 'No photos found — try Enrich or Upload',
+      clear: current.avatarUrl
+        ? {
+            url: `/api/network/contacts/${encodeURIComponent(current.id)}`,
+            body: { avatarUrl: null },
+            label: 'Remove current photo',
+          }
+        : null,
       onApplied: (entity) => {
         const idx = contacts.findIndex((x) => x.id === entity.id);
         if (idx >= 0) contacts[idx] = entity;
@@ -1418,6 +1438,16 @@ export function mountNetworkUi(root) {
     form.append(
       field('Name', 'displayName', c.displayName),
       field('Nickname', 'nickname', c.nickname || ''),
+      (() => {
+        const jog = field('Memory jog', 'memoryJog', c.memoryJog || '');
+        const input = jog.querySelector('input');
+        if (input) {
+          input.placeholder = '1–2 words to remember who';
+          input.maxLength = 80;
+          input.autocomplete = 'off';
+        }
+        return jog;
+      })(),
       field('Scene', 'networkCircles', c.networkCircles || ''),
       field('Location', 'location', c.location),
       field('Relationship', 'relationshipStatus', c.relationshipStatus || '', {
@@ -1503,6 +1533,7 @@ export function mountNetworkUi(root) {
       return {
         displayName: String(fd.get('displayName') || '').trim(),
         nickname: String(fd.get('nickname') || '').trim(),
+        memoryJog: String(fd.get('memoryJog') || '').trim().slice(0, 80),
         title: String(fd.get('title') || '').trim(),
         org: String(fd.get('org') || '').trim(),
         kinds: kindsSel.length ? kindsSel : ['friend'],
@@ -2168,14 +2199,11 @@ export function mountNetworkUi(root) {
 
     const logoWrap = document.createElement('div');
     logoWrap.className = 'network-crm__avatar-wrap';
+
+    const logoFrame = document.createElement('div');
+    logoFrame.className = 'network-crm__avatar-frame';
     if (current.logoUrl) {
-      const logo = document.createElement('div');
-      logo.className = 'network-crm__avatar network-crm__avatar--lg';
-      const img = document.createElement('img');
-      img.src = `${current.logoUrl}${current.logoUrl.includes('?') ? '&' : '?'}t=${encodeURIComponent(current.updatedAt || '')}`;
-      img.alt = '';
-      logo.append(img);
-      logoWrap.append(logo);
+      logoFrame.append(logoEl(current, 'network-crm__avatar network-crm__avatar--lg'));
     } else {
       const placeholder = document.createElement('div');
       placeholder.className = 'network-crm__avatar network-crm__avatar--lg';
@@ -2186,14 +2214,17 @@ export function mountNetworkUi(root) {
         .join('')
         .toUpperCase();
       placeholder.textContent = initials || '?';
-      logoWrap.append(placeholder);
+      logoFrame.append(placeholder);
     }
+    logoWrap.append(logoFrame);
+
     const logoPick = mountImageCandidatePicker({
       candidatesUrl: `/api/network/organizations/${encodeURIComponent(current.id)}/logo-candidates`,
       applyUrl: `/api/network/organizations/${encodeURIComponent(current.id)}/logo-from-url`,
+      uploadUrl: `/api/network/organizations/${encodeURIComponent(current.id)}/logo`,
       buttonLabel: 'Find other logos',
       dialogTitle: 'Pick a logo',
-      emptyLabel: 'No logos found — try a different search',
+      emptyLabel: 'No logos found — try a different search or Upload',
       querySearch: true,
       queryPlaceholder: 'Type a company or brand name…',
       defaultQuery: () => {
@@ -2201,6 +2232,13 @@ export function mountNetworkUi(root) {
         const name = String(live?.value || current.name || '').trim();
         return name ? `${name} logo` : '';
       },
+      clear: current.logoUrl
+        ? {
+            url: `/api/network/organizations/${encodeURIComponent(current.id)}`,
+            body: { logoUrl: null },
+            label: 'Remove current logo',
+          }
+        : null,
       onApplied: (entity) => {
         const idx = organizations.findIndex((x) => x.id === entity.id);
         if (idx >= 0) organizations[idx] = entity;
@@ -2211,10 +2249,19 @@ export function mountNetworkUi(root) {
     logoWrap.append(logoPick);
     head.append(logoWrap);
 
+    const titles = document.createElement('div');
     const h = document.createElement('h3');
     h.className = 'network-crm__detail-name';
     h.textContent = current.name || 'Untitled company';
-    head.append(h);
+    if (!current.logoUrl) {
+      const hint = document.createElement('p');
+      hint.className = 'muted network-crm__aliases';
+      hint.textContent = 'No logo yet — find logos, Upload, or Enrich';
+      titles.append(h, hint);
+    } else {
+      titles.append(h);
+    }
+    head.append(titles);
 
     const form = document.createElement('form');
     form.className = 'network-crm__form';

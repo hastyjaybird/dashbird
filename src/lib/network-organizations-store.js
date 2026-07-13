@@ -311,6 +311,75 @@ export async function updateOrganization(id, patch, env = process.env) {
 }
 
 /**
+ * Upload / replace an organization logo from a data URL or base64 payload.
+ * Crops wordmark+icon locks to the icon mark when possible.
+ * @param {string} orgId
+ * @param {{ dataUrl?: string, base64?: string, mimeType?: string }} payload
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function saveOrganizationLogo(orgId, payload, env = process.env) {
+  const org = await getOrganizationById(orgId, env);
+  if (!org) {
+    const err = new Error('not_found');
+    err.code = 'not_found';
+    throw err;
+  }
+
+  let mime = cleanStr(payload?.mimeType, 80).toLowerCase() || 'image/jpeg';
+  let b64 = String(payload?.base64 || '').trim();
+  const dataUrl = String(payload?.dataUrl || '').trim();
+  if (dataUrl.startsWith('data:')) {
+    const m = dataUrl.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+    if (!m) {
+      const err = new Error('invalid_image');
+      err.code = 'invalid_image';
+      throw err;
+    }
+    mime = m[1].toLowerCase();
+    b64 = m[2];
+  }
+  if (!b64) {
+    const err = new Error('invalid_image');
+    err.code = 'invalid_image';
+    throw err;
+  }
+
+  let buf;
+  try {
+    buf = Buffer.from(b64, 'base64');
+  } catch {
+    const err = new Error('invalid_image');
+    err.code = 'invalid_image';
+    throw err;
+  }
+  if (buf.length < 32 || buf.length > 8_000_000) {
+    const err = new Error('invalid_image_size');
+    err.code = 'invalid_image_size';
+    throw err;
+  }
+
+  let ext = '.jpg';
+  if (mime.includes('png')) ext = '.png';
+  else if (mime.includes('webp')) ext = '.webp';
+  else if (mime.includes('gif')) ext = '.gif';
+
+  try {
+    const { cropLogoToIconMark } = await import('./network-logo-icon.js');
+    const cropped = await cropLogoToIconMark(buf);
+    if (cropped?.buffer?.length >= 200) {
+      buf = cropped.buffer;
+      if (cropped.ext) ext = cropped.ext;
+    }
+  } catch {
+    // keep original
+  }
+
+  const { saveNetworkAsset } = await import('./network-contacts-store.js');
+  const logoUrl = await saveNetworkAsset(buf, `${orgId}-logo${ext}`, env);
+  return updateOrganization(orgId, { logoUrl }, env);
+}
+
+/**
  * @param {string[]} ids
  * @param {NodeJS.ProcessEnv} [env]
  */
