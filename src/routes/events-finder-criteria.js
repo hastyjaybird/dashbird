@@ -58,32 +58,43 @@ router.get('/', async (_req, res) => {
 
 router.put('/', async (req, res) => {
   try {
-    const saved = await saveEventsFinderCriteria(req.body);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const saved = await saveEventsFinderCriteria(body);
     if (!saved.ok) {
       res.status(400).json(saved);
       return;
     }
+    const skipMutated =
+      Array.isArray(body.skippedEvents)
+      || Array.isArray(body.unskipEventIds)
+      || Array.isArray(body.hiddenEventIds);
     const [geo, facebookBilling] = await Promise.all([
       resolveEventsFinderGeo(),
       getFacebookBillingMonthSummary(),
     ]);
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({
+    /** @type {Record<string, unknown>} */
+    const payload = {
       ok: true,
       lookFor: saved.lookFor,
       skip: saved.skip,
       blacklist: saved.blacklist,
       filters: saved.filters,
       scrape: saved.scrape,
-      hiddenEventIds: saved.hiddenEventIds,
-      skippedEvents: saved.skippedEvents,
       favoriteEventIds: saved.favoriteEventIds,
       calendarAddedEventIds: saved.calendarAddedEventIds,
       googleCalendar: resolveEventsFinderGoogleCalendar(),
       geo: geoPayload(geo),
       facebookBilling,
       ingestWindow: eventsIngestWindowDays(process.env, { scrape: saved.scrape }),
-    });
+      skippedCount: Array.isArray(saved.skippedEvents) ? saved.skippedEvents.length : 0,
+    };
+    // Filter-only saves omit the bulky skip list — client keeps its cached copy.
+    if (skipMutated) {
+      payload.hiddenEventIds = saved.hiddenEventIds;
+      payload.skippedEvents = saved.skippedEvents;
+    }
+    res.json(payload);
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }

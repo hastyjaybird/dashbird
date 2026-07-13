@@ -5,6 +5,7 @@
 
 import { beginWaitCursor, endWaitCursor } from '../lib/wait-cursor.js';
 import { formatContactLastContact } from '../lib/network-last-contact.js';
+import { mountNetworkManageTable } from './network-manage-table.js?v=manage-fill-kbd-3';
 
 const METHOD_LABELS = {
   phone: 'Phone',
@@ -17,19 +18,26 @@ const METHOD_LABELS = {
 
 const DEFAULT_METHODS = Object.keys(METHOD_LABELS);
 
-/** Friendly local display for ISO timestamps (enriched / created / updated). */
+/** Compact local display for ISO timestamps: MMDDYY-HH:mm (Pacific). */
 function formatNetworkTimestamp(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
-  return d.toLocaleString('en-US', {
+  const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Los_Angeles',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    year: '2-digit',
+    hour: '2-digit',
     minute: '2-digit',
-  });
+    hourCycle: 'h23',
+  }).formatToParts(d);
+  /** @type {Record<string, string>} */
+  const bag = {};
+  for (const p of parts) {
+    if (p.type !== 'literal') bag[p.type] = p.value;
+  }
+  return `${bag.month}${bag.day}${bag.year}-${bag.hour}:${bag.minute}`;
 }
 
 /**
@@ -63,15 +71,38 @@ export function mountNetworkUi(root) {
   companiesTab.id = 'network-tab-companies';
   companiesTab.textContent = 'Companies';
 
-  const groupsTab = document.createElement('button');
-  groupsTab.type = 'button';
-  groupsTab.className = 'network-crm__tab';
-  groupsTab.setAttribute('role', 'tab');
-  groupsTab.setAttribute('aria-selected', 'false');
-  groupsTab.id = 'network-tab-groups';
-  groupsTab.textContent = 'Groups';
+  tabs.append(peopleTab, companiesTab);
 
-  tabs.append(peopleTab, companiesTab, groupsTab);
+  const peopleSubTabs = document.createElement('div');
+  peopleSubTabs.className = 'network-crm__subtabs';
+  peopleSubTabs.setAttribute('role', 'tablist');
+  peopleSubTabs.setAttribute('aria-label', 'People views');
+
+  const contactsSubTab = document.createElement('button');
+  contactsSubTab.type = 'button';
+  contactsSubTab.className = 'network-crm__subtab network-crm__subtab--active';
+  contactsSubTab.setAttribute('role', 'tab');
+  contactsSubTab.setAttribute('aria-selected', 'true');
+  contactsSubTab.id = 'network-subtab-contacts';
+  contactsSubTab.textContent = 'Contacts';
+
+  const manageSubTab = document.createElement('button');
+  manageSubTab.type = 'button';
+  manageSubTab.className = 'network-crm__subtab';
+  manageSubTab.setAttribute('role', 'tab');
+  manageSubTab.setAttribute('aria-selected', 'false');
+  manageSubTab.id = 'network-subtab-manage';
+  manageSubTab.textContent = 'Manage';
+
+  const groupsSubTab = document.createElement('button');
+  groupsSubTab.type = 'button';
+  groupsSubTab.className = 'network-crm__subtab';
+  groupsSubTab.setAttribute('role', 'tab');
+  groupsSubTab.setAttribute('aria-selected', 'false');
+  groupsSubTab.id = 'network-subtab-groups';
+  groupsSubTab.textContent = 'Groups';
+
+  peopleSubTabs.append(contactsSubTab, manageSubTab, groupsSubTab);
 
   const toolbar = document.createElement('div');
   toolbar.className = 'network-crm__toolbar';
@@ -79,7 +110,7 @@ export function mountNetworkUi(root) {
   const search = document.createElement('input');
   search.type = 'search';
   search.className = 'network-crm__search';
-  search.placeholder = 'Search people…';
+  search.placeholder = 'Search contacts…';
   search.autocomplete = 'off';
 
   const peopleActions = document.createElement('div');
@@ -190,7 +221,7 @@ export function mountNetworkUi(root) {
     return { wrapEl, sel };
   }
 
-  const kindFilter = makeFilterSelect('Kind', 'filter-kind', [
+  const kindFilter = makeFilterSelect('Type', 'filter-kind', [
     { value: 'friend', label: 'Friend' },
     { value: 'organizer', label: 'Organizer' },
     { value: 'business', label: 'Business' },
@@ -205,11 +236,22 @@ export function mountNetworkUi(root) {
     'Former',
   ]);
   const statusFilter = makeFilterSelect('Status', 'filter-status', [
+    'Fan',
     'Hot',
     'Warm',
     'Cold',
   ]);
-  peopleFilterBar.append(kindFilter.wrapEl, relationshipFilter.wrapEl, statusFilter.wrapEl);
+  const sensitivityFilter = makeFilterSelect('Sensitivity', 'filter-sensitivity', [
+    'Down',
+    'Situational',
+    'Proper',
+  ]);
+  peopleFilterBar.append(
+    kindFilter.wrapEl,
+    relationshipFilter.wrapEl,
+    statusFilter.wrapEl,
+    sensitivityFilter.wrapEl,
+  );
 
   const bulkPanel = document.createElement('div');
   bulkPanel.className = 'network-crm__bulk';
@@ -239,6 +281,11 @@ export function mountNetworkUi(root) {
   list.setAttribute('aria-label', 'People');
   list.setAttribute('aria-labelledby', 'network-tab-people');
 
+  const managePane = document.createElement('div');
+  managePane.className = 'network-crm__manage-pane';
+  managePane.setAttribute('aria-label', 'Manage contacts');
+  managePane.hidden = true;
+
   const detail = document.createElement('div');
   detail.className = 'network-crm__detail';
   detail.innerHTML = '<p class="muted">Select a person</p>';
@@ -247,7 +294,7 @@ export function mountNetworkUi(root) {
   status.className = 'network-crm__status muted';
   status.hidden = true;
 
-  layout.append(list, detail);
+  layout.append(list, managePane, detail);
   const mainPane = document.createElement('div');
   mainPane.className = 'network-crm__main';
   mainPane.append(toolbar, peopleFilterBar, bulkPanel, layout, status);
@@ -256,7 +303,7 @@ export function mountNetworkUi(root) {
   groupsPane.className = 'network-crm__groups-pane';
   groupsPane.hidden = true;
 
-  wrap.append(tabs, mainPane, groupsPane);
+  wrap.append(tabs, peopleSubTabs, mainPane, groupsPane);
 
   const voiceBar = document.createElement('div');
   voiceBar.className = 'network-crm__voice-bar';
@@ -277,10 +324,16 @@ export function mountNetworkUi(root) {
   let methodOptions = DEFAULT_METHODS;
   /** @type {string | null} */
   let selectedId = null;
-  /** @type {'people' | 'companies' | 'groups'} */
+  /** Unsaved edits in the open contact detail form. */
+  let detailDirty = false;
+  /** @type {'people' | 'companies'} */
   let view = 'people';
+  /** @type {'contacts' | 'manage' | 'groups'} */
+  let peopleSubTab = 'contacts';
   /** @type {boolean} */
   let groupsUiMounted = false;
+  /** @type {{ render: () => void, destroy: () => void } | null} */
+  let manageTableApi = null;
   /** @type {string | null} */
   let selectedOrgId = null;
   /** @type {Set<string>} */
@@ -288,12 +341,14 @@ export function mountNetworkUi(root) {
   /** @type {Set<string>} */
   const selectedOrgIds = new Set();
   let query = '';
-  /** @type {{ kind: string, relationship: string, status: string }} */
-  let peopleFilters = { kind: '', relationship: '', status: '' };
+  /** @type {{ kind: string, relationship: string, status: string, sensitivity: string }} */
+  let peopleFilters = { kind: '', relationship: '', status: '', sensitivity: '' };
   /** Session flag: org detail "More attributes" panel open */
   let orgAttrsExpanded = false;
   /** Session flag: contact detail "More attributes" panel open */
   let contactAttrsExpanded = false;
+  /** Manage tab: detail pane only after double-clicking a row */
+  let manageDetailOpen = false;
   /** Bumps when detail pane is remounted; cancels stale in-flight saves */
   let detailGeneration = 0;
   const MAX_UNDO = 25;
@@ -315,7 +370,21 @@ export function mountNetworkUi(root) {
   }
 
   /**
+   * Enrichment fields included in undo snapshots (wrong-person enrich revert).
+   * @param {object | null | undefined} e
+   */
+  function enrichmentToPutBody(e) {
+    return {
+      sources: Array.isArray(e?.sources) ? [...e.sources] : [],
+      enrichedAt: e?.enrichedAt || null,
+      rawSummary: e?.rawSummary || null,
+      confidence: typeof e?.confidence === 'number' ? e.confidence : null,
+    };
+  }
+
+  /**
    * PUT body snapshot from a loaded contact (for undo restore).
+   * Includes avatar + enrichment so Undo can reverse a bad enrich.
    * @param {object} c
    */
   function contactToPutBody(c) {
@@ -332,6 +401,7 @@ export function mountNetworkUi(root) {
       aliases: Array.isArray(c.aliases) ? [...c.aliases] : [],
       department: c.department || '',
       rating: c.rating || '',
+      sensitivity: c.sensitivity || '',
       nextStep: c.nextStep || '',
       bio: c.bio || '',
       howWeMet: c.howWeMet || '',
@@ -353,6 +423,9 @@ export function mountNetworkUi(root) {
         other: c.channels?.other || null,
         urls: Array.isArray(c.channels?.urls) ? [...c.channels.urls] : [],
       },
+      avatarUrl: c.avatarUrl || null,
+      enrichment: enrichmentToPutBody(c.enrichment),
+      source: c.source || 'manual',
     };
   }
 
@@ -387,32 +460,101 @@ export function mountNetworkUi(root) {
       summary: o.summary || '',
       aliases: Array.isArray(o.aliases) ? [...o.aliases] : [],
       urls: Array.isArray(o.urls) ? [...o.urls] : [],
+      logoUrl: o.logoUrl || null,
+      suggestedPeople: Array.isArray(o.suggestedPeople)
+        ? o.suggestedPeople.map((p) => ({ ...p }))
+        : [],
+      enrichment: enrichmentToPutBody(o.enrichment),
+      source: o.source || 'manual',
     };
+  }
+
+  /**
+   * Push a pre-change snapshot so Undo can restore it (save or enrich).
+   * @param {Map<string, object[]>} stacks
+   * @param {string} id
+   * @param {object} snap
+   */
+  function pushUndoSnap(stacks, id, snap) {
+    if (!id || !snap) return;
+    let stack = stacks.get(id);
+    if (!stack) {
+      stack = [];
+      stacks.set(id, stack);
+    }
+    const top = stack[stack.length - 1];
+    if (top && sameJson(top, snap)) return;
+    stack.push(snap);
+    if (stack.length > MAX_UNDO) stack.shift();
+  }
+
+  function syncPeopleSubView() {
+    const onPeople = view === 'people';
+    const onContacts = onPeople && peopleSubTab === 'contacts';
+    const onManage = onPeople && peopleSubTab === 'manage';
+    const onGroups = onPeople && peopleSubTab === 'groups';
+
+    peopleSubTabs.hidden = !onPeople;
+    contactsSubTab.classList.toggle('network-crm__subtab--active', onContacts);
+    manageSubTab.classList.toggle('network-crm__subtab--active', onManage);
+    groupsSubTab.classList.toggle('network-crm__subtab--active', onGroups);
+    contactsSubTab.setAttribute('aria-selected', onContacts ? 'true' : 'false');
+    manageSubTab.setAttribute('aria-selected', onManage ? 'true' : 'false');
+    groupsSubTab.setAttribute('aria-selected', onGroups ? 'true' : 'false');
+
+    if (onContacts || view === 'companies') {
+      list.hidden = false;
+      managePane.hidden = true;
+    } else if (onManage) {
+      list.hidden = true;
+      managePane.hidden = false;
+    } else {
+      list.hidden = true;
+      managePane.hidden = true;
+    }
+    layout.classList.toggle('network-crm__layout--manage', onManage);
+    layout.classList.toggle(
+      'network-crm__layout--manage-table-only',
+      onManage && !manageDetailOpen,
+    );
+    layout.classList.toggle('network-crm__layout--companies', view === 'companies');
+    if (onManage && !manageDetailOpen) {
+      detail.hidden = true;
+    } else {
+      detail.hidden = false;
+    }
   }
 
   function syncTabs() {
     const onPeople = view === 'people';
     const onCompanies = view === 'companies';
-    const onGroups = view === 'groups';
+    const onContacts = onPeople && peopleSubTab === 'contacts';
+    const onManage = onPeople && peopleSubTab === 'manage';
+    const onGroups = onPeople && peopleSubTab === 'groups';
+    const onPeopleWorkbench = onContacts || onManage;
     peopleTab.classList.toggle('network-crm__tab--active', onPeople);
     companiesTab.classList.toggle('network-crm__tab--active', onCompanies);
-    groupsTab.classList.toggle('network-crm__tab--active', onGroups);
     peopleTab.setAttribute('aria-selected', onPeople ? 'true' : 'false');
     companiesTab.setAttribute('aria-selected', onCompanies ? 'true' : 'false');
-    groupsTab.setAttribute('aria-selected', onGroups ? 'true' : 'false');
-    search.placeholder = onPeople ? 'Search people…' : onCompanies ? 'Search companies…' : 'Search groups…';
-    peopleActions.hidden = !onPeople;
+    search.placeholder = onCompanies
+      ? 'Search companies…'
+      : onManage
+        ? 'Search contacts…'
+        : 'Search people…';
+    peopleActions.hidden = !onPeopleWorkbench;
     companyActions.hidden = !onCompanies;
-    peopleFilterBar.hidden = !onPeople;
+    peopleFilterBar.hidden = !onPeopleWorkbench;
     mainPane.hidden = onGroups;
     groupsPane.hidden = !onGroups;
-    if (!onPeople) bulkPanel.hidden = true;
+    if (!onPeopleWorkbench) bulkPanel.hidden = true;
+    syncPeopleSubView();
     syncSelectionActions();
   }
 
   function syncSelectionActions() {
     const n = selectedContactIds.size;
-    const selecting = n > 0 && view === 'people';
+    const selecting =
+      n > 0 && view === 'people' && (peopleSubTab === 'contacts' || peopleSubTab === 'manage');
     peopleDefaultActions.hidden = selecting;
     peopleSelectionActions.hidden = !selecting;
     const count = n ? ` (${n})` : '';
@@ -425,15 +567,29 @@ export function mountNetworkUi(root) {
   }
 
   /**
-   * @param {'people' | 'companies' | 'groups'} next
-   * @param {{ selectOrgId?: string | null, selectGroupId?: string | null }} [opts]
+   * @param {'people' | 'companies'} next
+   * @param {{ selectOrgId?: string | null, selectGroupId?: string | null, peopleSubTab?: 'contacts' | 'manage' | 'groups' }} [opts]
    */
   async function setView(next, opts = {}) {
+    const nextPeopleSub = next === 'people' ? opts.peopleSubTab || peopleSubTab : peopleSubTab;
+    const onPeopleDetail =
+      view === 'people'
+      && Boolean(selectedId)
+      && (peopleSubTab === 'contacts' || (peopleSubTab === 'manage' && manageDetailOpen));
+    const leavingPeopleDetail =
+      onPeopleDetail
+      && (next !== 'people' || nextPeopleSub !== peopleSubTab);
+    if (leavingPeopleDetail && !confirmLeaveUnsaved()) return;
+    if (leavingPeopleDetail) detailDirty = false;
+
     view = next;
+    if (next === 'people' && opts.peopleSubTab) {
+      peopleSubTab = opts.peopleSubTab;
+    } else if (next === 'companies') {
+      peopleSubTab = 'contacts';
+    }
     syncTabs();
-    if (next === 'groups') {
-      list.setAttribute('aria-label', 'Groups');
-      list.setAttribute('aria-labelledby', 'network-tab-groups');
+    if (next === 'people' && peopleSubTab === 'groups') {
       await openGroupsUi({ selectGroupId: opts.selectGroupId || null });
       return;
     }
@@ -442,7 +598,10 @@ export function mountNetworkUi(root) {
       groupsUiMounted = false;
     }
     list.setAttribute('aria-label', next === 'people' ? 'People' : 'Companies');
-    list.setAttribute('aria-labelledby', next === 'people' ? 'network-tab-people' : 'network-tab-companies');
+    list.setAttribute(
+      'aria-labelledby',
+      next === 'people' ? 'network-subtab-contacts' : 'network-tab-companies',
+    );
     if (next === 'companies') {
       await loadOrganizations();
       selectedOrgId = opts.selectOrgId ?? selectedOrgId ?? organizations[0]?.id ?? null;
@@ -452,8 +611,66 @@ export function mountNetworkUi(root) {
       return;
     }
     renderList();
+    if (peopleSubTab === 'manage') {
+      if (!manageDetailOpen) {
+        selectedId = null;
+        detail.innerHTML = '<p class="muted">Double-click a row to edit details</p>';
+      } else if (selectedId) {
+        selectContact(selectedId);
+      } else {
+        manageDetailOpen = false;
+        detail.innerHTML = '<p class="muted">Double-click a row to edit details</p>';
+      }
+      syncPeopleSubView();
+      return;
+    }
+    manageDetailOpen = false;
     if (selectedId) selectContact(selectedId);
     else detail.innerHTML = '<p class="muted">Select a person</p>';
+  }
+
+  /**
+   * @param {'contacts' | 'manage' | 'groups'} next
+   * @param {{ selectGroupId?: string | null }} [opts]
+   */
+  async function setPeopleSubTab(next, opts = {}) {
+    if (view !== 'people') view = 'people';
+    await setView('people', {
+      peopleSubTab: next,
+      selectGroupId: opts.selectGroupId || null,
+    });
+    if (peopleSubTab === next) manageDetailOpen = false;
+  }
+
+  function ensureManageTable() {
+    if (manageTableApi) return;
+    manageTableApi = mountNetworkManageTable(managePane, {
+      getContacts: () => filtered(),
+      getSelectedIds: () => selectedContactIds,
+      setSelectedIds: (ids) => {
+        selectedContactIds.clear();
+        for (const id of ids) selectedContactIds.add(id);
+        syncSelectionActions();
+      },
+      onSelectContact: (id) => {
+        manageDetailOpen = true;
+        syncPeopleSubView();
+        selectContact(id);
+      },
+      onContactsUpdated: (updated) => {
+        for (const u of updated) {
+          const idx = contacts.findIndex((x) => x.id === u.id);
+          if (idx >= 0) contacts[idx] = u;
+        }
+        if (peopleSubTab === 'manage') manageTableApi?.render();
+        else if (peopleSubTab === 'contacts') renderList();
+        if (selectedId && updated.some((u) => u.id === selectedId)) {
+          const c = contacts.find((x) => x.id === selectedId);
+          if (c) renderDetail(c);
+        }
+      },
+      showStatus,
+    });
   }
 
   function showStatus(msg, isErr = false) {
@@ -480,6 +697,9 @@ export function mountNetworkUi(root) {
       if (peopleFilters.status) {
         if (String(c.rating || '') !== peopleFilters.status) return false;
       }
+      if (peopleFilters.sensitivity) {
+        if (String(c.sensitivity || '') !== peopleFilters.sensitivity) return false;
+      }
       if (!q) return true;
       const hay = [
         c.displayName,
@@ -499,6 +719,7 @@ export function mountNetworkUi(root) {
         c.notes,
         c.relationshipStatus,
         c.rating,
+        c.sensitivity,
         c.location,
       ]
         .filter(Boolean)
@@ -573,8 +794,7 @@ export function mountNetworkUi(root) {
 
   /**
    * Image-candidate picker in a pop-out dialog. Skips broken previews.
-   * People photos use the morning path (Search further, no keyword box).
-   * When `querySearch` is true (logos), a top text box drives image search.
+   * When `querySearch` is true (logos + people photos), a top text box drives image search.
    * @param {{
    *   candidatesUrl: string,
    *   applyUrl: string,
@@ -582,10 +802,11 @@ export function mountNetworkUi(root) {
    *   emptyLabel?: string,
    *   dialogTitle?: string,
    *   queryPlaceholder?: string,
+   *   queryAriaLabel?: string,
    *   querySearch?: boolean,
    *   defaultQuery?: string | (() => string),
    *   uploadUrl?: string,
-   *   clear?: { url: string, body: object, label?: string } | null,
+   *   clear?: { url: string, body: object, label?: string, previewUrl?: string } | null,
    *   onApplied: (entity: object) => void,
    * }} opts
    */
@@ -606,6 +827,7 @@ export function mountNetworkUi(root) {
             url: String(opts.clear.url).trim(),
             body: opts.clear.body && typeof opts.clear.body === 'object' ? opts.clear.body : {},
             label: String(opts.clear.label || 'Remove current image').trim() || 'Remove current image',
+            previewUrl: String(opts.clear.previewUrl || '').trim(),
           }
         : null;
 
@@ -684,11 +906,6 @@ export function mountNetworkUi(root) {
         img.addEventListener('load', () => {
           grid.querySelector('[data-empty="1"]')?.remove();
           btn.hidden = false;
-          const statusEl = backdrop?.querySelector('.network-crm__img-pick-status');
-          if (statusEl) {
-            const visible = grid.querySelectorAll('.network-crm__img-pick-item:not([hidden])').length;
-            statusEl.textContent = visible ? `Pick one · ${visible} shown` : 'Waiting for previews…';
-          }
         });
         img.src = thumb;
         btn.append(img);
@@ -727,10 +944,9 @@ export function mountNetworkUi(root) {
       if (!backdrop) return;
       const grid = backdrop.querySelector('.network-crm__img-pick-grid');
       const furtherBtn = backdrop.querySelector('.network-crm__img-pick-further');
-      const statusEl = backdrop.querySelector('.network-crm__img-pick-status');
       const queryInput = backdrop.querySelector('.network-crm__img-pick-query');
       const searchBtn = backdrop.querySelector('.network-crm__img-pick-search');
-      if (!grid || !furtherBtn || !statusEl) return;
+      if (!grid || !furtherBtn) return;
 
       const query = querySearch ? String(queryInput?.value || '').trim().slice(0, 160) : '';
       if (querySearch && !query) {
@@ -761,7 +977,6 @@ export function mountNetworkUi(root) {
           : 'Looking up images…'
         : 'Searching further…';
       grid.append(loading);
-      statusEl.textContent = reset ? 'Searching…' : 'Loading next results…';
       showStatus(reset ? 'Finding images…' : 'Searching further…');
 
       try {
@@ -790,16 +1005,8 @@ export function mountNetworkUi(root) {
           empty.dataset.empty = '1';
           empty.textContent = opts.emptyLabel || 'No images found';
           grid.replaceChildren(empty);
-          statusEl.textContent = 'No images found';
           showStatus('No images found', true);
         } else {
-          const visible = grid.querySelectorAll('.network-crm__img-pick-item:not([hidden])').length;
-          const pending = grid.querySelectorAll('.network-crm__img-pick-item[hidden]').length;
-          statusEl.textContent = visible
-            ? `Pick one · ${visible} shown`
-            : pending
-              ? 'Waiting for previews…'
-              : 'No previewable images';
           showStatus(added ? `Loaded ${added} image${added === 1 ? '' : 's'}` : 'No new images');
         }
         furtherBtn.hidden = !hasMore;
@@ -812,7 +1019,6 @@ export function mountNetworkUi(root) {
           empty.textContent = 'Search failed';
           grid.replaceChildren(empty);
         }
-        statusEl.textContent = 'Search failed';
         showStatus(String(err?.message || err), true);
         furtherBtn.hidden = !hasMore;
         furtherBtn.disabled = !hasMore;
@@ -848,15 +1054,65 @@ export function mountNetworkUi(root) {
       closeBtn.addEventListener('click', () => closeDialog());
       header.append(title, closeBtn);
 
-      const hint = document.createElement('p');
-      hint.className = 'network-crm__img-pick-hint muted';
-      hint.textContent = 'Pick one with a working preview — broken previews are skipped';
-
-      const statusEl = document.createElement('p');
-      statusEl.className = 'network-crm__img-pick-status muted';
-
       const grid = document.createElement('div');
       grid.className = 'network-crm__img-pick-grid';
+
+      /** @type {HTMLElement[]} */
+      const dialogParts = [header];
+
+      if (clearOpts) {
+        const currentBlock = document.createElement('div');
+        currentBlock.className = 'network-crm__img-pick-current';
+        const currentLabel = document.createElement('p');
+        currentLabel.className = 'network-crm__img-pick-hint muted';
+        currentLabel.textContent = 'Current';
+        const frame = document.createElement('div');
+        frame.className = 'network-crm__img-pick-current-frame';
+        if (clearOpts.previewUrl) {
+          const img = document.createElement('img');
+          img.src = clearOpts.previewUrl;
+          img.alt = '';
+          img.referrerPolicy = 'no-referrer';
+          frame.append(img);
+        } else {
+          const placeholder = document.createElement('div');
+          placeholder.className = 'network-crm__img-pick-current-placeholder';
+          placeholder.textContent = '—';
+          frame.append(placeholder);
+        }
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'network-crm__img-pick-current-clear';
+        removeBtn.title = clearOpts.label;
+        removeBtn.setAttribute('aria-label', clearOpts.label);
+        removeBtn.textContent = '×';
+        removeBtn.addEventListener('click', async () => {
+          removeBtn.disabled = true;
+          findBtn.disabled = true;
+          showStatus('Removing image…');
+          try {
+            const r = await fetch(clearOpts.url, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(clearOpts.body),
+            });
+            const j = await r.json();
+            if (!j.ok) throw new Error(j.error || 'remove_failed');
+            closeDialog();
+            showStatus('Image removed');
+            opts.onApplied(j.contact || j.organization);
+          } catch (err) {
+            showStatus(String(err?.message || err), true);
+            removeBtn.disabled = false;
+            findBtn.disabled = false;
+          }
+        });
+        frame.append(removeBtn);
+        currentBlock.append(currentLabel, frame);
+        dialogParts.push(currentBlock);
+      }
+
+      dialogParts.push(grid);
 
       const actions = document.createElement('div');
       actions.className = 'network-crm__img-pick-dialog-actions';
@@ -865,10 +1121,10 @@ export function mountNetworkUi(root) {
         const queryInput = document.createElement('input');
         queryInput.type = 'search';
         queryInput.className = 'network-crm__img-pick-query';
-        queryInput.placeholder = opts.queryPlaceholder || 'Type to search for logos…';
+        queryInput.placeholder = opts.queryPlaceholder || 'Type to search…';
         queryInput.autocomplete = 'off';
         queryInput.spellcheck = true;
-        queryInput.setAttribute('aria-label', 'Search logos');
+        queryInput.setAttribute('aria-label', opts.queryAriaLabel || 'Search images');
         queryInput.value = resolveDefaultQuery();
         const searchBtn = document.createElement('button');
         searchBtn.type = 'button';
@@ -936,37 +1192,8 @@ export function mountNetworkUi(root) {
         actions.append(uploadBtn, fileInput);
       }
 
-      if (clearOpts) {
-        const removeBtn = document.createElement('button');
-        removeBtn.type = 'button';
-        removeBtn.className =
-          'network-crm__btn network-crm__btn--tiny network-crm__btn--danger network-crm__img-pick-clear';
-        removeBtn.textContent = clearOpts.label;
-        removeBtn.addEventListener('click', async () => {
-          removeBtn.disabled = true;
-          findBtn.disabled = true;
-          showStatus('Removing image…');
-          try {
-            const r = await fetch(clearOpts.url, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(clearOpts.body),
-            });
-            const j = await r.json();
-            if (!j.ok) throw new Error(j.error || 'remove_failed');
-            closeDialog();
-            showStatus('Image removed');
-            opts.onApplied(j.contact || j.organization);
-          } catch (err) {
-            showStatus(String(err?.message || err), true);
-            removeBtn.disabled = false;
-            findBtn.disabled = false;
-          }
-        });
-        actions.append(removeBtn);
-      }
-
-      dialog.append(header, hint, statusEl, grid, actions);
+      dialogParts.push(actions);
+      dialog.append(...dialogParts);
       backdrop.append(dialog);
       backdrop.addEventListener('click', (e) => {
         if (e.target === backdrop) closeDialog();
@@ -990,11 +1217,17 @@ export function mountNetworkUi(root) {
   }
 
   function renderList() {
-    list.replaceChildren();
     if (view === 'companies') {
+      list.replaceChildren();
       renderOrgList();
       return;
     }
+    if (peopleSubTab === 'manage') {
+      ensureManageTable();
+      manageTableApi?.render();
+      return;
+    }
+    list.replaceChildren();
     const items = filtered();
     if (!items.length) {
       const empty = document.createElement('li');
@@ -1104,11 +1337,23 @@ export function mountNetworkUi(root) {
     }
   }
 
+  function confirmLeaveUnsaved() {
+    if (!detailDirty) return true;
+    return window.confirm('You have unsaved contact edits. Leave without saving?');
+  }
+
   /**
    * @param {string} id
    */
   function selectContact(id) {
+    if (selectedId === id) {
+      // Already on this person — don't remount and wipe an in-progress edit.
+      if (detailDirty) return;
+    } else if (selectedId && !confirmLeaveUnsaved()) {
+      return;
+    }
     selectedId = id;
+    detailDirty = false;
     renderList();
     const c = contacts.find((x) => x.id === id);
     if (!c) {
@@ -1140,6 +1385,7 @@ export function mountNetworkUi(root) {
       hideVoiceBar();
     }
     const gen = ++detailGeneration;
+    detailDirty = false;
     /** @type {object} */
     let current = c;
     detail.replaceChildren();
@@ -1161,12 +1407,24 @@ export function mountNetworkUi(root) {
       uploadUrl: `/api/network/contacts/${encodeURIComponent(current.id)}/avatar`,
       buttonLabel: 'Find other photos',
       dialogTitle: 'Pick a photo',
-      emptyLabel: 'No photos found — try Enrich or Upload',
+      emptyLabel: 'No photos found — try a different search or Upload',
+      querySearch: true,
+      queryPlaceholder: 'Type a name or search phrase…',
+      queryAriaLabel: 'Search photos',
+      defaultQuery: () => {
+        const liveName = detail.querySelector('.network-crm__form [name="displayName"]');
+        const liveOrg = detail.querySelector('.network-crm__form [name="org"]');
+        const name = String(liveName?.value || current.displayName || '').trim();
+        const org = String(liveOrg?.value || current.org || '').trim();
+        if (name && org) return `"${name}" ${org}`;
+        return name || '';
+      },
       clear: current.avatarUrl
         ? {
             url: `/api/network/contacts/${encodeURIComponent(current.id)}`,
             body: { avatarUrl: null },
             label: 'Remove current photo',
+            previewUrl: `${current.avatarUrl}${current.avatarUrl.includes('?') ? '&' : '?'}t=${encodeURIComponent(current.updatedAt || '')}`,
           }
         : null,
       onApplied: (entity) => {
@@ -1189,14 +1447,7 @@ export function mountNetworkUi(root) {
       nick.textContent = current.nickname;
       h.append(document.createTextNode(' '), nick);
     }
-    if (!current.avatarUrl) {
-      const hint = document.createElement('p');
-      hint.className = 'muted network-crm__aliases';
-      hint.textContent = 'No photo yet — find photos, Upload, or Enrich';
-      titles.append(h, hint);
-    } else {
-      titles.append(h);
-    }
+    titles.append(h);
     head.append(titles);
 
     const form = document.createElement('form');
@@ -1255,7 +1506,7 @@ export function mountNetworkUi(root) {
     kindsBox.className = 'network-crm__checks';
     const kindsLabelEl = document.createElement('span');
     kindsLabelEl.className = 'network-crm__checks-label';
-    kindsLabelEl.textContent = 'Kinds';
+    kindsLabelEl.textContent = 'Type';
     kindsBox.append(kindsLabelEl);
     const kinds = new Set(c.kinds || ['friend']);
     for (const k of ['friend', 'organizer', 'business']) {
@@ -1462,8 +1713,12 @@ export function mountNetworkUi(root) {
         ],
       }),
       field('Status', 'rating', c.rating || '', {
-        options: ['Hot', 'Warm', 'Cold'],
+        options: ['Fan', 'Hot', 'Warm', 'Cold'],
       }),
+      field('Sensitivity', 'sensitivity', c.sensitivity || '', {
+        options: ['Down', 'Situational', 'Proper'],
+      }),
+      field('Next step', 'nextStep', c.nextStep || ''),
       lastContactField,
       kindsBox,
       moreChannels,
@@ -1475,7 +1730,6 @@ export function mountNetworkUi(root) {
         (c.alignedActivities || []).join('\n'),
         { rows: 4 },
       ),
-      field('Next step', 'nextStep', c.nextStep || '', { rows: 2 }),
       toggleAttrs,
       attrsPanel,
     );
@@ -1487,13 +1741,28 @@ export function mountNetworkUi(root) {
     saveBtn.type = 'submit';
     saveBtn.className = 'network-crm__btn network-crm__btn--primary';
     saveBtn.textContent = 'Save';
+    saveBtn.title = 'Save changes (Ctrl/Cmd+S)';
+
+    function syncSaveBtn() {
+      saveBtn.textContent = detailDirty ? 'Save · unsaved' : 'Save';
+      saveBtn.classList.toggle('network-crm__btn--unsaved', detailDirty);
+    }
+    syncSaveBtn();
+
+    const markDirty = () => {
+      if (gen !== detailGeneration) return;
+      detailDirty = true;
+      syncSaveBtn();
+    };
+    form.addEventListener('input', markDirty);
+    form.addEventListener('change', markDirty);
 
     const undoBtn = document.createElement('button');
     undoBtn.type = 'button';
     undoBtn.className = 'network-crm__btn';
     undoBtn.textContent = 'Undo';
     undoBtn.disabled = true;
-    undoBtn.title = 'Undo last save (Ctrl+Z outside a field uses this too)';
+    undoBtn.title = 'Undo last save or enrich (Ctrl+Z outside a field)';
 
     const enrichBtn = document.createElement('button');
     enrichBtn.type = 'button';
@@ -1542,6 +1811,7 @@ export function mountNetworkUi(root) {
         aliases: splitCsv(fd.get('aliases')),
         department: String(fd.get('department') || '').trim(),
         rating: String(fd.get('rating') || '').trim(),
+        sensitivity: String(fd.get('sensitivity') || '').trim(),
         nextStep: String(fd.get('nextStep') || '').trim(),
         bio: String(fd.get('bio') || '').trim(),
         howWeMet: String(fd.get('howWeMet') || '').trim(),
@@ -1655,6 +1925,8 @@ export function mountNetworkUi(root) {
             ? ` · updated ${formatNetworkTimestamp(saved.updatedAt)}`
             : '';
           enrichMeta.textContent = `${enrichedSaved} · source: ${saved.source || '—'}${createdSaved}${updatedSaved}`;
+          detailDirty = false;
+          syncSaveBtn();
           showStatus('Saved');
 
           // Sidebar only shows name / nick / kinds / circles — skip full rebuild for notes etc.
@@ -1680,6 +1952,11 @@ export function mountNetworkUi(root) {
     }
 
     form.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        void persistContact();
+        return;
+      }
       if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || e.shiftKey || e.altKey) return;
       const t = /** @type {HTMLElement} */ (e.target);
       const tag = t?.tagName || '';
@@ -1840,6 +2117,9 @@ export function mountNetworkUi(root) {
 
   /**
    * Close the enrich picker and run work on the Network screen.
+   * Wait cursor only while the UI is not yet free to use; once work yields
+   * (request in flight), restore the normal pointer so Jay can click around
+   * without thinking enrichment will be interrupted.
    * @param {string} pendingMsg
    * @param {() => Promise<void>} work
    */
@@ -1847,23 +2127,38 @@ export function mountNetworkUi(root) {
     showStatus(pendingMsg);
     beginWaitCursor();
     void (async () => {
+      let holdingCursor = true;
+      const releaseCursor = () => {
+        if (!holdingCursor) return;
+        holdingCursor = false;
+        endWaitCursor();
+      };
       try {
-        await work();
+        const pending = work();
+        // If work hangs synchronously before its first await, we never reach
+        // here and the wait cursor stays — correct for a blocked UI.
+        queueMicrotask(releaseCursor);
+        await pending;
       } catch (err) {
         showStatus(String(err?.message || err), true);
       } finally {
-        endWaitCursor();
+        releaseCursor();
       }
     })();
   }
 
   /**
    * Apply an enriched contact if still on People; always refresh the list row.
+   * Snapshots the pre-enrich card onto the undo stack so Undo can revert a bad match.
    * @param {object} contact
    * @param {string} [okMsg]
    */
   function applyEnrichedContact(contact, okMsg) {
     if (!contact?.id) return;
+    const prev = contacts.find((x) => x.id === contact.id);
+    if (prev && !sameJson(contactToPutBody(prev), contactToPutBody(contact))) {
+      pushUndoSnap(contactUndoStacks, contact.id, contactToPutBody(prev));
+    }
     const idx = contacts.findIndex((x) => x.id === contact.id);
     if (idx >= 0) contacts[idx] = contact;
     else contacts.push(contact);
@@ -1871,7 +2166,7 @@ export function mountNetworkUi(root) {
     if (view === 'people' && selectedId === contact.id) {
       selectContact(contact.id);
     }
-    if (okMsg) showStatus(okMsg);
+    if (okMsg) showStatus(`${okMsg} · Undo to revert`);
   }
 
   /**
@@ -1880,6 +2175,10 @@ export function mountNetworkUi(root) {
    */
   function applyEnrichedOrganization(organization, okMsg) {
     if (!organization?.id) return;
+    const prev = organizations.find((x) => x.id === organization.id);
+    if (prev && !sameJson(orgToPutBody(prev), orgToPutBody(organization))) {
+      pushUndoSnap(orgUndoStacks, organization.id, orgToPutBody(prev));
+    }
     const idx = organizations.findIndex((x) => x.id === organization.id);
     if (idx >= 0) organizations[idx] = organization;
     else organizations.push(organization);
@@ -1887,7 +2186,7 @@ export function mountNetworkUi(root) {
     if (view === 'companies' && selectedOrgId === organization.id) {
       openOrganization(organization.id);
     }
-    if (okMsg) showStatus(okMsg);
+    if (okMsg) showStatus(`${okMsg} · Undo to revert`);
   }
 
   /** @type {{
@@ -2037,7 +2336,8 @@ export function mountNetworkUi(root) {
 
     const hint = document.createElement('p');
     hint.className = 'network-crm__img-pick-hint muted';
-    hint.textContent = 'Choose a source — work continues on the Network screen.';
+    hint.textContent =
+      'Choose a source — enrichment continues in the background; you can keep using the app.';
 
     const listEl = document.createElement('div');
     listEl.className = 'network-crm__enrich-options';
@@ -2087,7 +2387,10 @@ export function mountNetworkUi(root) {
     if (modes.has('web')) {
       addOption('From web', 'Search public pages and fill empty fields', () => {
         close();
-        runEnrichInBackground('Enriching from web (up to ~90s)…', () => opts.onWeb());
+        runEnrichInBackground(
+          'Enriching from web in the background (up to ~90s)…',
+          () => opts.onWeb(),
+        );
       });
     }
 
@@ -2227,6 +2530,7 @@ export function mountNetworkUi(root) {
       emptyLabel: 'No logos found — try a different search or Upload',
       querySearch: true,
       queryPlaceholder: 'Type a company or brand name…',
+      queryAriaLabel: 'Search logos',
       defaultQuery: () => {
         const live = detail.querySelector('.network-crm__form [name="name"]');
         const name = String(live?.value || current.name || '').trim();
@@ -2237,6 +2541,7 @@ export function mountNetworkUi(root) {
             url: `/api/network/organizations/${encodeURIComponent(current.id)}`,
             body: { logoUrl: null },
             label: 'Remove current logo',
+            previewUrl: `${current.logoUrl}${current.logoUrl.includes('?') ? '&' : '?'}t=${encodeURIComponent(current.updatedAt || '')}`,
           }
         : null,
       onApplied: (entity) => {
@@ -2419,7 +2724,7 @@ export function mountNetworkUi(root) {
       for (const p of linkedPeople) {
         const openBtn = tinyBtn('Open', () => {
           selectedId = p.id;
-          void setView('people');
+          void setPeopleSubTab('contacts');
         });
         const renameBtn = tinyBtn('Rename', async () => {
           const next = prompt('Name', p.displayName || '');
@@ -2641,7 +2946,7 @@ export function mountNetworkUi(root) {
     attrsPanel.append(
       field('Ownership', 'ownership', o.ownership || ''),
       field('Account source', 'accountSource', o.accountSource || ''),
-      field('Rating', 'rating', o.rating || '', { options: ['Hot', 'Warm', 'Cold'] }),
+      field('Rating', 'rating', o.rating || '', { options: ['Fan', 'Hot', 'Warm', 'Cold'] }),
       field('Annual revenue', 'annualRevenue', o.annualRevenue || ''),
       field('Employees', 'employeeCount', o.employeeCount || ''),
       field('Fiscal year end', 'fiscalYearEnd', o.fiscalYearEnd || ''),
@@ -2709,7 +3014,7 @@ export function mountNetworkUi(root) {
     undoBtn.className = 'network-crm__btn';
     undoBtn.textContent = 'Undo';
     undoBtn.disabled = true;
-    undoBtn.title = 'Undo last save (Ctrl+Z outside a field uses this too)';
+    undoBtn.title = 'Undo last save or enrich (Ctrl+Z outside a field)';
     const enrichBtn = document.createElement('button');
     enrichBtn.type = 'button';
     enrichBtn.className = 'network-crm__btn';
@@ -2936,13 +3241,19 @@ export function mountNetworkUi(root) {
   }
 
   peopleTab.addEventListener('click', () => {
-    void setView('people');
+    void setPeopleSubTab('contacts');
   });
   companiesTab.addEventListener('click', () => {
     void setView('companies');
   });
-  groupsTab.addEventListener('click', () => {
-    void setView('groups');
+  contactsSubTab.addEventListener('click', () => {
+    void setPeopleSubTab('contacts');
+  });
+  manageSubTab.addEventListener('click', () => {
+    void setPeopleSubTab('manage');
+  });
+  groupsSubTab.addEventListener('click', () => {
+    void setPeopleSubTab('groups');
   });
 
   /**
@@ -2957,15 +3268,15 @@ export function mountNetworkUi(root) {
       selectGroupId: opts.selectGroupId || null,
       embedded: true,
       onClose: () => {
-        void setView('people');
+        void setPeopleSubTab('contacts');
       },
       onOpenContact: (id) => {
         selectedId = id;
-        void setView('people');
+        void setPeopleSubTab('contacts');
       },
       onContactsChanged: async () => {
         const keepId = selectedId;
-        const prevView = view;
+        const wasWorkbench = peopleSubTab === 'contacts' || peopleSubTab === 'manage';
         showStatus('Loading…');
         try {
           const [cr, or] = await Promise.all([
@@ -2982,8 +3293,8 @@ export function mountNetworkUi(root) {
           }
           showStatus('');
           if (keepId && contacts.some((c) => c.id === keepId)) selectedId = keepId;
-          else if (prevView !== 'groups') selectedId = contacts[0]?.id || null;
-          if (prevView === 'people') {
+          else if (wasWorkbench) selectedId = contacts[0]?.id || null;
+          if (wasWorkbench) {
             renderList();
             if (selectedId) selectContact(selectedId);
           }
@@ -3015,7 +3326,7 @@ export function mountNetworkUi(root) {
       syncSelectionActions();
       renderList();
       showStatus(`Started ${j.group?.name || 'group'}`);
-      await setView('groups', { selectGroupId: j.group?.id || null });
+      await setPeopleSubTab('groups', { selectGroupId: j.group?.id || null });
     } catch (err) {
       showStatus(String(err?.message || err), true);
     }
@@ -3031,7 +3342,7 @@ export function mountNetworkUi(root) {
       if (!j.ok) throw new Error(j.error || 'groups_failed');
       const groups = Array.isArray(j.groups) ? j.groups : [];
       if (!groups.length) {
-        showStatus('No groups yet — open the Groups tab first', true);
+        showStatus('No groups yet — use Groups or Start group first', true);
         return;
       }
       const labels = groups.map((g, i) => `${i + 1}. ${g.name || 'Untitled'} (${(g.memberIds || []).length})`).join('\n');
@@ -3141,6 +3452,10 @@ export function mountNetworkUi(root) {
           });
           const j = await r.json();
           if (!j.ok) throw new Error(j.error || 'enrich_failed');
+          const prev = contacts.find((x) => x.id === id);
+          if (prev && j.contact && !sameJson(contactToPutBody(prev), contactToPutBody(j.contact))) {
+            pushUndoSnap(contactUndoStacks, id, contactToPutBody(prev));
+          }
           const idx = contacts.findIndex((x) => x.id === id);
           if (idx >= 0) contacts[idx] = j.contact;
           ok += 1;
@@ -3258,12 +3573,14 @@ export function mountNetworkUi(root) {
       kind: kindFilter.sel.value || '',
       relationship: relationshipFilter.sel.value || '',
       status: statusFilter.sel.value || '',
+      sensitivity: sensitivityFilter.sel.value || '',
     };
     renderList();
   }
   kindFilter.sel.addEventListener('change', syncPeopleFiltersFromUi);
   relationshipFilter.sel.addEventListener('change', syncPeopleFiltersFromUi);
   statusFilter.sel.addEventListener('change', syncPeopleFiltersFromUi);
+  sensitivityFilter.sel.addEventListener('change', syncPeopleFiltersFromUi);
 
   async function load() {
     showStatus('Loading…');
@@ -3282,13 +3599,22 @@ export function mountNetworkUi(root) {
       }
       showStatus('');
       selectedId = contacts[0]?.id || null;
+      peopleSubTab = 'contacts';
+      detailDirty = false;
       syncTabs();
       renderList();
       if (selectedId) selectContact(selectedId);
+      else detail.innerHTML = '<p class="muted">Select a person</p>';
     } catch (err) {
       showStatus(String(err?.message || err), true);
     }
   }
+
+  window.addEventListener('beforeunload', (e) => {
+    if (!detailDirty) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
 
   load();
 }

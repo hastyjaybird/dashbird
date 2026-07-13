@@ -15,6 +15,7 @@ import {
   upsertGroupRow,
 } from './network-db.js';
 import { addContact, findContactByNameOrAlias, updateContact } from './network-contacts-store.js';
+import { normalizeSceneGroupName } from './network-scene-normalize.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
@@ -67,7 +68,7 @@ export function normalizeGroup(raw) {
   if (source === 'seed') source = 'manual';
   return {
     id,
-    name: cleanStr(raw.name, 300),
+    name: normalizeSceneGroupName(raw.name, 300),
     description: cleanStr(raw.description, 4000),
     memberIds: cleanIdList(raw.memberIds),
     commonalities: Array.isArray(raw.commonalities) ? raw.commonalities.slice(0, 40) : [],

@@ -25,11 +25,11 @@ import {
 const router = Router();
 router.use(express.json({ limit: '256kb' }));
 
-/** At most one heavy online-search at a time (scrape + screenshots). */
+/** At most one heavy online-search at a time. */
 let searchOnlineBusy = false;
 let searchOnlineBusySince = 0;
 /** Stale-lock recovery if a search hangs and never clears the flag. */
-const SEARCH_BUSY_MAX_MS = 3 * 60 * 1000;
+const SEARCH_BUSY_MAX_MS = 60 * 1000;
 
 const ratingsTelemetry = {
   totalRequests: 0,
@@ -129,9 +129,23 @@ router.post('/tools/search-online', async (req, res) => {
     searchOnlineBusy = true;
     searchOnlineBusySince = Date.now();
     try {
-      const result = await searchToolOnline(query);
-      if (!res.writableEnded && !req.destroyed) {
-        res.json({ ok: true, ...result });
+      // Absolute ceiling so a stuck outbound fetch cannot hold the lock forever.
+      const result = await Promise.race([
+        searchToolOnline(query),
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('search_timeout')), 25_000);
+        }),
+      ]);
+      const body = JSON.stringify({
+        ok: true,
+        query: result.query,
+        matched: result.matched,
+        ranked: result.ranked,
+      });
+      // Do not gate on req.destroyed — Node can mark the request destroyed while the
+      // response is still writable, which previously left the client hanging forever.
+      if (!res.headersSent) {
+        res.status(200).type('json').end(body);
       }
     } finally {
       searchOnlineBusy = false;
@@ -142,7 +156,12 @@ router.post('/tools/search-online', async (req, res) => {
     searchOnlineBusySince = 0;
     if (res.writableEnded || req.destroyed) return;
     const msg = String(e?.message || e);
-    res.status(msg.includes('could_not_resolve') ? 404 : 500).json({ ok: false, error: msg });
+    const status = msg.includes('could_not_resolve')
+      ? 404
+      : msg === 'search_timeout'
+        ? 504
+        : 500;
+    res.status(status).json({ ok: false, error: msg });
   }
 });
 

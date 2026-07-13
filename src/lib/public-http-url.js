@@ -132,7 +132,13 @@ export async function assertPublicHttpUrl(urlString) {
 
   let records;
   try {
-    records = await dns.lookup(host, { all: true, verbatim: true });
+    // dns.lookup has no native timeout — a wedged resolver hung Tool Library search forever.
+    records = await Promise.race([
+      dns.lookup(host, { all: true, verbatim: true }),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('dns_timeout')), 4_000);
+      }),
+    ]);
   } catch {
     throw new Error('url_not_public');
   }

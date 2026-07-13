@@ -14,6 +14,10 @@ import {
   upsertContactRow,
 } from './network-db.js';
 import { normalizeLastContactFields } from './network-last-contact.js';
+import {
+  normalizeContactDisplayName,
+  normalizeSceneCircles,
+} from './network-scene-normalize.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
@@ -21,7 +25,10 @@ export { JULIA_CONTACT_ID, JULIA_SEED_ID };
 
 export const CONTACT_KINDS = ['friend', 'organizer', 'business'];
 
-export const CONTACT_RATINGS = ['Hot', 'Warm', 'Cold'];
+export const CONTACT_RATINGS = ['Fan', 'Hot', 'Warm', 'Cold'];
+
+/** Adult / raunchy plans comfort: Down = strip club fine; Proper = keep it clean. */
+export const CONTACT_SENSITIVITIES = ['Down', 'Situational', 'Proper'];
 
 export const CONTACT_RELATIONSHIP_STATUSES = [
   'Lead',
@@ -71,6 +78,25 @@ function cleanStr(v, max = 2000) {
   const s = String(v ?? '').replace(/\s+/g, ' ').trim();
   if (!s) return '';
   return s.slice(0, max);
+}
+
+/**
+ * Title-case a person name: capitalize the first letter of each word
+ * (and after hyphens / apostrophes). Applied on every contact save.
+ * @param {string} s
+ */
+function titleCaseName(s) {
+  if (!s) return '';
+  return s.replace(/[A-Za-zÀ-ÿ]+(?:['’][A-Za-zÀ-ÿ]+)*/g, (word) =>
+    word
+      .split(/(['’])/)
+      .map((seg) => {
+        if (seg === "'" || seg === '’') return seg;
+        if (!seg) return seg;
+        return seg.charAt(0).toUpperCase() + seg.slice(1).toLowerCase();
+      })
+      .join(''),
+  );
 }
 
 /**
@@ -229,7 +255,7 @@ function normalizeEnrichment(enrichment) {
 export function normalizeContact(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const id = remapLegacyNetworkId(cleanStr(raw.id, 80) || newContactId());
-  const displayName = cleanStr(raw.displayName, 200);
+  const displayName = normalizeContactDisplayName(raw.displayName, titleCaseName);
   const kinds = normalizeKinds(raw);
   let summary = cleanStr(raw.summary, 8000);
   if (!summary && Array.isArray(raw.tags) && raw.tags.length) {
@@ -241,14 +267,15 @@ export function normalizeContact(raw) {
   return {
     id,
     displayName,
-    nickname: cleanStr(raw.nickname, 120),
-    aliases: cleanStrList(raw.aliases, 20),
+    nickname: titleCaseName(cleanStr(raw.nickname, 120)),
+    memoryJog: cleanStr(raw.memoryJog, 80),
+    aliases: cleanStrList(raw.aliases, 20).map(titleCaseName),
     kinds,
     summary,
     notes: cleanStr(raw.notes, 8000),
     bio: cleanStr(raw.bio, 8000),
     howWeMet: cleanStr(raw.howWeMet, 4000),
-    networkCircles: cleanStr(raw.networkCircles, 4000),
+    networkCircles: normalizeSceneCircles(raw.networkCircles, 4000),
     alignedActivities: cleanStrList(raw.alignedActivities, 60, 400),
     org: cleanStr(raw.org, 300),
     orgId: raw.orgId ? remapLegacyNetworkId(cleanStr(raw.orgId, 80)) : null,
@@ -258,9 +285,10 @@ export function normalizeContact(raw) {
     region: cleanStr(raw.region, 300),
     rating: (() => {
       const legacy = cleanStr(raw.rating, 80).toLowerCase();
-      if (legacy === 'ride or die') return 'Hot';
+      if (legacy === 'ride or die') return 'Fan';
       return cleanEnum(raw.rating, CONTACT_RATINGS);
     })(),
+    sensitivity: cleanEnum(raw.sensitivity, CONTACT_SENSITIVITIES),
     relationshipStatus: normalizeRelationshipStatus(raw),
     nextStep: cleanStr(raw.nextStep, 2000),
     preferredContactMethods: normalizePreferredMethods(raw.preferredContactMethods),

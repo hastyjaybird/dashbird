@@ -12,7 +12,8 @@ export function mountNetwork(root) {
   root.append(wrap);
 
   // Full UI is attached after API modules land; this stub is replaced in network-ui step.
-  import('./network-ui.js')
+  // Cache-bust query so avatar clear-button removals always land after rebuilds.
+  import('./network-ui.js?v=manage-fill-kbd-2')
     .then(({ mountNetworkUi }) => mountNetworkUi(wrap))
     .catch((e) => {
       console.error('Network UI mount failed:', e);

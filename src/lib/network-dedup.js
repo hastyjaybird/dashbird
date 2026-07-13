@@ -565,6 +565,7 @@ export function buildMergedContact(keep, drop) {
   return {
     ...keep,
     nickname: preferStr(keep.nickname, drop.nickname),
+    memoryJog: preferStr(keep.memoryJog, drop.memoryJog),
     aliases,
     kinds: unionStrList(keep.kinds, drop.kinds, 10),
     summary: joinUniqueText(keep.summary, drop.summary, 8000),
@@ -577,6 +578,7 @@ export function buildMergedContact(keep, drop) {
     orgId: keep.orgId || drop.orgId || null,
     title: preferStr(keep.title, drop.title),
     location: preferStr(keep.location, drop.location),
+    sensitivity: preferStr(keep.sensitivity, drop.sensitivity),
     preferredContactMethods: unionStrList(keep.preferredContactMethods, drop.preferredContactMethods, 20),
     channels,
     avatarUrl: keep.avatarUrl || drop.avatarUrl || null,

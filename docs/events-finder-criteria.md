@@ -228,12 +228,12 @@ wasteland weekend
 
 | Field | Current |
 | --- | --- |
-| maxQueries | 3 |
-| maxEventsPerQuery | 15 |
-| cacheHours | **168** (7 days — matches weekly schedule) |
-| pinnedHosts | **34 group URLs loaded** from `exampleevents/fblinks.txt` (2026-07-09) |
+| maxQueries | 6 (default; live criteria may be higher) |
+| maxEventsPerQuery | 30 (default; live criteria may be higher) |
+| cacheHours | **168** (7 days — matches daily schedule cache reuse) |
+| pinnedHosts | **34+ group URLs** from `exampleevents/fblinks.txt` |
 
-Needs: `APIFY_TOKEN` in `.env` (set); optional Gmail intake for invite mail. Per-run spend capped via `FACEBOOK_EVENTS_MAX_CHARGE_USD` (default $1.50).
+Needs: `APIFY_TOKEN` in `.env` (set); optional Gmail intake for invite mail. Per-run spend capped via `FACEBOOK_EVENTS_MAX_CHARGE_USD` (default $3).
 
 ---
 
@@ -383,9 +383,11 @@ Actor: [`apify/facebook-events-scraper`](https://apify.com/apify/facebook-events
 | Starter (~$29/mo) | ~$0.010 | lower | ~2.9k events from credits |
 | Scale / Business | $0.0085 → $0.007 | lower | volume tiers |
 
-**Our budget knobs:** `maxQueries=3`, `maxEventsPerQuery=15` (= Apify `maxEvents`), `cacheHours=168` (weekly), `FACEBOOK_EVENTS_MAX_CHARGE_USD=1.5` (default).
+**Our budget knobs:** `maxQueries=6`, `maxEventsPerQuery=30` (= Apify `maxEvents`), `cacheHours=168`, `FACEBOOK_EVENTS_MAX_CHARGE_USD=3` (default).
 
-**Schedule:** Tuesday **21:00** `America/Los_Angeles` (server polls once/minute). Env: `FACEBOOK_EVENTS_WEEKLY=1` (default), `FACEBOOK_EVENTS_WEEKLY_DOW=2`, `FACEBOOK_EVENTS_WEEKLY_HOUR=21`, `FACEBOOK_EVENTS_WEEKLY_TZ=America/Los_Angeles`. Set `FACEBOOK_EVENTS_WEEKLY=0` to disable. Manual: `?refreshFacebook=1`.
+**Schedule:** daily **04:00** `America/Los_Angeles` (server polls once/minute). Env: `FACEBOOK_EVENTS_WEEKLY=1` (default), `FACEBOOK_EVENTS_WEEKLY_HOUR=4`, `FACEBOOK_EVENTS_WEEKLY_TZ=America/Los_Angeles`. Optional `FACEBOOK_EVENTS_WEEKLY_DOW=0..6` restricts to one weekday. Set `FACEBOOK_EVENTS_WEEKLY=0` to disable. Manual: `?refreshFacebook=1`.
+
+Other sources (Gmail, Meetup, Luma, public pages, …) ingest every **2 hours** (`EVENTS_FINDER_INGEST_COOLDOWN_MS=7200000`), paused **02:00–07:00** local (`EVENTS_FINDER_INGEST_QUIET_START_HOUR` / `_END_HOUR`). Facebook’s 4am Apify run is allowed inside that quiet window.
 
 **Measured (2026-07-10):** one live run with 3 search queries + **34 group startUrls**, `maxEvents=15` → **~$1.08** charged; **6** events kept in cache after normalize (feed may show fewer after geo/taste filters).
 

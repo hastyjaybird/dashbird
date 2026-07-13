@@ -313,7 +313,7 @@ export function lumaEventToNormalized(event, calendar = null, ticketInfo = null,
  * @returns {Promise<{ ok: boolean, entries: object[], error?: string }>}
  */
 async function fetchPaginatedEntries(fetchPage, opts = {}) {
-  const maxPages = Math.min(Math.max(Number(opts.maxPages) || 8, 1), 20);
+  const maxPages = Math.min(Math.max(Number(opts.maxPages) || 16, 1), 40);
   /** @type {object[]} */
   const entries = [];
   let cursor = '';
@@ -350,7 +350,7 @@ async function fetchCalendarItems(calendarApiId) {
   return fetchPaginatedEntries((cursor) => {
     const params = new URLSearchParams({
       calendar_api_id: id,
-      pagination_limit: '100',
+      pagination_limit: '200',
     });
     if (cursor) params.set('pagination_cursor', cursor);
     return fetchJson(`https://api.lu.ma/calendar/get-items?${params}`);
@@ -369,7 +369,7 @@ async function fetchDiscoverPlaceEvents(discoverPlaceApiId) {
   return fetchPaginatedEntries((cursor) => {
     const params = new URLSearchParams({
       discover_place_api_id: id,
-      pagination_limit: '50',
+      pagination_limit: '100',
     });
     if (cursor) params.set('pagination_cursor', cursor);
     return fetchJson(`https://api.lu.ma/discover/get-paginated-events?${params}`);

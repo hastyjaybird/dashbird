@@ -57,10 +57,10 @@ const DEFAULT_FILTERS = /** @type {EventsFinderFilters} */ ({
   attendance: 'in_person',
 });
 
-/** Defaults lean cheap: few Apify queries, modest page size, longer cache. */
+/** Defaults for Apify search budget (queries × events / query). */
 const DEFAULT_SCRAPE = /** @type {EventsFinderScrapeBudget} */ ({
-  maxQueries: 3,
-  maxEventsPerQuery: 15,
+  maxQueries: 6,
+  maxEventsPerQuery: 30,
   cacheHours: 6,
   windowWeeks: 4,
   earliestLocalTime: null,
@@ -485,7 +485,7 @@ export function normalizeSearchQueries(raw) {
  * @returns {string[]}
  */
 function seedSearchQueriesFromLookFor(lookFor, maxQueries) {
-  const n = Math.min(Math.max(Number(maxQueries) || 3, 1), 12);
+  const n = Math.min(Math.max(Number(maxQueries) || 6, 1), 24);
   return normalizeSearchQueries(
     String(lookFor || '')
       .split(/\r?\n/)
@@ -511,7 +511,7 @@ function normalizeWindowWeeks(raw) {
  */
 function normalizeScrape(raw, ctx = {}) {
   const src = raw && typeof raw === 'object' ? /** @type {Record<string, unknown>} */ (raw) : {};
-  const maxQueries = normalizeInt(src.maxQueries, DEFAULT_SCRAPE.maxQueries, 1, 12);
+  const maxQueries = normalizeInt(src.maxQueries, DEFAULT_SCRAPE.maxQueries, 1, 24);
   let searchQueries;
   if (src.searchQueries === undefined) {
     // Migrate: first N Look for lines used to be the paid Apify searches.
@@ -526,7 +526,7 @@ function normalizeScrape(raw, ctx = {}) {
       src.maxEventsPerQuery,
       DEFAULT_SCRAPE.maxEventsPerQuery,
       1,
-      100,
+      200,
     ),
     cacheHours: normalizeInt(src.cacheHours, DEFAULT_SCRAPE.cacheHours, 1, 168),
     windowWeeks: normalizeWindowWeeks(

@@ -562,7 +562,7 @@ export async function fetchEventbritePublicListing(env = process.env) {
 
   /** @type {string[]} */
   const urls = [`https://www.eventbrite.com/d/${slug}/events/`];
-  for (const cat of cats.slice(0, 10)) {
+  for (const cat of cats.slice(0, 20)) {
     urls.push(`https://www.eventbrite.com/b/${slug}/${cat}/`);
   }
   // Neighbor city listing when Bay Area (Oakland often has distinct inventory).
@@ -603,7 +603,7 @@ export async function fetchEventbritePublicListing(env = process.env) {
       let pageEvents = parsePublicEventHtml(page.html, 'eventbrite', url);
       if (pageEvents.length < 3) {
         const linkRe = /https?:\/\/www\.eventbrite\.com\/e\/[a-z0-9-]+-\d+/gi;
-        const links = [...new Set((page.html.match(linkRe) || []).slice(0, 30))];
+        const links = [...new Set((page.html.match(linkRe) || []).slice(0, 60))];
         for (const link of links) {
           const id = `eventbrite:${Buffer.from(link).toString('base64url').slice(0, 48)}`;
           if (pageEvents.some((e) => e.url === link || e.id === id)) continue;
@@ -667,8 +667,8 @@ export async function fetchPublicPageEvents(env = process.env) {
   const samples = await loadSampleWatchUrls();
   const [partifulExplore, partifulWatch, secretparty, eventbrite] = await Promise.all([
     fetchPartifulExploreListing(env),
-    fetchUrlList(samples.partiful.slice(0, 8), 'partiful'),
-    fetchUrlList(samples.secretparty.slice(0, 12), 'secretparty'),
+    fetchUrlList(samples.partiful.slice(0, 16), 'partiful'),
+    fetchUrlList(samples.secretparty.slice(0, 24), 'secretparty'),
     fetchEventbritePublicListing(env),
   ]);
 

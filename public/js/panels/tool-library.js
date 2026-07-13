@@ -249,6 +249,8 @@ function filteredTools(list) {
       if (!oss.some((o) => activeOsFilters.has(o))) return false;
     }
     if (!tokens.length) return true;
+    const name = String(t.name || '').toLowerCase();
+    const nameCompact = name.replace(/[^a-z0-9]+/g, '');
     const blob = [
       t.name,
       t.bestUsedFor,
@@ -263,8 +265,59 @@ function filteredTools(list) {
     ]
       .join(' ')
       .toLowerCase();
-    return tokens.every((tok) => blob.includes(tok));
+    return tokens.every((tok) => {
+      if (blob.includes(tok)) return true;
+      const fixed = COMMON_SEARCH_TYPOS[tok] || COMMON_SEARCH_TYPOS[tok.replace(/\s+/g, '')];
+      if (fixed && (blob.includes(fixed) || nameCompact.includes(fixed))) return true;
+      const tokCompact = tok.replace(/[^a-z0-9]+/g, '');
+      if (
+        tokCompact.length >= 4 &&
+        nameCompact &&
+        Math.abs(tokCompact.length - nameCompact.length) <= 2 &&
+        editDistance(tokCompact, nameCompact) <= 2
+      ) {
+        return true;
+      }
+      return false;
+    });
   });
+}
+
+/** @type {Record<string, string>} */
+const COMMON_SEARCH_TYPOS = {
+  pintrest: 'pinterest',
+  pinterst: 'pinterest',
+  pinteres: 'pinterest',
+  notoin: 'notion',
+  figam: 'figma',
+  midjounrey: 'midjourney',
+  chatgbt: 'chatgpt',
+  chatgtp: 'chatgpt',
+};
+
+/**
+ * @param {string} a
+ * @param {string} b
+ */
+function editDistance(a, b) {
+  const s = String(a || '');
+  const t = String(b || '');
+  if (s === t) return 0;
+  if (!s.length) return t.length;
+  if (!t.length) return s.length;
+  if (Math.abs(s.length - t.length) > 3) return 99;
+  /** @type {number[]} */
+  let prev = Array.from({ length: t.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= s.length; i += 1) {
+    /** @type {number[]} */
+    const cur = [i];
+    for (let j = 1; j <= t.length; j += 1) {
+      const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[t.length];
 }
 
 /** OS labels that are Apple-ecosystem only. */
@@ -702,12 +755,18 @@ async function openOnlineSearchModal(query, root) {
     let data = null;
     for (let attempt = 0; attempt < 8; attempt += 1) {
       if (closed) return;
-      const r = await fetch('/api/tool-library/tools/search-online', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q }),
-        signal: ac.signal,
-      });
+      const timeout = setTimeout(() => ac.abort(), 50_000);
+      let r;
+      try {
+        r = await fetch('/api/tool-library/tools/search-online', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: q }),
+          signal: ac.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
       data = await r.json().catch(() => ({}));
       if (r.status === 429 || data?.error === 'search_busy') {
         setChasingDotsMsg(msg, 'Waiting for the previous search to finish');
@@ -767,11 +826,16 @@ async function openOnlineSearchModal(query, root) {
     }
     addBtn.disabled = false;
   } catch (e) {
-    if (closed || e?.name === 'AbortError') return;
+    if (closed || e?.name === 'AbortError') {
+      if (!closed) msg.textContent = 'Search timed out — try again, or paste the website URL.';
+      return;
+    }
     msg.textContent =
       e?.message === 'search_busy'
         ? 'Another search is still running. Close and try again in a moment.'
-        : e?.message || 'Online search failed';
+        : e?.message === 'search_timeout'
+          ? 'Search timed out — try again, or paste the website URL.'
+          : e?.message || 'Online search failed';
   }
 }
 

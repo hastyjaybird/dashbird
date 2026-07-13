@@ -36,10 +36,20 @@ import {
   eventMatchesGoogleCalendar,
   loadGoogleCalendarOccupancyKeys,
 } from '../lib/events-finder-calendar-occupancy.js';
-import { isEventSkipped } from '../lib/events-finder-skipped.js';
+import {
+  buildSkippedEventsIndex,
+  findSkippedEventMatch,
+  isEventSkipped,
+} from '../lib/events-finder-skipped.js';
 import { scoreEventTaste } from '../lib/events-finder-taste.js';
 import { geocodeUsZip5 } from '../lib/zip-geocode.js';
 import { eventsIngestWindowDays } from '../lib/events-finder-window.js';
+import {
+  eventsFinderIngestCooldownMs,
+  eventsFinderIngestQuietHours,
+  eventsFinderScheduleTz,
+  isEventsFinderIngestQuietHours,
+} from '../lib/events-finder-ingest-schedule.js';
 
 const router = Router();
 
@@ -49,33 +59,35 @@ let eventsFinderIngestInflight = null;
 let lastEventsFinderIngest = null;
 /** @type {number} */
 let lastEventsFinderIngestAt = 0;
+/** @type {ReturnType<typeof setInterval> | null} */
+let eventsFinderIngestTimer = null;
 
 /**
  * Filter + upsert one source batch into the catalog (yields before sync SQLite).
  * @param {object[]} events
  * @param {object} criteria
  * @param {string} timeZone
- * @param {object[]} skippedRecords
+ * @param {ReturnType<typeof buildSkippedEventsIndex> | object[]} skipped
  */
-async function upsertLiveBatch(events, criteria, timeZone, skippedRecords) {
+async function upsertLiveBatch(events, criteria, timeZone, skipped) {
   const batchAll = filterEventsByIngestWindow(
     Array.isArray(events) ? events : [],
     criteria.scrape || {},
     timeZone,
   );
-  const batch = batchAll.filter((ev) => !isEventSkipped(ev, skippedRecords, timeZone));
+  const batch = batchAll.filter((ev) => !isEventSkipped(ev, skipped, timeZone));
   const ingestSkipped = batchAll.length - batch.length;
   let upserted = 0;
-  let skipped = 0;
+  let skippedCount = 0;
   try {
     await new Promise((r) => setImmediate(r));
     const result = upsertEventsFinderEvents(batch, process.env);
     upserted = result.upserted;
-    skipped = result.skipped;
+    skippedCount = result.skipped;
   } catch (storeErr) {
     console.warn('[events-finder] sqlite upsert failed:', storeErr?.message || storeErr);
   }
-  return { upserted, skipped, ingestSkipped, batch };
+  return { upserted, skipped: skippedCount, ingestSkipped, batch };
 }
 
 /**
@@ -93,10 +105,28 @@ function scheduleEventsFinderIngest(opts) {
   if (eventsFinderIngestInflight) return eventsFinderIngestInflight;
 
   const force = opts.force === true || opts.forceFacebook === true;
-  const cooldownMs = (() => {
-    const n = Number(process.env.EVENTS_FINDER_INGEST_COOLDOWN_MS);
-    return Number.isFinite(n) && n >= 10_000 ? n : 2 * 60 * 1000;
-  })();
+  if (!force && isEventsFinderIngestQuietHours(process.env)) {
+    return Promise.resolve(
+      lastEventsFinderIngest || {
+        gmail: { ok: true, events: [], fromCache: true },
+        facebook: { ok: true, events: [], fromCache: true },
+        publicPages: { ok: true, events: [], sources: {} },
+        meetup: { ok: true, events: [], fromCache: true },
+        multiverse: { ok: true, events: [], fromCache: true },
+        luma: { ok: true, events: [], fromCache: true },
+        gcalIcs: { ok: true, events: [], fromCache: true },
+        upserted: 0,
+        skipped: 0,
+        pruned: 0,
+        deletedSkipped: 0,
+        ingestSkipped: 0,
+        batch: [],
+        quietHours: true,
+      },
+    );
+  }
+
+  const cooldownMs = eventsFinderIngestCooldownMs(process.env);
   if (
     !force
     && lastEventsFinderIngest
@@ -106,6 +136,7 @@ function scheduleEventsFinderIngest(opts) {
   }
 
   const { forceFacebook = false, criteria, timeZone, skippedRecords } = opts;
+  const skippedIndex = buildSkippedEventsIndex(skippedRecords, timeZone);
 
   eventsFinderIngestInflight = (async () => {
     /** @type {Record<string, object>} */
@@ -125,7 +156,7 @@ function scheduleEventsFinderIngest(opts) {
         const result = await promise;
         sources[name] = result;
         const events = Array.isArray(result?.events) ? result.events : [];
-        const r = await upsertLiveBatch(events, criteria, timeZone, skippedRecords);
+        const r = await upsertLiveBatch(events, criteria, timeZone, skippedIndex);
         upserted += r.upserted;
         skipped += r.skipped;
         ingestSkipped += r.ingestSkipped;
@@ -234,6 +265,8 @@ function scheduleEventsFinderIngest(opts) {
     .then((result) => {
       lastEventsFinderIngest = result;
       lastEventsFinderIngestAt = Date.now();
+      // Refresh calendar occupancy off the ingest path (not on Save / catalogOnly).
+      void loadGoogleCalendarOccupancyKeys(process.env, timeZone).catch(() => {});
       return result;
     })
     .catch((e) => {
@@ -253,7 +286,7 @@ function scheduleEventsFinderIngest(opts) {
  * upsert per-source so polling clients see events appear progressively.
  * Query: ?refreshFacebook=1 — force a live Apify run (bypasses cache).
  * Query: ?waitIngest=1 — wait for live ingest (manual / cold tooling only).
- * Query: ?catalogOnly=1 — read catalog only; do not start a new ingest (poll path).
+ * Query: ?catalogOnly=1 — SQLite catalog + saved filters only; no ingest, no live iCal.
  */
 router.get('/', async (req, res) => {
   try {
@@ -329,17 +362,16 @@ router.get('/', async (req, res) => {
         ingest = lastEventsFinderIngest;
       }
     } else if (!catalogOnly) {
-      // Defer live ingest until after this response flushes so sync SQLite upserts
-      // cannot stall the catalog paint.
-      const cooldownMs = (() => {
-        const n = Number(process.env.EVENTS_FINDER_INGEST_COOLDOWN_MS);
-        return Number.isFinite(n) && n >= 10_000 ? n : 2 * 60 * 1000;
-      })();
+      // Background ingest: every ~2h outside quiet hours (02:00–07:00 local).
+      const cooldownMs = eventsFinderIngestCooldownMs(process.env);
+      const quiet = isEventsFinderIngestQuietHours(process.env);
       const onCooldown =
         Boolean(lastEventsFinderIngest)
         && !forceFacebook
         && Date.now() - lastEventsFinderIngestAt < cooldownMs;
-      ingestPending = eventsFinderIngestInflight != null || !onCooldown;
+      ingestPending =
+        eventsFinderIngestInflight != null
+        || (!quiet && !onCooldown);
     }
 
     const gmail = ingest?.gmail || {
@@ -402,38 +434,13 @@ router.get('/', async (req, res) => {
       ).filter(Boolean),
     );
 
-    // Static hide: already on Google Calendar (title + local day) — reviewed, not Skip.
-    const calendarOccupancy = await loadGoogleCalendarOccupancyKeys(process.env, timeZone);
+    // Calendar occupancy: live iCal only on full/panel loads. Save + catalogOnly
+    // use the last refreshed set (filled on ingest / non-catalog load).
+    const calendarOccupancy = await loadGoogleCalendarOccupancyKeys(process.env, timeZone, {
+      fetch: !catalogOnly,
+    });
 
-    const skippedAtById = new Map(
-      skippedRecords.map((s) => [String(s.id || '').trim(), String(s.skippedAt || '')]),
-    );
-
-    /**
-     * @param {object} event
-     * @returns {string | null}
-     */
-    function skippedAtFor(event) {
-      const id = String(event?.id || '').trim();
-      if (id && skippedAtById.has(id)) return skippedAtById.get(id) || null;
-      for (const s of skippedRecords) {
-        if (id && s.id === id) return s.skippedAt || null;
-        if (
-          event?.url
-          && s.url
-          && String(event.url).toLowerCase().includes(String(s.url).slice(0, 40))
-        ) {
-          return s.skippedAt || null;
-        }
-        if (s.id && skippedAtById.has(s.id) && isEventSkipped(event, [s], timeZone)) {
-          return s.skippedAt || null;
-        }
-      }
-      for (const s of skippedRecords) {
-        if (isEventSkipped(event, [s], timeZone)) return s.skippedAt || null;
-      }
-      return null;
-    }
+    const skippedIndex = buildSkippedEventsIndex(skippedRecords, timeZone);
 
     const filtered = [];
     /** @type {object[]} */
@@ -444,7 +451,8 @@ router.get('/', async (req, res) => {
     for (const event of deduped) {
       const eventId = String(event?.id || '').trim();
       // Skipped events never enter the main feed — regardless of filter/taste changes.
-      if (isEventSkipped(event, skippedRecords, timeZone)) {
+      const skipMatch = findSkippedEventMatch(event, skippedIndex);
+      if (skipMatch) {
         skippedFeed.push(
           withEventPrice({
             ...event,
@@ -454,7 +462,7 @@ router.get('/', async (req, res) => {
             tasteScore: 0,
             matchedLookFor: [],
             skipped: true,
-            skippedAt: skippedAtFor(event),
+            skippedAt: skipMatch.skippedAt || null,
           }),
         );
         continue;
@@ -655,8 +663,15 @@ router.get('/', async (req, res) => {
     });
 
     // Start background ingest only after headers/body are on the wire.
+    // Quiet hours (default 2–7am) skip non-forced scrapes; Facebook daily Apify is separate.
     if (!catalogOnly && !waitIngest) {
       setImmediate(() => {
+        if (
+          !forceFacebook
+          && isEventsFinderIngestQuietHours(process.env)
+        ) {
+          return;
+        }
         scheduleEventsFinderIngest(ingestOpts).catch((e) => {
           console.warn('[events-finder] deferred ingest failed:', e?.message || e);
         });
@@ -666,5 +681,64 @@ router.get('/', async (req, res) => {
     res.status(500).json({ ok: false, error: String(e?.message || e), events: [] });
   }
 });
+
+/**
+ * Periodic non-Facebook ingest (Gmail, Meetup, Luma, public pages, …).
+ * Default every 2 hours; paused 02:00–07:00 local. Facebook Apify is daily 4am separately.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function startEventsFinderIngestScheduler(env = process.env) {
+  if (eventsFinderIngestTimer) return;
+
+  const cooldownMs = eventsFinderIngestCooldownMs(env);
+  const quiet = eventsFinderIngestQuietHours(env);
+  const tz = eventsFinderScheduleTz(env);
+  const hours = Math.round(cooldownMs / (60 * 60 * 1000) * 10) / 10;
+  console.log(
+    `[events-finder] ingest schedule: every ${hours}h, quiet ${String(quiet.startHour).padStart(2, '0')}:00–${String(quiet.endHour).padStart(2, '0')}:00 ${tz}`,
+  );
+
+  const tick = async () => {
+    if (eventsFinderIngestInflight) return;
+    if (isEventsFinderIngestQuietHours(env)) return;
+    if (
+      lastEventsFinderIngest
+      && Date.now() - lastEventsFinderIngestAt < eventsFinderIngestCooldownMs(env)
+    ) {
+      return;
+    }
+    try {
+      const criteria = await loadEventsFinderCriteria();
+      const timeZone =
+        String(env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim()
+        || 'America/Los_Angeles';
+      const skippedRecords = Array.isArray(criteria.skippedEvents)
+        ? criteria.skippedEvents
+        : [];
+      console.log('[events-finder] scheduled ingest starting');
+      const result = await scheduleEventsFinderIngest({
+        forceFacebook: false,
+        criteria,
+        timeZone,
+        skippedRecords,
+      });
+      console.log(
+        `[events-finder] scheduled ingest done upserted=${result?.upserted ?? 0}`
+          + (result?.quietHours ? ' (quiet hours)' : ''),
+      );
+    } catch (e) {
+      console.warn('[events-finder] scheduled ingest failed:', e?.message || e);
+    }
+  };
+
+  eventsFinderIngestTimer = setInterval(() => {
+    void tick();
+  }, 60_000);
+  if (typeof eventsFinderIngestTimer.unref === 'function') eventsFinderIngestTimer.unref();
+  // First check after boot (give Facebook / Telegram a head start).
+  setTimeout(() => {
+    void tick();
+  }, 25_000);
+}
 
 export default router;

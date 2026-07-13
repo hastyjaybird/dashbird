@@ -1061,8 +1061,8 @@ export function mountEventsFinder(root) {
       filters,
     });
     if (ok && reload) {
-      refilterFeedForTaste();
-      void loadEvents();
+      // Browse filters only — re-read SQLite catalog. Never kick off live ingest.
+      void loadEvents({ catalogOnly: true, quiet: true });
     }
     return ok;
   }
@@ -1250,13 +1250,16 @@ export function mountEventsFinder(root) {
   }
 
   /**
+   * Persist browse filters and refresh the feed from the saved catalog.
+   * Does not start a live source ingest (that made Save feel stuck for minutes).
+   * Catalog reload is fire-and-forget so the Save click returns immediately after
+   * the criteria write; paint updates when SQLite read completes.
    * @returns {Promise<boolean>}
    */
   async function saveFilters() {
     const ok = await saveCriteria({ waitForIdle: true });
     if (ok) {
-      refilterFeedForTaste();
-      void loadEvents();
+      void loadEvents({ catalogOnly: true, quiet: true });
     }
     return ok;
   }

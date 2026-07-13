@@ -345,14 +345,102 @@ export function removeSkippedById(skipped, id) {
 }
 
 /**
- * @param {object} event
+ * Precomputed skip lookups for feed/ingest loops (avoids O(events × skips)).
+ * @typedef {{
+ *   tz: string,
+ *   byId: Map<string, SkippedEventRecord>,
+ *   urls: Map<string, SkippedEventRecord>,
+ *   keys: Map<string, SkippedEventRecord>,
+ *   seriesKeys: Map<string, SkippedEventRecord>,
+ *   titleDays: Map<string, SkippedEventRecord>,
+ * }} SkippedEventsIndex
+ */
+
+/**
  * @param {SkippedEventRecord[]} skipped
+ * @param {string} [timeZone]
+ * @returns {SkippedEventsIndex}
+ */
+export function buildSkippedEventsIndex(skipped, timeZone) {
+  const tz =
+    typeof timeZone === 'string' && timeZone.trim()
+      ? timeZone.trim()
+      : String(process.env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim()
+        || 'America/Los_Angeles';
+  /** @type {SkippedEventsIndex} */
+  const index = {
+    tz,
+    byId: new Map(),
+    urls: new Map(),
+    keys: new Map(),
+    seriesKeys: new Map(),
+    titleDays: new Map(),
+  };
+  const list = Array.isArray(skipped) ? skipped : [];
+  for (const s of list) {
+    if (!s || typeof s !== 'object') continue;
+    if (s.id) index.byId.set(String(s.id).trim(), s);
+    if (s.url) index.urls.set(String(s.url), s);
+    if (s.key) index.keys.set(String(s.key), s);
+    if (s.seriesKey) index.seriesKeys.set(String(s.seriesKey).trim(), s);
+    const titleKey = normalizeEventTitleKey(s.title);
+    const skipDay =
+      eventLocalDateKey(s.start, tz) || (s.start ? String(s.start).slice(0, 10) : null);
+    if (titleKey && skipDay) index.titleDays.set(`${titleKey}|${skipDay}`, s);
+  }
+  return index;
+}
+
+/**
+ * @param {object} event
+ * @param {SkippedEventsIndex} index
+ * @returns {SkippedEventRecord | null}
+ */
+export function findSkippedEventMatch(event, index) {
+  if (!event || !index) return null;
+  const id = String(event.id || '').trim();
+  if (id && index.byId.has(id)) return index.byId.get(id) || null;
+
+  const seriesKey =
+    (event.seriesKey != null ? String(event.seriesKey).trim() : '')
+    || eventSeriesDedupeKey(event)
+    || '';
+  if (seriesKey && index.seriesKeys.has(seriesKey)) {
+    return index.seriesKeys.get(seriesKey) || null;
+  }
+
+  const url = normalizeEventUrlKey(event.url);
+  if (url && index.urls.has(url)) return index.urls.get(url) || null;
+
+  const key = eventNameDateDedupeKey(event, index.tz);
+  if (key && index.keys.has(key)) return index.keys.get(key) || null;
+
+  const titleKey = normalizeEventTitleKey(event.title);
+  const eventDay = eventLocalDateKey(event.start, index.tz);
+  if (titleKey && eventDay) {
+    const hit = index.titleDays.get(`${titleKey}|${eventDay}`);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * @param {object} event
+ * @param {SkippedEventRecord[] | SkippedEventsIndex} skipped
  * @param {string} [timeZone]
  * @returns {boolean}
  */
 export function isEventSkipped(event, skipped, timeZone) {
+  if (!event || !skipped) return false;
+  if (
+    typeof skipped === 'object'
+    && !Array.isArray(skipped)
+    && /** @type {SkippedEventsIndex} */ (skipped).byId instanceof Map
+  ) {
+    return findSkippedEventMatch(event, /** @type {SkippedEventsIndex} */ (skipped)) != null;
+  }
   const list = Array.isArray(skipped) ? skipped : [];
-  if (!list.length || !event) return false;
+  if (!list.length) return false;
   const tz =
     typeof timeZone === 'string' && timeZone.trim()
       ? timeZone.trim()

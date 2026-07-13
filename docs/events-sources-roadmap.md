@@ -151,7 +151,7 @@ event-page seeds.
 | 1 | `APIFY_TOKEN` in `.env`; Connect Gmail for invites. |
 | 2 | Filter criteria → Look for (search) + scrape budget + **Pinned Facebook hosts**. |
 | 3 | Forward FB invite email to intake Gmail if invites land on another address. |
-| 4 | Force refresh: `GET /api/events-finder/events?refreshFacebook=1`. Weekly: Tuesday 21:00 America/Los_Angeles (`FACEBOOK_EVENTS_WEEKLY`). |
+| 4 | Force refresh: `GET /api/events-finder/events?refreshFacebook=1`. Daily Apify: 04:00 America/Los_Angeles (`FACEBOOK_EVENTS_WEEKLY`). Other sources: every 2h, quiet 02:00–07:00. |
 
 **Needs from you:** Pin page/group slugs your circle actually follows; keep Look for short to control cost.
 

@@ -1,0 +1,14 @@
+---
+description: Safe Network DB restore and lasting scene renames
+alwaysApply: true
+---
+
+# Network contacts data safety
+
+When restoring or bulk-fixing Network / Tool Library data:
+
+1. **Stop the stack first** (`docker compose down`) before copying or editing `data/network.db` from the host. Do not open the DB with host Python/sqlite while the dashboard container holds it.
+2. Prefer `node scripts/restore-tools-contacts-backup.mjs` (latest) or `… YYYY-MM-DD` over hand-copying. List with `--list`.
+3. After restore: `docker compose up -d --build && docker compose logs lan-url`.
+4. Scene renames / typos belong in `src/lib/network-scene-normalize.js` (`SCENE_TOKEN_ALIASES`, `CONTACT_DISPLAY_ALIASES`). Bump `SCENE_ALIASES_MIGRATION` when new aliases must rewrite existing rows. Do not one-off patch the DB for the same rename twice.
+5. Contact detail edits require **Save** (or Ctrl/Cmd+S). Manage bulk-fill saves on confirm. Respect unsaved-leave prompts.

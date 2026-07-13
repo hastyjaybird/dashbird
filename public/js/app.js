@@ -83,7 +83,7 @@ function showPage(page) {
   }
   if (page === 'network' && !networkLoaded) {
     networkLoaded = true;
-    import('./panels/network.js')
+    import('./panels/network.js?v=manage-fill-kbd-2')
       .then(({ mountNetwork }) => {
         mountNetwork(document.getElementById('mount-network'));
       })
@@ -186,7 +186,7 @@ async function mountDeferredPanels(config) {
       }),
     ),
     mountWhenReady('events-finder', () =>
-      import('./panels/events-finder.js').then(({ mountEventsFinder }) => {
+      import('./panels/events-finder.js?v=filter-save-1').then(({ mountEventsFinder }) => {
         mountEventsFinder(document.getElementById('mount-events-finder'));
       }),
     ),

@@ -18,6 +18,11 @@ import {
   parseInviteText,
   transcribeInviteAudio,
 } from './events-finder-invite-parse.js';
+import {
+  isTelegramPlaceholderUrl,
+  resolveEventPageUrl,
+} from './events-finder-event-url.js';
+import { cropFlyerRegion, pickBestFlyerImage } from './events-finder-flyer-crop.js';
 import { classifyTelegramMessage, parseTelegramTypeOverride } from './telegram-message-classify.js';
 import { createPanelTodo } from './vikunja-client.js';
 import { addNetworkNote } from './network-notes-store.js';
@@ -326,6 +331,49 @@ function saveMediaPublic(buf, basename, env = process.env) {
 }
 
 /**
+ * Prefer a cropped flyer file next to the original screenshot.
+ * @param {Buffer} buf
+ * @param {string} publicPath
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<{ imageUrl: string, cropped: boolean, score: number }>}
+ */
+async function saveCroppedFlyerPublic(buf, publicPath, env = process.env) {
+  const crop = await cropFlyerRegion(buf);
+  if (!crop.cropped) {
+    return {
+      imageUrl: publicPath || TELEGRAM_EVENT_LOGO_PATH,
+      cropped: false,
+      score: crop.score || 0,
+    };
+  }
+  const base = path.basename(String(publicPath || 'flyer.jpg')).replace(/\.[^.]+$/, '');
+  const croppedPath = saveMediaPublic(crop.buffer, `${base}-flyer.jpg`, env);
+  return { imageUrl: croppedPath, cropped: true, score: crop.score || 0 };
+}
+
+/**
+ * Never keep Telegram URLs; web-search a public event page when missing.
+ * @param {Record<string, unknown>} event
+ * @param {{ textHint?: string, urlHints?: string[] }} [opts]
+ */
+async function enrichEventPublicUrl(event, opts = {}) {
+  const current = clean(event?.url);
+  if (current && !isTelegramPlaceholderUrl(current)) {
+    event.url = current;
+    return event;
+  }
+  const resolved = await resolveEventPageUrl(event, {
+    textHint: opts.textHint || '',
+    urlHints: opts.urlHints || [],
+  });
+  event.url = resolved.url || null;
+  if (!event.raw || typeof event.raw !== 'object') event.raw = {};
+  /** @type {Record<string, unknown>} */ (event.raw).urlResolveVia = resolved.via;
+  /** @type {Record<string, unknown>} */ (event.raw).urlCandidates = resolved.candidates.slice(0, 6);
+  return event;
+}
+
+/**
  * @param {any} message
  * @returns {string | null}
  */
@@ -387,7 +435,10 @@ function finalizeEvent(partial, message, meta) {
     id,
     source: 'telegram',
     imageUrl,
-    url: clean(/** @type {{ url?: unknown }} */ (partial).url) || 'https://t.me/',
+    url: (() => {
+      const u = clean(/** @type {{ url?: unknown }} */ (partial).url);
+      return u && !isTelegramPlaceholderUrl(u) ? u : null;
+    })(),
     raw: {
       chatId: message?.chat?.id ?? null,
       messageId: message?.message_id ?? null,
@@ -524,8 +575,26 @@ export async function processTelegramAlbum(messages, env = process.env) {
     return { ok: false, error: 'empty_album' };
   }
 
-  const imageUrl = downloaded[0].publicPath;
+  const bestFlyer = await pickBestFlyerImage(
+    downloaded.map((d) => ({
+      buffer: Buffer.from(d.base64, 'base64'),
+      publicPath: d.publicPath,
+      mimeType: d.mimeType,
+    })),
+  );
+  let imageUrl = downloaded[0].publicPath;
   const imageUrls = downloaded.map((d) => d.publicPath);
+  if (bestFlyer) {
+    if (bestFlyer.cropped) {
+      const base = path.basename(String(bestFlyer.publicPath || downloaded[bestFlyer.index].publicPath || 'album'))
+        .replace(/\.[^.]+$/, '');
+      imageUrl = saveMediaPublic(bestFlyer.buffer, `${base}-flyer.jpg`, env);
+    } else if (bestFlyer.score >= 35) {
+      imageUrl = bestFlyer.publicPath || downloaded[bestFlyer.index].publicPath;
+    } else {
+      imageUrl = TELEGRAM_EVENT_LOGO_PATH;
+    }
+  }
   let parsed;
   try {
     parsed = await parseInviteImages(
@@ -556,6 +625,15 @@ export async function processTelegramAlbum(messages, env = process.env) {
     imageUrls,
   });
   if (parsed.event.invitedBy) event.invitedBy = parsed.event.invitedBy;
+  await enrichEventPublicUrl(event, {
+    textHint: caption,
+    urlHints: imageUrls,
+  });
+  if (bestFlyer) {
+    if (!event.raw || typeof event.raw !== 'object') event.raw = {};
+    /** @type {Record<string, unknown>} */ (event.raw).flyerCropped = Boolean(bestFlyer.cropped);
+    /** @type {Record<string, unknown>} */ (event.raw).flyerScore = bestFlyer.score;
+  }
 
   const upsert = upsertEventsFinderEvents([event], env);
   const reply = formatIngestReply(event);
@@ -1086,6 +1164,7 @@ async function ingestTelegramEventFromText(text, message, env, meta = {}) {
     imageUrl: TELEGRAM_EVENT_LOGO_PATH,
   });
   if (parsed.event.invitedBy) event.invitedBy = parsed.event.invitedBy;
+  await enrichEventPublicUrl(event, { textHint: text });
   const upsert = upsertEventsFinderEvents([event], env);
   await telegramSendMessage(chatId, formatIngestReply(event), env);
   return {
@@ -1243,6 +1322,14 @@ async function ingestTelegramEventFromMessage(message, env, media) {
       env,
       { defaultImageUrl: publicPath },
     );
+    const cropped = await saveCroppedFlyerPublic(file.buffer, publicPath, env);
+    if (cropped.cropped) {
+      imageUrl = cropped.imageUrl;
+    } else if (cropped.score < 35) {
+      // Text/UI screenshot with no flyer graphic — keep for vision parse, but
+      // prefer the Telegram tile until a better flyer lands.
+      imageUrl = TELEGRAM_EVENT_LOGO_PATH;
+    }
   } catch (e) {
     await notifyIntake(chatId, `Ingest error: ${String(e?.message || e).slice(0, 200)}`, env, { notifyUser });
     return { ok: false, error: String(e?.message || e), type: 'event' };
@@ -1256,6 +1343,9 @@ async function ingestTelegramEventFromMessage(message, env, media) {
 
   const event = finalizeEvent(parsed.event, message, { parseVia, imageUrl });
   if (parsed.event.invitedBy) event.invitedBy = parsed.event.invitedBy;
+  await enrichEventPublicUrl(event, {
+    textHint: [media.caption, media.text].filter(Boolean).join('\n'),
+  });
   const upsert = upsertEventsFinderEvents([event], env);
   await telegramSendMessage(chatId, formatIngestReply(event), env);
   return {

@@ -17,7 +17,6 @@ import eventTypesStatusRouter from './routes/event-types-status.js';
 import eventsFinderStatusRouter from './routes/events-finder-status.js';
 import eventsFinderCriteriaRouter from './routes/events-finder-criteria.js';
 import eventsFinderGmailRouter from './routes/events-finder-gmail.js';
-import eventsFinderEventsRouter from './routes/events-finder-events.js';
 import eventsFinderSourcesRouter from './routes/events-finder-sources.js';
 import openDesktopRouter from './routes/open-desktop.js';
 import networkHealthRouter from './routes/network-health.js';
@@ -55,8 +54,12 @@ import toolLibraryRouter from './routes/tool-library.js';
 import webCatalogRouter from './routes/web-catalog.js';
 import { startWebCatalogWatchPoller } from './lib/web-catalog-watch.js';
 import { startWebCatalogDiscoveryWorker } from './lib/web-catalog-discovery.js';
+import eventsFinderEventsRouter, {
+  startEventsFinderIngestScheduler,
+} from './routes/events-finder-events.js';
 import { startFacebookEventsWeeklyScheduler } from './lib/events-finder-facebook.js';
 import { startTelegramEventsPoller } from './lib/events-finder-telegram.js';
+import { startToolsContactsBackupScheduler } from './lib/data-backup-schedule.js';
 import eventsFinderTelegramRouter from './routes/events-finder-telegram.js';
 import networkRouter from './routes/network.js';
 import devNotesRouter from './routes/dev-notes.js';
@@ -153,8 +156,11 @@ app.get('*', (req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(err.status || 500).json({ error: err.message || 'internal_error' });
+  const msg = String(err?.message || err || 'internal_error').slice(0, 500);
+  console.error('[express]', msg);
+  if (!res.headersSent) {
+    res.status(err.status || 500).json({ error: err.message || 'internal_error' });
+  }
 });
 
 app.listen(port, '0.0.0.0', () => {
@@ -179,7 +185,9 @@ app.listen(port, '0.0.0.0', () => {
   kick(() => startWebCatalogWatchPoller(), 400);
   kick(() => startWebCatalogDiscoveryWorker(), 600);
   kick(() => startFacebookEventsWeeklyScheduler(), 800);
+  kick(() => startEventsFinderIngestScheduler(), 900);
   kick(() => startTelegramEventsPoller(), 1000);
+  kick(() => startToolsContactsBackupScheduler(), 1100);
   kick(() => warmGoogleCalendarCache(), 1200);
   kick(() => {
     void resolveDashboardWeatherLatLon().catch(() => {});

@@ -51,6 +51,7 @@ data/network.db
 data/network.db-wal
 data/network.db-shm
 data/network-assets/*
+data/backups/
 data/friendzies-2025-import.json
 !data/network-assets/.gitkeep
 !data/network-assets/julia-hasty.jpg

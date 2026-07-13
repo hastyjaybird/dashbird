@@ -663,18 +663,18 @@ function openEventsFilterCriteriaModal() {
   const maxQueries = makeNumField(
     'settings-events-scrape-max-queries',
     'Max search queries',
-    'Run at most this many queries from the list above (1–12).',
+    'Run at most this many queries from the list above (1–24).',
     1,
-    12,
-    3,
+    24,
+    6,
   );
   const maxPer = makeNumField(
     'settings-events-scrape-max-per',
     'Max events / query',
-    'Apify bills per result (1–100).',
+    'Apify bills per result (1–200).',
     1,
-    100,
-    15,
+    200,
+    30,
   );
   const cacheHours = makeNumField(
     'settings-events-scrape-cache-hours',
@@ -948,11 +948,11 @@ function openEventsFilterCriteriaModal() {
 
   function updateScrapeSummary() {
     const q = Math.min(
-      Math.max(Number(maxQueries.input.value) || 3, 1),
-      12,
+      Math.max(Number(maxQueries.input.value) || 6, 1),
+      24,
       Math.max(searchQueries.filter(Boolean).length, 1),
     );
-    const per = Number(maxPer.input.value) || 15;
+    const per = Number(maxPer.input.value) || 30;
     const hrs = Number(cacheHours.input.value) || 6;
     const pins = pinnedHosts.length;
     scrapeSummary.textContent = `3. Facebook discovery (Apify) — ${q} searches × ${per} events, ${hrs}h cache${
@@ -996,13 +996,13 @@ function openEventsFilterCriteriaModal() {
     searchQueries = [...fbSearchList.querySelectorAll('[data-field="fb-query"]')]
       .map((el) => (el instanceof HTMLInputElement ? el.value.trim() : ''))
       .filter(Boolean)
-      .slice(0, 12);
+      .slice(0, 24);
     return searchQueries;
   }
 
   function renderFbSearchList() {
     fbSearchList.replaceChildren();
-    const n = Math.min(Math.max(Number(maxQueries.input.value) || 3, 1), 12);
+    const n = Math.min(Math.max(Number(maxQueries.input.value) || 6, 1), 24);
     const rows = searchQueries.length ? [...searchQueries] : [''];
     rows.forEach((query, index) => {
       const wrap = document.createElement('div');
@@ -1089,7 +1089,7 @@ function openEventsFilterCriteriaModal() {
 
   function refreshFbSearchMeta() {
     readSearchQueriesFromUi();
-    const n = Math.min(Math.max(Number(maxQueries.input.value) || 3, 1), 12);
+    const n = Math.min(Math.max(Number(maxQueries.input.value) || 6, 1), 24);
     const active = Math.min(searchQueries.length, n);
     fbSearchCount.textContent = searchQueries.length
       ? active < searchQueries.length
@@ -1195,7 +1195,7 @@ function openEventsFilterCriteriaModal() {
   });
 
   seedSearchBtn.addEventListener('click', () => {
-    const n = Math.min(Math.max(Number(maxQueries.input.value) || 3, 1), 12);
+    const n = Math.min(Math.max(Number(maxQueries.input.value) || 6, 1), 24);
     const seeded = nonEmptyLines(lookArea.value).slice(0, n);
     if (!seeded.length) return;
     searchQueries = seeded;
@@ -1305,8 +1305,8 @@ function openEventsFilterCriteriaModal() {
       renderBilling();
 
       const scrape = data.scrape && typeof data.scrape === 'object' ? data.scrape : {};
-      maxQueries.input.value = String(scrape.maxQueries ?? 3);
-      maxPer.input.value = String(scrape.maxEventsPerQuery ?? 15);
+      maxQueries.input.value = String(scrape.maxQueries ?? 6);
+      maxPer.input.value = String(scrape.maxEventsPerQuery ?? 30);
       cacheHours.input.value = String(scrape.cacheHours ?? 6);
       weeksSelect.value = String(scrape.windowWeeks ?? 4);
       renderWeeksOptions(Number(scrape.windowWeeks) || 4);
@@ -1375,11 +1375,11 @@ function openEventsFilterCriteriaModal() {
       const per = Number(maxPer.input.value);
       const hrs = Number(cacheHours.input.value);
       const weeks = Number(weeksSelect.value);
-      if (!Number.isFinite(q) || q < 1 || q > 12) {
-        throw new Error('Max search queries must be 1–12.');
+      if (!Number.isFinite(q) || q < 1 || q > 24) {
+        throw new Error('Max search queries must be 1–24.');
       }
-      if (!Number.isFinite(per) || per < 1 || per > 100) {
-        throw new Error('Max events per query must be 1–100.');
+      if (!Number.isFinite(per) || per < 1 || per > 200) {
+        throw new Error('Max events per query must be 1–200.');
       }
       if (!Number.isFinite(hrs) || hrs < 1 || hrs > 168) {
         throw new Error('Cache hours must be 1–168.');

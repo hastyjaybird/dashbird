@@ -15,6 +15,8 @@ import {
 } from './tool-library-pricing.js';
 
 const MAX_SEARCH_ALTERNATIVES = 6;
+/** Hard wall-clock budget for Enter-to-search-online (UI preview only). */
+const SEARCH_ONLINE_BUDGET_MS = 35_000;
 
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -72,6 +74,30 @@ const KNOWN_TOOL_HOMEPAGES = {
   sketchup: 'https://www.sketchup.com',
   onshape: 'https://www.onshape.com',
   kdenlive: 'https://kdenlive.org',
+  pinterest: 'https://www.pinterest.com',
+  pintrest: 'https://www.pinterest.com',
+  pinterst: 'https://www.pinterest.com',
+  canva: 'https://www.canva.com',
+  figma: 'https://www.figma.com',
+  midjourney: 'https://www.midjourney.com',
+  chatgpt: 'https://chatgpt.com',
+  'openai chatgpt': 'https://chatgpt.com',
+};
+
+/**
+ * Common single-token typos → canonical product name used for resolve + search.
+ * @type {Record<string, string>}
+ */
+const COMMON_TOOL_TYPOS = {
+  pintrest: 'pinterest',
+  pinterst: 'pinterest',
+  pinteres: 'pinterest',
+  notoin: 'notion',
+  notoinso: 'notion',
+  figam: 'figma',
+  midjounrey: 'midjourney',
+  chatgbt: 'chatgpt',
+  chatgtp: 'chatgpt',
 };
 
 /**
@@ -83,6 +109,20 @@ function looksLikeHomepageUrl(input) {
   if (/^https?:\/\//i.test(s)) return true;
   if (/\s/.test(s)) return false;
   return /^[a-z0-9][-a-z0-9.]*\.[a-z]{2,}(\/|$)/i.test(s);
+}
+
+/**
+ * @param {string} input
+ */
+function canonicalizeToolQuery(input) {
+  const key = String(input || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  const compact = key.replace(/\s+/g, '');
+  const fixed = COMMON_TOOL_TYPOS[key] || COMMON_TOOL_TYPOS[compact];
+  if (fixed) return fixed;
+  return key;
 }
 
 /**
@@ -98,16 +138,19 @@ export async function resolveToolHomepageUrl(input) {
     return assertPublicHttpUrl(normalizeToolUrl(raw));
   }
 
-  const key = raw.toLowerCase().replace(/\s+/g, ' ').trim();
-  const compact = key.replace(/\s+/g, '');
-  const known = KNOWN_TOOL_HOMEPAGES[key] || KNOWN_TOOL_HOMEPAGES[compact];
-  if (known) return assertPublicHttpUrl(normalizeToolUrl(known));
+  const canonical = canonicalizeToolQuery(raw);
+  const compact = canonical.replace(/\s+/g, '');
+  const known = KNOWN_TOOL_HOMEPAGES[canonical] || KNOWN_TOOL_HOMEPAGES[compact];
+  if (known) {
+    // Known map entries are curated public https URLs — skip DNS (can wedge the long-lived server).
+    return normalizeToolUrl(known);
+  }
 
-  const fromWeb = await searchOfficialHomepageUrl(raw);
+  const fromWeb = await searchOfficialHomepageUrl(canonical);
   if (fromWeb) return assertPublicHttpUrl(normalizeToolUrl(fromWeb));
 
   // Last resort for single-token product names: try www.<name>.com / .<name>.so
-  const guessed = await guessHomepageFromName(raw);
+  const guessed = await guessHomepageFromName(canonical);
   if (guessed) return assertPublicHttpUrl(normalizeToolUrl(guessed));
 
   throw new Error(`could_not_resolve_url for "${raw}" (provide full https URL)`);
@@ -129,10 +172,10 @@ async function guessHomepageFromName(productName) {
     `https://${token}.io`,
     `https://www.${token}.io`,
   ];
-  for (const url of candidates) {
-    if (await probeHomepageReachable(url)) return url;
-  }
-  return '';
+  // Probe in parallel — sequential 6s timeouts made typos feel endless.
+  const results = await Promise.all(candidates.map((url) => probeHomepageReachable(url)));
+  const hit = candidates.find((_, i) => results[i]);
+  return hit || '';
 }
 
 /**
@@ -159,46 +202,44 @@ async function probeHomepageReachable(url) {
 /**
  * Search the web for a tool by name; return a preview of the match + alternatives
  * (not yet in the library) so the UI can offer Add.
+ * Preview path stays light: no Playwright screenshots, no rating/pricing LLM.
+ * Full enrich + images run when the user imports selected rows.
  * @param {string} query
  */
 export async function searchToolOnline(query) {
   const q = String(query || '').trim();
   if (!q) throw new Error('query_required');
+  const started = Date.now();
+  const deadline = started + SEARCH_ONLINE_BUDGET_MS;
 
-  const homepage = await resolveToolHomepageUrl(q);
-  const meta = await fetchPageMeta(homepage);
-  const enriched = await enrichToolFromScrape({
+  const homepage = await withDeadline(resolveToolHomepageUrl(q), Math.min(deadline, started + 10_000));
+  const host = safeHostname(homepage);
+  const displayGuess = cleanToolName(canonicalizeToolQuery(q) || q);
+
+  // Meta fetch is best-effort — known tools must not stall the whole search.
+  let meta = {
+    title: displayGuess,
+    description: '',
+    host,
+    htmlSnippet: '',
+  };
+  try {
+    meta = await withDeadline(fetchPageMeta(homepage), Math.min(deadline, Date.now() + 8_000));
+  } catch {
+    /* stub meta */
+  }
+
+  const enriched = enrichAlternativeCandidate({
     url: homepage,
-    title: meta.title,
+    title: meta.title || displayGuess,
     description: meta.description,
-    host: meta.host,
+    host: meta.host || host,
     html: meta.htmlSnippet,
-  }).catch(() => ({
-    name: cleanToolName(meta.title || q),
-    bestUsedFor: meta.description || '',
-    pricing: unknownPricing(),
-    features: [],
-    pros: [],
-    cons: [],
-    rating: null,
-    ratingSource: '',
-    operatingSystems: ['Web'],
-    categories: inferToolCategories({
-      name: meta.title || q,
-      description: meta.description,
-      url: homepage,
-      host: meta.host,
-    }),
-  }));
-
-  const images = await importToolImages(assetIdForUrl(homepage), homepage, meta).catch(() => ({
-    logoPath: '',
-    snapshotPath: '',
-  }));
+  });
 
   const matched = {
     tempId: 'matched',
-    name: enriched.name || cleanToolName(q),
+    name: enriched.name || displayGuess,
     bestUsedFor: enriched.bestUsedFor || '',
     url: homepage,
     website: homepage,
@@ -210,8 +251,8 @@ export async function searchToolOnline(query) {
     ratingSource: enriched.ratingSource || '',
     operatingSystems: enriched.operatingSystems || ['Web'],
     categories: enriched.categories || ['utilities'],
-    logoUrl: images.logoPath || '',
-    snapshotUrl: images.snapshotPath || '',
+    logoUrl: '',
+    snapshotUrl: '',
     source: 'search',
     isOriginal: false,
   };
@@ -225,7 +266,22 @@ export async function searchToolOnline(query) {
   );
   matched.alreadyInLibrary = alreadyInLibrary;
 
-  const alternatives = await findAlternatives(matched);
+  /** @type {object[]} */
+  let alternatives = [];
+  const remainingMs = deadline - Date.now();
+  // Prefer returning the match quickly; alternatives are best-effort within budget.
+  if (remainingMs > 2_500) {
+    const altDeadline = Math.min(deadline, Date.now() + Math.min(remainingMs, 12_000));
+    try {
+      alternatives = await findAlternatives(matched, {
+        skipImages: true,
+        deadline: altDeadline,
+        maxAlternatives: MAX_SEARCH_ALTERNATIVES,
+      });
+    } catch {
+      alternatives = [];
+    }
+  }
   const ranked = rankToolAmongAlternatives(matched, alternatives).filter(
     (r) => !isAppleOrMacOnlyTool(r),
   );
@@ -238,11 +294,35 @@ export async function searchToolOnline(query) {
       ]
     : ranked.filter((r) => safeNormalize(r.url) !== safeNormalize(homepage));
 
+  console.info(
+    '[tool-library] search-online',
+    JSON.stringify({
+      query: q,
+      ms: Date.now() - started,
+      matched: includeMatch ? matched.name : null,
+      ranked: rankedOut.length,
+    }),
+  );
+
   return {
     query: q,
     matched: includeMatch ? matched : null,
     ranked: rankedOut,
   };
+}
+
+/**
+ * @param {Promise<any>} promise
+ * @param {number} deadline
+ */
+function withDeadline(promise, deadline) {
+  const ms = Math.max(1, deadline - Date.now());
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('search_timeout')), ms);
+    }),
+  ]);
 }
 
 /**
@@ -269,7 +349,7 @@ async function searchOfficialHomepageUrl(productName) {
 async function searchDuckDuckGoHomepageCandidates(query) {
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 12_000);
+  const timer = setTimeout(() => ac.abort(), 8_000);
   try {
     const r = await fetch(url, {
       signal: ac.signal,
@@ -291,7 +371,7 @@ async function searchDuckDuckGoHomepageCandidates(query) {
 async function searchYahooHomepageCandidates(query) {
   const url = `https://search.yahoo.com/search?p=${encodeURIComponent(query)}`;
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 12_000);
+  const timer = setTimeout(() => ac.abort(), 8_000);
   try {
     const r = await fetch(url, {
       signal: ac.signal,
@@ -386,6 +466,14 @@ function pickBestHomepageCandidate(candidates, productName) {
     let score = 0;
     if (compact && hostCore.includes(compact)) score += 8;
     if (compact && title.replace(/\s+/g, '').includes(compact)) score += 6;
+    // Typo tolerance: "pintrest" ≈ "pinterest"
+    if (compact && hostCore && editDistance(compact, hostCore) <= 2) score += 7;
+    if (compact && title) {
+      const titleCompact = title.replace(/[^a-z0-9]+/g, '');
+      if (titleCompact && editDistance(compact, titleCompact.slice(0, compact.length + 2)) <= 2) {
+        score += 5;
+      }
+    }
     for (const t of tokens) {
       if (hostCore.includes(t)) score += 3;
       if (title.includes(t)) score += 2;
@@ -404,6 +492,34 @@ function pickBestHomepageCandidate(candidates, productName) {
     }
   }
   return bestScore >= 3 ? best : '';
+}
+
+/**
+ * Levenshtein distance for short product-name / host tokens.
+ * @param {string} a
+ * @param {string} b
+ */
+function editDistance(a, b) {
+  const s = String(a || '');
+  const t = String(b || '');
+  if (s === t) return 0;
+  if (!s.length) return t.length;
+  if (!t.length) return s.length;
+  if (Math.abs(s.length - t.length) > 3) return 99;
+  const rows = s.length + 1;
+  const cols = t.length + 1;
+  /** @type {number[]} */
+  let prev = Array.from({ length: cols }, (_, i) => i);
+  for (let i = 1; i < rows; i += 1) {
+    /** @type {number[]} */
+    const cur = [i];
+    for (let j = 1; j < cols; j += 1) {
+      const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[t.length];
 }
 
 /**
@@ -444,7 +560,12 @@ export async function enrichToolFromScrape(scrape) {
 
 /**
  * @param {object} tool
- * @param {{ onProgress?: (info: { phase: string, checked?: number, found?: number, total?: number }) => void | Promise<void> }} [opts]
+ * @param {{
+ *   onProgress?: (info: { phase: string, checked?: number, found?: number, total?: number }) => void | Promise<void>,
+ *   skipImages?: boolean,
+ *   deadline?: number,
+ *   maxAlternatives?: number,
+ * }} [opts]
  */
 export async function findAlternatives(tool, opts = {}) {
   const webAlternatives = await findWebAlternatives(tool, opts);
@@ -467,10 +588,21 @@ export function rankToolAmongAlternatives(tool, alternatives) {
 
 /**
  * @param {object} tool
- * @param {{ onProgress?: (info: { phase: string, checked?: number, found?: number, total?: number }) => void | Promise<void> }} [opts]
+ * @param {{
+ *   onProgress?: (info: { phase: string, checked?: number, found?: number, total?: number }) => void | Promise<void>,
+ *   skipImages?: boolean,
+ *   deadline?: number,
+ *   maxAlternatives?: number,
+ * }} [opts]
  */
 async function findWebAlternatives(tool, opts = {}) {
   const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
+  const skipImages = Boolean(opts.skipImages);
+  const deadline = Number(opts.deadline) > 0 ? Number(opts.deadline) : 0;
+  const maxOut = Math.max(
+    1,
+    Math.min(MAX_SEARCH_ALTERNATIVES, Number(opts.maxAlternatives) || MAX_SEARCH_ALTERNATIVES),
+  );
   await onProgress?.({ phase: 'searching' });
   const candidates = await searchAlternativeUrls(tool);
   if (!candidates.length) {
@@ -488,6 +620,7 @@ async function findWebAlternatives(tool, opts = {}) {
   const seenHosts = new Set();
   let checked = 0;
   for (let i = 0; i < candidates.length; i += 1) {
+    if (deadline && Date.now() > deadline) break;
     const candidate = candidates[i];
     try {
       const resolvedUrl = normalizeToolUrl(candidate.url);
@@ -511,7 +644,9 @@ async function findWebAlternatives(tool, opts = {}) {
         found: out.length,
         total: candidates.length,
       });
-      const meta = await fetchPageMeta(resolvedUrl);
+      const meta = deadline
+        ? await withDeadline(fetchPageMeta(resolvedUrl), deadline)
+        : await fetchPageMeta(resolvedUrl);
       if (isBlockedPage({ ...meta, html: meta.htmlSnippet })) continue;
       const enriched = enrichAlternativeCandidate({
         url: resolvedUrl,
@@ -533,9 +668,15 @@ async function findWebAlternatives(tool, opts = {}) {
         operatingSystems: enriched.operatingSystems || ['Web'],
       };
       if (isAppleOrMacOnlyTool(candidateRow)) continue;
-      const images = await importToolImages(assetIdForUrl(resolvedUrl), resolvedUrl, meta).catch(
-        () => ({ logoPath: '', snapshotPath: '' }),
-      );
+      let logoUrl = '';
+      let snapshotUrl = '';
+      if (!skipImages) {
+        const images = await importToolImages(assetIdForUrl(resolvedUrl), resolvedUrl, meta).catch(
+          () => ({ logoPath: '', snapshotPath: '' }),
+        );
+        logoUrl = images.logoPath || '';
+        snapshotUrl = images.snapshotPath || '';
+      }
       if (resolvedHost) seenHosts.add(resolvedHost);
       out.push({
         tempId: `web-${i + 1}`,
@@ -551,8 +692,8 @@ async function findWebAlternatives(tool, opts = {}) {
         ratingSource: enriched.ratingSource || '',
         operatingSystems: enriched.operatingSystems || ['Web'],
         categories: enriched.categories || ['utilities'],
-        logoUrl: images.logoPath || '',
-        snapshotUrl: images.snapshotPath || '',
+        logoUrl,
+        snapshotUrl,
         source: 'web',
       });
       await onProgress?.({
@@ -564,7 +705,7 @@ async function findWebAlternatives(tool, opts = {}) {
     } catch {
       // Skip candidates we cannot resolve or fetch.
     }
-    if (out.length >= MAX_SEARCH_ALTERNATIVES) break;
+    if (out.length >= maxOut) break;
   }
   await onProgress?.({
     phase: 'done',
@@ -595,7 +736,7 @@ async function searchAlternativeUrls(tool) {
 async function searchYahooAlternativeUrls(searchName, sourceTool) {
   const url = `https://search.yahoo.com/search?p=${encodeURIComponent(`${searchName} alternatives`)}`;
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 12_000);
+  const timer = setTimeout(() => ac.abort(), 8_000);
   try {
     const r = await fetch(url, {
       signal: ac.signal,
@@ -618,7 +759,7 @@ async function searchYahooAlternativeUrls(searchName, sourceTool) {
 async function searchDuckDuckGoAlternativeUrls(searchName, sourceTool) {
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(`${searchName} alternatives`)}`;
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 12_000);
+  const timer = setTimeout(() => ac.abort(), 8_000);
   try {
     const r = await fetch(url, {
       signal: ac.signal,

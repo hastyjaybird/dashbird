@@ -883,7 +883,7 @@ export async function probeGmailMailbox(email, env = process.env) {
     const q = encodeURIComponent(gmailEventsQuery(env));
     const list = await gmailGet(
       auth.accessToken,
-      `/users/me/messages?maxResults=20&q=${q}`,
+      `/users/me/messages?maxResults=40&q=${q}`,
     );
     const profile = await gmailGet(auth.accessToken, '/users/me/profile');
     const profileEmail = String(profile?.emailAddress || auth.email || address).toLowerCase();
@@ -1034,7 +1034,7 @@ export async function probeGmailEventsIntake(env = process.env) {
  * @param {{ maxMessages?: number }} [opts]
  */
 export async function fetchGmailEventAnnouncementsFor(email, env = process.env, opts = {}) {
-  const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 25, 1), 50);
+  const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 50, 1), 100);
   const address = normalizeGmailAddress(email);
   const appPassword = gmailAppPasswordFor(address, env);
   if (appPassword) {
@@ -1365,7 +1365,7 @@ export async function gmailTokenExists(email, env = process.env) {
  * }>}
  */
 export async function fetchSharedEmailsWithContact(contact, env = process.env, opts = {}) {
-  const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 12, 1), 25);
+  const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 24, 1), 50);
   const email = normalizeGmailAddress(contact?.email || '');
   const name = String(contact?.displayName || '').trim();
   const nickname = String(contact?.nickname || '').trim();

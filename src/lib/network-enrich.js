@@ -26,7 +26,7 @@ Return JSON only:
   "department": string | null,
   "location": string | null,
   "region": string | null,
-  "rating": "Hot" | "Warm" | "Cold" | null,
+  "rating": "Fan" | "Hot" | "Warm" | "Cold" | null,
   "relationshipStatus": "Lead" | "Cultivating" | "Collaborator" | "Family" | "Acquaintance" | "Paused" | "Former" | null,
   "nextStep": string | null,
   "howWeMet": string | null,
@@ -52,7 +52,7 @@ Rules:
 - title: role / job title when stated.
 - department: team or department when stated.
 - region: geographic market / metro when known; location: city/area freeform.
-- rating / relationshipStatus: only when clearly implied; else null. Prefer null over guessing "Hot".
+- rating / relationshipStatus: only when clearly implied; else null. Prefer null over guessing "Hot" or "Fan". Fan is higher than Hot (closest / strongest fans).
 - avatarImageUrl: direct image URL of a headshot if present; else null.
 - confidence: 0-1.`;
 
@@ -68,7 +68,7 @@ Return JSON only:
   "industry": string | null,
   "ownership": string | null,
   "accountSource": string | null,
-  "rating": "Hot" | "Warm" | "Cold" | null,
+  "rating": "Fan" | "Hot" | "Warm" | "Cold" | null,
   "annualRevenue": string | null,
   "employeeCount": string | null,
   "fiscalYearEnd": string | null,
@@ -361,53 +361,6 @@ function scoreLogoUrl(url) {
 }
 
 /**
- * Score a candidate for person headshot / portrait likeness.
- * Negative scores should be dropped from people-photo pickers.
- * @param {{ url?: string, title?: string, width?: number, height?: number }} opts
- */
-function scoreHeadshotCandidate(opts = {}) {
-  const u = String(opts.url || '').toLowerCase();
-  const t = String(opts.title || '').toLowerCase();
-  const blob = `${u} ${t}`;
-  if (!u) return -100;
-
-  // Hard rejects: brand marks, icons, tracking pixels.
-  if (
-    /logo|favicon|wordmark|logomark|brand[-_]?mark|apple-touch|site-icon|clearbit\.com|s2\/favicons|sprite|pixel|tracking|1x1|blank\.(gif|png)/i.test(
-      blob,
-    )
-  ) {
-    return -100;
-  }
-
-  let score = 0;
-  if (/headshot|head[-_]?shot|portrait|profile[-_]?(?:photo|pic|picture|image)|face[-_]?photo/i.test(blob)) {
-    score += 22;
-  }
-  if (/linkedin|about[-_]?me|team[-_]?member|staff|speaker|founder|bio\b|executive|headshot/i.test(blob)) {
-    score += 10;
-  }
-  if (/avatar|profile|person|people|head|face|photo|mugshot/i.test(blob)) score += 5;
-  if (/banner|hero|cover|og-image|social[-_]?share|screenshot|diagram|infographic|chart|map|flyer|poster|product|packaging|building|office|screenshot|meme|cartoon|illustration|vector/i.test(blob)) {
-    score -= 18;
-  }
-  if (/shutterstock|gettyimages|istockphoto|depositphotos|alamy/i.test(blob)) score -= 6;
-
-  const w = Number(opts.width) || 0;
-  const h = Number(opts.height) || 0;
-  if (w && h) {
-    const ratio = w / h;
-    // Headshots are near-square or mild portrait — reject wide banners / ultra-tall crops.
-    if (ratio < 0.55 || ratio > 1.45) score -= 25;
-    else if (ratio >= 0.75 && ratio <= 1.2) score += 10;
-    else score += 4;
-    if (w < 120 || h < 120) score -= 12;
-  }
-
-  return score;
-}
-
-/**
  * @param {string[]} urls
  * @returns {string[]}
  */
@@ -469,14 +422,13 @@ async function fetchPageText(url) {
  * DuckDuckGo image search (unofficial i.js) — same results path as browser Images.
  * @param {string} query
  * @param {number} [limit]
- * @param {{ preferSquare?: boolean, preferHeadshot?: boolean }} [opts]
+ * @param {{ preferSquare?: boolean }} [opts]
  * @returns {Promise<{ url: string, thumbUrl: string | null }[]>}
  */
 export async function searchDuckDuckGoImageResults(query, limit = 10, opts = {}) {
   const q = String(query || '').trim();
   if (!q) return [];
   const preferSquare = Boolean(opts.preferSquare);
-  const preferHeadshot = Boolean(opts.preferHeadshot);
   const ua =
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
   try {
@@ -498,16 +450,12 @@ export async function searchDuckDuckGoImageResults(query, limit = 10, opts = {})
     const vqd = vqdMatch?.[1];
     if (!vqd) return [];
 
-    // Filter string: time,size,color,type,layout,license (see DDG Images UI / ddgs).
-    // People photos: photographs only, prefer square layout for headshot-ish crops.
-    const filter = preferHeadshot ? ',,,type:photo,layout:Square,' : ',,,';
-
     const params = new URLSearchParams({
       l: 'us-en',
       o: 'json',
       q,
       vqd,
-      f: filter,
+      f: ',,,',
       p: '1',
     });
     const imgRes = await fetch(`https://duckduckgo.com/i.js?${params}`, {
@@ -526,34 +474,20 @@ export async function searchDuckDuckGoImageResults(query, limit = 10, opts = {})
     for (const row of results) {
       const image = String(row?.image || row?.url || '').trim();
       const thumb = String(row?.thumbnail || '').trim();
-      const title = String(row?.title || '').trim();
       const w = Number(row?.width) || 0;
       const h = Number(row?.height) || 0;
       if (w && h && (w < 80 || h < 80)) continue;
-      if ((preferSquare || preferHeadshot) && w && h) {
+      if (preferSquare && w && h) {
         const ratio = w / h;
-        if (preferHeadshot) {
-          // Headshots: near-square / mild portrait only.
-          if (ratio > 1.45 || ratio < 0.55) continue;
-        } else if (ratio > 2.8 || ratio < 0.35) {
-          // Logos: skip obvious banners / ultra-tall images.
-          continue;
-        }
+        // Skip obvious banners / tall photos when looking for logos.
+        if (ratio > 2.8 || ratio < 0.35) continue;
       }
       if (!image || !/^https?:\/\//i.test(image)) continue;
       if (out.some((x) => x.url === image)) continue;
-
-      let score = preferHeadshot
-        ? scoreHeadshotCandidate({ url: image, title, width: w, height: h })
-        : scoreLogoUrl(image);
-      if (preferHeadshot && score < 0) continue;
-
-      if ((preferSquare || preferHeadshot) && w && h) {
+      let score = scoreLogoUrl(image);
+      if (preferSquare && w && h) {
         const ratio = w / h;
-        if (preferHeadshot) {
-          if (ratio >= 0.8 && ratio <= 1.15) score += 6;
-          else if (ratio >= 0.65 && ratio <= 1.3) score += 3;
-        } else if (ratio >= 0.75 && ratio <= 1.35) score += 5;
+        if (ratio >= 0.75 && ratio <= 1.35) score += 5;
         else if (ratio >= 0.5 && ratio <= 2) score += 2;
       }
       out.push({
@@ -561,9 +495,9 @@ export async function searchDuckDuckGoImageResults(query, limit = 10, opts = {})
         thumbUrl: thumb && /^https?:\/\//i.test(thumb) ? thumb : null,
         score,
       });
-      if (out.length >= Math.max(limit * 3, limit)) break;
+      if (out.length >= Math.max(limit * 2, limit)) break;
     }
-    if (preferSquare || preferHeadshot) out.sort((a, b) => b.score - a.score);
+    if (preferSquare) out.sort((a, b) => b.score - a.score);
     return out.slice(0, limit).map(({ url, thumbUrl }) => ({ url, thumbUrl }));
   } catch {
     return [];
@@ -573,11 +507,10 @@ export async function searchDuckDuckGoImageResults(query, limit = 10, opts = {})
 /**
  * @param {string} query
  * @param {number} [limit]
- * @param {{ preferSquare?: boolean, preferHeadshot?: boolean }} [opts]
  * @returns {Promise<string[]>}
  */
-export async function searchDuckDuckGoImages(query, limit = 10, opts = {}) {
-  const rows = await searchDuckDuckGoImageResults(query, limit, opts);
+export async function searchDuckDuckGoImages(query, limit = 10) {
+  const rows = await searchDuckDuckGoImageResults(query, limit);
   return rows.map((r) => r.url);
 }
 
@@ -1006,9 +939,10 @@ function pushCandidate(list, url, thumbUrl = null) {
 
 /**
  * Re-run image search for a contact; return a page of candidates without saving.
- * Biased to person headshots only (not logos, banners, product shots).
+ * Default path: scrape known pages, then DuckDuckGo Images for `"Name"` / `"Name" Org` / Name.
+ * When `opts.query` is set (picker text box), skip page scrapes and search with that hint.
  * @param {string} contactId
- * @param {{ offset?: number, limit?: number }} [opts]
+ * @param {{ offset?: number, limit?: number, query?: string }} [opts]
  * @param {NodeJS.ProcessEnv} [env]
  */
 export async function findContactAvatarCandidates(contactId, opts = {}, env = process.env) {
@@ -1018,63 +952,58 @@ export async function findContactAvatarCandidates(contactId, opts = {}, env = pr
   const limit = Math.max(1, Math.min(10, Number(opts.limit) || 5));
   const offset = Math.max(0, Number(opts.offset) || 0);
   const poolTarget = Math.min(40, offset + limit + 10);
+  const hint = String(opts.query || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
 
-  /** @type {{ url: string, thumbUrl: string | null, score: number }[]} */
-  const scored = [];
-  const pushScored = (url, thumbUrl = null, score = 0) => {
-    const s = String(url || '').trim();
-    if (!s || !/^https?:\/\//i.test(s)) return;
-    if (/\.svg(\?|$)/i.test(s)) return;
-    if (score < 0) return;
-    const existing = scored.find((x) => x.url === s);
-    if (existing) {
-      existing.score = Math.max(existing.score, score);
-      if (thumbUrl && !existing.thumbUrl) {
-        existing.thumbUrl = /^https?:\/\//i.test(thumbUrl) ? thumbUrl : null;
-      }
-      return;
-    }
-    scored.push({
-      url: s,
-      thumbUrl: thumbUrl && /^https?:\/\//i.test(thumbUrl) ? thumbUrl : null,
-      score,
-    });
+  /** @type {{ url: string, thumbUrl: string | null }[]} */
+  const candidates = [];
+
+  const name = String(contact.displayName || '').trim();
+  const org = String(contact.org || '').trim();
+  /** @type {string[]} */
+  const queries = [];
+  const pushQ = (q) => {
+    const s = String(q || '').replace(/\s+/g, ' ').trim();
+    if (!s || queries.includes(s)) return;
+    queries.push(s);
   };
 
-  const pageUrls = contactCandidateUrls(contact);
-  const pages = await fetchPages(pageUrls);
-  for (const img of pages.flatMap((p) => p.imageUrls || [])) {
-    const score = scoreHeadshotCandidate({ url: img });
-    if (score < 0) continue;
-    pushScored(img, null, score);
-    if (scored.length >= poolTarget) break;
+  if (hint) {
+    pushQ(hint);
+    if (name && hint.toLowerCase() !== name.toLowerCase()) {
+      pushQ(`"${name}" ${hint}`);
+    }
+    if (name && org) pushQ(`"${name}" ${org}`);
+    if (name) pushQ(`"${name}"`);
+  } else {
+    if (name) pushQ(`"${name}"`);
+    if (name && org) pushQ(`"${name}" ${org}`);
+    if (name) pushQ(name);
   }
 
-  if (scored.length < poolTarget) {
-    const name = String(contact.displayName || '').trim();
-    const org = String(contact.org || '').trim();
-    /** @type {string[]} */
-    const queries = [];
-    if (name) {
-      queries.push(`"${name}" headshot`);
-      queries.push(`"${name}" portrait photo`);
-      if (org) queries.push(`"${name}" ${org} headshot`);
-      queries.push(`"${name}" LinkedIn profile`);
-      queries.push(`"${name}" profile photo`);
+  // Refine hints skip page scrapes for speed (same as logo picker).
+  if (!hint) {
+    const pageUrls = contactCandidateUrls(contact);
+    const pages = await fetchPages(pageUrls);
+    for (const img of pages.flatMap((p) => p.imageUrls || [])) {
+      pushCandidate(candidates, img);
+      if (candidates.length >= poolTarget) break;
     }
+  }
+
+  if (candidates.length < poolTarget) {
     for (const q of queries) {
-      const hits = await searchDuckDuckGoImageResults(q, 15, { preferHeadshot: true });
+      const hits = await searchDuckDuckGoImageResults(q, 15);
       for (const hit of hits) {
-        const score = scoreHeadshotCandidate({ url: hit.url });
-        pushScored(hit.url, hit.thumbUrl, Math.max(score, 1));
-        if (scored.length >= poolTarget) break;
+        pushCandidate(candidates, hit.url, hit.thumbUrl);
+        if (candidates.length >= poolTarget) break;
       }
-      if (scored.length >= poolTarget) break;
+      if (candidates.length >= poolTarget) break;
     }
   }
 
-  scored.sort((a, b) => b.score - a.score);
-  const candidates = scored.map(({ url, thumbUrl }) => ({ url, thumbUrl }));
   const page = candidates.slice(offset, offset + limit);
   return {
     ok: true,
@@ -1514,36 +1443,26 @@ ${excerpt || '(no pages fetched — only high-confidence public facts; else null
     if (avatarUrl) patch.avatarUrl = avatarUrl;
   }
 
-  // Prefer headshot-like images found on the contact's own pages (og:image / <img>).
+  // Prefer images found on the contact's own pages (og:image / <img>).
   if ((force || emptyField(contact.avatarUrl)) && !patch.avatarUrl && pageImageUrls.length) {
-    const headshotish = [...pageImageUrls]
-      .map((url) => ({ url, score: scoreHeadshotCandidate({ url }) }))
-      .filter((x) => x.score >= 0)
-      .sort((a, b) => b.score - a.score)
-      .map((x) => x.url);
-    if (headshotish.length) {
-      const avatarUrl = await tryDownloadFirstImage(headshotish, contact.id, 'avatar', env);
-      if (avatarUrl) patch.avatarUrl = avatarUrl;
-    }
+    const avatarUrl = await tryDownloadFirstImage(pageImageUrls, contact.id, 'avatar', env);
+    if (avatarUrl) patch.avatarUrl = avatarUrl;
   }
 
-  // DuckDuckGo Images biased to headshots / portraits (not logos or random hits).
+  // Same path you see in the browser: DuckDuckGo Images for the person's name (+ org).
   if ((force || emptyField(contact.avatarUrl)) && !patch.avatarUrl && Date.now() < deadlineAt - 8_000) {
     const name = String(contact.displayName || '').trim();
     const org = String(patch.org || contact.org || '').trim();
     /** @type {string[]} */
     const queries = [];
-    if (name) {
-      queries.push(`"${name}" headshot`);
-      if (org) queries.push(`"${name}" ${org} headshot`);
-      queries.push(`"${name}" portrait photo`);
-      queries.push(`"${name}" LinkedIn profile`);
-    }
+    if (name && org) queries.push(`"${name}" ${org}`);
+    else if (name) queries.push(`"${name}"`);
+    if (name && queries[0] !== name) queries.push(name);
     /** @type {string[]} */
     let imageHits = [];
-    for (const q of queries.slice(0, 3)) {
+    for (const q of queries.slice(0, 2)) {
       if (Date.now() >= deadlineAt - 5_000) break;
-      imageHits = await searchDuckDuckGoImages(q, 8, { preferHeadshot: true });
+      imageHits = await searchDuckDuckGoImages(q, 8);
       if (imageHits.length) break;
     }
     if (imageHits.length) {

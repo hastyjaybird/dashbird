@@ -59,7 +59,7 @@ function cleanStrList(v, max = 40, itemMax = 200) {
 }
 
 const ORG_TYPES = new Set(['Prospect', 'Customer', 'Partner', 'Competitor', 'Other']);
-const ORG_RATINGS = new Set(['Hot', 'Warm', 'Cold']);
+const ORG_RATINGS = new Set(['Fan', 'Hot', 'Warm', 'Cold']);
 const ORG_LIFECYCLES = new Set(['Prospect', 'Qualified', 'Customer', 'Churned']);
 
 /**

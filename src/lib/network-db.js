@@ -6,6 +6,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import {
+  CONTACT_DISPLAY_ALIASES,
+  SCENE_ALIASES_MIGRATION,
+  normalizeContactDisplayName,
+  normalizeSceneCircles,
+  normalizeSceneGroupName,
+} from './network-scene-normalize.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
@@ -401,14 +408,20 @@ function migrateFromJsonIfNeeded(db, env = process.env) {
  * @param {NodeJS.ProcessEnv} [env]
  */
 function ensureFoundationRows(db, env = process.env) {
-  if (getMeta(db, 'foundation_v1') === '1') {
-    // Still ensure the two people exist if deleted later? User asked for first entries on setup.
-    // Only re-insert if missing.
-  }
-
   const now = new Date().toISOString();
   const juliaCreated = '2020-01-01T00:00:00.000Z';
   const samCreated = '2020-01-01T00:00:01.000Z';
+  const alreadyBootstrapped = getMeta(db, 'foundation_v1') === '1';
+
+  // After first bootstrap: only re-insert missing foundation rows. Never rewrite
+  // existing Julia/Sam/Runway payloads on every process open (that looked like
+  // edits "not sticking" across restarts and raced with live saves).
+  if (alreadyBootstrapped) {
+    const missingJulia = !db.prepare('SELECT 1 AS ok FROM contacts WHERE id = ?').get(JULIA_CONTACT_ID);
+    const missingSam = !db.prepare('SELECT 1 AS ok FROM contacts WHERE id = ?').get(SAM_CONTACT_ID);
+    const missingRunway = !db.prepare('SELECT 1 AS ok FROM groups WHERE id = ?').get(RUNWAY_HOUSE_GROUP_ID);
+    if (!missingJulia && !missingSam && !missingRunway) return;
+  }
 
   const hasOrg = db.prepare('SELECT 1 AS ok FROM organizations WHERE id = ?').get(CORVIDAE_ORG_ID);
   if (!hasOrg) {
@@ -582,48 +595,116 @@ function ensureFoundationRows(db, env = process.env) {
       updatedAt: now,
       source: 'manual',
     });
-  } else {
-    const gRow = db.prepare('SELECT id, payload FROM groups WHERE id = ? OR lower(name) = ?').get(
-      RUNWAY_HOUSE_GROUP_ID,
-      'runway house',
-    );
-    if (gRow) {
-      const g = rowToGroup(gRow);
-      const set = new Set(g.memberIds || []);
-      set.add(JULIA_CONTACT_ID);
-      set.add(SAM_CONTACT_ID);
-      // Remap any legacy seed member ids
-      const memberIds = [...set].map(remapLegacyNetworkId);
-      upsertGroupRow(db, {
-        ...g,
-        id: remapLegacyNetworkId(g.id) || RUNWAY_HOUSE_GROUP_ID,
-        memberIds,
-        source: g.source === 'seed' ? 'manual' : g.source || 'manual',
-        updatedAt: now,
+  }
+
+  // First bootstrap only: pin Julia/Sam created_at ordering and drop seed labeling.
+  if (!alreadyBootstrapped) {
+    const foundationTimes = {
+      [JULIA_CONTACT_ID]: juliaCreated,
+      [SAM_CONTACT_ID]: samCreated,
+    };
+    for (const id of [JULIA_CONTACT_ID, SAM_CONTACT_ID]) {
+      const row = db
+        .prepare('SELECT id, display_name, org, payload, created_at, updated_at FROM contacts WHERE id = ?')
+        .get(id);
+      if (!row) continue;
+      const c = rowToContact(row);
+      upsertContactRow(db, {
+        ...c,
+        source: 'manual',
+        createdAt: foundationTimes[id],
+        updatedAt: c.updatedAt || now,
       });
     }
+    setMeta(db, 'foundation_v1', '1');
   }
+}
 
-  // Keep Julia / Sam as the first two rows (by created_at) and drop seed labeling.
-  const foundationTimes = {
-    [JULIA_CONTACT_ID]: juliaCreated,
-    [SAM_CONTACT_ID]: samCreated,
-  };
-  for (const id of [JULIA_CONTACT_ID, SAM_CONTACT_ID]) {
-    const row = db
-      .prepare('SELECT id, display_name, org, payload, created_at, updated_at FROM contacts WHERE id = ?')
-      .get(id);
-    if (!row) continue;
+/**
+ * Rewrite stored scene aliases / known display renames once per migration version.
+ * Load/save already canonicalize via normalizeContact/normalizeGroup; this keeps
+ * SQLite columns + payloads consistent for backups and raw queries.
+ * @param {DatabaseSync} db
+ */
+function migrateSceneAliasesIfNeeded(db) {
+  if (getMeta(db, SCENE_ALIASES_MIGRATION) === '1') return;
+  const now = new Date().toISOString();
+
+  const contactRows = db
+    .prepare('SELECT id, display_name, org, payload, created_at, updated_at FROM contacts')
+    .all();
+  const upsert = db.prepare(
+    `INSERT INTO contacts (id, display_name, org, payload, created_at, updated_at)
+     VALUES (@id, @display_name, @org, @payload, @created_at, @updated_at)
+     ON CONFLICT(id) DO UPDATE SET
+       display_name = excluded.display_name,
+       org = excluded.org,
+       payload = excluded.payload,
+       updated_at = excluded.updated_at`,
+  );
+
+  for (const row of contactRows) {
     const c = rowToContact(row);
-    upsertContactRow(db, {
+    const nextName = normalizeContactDisplayName(c.displayName, (s) => s);
+    // Prefer alias map; otherwise keep existing casing (don't title-case in migration).
+    const aliased = CONTACT_DISPLAY_ALIASES[String(c.displayName || '').trim().toLowerCase()];
+    const displayName = aliased || nextName || c.displayName || '';
+    const networkCircles = normalizeSceneCircles(c.networkCircles, 4000);
+    if (displayName === c.displayName && networkCircles === (c.networkCircles || '')) continue;
+    const next = {
       ...c,
-      source: 'manual',
-      createdAt: foundationTimes[id],
+      displayName,
+      networkCircles,
       updatedAt: now,
-    });
+    };
+    upsert.run(contactToRow(next));
   }
 
-  setMeta(db, 'foundation_v1', '1');
+  const groupRows = db.prepare('SELECT id, name, payload, created_at, updated_at FROM groups').all();
+  const upsertG = db.prepare(
+    `INSERT INTO groups (id, name, payload, created_at, updated_at)
+     VALUES (@id, @name, @payload, @created_at, @updated_at)
+     ON CONFLICT(id) DO UPDATE SET
+       name = excluded.name,
+       payload = excluded.payload,
+       updated_at = excluded.updated_at`,
+  );
+  /** @type {Map<string, { keepId: string, memberIds: string[], payload: object }>} */
+  const byCanon = new Map();
+  for (const row of groupRows) {
+    const g = rowToGroup(row);
+    const name = normalizeSceneGroupName(g.name, 300);
+    if (!name) continue;
+    const key = name.toLowerCase();
+    const existing = byCanon.get(key);
+    if (!existing) {
+      byCanon.set(key, {
+        keepId: g.id,
+        memberIds: [...(g.memberIds || [])],
+        payload: { ...g, name, updatedAt: now },
+      });
+      if (name !== g.name) {
+        upsertG.run(groupToRow({ ...g, name, updatedAt: now }));
+      }
+      continue;
+    }
+    for (const mid of g.memberIds || []) {
+      if (!existing.memberIds.includes(mid)) existing.memberIds.push(mid);
+    }
+    db.prepare('DELETE FROM groups WHERE id = ?').run(g.id);
+  }
+  for (const entry of byCanon.values()) {
+    const payload = {
+      ...entry.payload,
+      id: entry.keepId,
+      name: entry.payload.name,
+      memberIds: entry.memberIds,
+      updatedAt: now,
+    };
+    upsertG.run(groupToRow(payload));
+  }
+
+  setMeta(db, SCENE_ALIASES_MIGRATION, '1');
 }
 
 /**
@@ -646,9 +727,17 @@ export function openNetworkDb(env = process.env) {
 
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
+  // WAL so readers/writers don't clobber each other across restarts / host tools.
+  try {
+    db.exec('PRAGMA journal_mode = WAL;');
+    db.exec('PRAGMA synchronous = NORMAL;');
+  } catch {
+    /* ignore */
+  }
   migrate(db);
   migrateFromJsonIfNeeded(db, env);
   ensureFoundationRows(db, env);
+  migrateSceneAliasesIfNeeded(db);
   dbSingleton = db;
   dbPathSingleton = dbPath;
   return db;

@@ -6,6 +6,22 @@ import { eventLocalDayAndMinutes } from './events-finder-geo.js';
 import { normalizeEventTitleKey } from './events-finder-store.js';
 import { fetchUpcomingGoogleCalendarEvents } from './google-calendar-ical.js';
 
+/** @type {{ keys: Set<string>, count: number, ok: boolean, at: number } | null} */
+let occupancyMemory = null;
+
+/**
+ * Last occupancy set from a prior fetch (no network). Used by catalog-only reads.
+ * @returns {{ keys: Set<string>, count: number, ok: boolean }}
+ */
+export function peekGoogleCalendarOccupancyKeys() {
+  if (!occupancyMemory) return { keys: new Set(), count: 0, ok: false };
+  return {
+    keys: occupancyMemory.keys,
+    count: occupancyMemory.count,
+    ok: occupancyMemory.ok,
+  };
+}
+
 /**
  * @param {unknown} title
  * @param {unknown} start  ISO string, Date, or epoch ms
@@ -53,13 +69,17 @@ export function eventOccupancyKey(event, timeZone = 'America/Los_Angeles') {
  * Soft-fails quickly so the Events feed never blocks on a slow iCal fetch.
  * @param {NodeJS.ProcessEnv} [env]
  * @param {string} [timeZone]
- * @param {{ timeoutMs?: number }} [opts]
+ * @param {{ timeoutMs?: number, fetch?: boolean }} [opts]
  * @returns {Promise<{ keys: Set<string>, count: number, ok: boolean }>}
  */
 export async function loadGoogleCalendarOccupancyKeys(env = process.env, timeZone, opts = {}) {
   const tz =
     String(timeZone || env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim()
     || 'America/Los_Angeles';
+  // Catalog-only / poll path: never block on iCal — use memory from a prior refresh.
+  if (opts.fetch === false) {
+    return peekGoogleCalendarOccupancyKeys();
+  }
   const timeoutMs = Math.min(Math.max(Number(opts.timeoutMs) || 2500, 500), 15_000);
   try {
     const cal = await Promise.race([
@@ -73,8 +93,18 @@ export async function loadGoogleCalendarOccupancyKeys(env = process.env, timeZon
       const key = eventOccupancyKey(ev, tz);
       if (key) keys.add(key);
     }
-    return { keys, count: keys.size, ok: cal?.ok === true };
+    const result = { keys, count: keys.size, ok: cal?.ok === true };
+    occupancyMemory = { ...result, at: Date.now() };
+    return result;
   } catch {
+    // Keep last good set if a refresh times out.
+    if (occupancyMemory) {
+      return {
+        keys: occupancyMemory.keys,
+        count: occupancyMemory.count,
+        ok: occupancyMemory.ok,
+      };
+    }
     return { keys: new Set(), count: 0, ok: false };
   }
 }

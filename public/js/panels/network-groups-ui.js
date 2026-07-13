@@ -46,16 +46,12 @@ export function mountNetworkGroupsUi(root, opts) {
   addBtn.type = 'button';
   addBtn.className = 'network-crm__btn network-crm__btn--primary';
   addBtn.textContent = 'Add group';
-  if (embedded) {
-    head.append(title, addBtn);
-  } else {
-    const backBtn = document.createElement('button');
-    backBtn.type = 'button';
-    backBtn.className = 'network-crm__btn';
-    backBtn.textContent = '← Contacts';
-    backBtn.addEventListener('click', onClose);
-    head.append(backBtn, title, addBtn);
-  }
+  const backBtn = document.createElement('button');
+  backBtn.type = 'button';
+  backBtn.className = 'network-crm__btn';
+  backBtn.textContent = embedded ? 'Back' : '← Contacts';
+  backBtn.addEventListener('click', onClose);
+  head.append(backBtn, title, addBtn);
 
   const layout = document.createElement('div');
   layout.className = 'network-crm__layout';

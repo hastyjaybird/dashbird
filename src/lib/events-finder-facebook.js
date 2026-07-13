@@ -15,7 +15,7 @@ const root = path.join(__dirname, '..', '..');
 
 const DEFAULT_ACTOR = 'apify/facebook-events-scraper';
 const DEFAULT_CACHE_MS = 60 * 60 * 1000;
-const DEFAULT_MAX_EVENTS = 30;
+const DEFAULT_MAX_EVENTS = 60;
 const DEFAULT_WAIT_SECS = 180;
 
 /** @type {Promise<object> | null} */
@@ -74,7 +74,7 @@ function effectiveCacheMs(env = process.env, scrape = {}) {
  */
 export function facebookEventsMaxEvents(env = process.env) {
   const n = Number(env.FACEBOOK_EVENTS_MAX_EVENTS);
-  if (Number.isFinite(n) && n > 0) return Math.min(Math.round(n), 100);
+  if (Number.isFinite(n) && n > 0) return Math.min(Math.round(n), 200);
   return DEFAULT_MAX_EVENTS;
 }
 
@@ -93,8 +93,8 @@ function facebookWaitSecs(env = process.env) {
  */
 function facebookMaxChargeUsd(env = process.env) {
   const n = Number(env.FACEBOOK_EVENTS_MAX_CHARGE_USD);
-  if (Number.isFinite(n) && n >= 0.05) return Math.min(n, 20);
-  return 1.5;
+  if (Number.isFinite(n) && n >= 0.05) return Math.min(n, 40);
+  return 3;
 }
 
 /**
@@ -139,8 +139,8 @@ async function apifyFetch(token, apiPath, init = {}) {
  */
 export function buildFacebookSearchQueries(env = process.env, opts = {}) {
   const maxQueries = Math.min(
-    Math.max(Number(opts.maxQueries) || 3, 1),
-    12,
+    Math.max(Number(opts.maxQueries) || 6, 1),
+    24,
   );
 
   const explicit = String(env.FACEBOOK_EVENTS_SEARCH_QUERIES || '')
@@ -233,7 +233,7 @@ export function buildFacebookStartUrls(pinnedHosts = '', opts = {}) {
     out.push(url);
   }
 
-  for (const line of lines.slice(0, 40)) {
+  for (const line of lines.slice(0, 80)) {
     const bare = line.replace(/^https?:\/\//i, '').replace(/^www\./i, '');
 
     if (/^groups\//i.test(line) || /^groups\//i.test(bare)) {
@@ -540,7 +540,7 @@ async function runApifyFacebookScrape(env = process.env, opts = {}) {
   const envMax = String(env.FACEBOOK_EVENTS_MAX_EVENTS || '').trim();
   const maxEvents = envMax
     ? facebookEventsMaxEvents(env)
-    : Math.min(Math.max(Number(scrape.maxEventsPerQuery) || DEFAULT_MAX_EVENTS, 1), 100);
+    : Math.min(Math.max(Number(scrape.maxEventsPerQuery) || DEFAULT_MAX_EVENTS, 1), 200);
 
   const actorId = apifyFacebookActorId(env);
   const wait = facebookWaitSecs(env);
@@ -777,7 +777,7 @@ export async function fetchFacebookEvents(env = process.env, opts = {}) {
     return result;
   }
 
-  // Weekly schedule owns paid runs — don't scrape on every sidebar open.
+  // Daily schedule owns paid runs — don't scrape on every sidebar open.
   if (facebookWeeklyEnabled(env) && cache?.events?.length) {
     return {
       ok: true,
@@ -790,7 +790,7 @@ export async function fetchFacebookEvents(env = process.env, opts = {}) {
       scanned: cache.count ?? cache.events.length,
       count: cache.events.length,
       scrape,
-      hint: 'Waiting for Tuesday-night Facebook refresh',
+      hint: 'Waiting for daily 4am Facebook refresh',
     };
   }
 
@@ -877,25 +877,26 @@ export async function probeFacebookEventsIntake(env = process.env) {
     };
   }
 
-  // Avoid a paid Actor run from Settings refresh — feed load / weekly schedule scrapes.
+  // Avoid a paid Actor run from Settings refresh — feed load / daily schedule scrapes.
   return {
     ok: true,
     ingestOk: null,
     active: true,
     value: 'Apify token ok · no cache yet',
     output: facebookWeeklyEnabled(env)
-      ? 'Token valid · weekly Tuesday-night scrape (or ?refreshFacebook=1)'
+      ? 'Token valid · daily 4am scrape (or ?refreshFacebook=1)'
       : 'Open the Events sidebar (or ?refreshFacebook=1) to run the Actor',
     ingestTest: facebookWeeklyEnabled(env)
-      ? 'Ready — token ok; waits for Tuesday night (or force refresh)'
+      ? 'Ready — token ok; waits for daily 4am (or force refresh)'
       : 'Ready — token ok; first feed load will scrape',
     count: 0,
   };
 }
 
 /**
- * Weekly Apify scrape (default: Tuesday 21:00 America/Los_Angeles).
- * Set FACEBOOK_EVENTS_WEEKLY=0 to disable.
+ * Scheduled Apify scrape (default: every day 04:00 America/Los_Angeles).
+ * Set FACEBOOK_EVENTS_WEEKLY=0 to disable. Optional FACEBOOK_EVENTS_WEEKLY_DOW
+ * (0=Sun…6=Sat) restricts to one weekday; omit for daily.
  * @param {NodeJS.ProcessEnv} [env]
  */
 export function facebookWeeklyEnabled(env = process.env) {
@@ -912,16 +913,22 @@ function facebookWeeklyTz(env = process.env) {
 
 /**
  * @param {NodeJS.ProcessEnv} [env]
- * @returns {{ dow: number, hour: number, minute: number }}
- *   dow: 0=Sun … 1=Mon … 6=Sat
+ * @returns {{ dow: number | null, hour: number, minute: number }}
+ *   dow: null = every day; else 0=Sun … 6=Sat
  */
 function facebookWeeklyWhen(env = process.env) {
-  const dowRaw = Number(env.FACEBOOK_EVENTS_WEEKLY_DOW);
+  const dowEnv = env.FACEBOOK_EVENTS_WEEKLY_DOW;
   const hourRaw = Number(env.FACEBOOK_EVENTS_WEEKLY_HOUR);
   const minuteRaw = Number(env.FACEBOOK_EVENTS_WEEKLY_MINUTE);
+  /** @type {number | null} */
+  let dow = null;
+  if (dowEnv != null && String(dowEnv).trim() !== '') {
+    const dowRaw = Number(dowEnv);
+    if (Number.isFinite(dowRaw) && dowRaw >= 0 && dowRaw <= 6) dow = Math.round(dowRaw);
+  }
   return {
-    dow: Number.isFinite(dowRaw) && dowRaw >= 0 && dowRaw <= 6 ? Math.round(dowRaw) : 2,
-    hour: Number.isFinite(hourRaw) && hourRaw >= 0 && hourRaw <= 23 ? Math.round(hourRaw) : 21,
+    dow,
+    hour: Number.isFinite(hourRaw) && hourRaw >= 0 && hourRaw <= 23 ? Math.round(hourRaw) : 4,
     minute: Number.isFinite(minuteRaw) && minuteRaw >= 0 && minuteRaw <= 59 ? Math.round(minuteRaw) : 0,
   };
 }
@@ -968,7 +975,7 @@ export function shouldRunFacebookWeekly(env = process.env, now = new Date()) {
   if (!apifyToken(env) || apifyToken(env).startsWith('REPLACE')) return false;
   const when = facebookWeeklyWhen(env);
   const local = facebookLocalParts(now, facebookWeeklyTz(env));
-  if (local.dow !== when.dow) return false;
+  if (when.dow != null && local.dow !== when.dow) return false;
   if (local.hour !== when.hour) return false;
   // Fire in the target minute window (poll is ~60s).
   if (local.minute < when.minute || local.minute > when.minute + 1) return false;
@@ -982,12 +989,12 @@ let weeklyTimer = null;
 let weeklyInFlight = false;
 
 /**
- * Start Tuesday-night (configurable) Facebook Apify refresh.
+ * Start daily (configurable) Facebook Apify refresh.
  * @param {NodeJS.ProcessEnv} [env]
  */
 export function startFacebookEventsWeeklyScheduler(env = process.env) {
   if (!facebookWeeklyEnabled(env)) {
-    console.log('[facebook-events] weekly schedule disabled');
+    console.log('[facebook-events] daily schedule disabled');
     return;
   }
   if (weeklyTimer) return;
@@ -995,9 +1002,11 @@ export function startFacebookEventsWeeklyScheduler(env = process.env) {
   const when = facebookWeeklyWhen(env);
   const tz = facebookWeeklyTz(env);
   const dowNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  console.log(
-    `[facebook-events] weekly schedule: ${dowNames[when.dow]} ${String(when.hour).padStart(2, '0')}:${String(when.minute).padStart(2, '0')} ${tz}`,
-  );
+  const whenLabel =
+    when.dow == null
+      ? `daily ${String(when.hour).padStart(2, '0')}:${String(when.minute).padStart(2, '0')}`
+      : `${dowNames[when.dow]} ${String(when.hour).padStart(2, '0')}:${String(when.minute).padStart(2, '0')}`;
+  console.log(`[facebook-events] Apify schedule: ${whenLabel} ${tz}`);
 
   const tick = async () => {
     if (weeklyInFlight) return;
@@ -1006,17 +1015,17 @@ export function startFacebookEventsWeeklyScheduler(env = process.env) {
     if (lastWeeklyYmd === ymd) return;
     weeklyInFlight = true;
     lastWeeklyYmd = ymd;
-    console.log(`[facebook-events] weekly scrape starting (${ymd})`);
+    console.log(`[facebook-events] daily scrape starting (${ymd})`);
     try {
       const result = await fetchFacebookEvents(env, { forceRefresh: true });
       console.log(
-        `[facebook-events] weekly scrape done ok=${result.ok} count=${result.count ?? result.events?.length ?? 0}`
+        `[facebook-events] daily scrape done ok=${result.ok} count=${result.count ?? result.events?.length ?? 0}`
           + (result.hint ? ` hint=${result.hint}` : '')
           + (result.error ? ` error=${result.error}` : ''),
       );
     } catch (e) {
-      console.warn('[facebook-events] weekly scrape failed', e?.message || e);
-      // Allow retry later the same night if the run crashed before finishing.
+      console.warn('[facebook-events] daily scrape failed', e?.message || e);
+      // Allow retry later the same morning if the run crashed before finishing.
       lastWeeklyYmd = null;
     } finally {
       weeklyInFlight = false;
@@ -1028,7 +1037,12 @@ export function startFacebookEventsWeeklyScheduler(env = process.env) {
     if (!cache?.cachedAt) return;
     const cachedLocal = facebookLocalParts(new Date(cache.cachedAt), tz);
     const nowLocal = facebookLocalParts(new Date(), tz);
-    if (cachedLocal.ymd === nowLocal.ymd && cachedLocal.dow === facebookWeeklyWhen(env).dow) {
+    const sameDay = cachedLocal.ymd === nowLocal.ymd;
+    const afterSlot =
+      cachedLocal.hour > when.hour
+      || (cachedLocal.hour === when.hour && cachedLocal.minute >= when.minute);
+    const dowOk = when.dow == null || cachedLocal.dow === when.dow;
+    if (sameDay && afterSlot && dowOk) {
       lastWeeklyYmd = cachedLocal.ymd;
     }
   }).catch(() => {});

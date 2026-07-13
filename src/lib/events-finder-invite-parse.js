@@ -6,6 +6,11 @@ import {
   extractPlatformUrls,
   sourceFromPlatformUrls,
 } from './events-finder-gmail.js';
+import {
+  extractHttpUrls,
+  isTelegramPlaceholderUrl,
+  normalizeEventPageUrl,
+} from './events-finder-event-url.js';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
@@ -33,7 +38,7 @@ Rules:
 - start/end: ISO 8601 with timezone offset when possible. Assume America/Los_Angeles if only a local date/time is given. If year is missing/ambiguous, use the soonest FUTURE occurrence (never a past year unless the flyer explicitly shows that year AND the event is still ongoing).
 - Today's reference date is provided in the user message — prefer dates on or after that day.
 - invitedBy: person who invited / host when mentioned ("invited by Sam", "from Maya").
-- url: event link if present; otherwise null.
+- url: public event / tickets page if visible. Read browser URL bars, QR captions, "Tickets" links, and ticket-platform domains (Luma, Partiful, Eventbrite, Meetup, Panic Booking, Dice, venue sites). Never use telegram / t.me links. If no public page is visible, set url to null (do not invent telegram).
 - confidence: 0-1.
 - If not an event, set isEvent=false and null fields.`;
 
@@ -258,19 +263,12 @@ export function normalizeInviteParse(parsed, opts = {}) {
   }
 
   const textHint = String(opts.textHint || '');
-  const urlsFromText = extractPlatformUrls(
-    [textHint, cleanStr(parsed.url) || '', cleanStr(parsed.description) || ''].join('\n'),
-  );
-  const urlFromModel = cleanStr(parsed.url);
-  let url = urlsFromText[0] || null;
-  if (urlFromModel) {
-    try {
-      url = new URL(urlFromModel).href.split('#')[0];
-    } catch {
-      /* keep text urls */
-    }
-  }
-  if (!url && urlsFromText[0]) url = urlsFromText[0];
+  const blobForUrls = [textHint, cleanStr(parsed.url) || '', cleanStr(parsed.description) || ''].join('\n');
+  const urlsFromText = extractPlatformUrls(blobForUrls);
+  const urlsAny = extractHttpUrls(blobForUrls).filter((u) => !isTelegramPlaceholderUrl(u));
+  const urlFromModel = normalizeEventPageUrl(cleanStr(parsed.url));
+  let url = urlFromModel || urlsFromText[0] || urlsAny[0] || null;
+  if (url && isTelegramPlaceholderUrl(url)) url = null;
 
   const invitedBy = cleanStr(parsed.invitedBy ?? parsed.invited_by);
   const descriptionBits = [];
@@ -278,7 +276,10 @@ export function normalizeInviteParse(parsed, opts = {}) {
   if (desc) descriptionBits.push(desc);
   if (invitedBy) descriptionBits.push(`Invited by ${invitedBy}`);
 
-  const platformSource = sourceFromPlatformUrls(urlsFromText.length ? urlsFromText : url ? [url] : [], 'telegram');
+  const platformSource = sourceFromPlatformUrls(
+    urlsFromText.length ? urlsFromText : url ? [url] : [],
+    'telegram',
+  );
 
   const startOrig = parseIsoRaw(parsed.start);
   const endOrig = parseIsoRaw(parsed.end);
@@ -297,7 +298,7 @@ export function normalizeInviteParse(parsed, opts = {}) {
     end: endRaw,
     venue: cleanStr(parsed.venue ?? parsed.location),
     city: cleanStr(parsed.city),
-    url: url || 'https://t.me/',
+    url: url || null,
     source: platformSource === 'gmail' ? 'telegram' : platformSource,
     online: parsed.online === true,
     description: descriptionBits.join(' · ') || null,
@@ -360,7 +361,7 @@ export async function parseInviteText(text, env = process.env, opts = {}) {
 }
 
 /** Max flyer screenshots per album vision call (payload size). */
-export const INVITE_VISION_MAX_IMAGES = 8;
+export const INVITE_VISION_MAX_IMAGES = 16;
 
 /**
  * @param {Array<{ mimeType?: string, base64?: string, caption?: string }>} images

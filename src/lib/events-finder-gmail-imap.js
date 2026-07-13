@@ -106,7 +106,7 @@ function toGmailMessageShape({ uid, parsed, envelope }) {
  */
 export async function fetchGmailEventsViaImap(email, appPassword, env = process.env, opts = {}) {
   const address = normalizeGmailAddress(email);
-  const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 25, 1), 50);
+  const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 50, 1), 100);
   const query = gmailEventsQuery(env);
   const client = new ImapFlow({
     host: 'imap.gmail.com',
@@ -189,7 +189,7 @@ export async function fetchGmailEventsViaImap(email, appPassword, env = process.
 export async function probeGmailMailboxViaImap(email, appPassword, env = process.env) {
   const address = normalizeGmailAddress(email);
   try {
-    const result = await fetchGmailEventsViaImap(address, appPassword, env, { maxMessages: 20 });
+    const result = await fetchGmailEventsViaImap(address, appPassword, env, { maxMessages: 40 });
     const count = result.scanned || 0;
     return {
       ok: true,
