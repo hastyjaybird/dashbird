@@ -169,10 +169,7 @@ export function mountNetworkGroupsUi(root, opts) {
     }
   }
 
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  let detailAutosaveTimer = null;
   let detailGeneration = 0;
-  const AUTOSAVE_MS = 700;
 
   /**
    * @param {string} id
@@ -192,10 +189,6 @@ export function mountNetworkGroupsUi(root, opts) {
    * @param {object} g
    */
   function renderDetail(g) {
-    if (detailAutosaveTimer) {
-      clearTimeout(detailAutosaveTimer);
-      detailAutosaveTimer = null;
-    }
     const gen = ++detailGeneration;
     /** @type {object} */
     let current = g;
@@ -529,28 +522,8 @@ export function mountNetworkGroupsUi(root, opts) {
       }
     }
 
-    function scheduleGroupAutosave() {
-      if (detailAutosaveTimer) clearTimeout(detailAutosaveTimer);
-      detailAutosaveTimer = setTimeout(() => {
-        detailAutosaveTimer = null;
-        if (gen !== detailGeneration) return;
-        void persistGroup();
-      }, AUTOSAVE_MS);
-    }
-
-    form.addEventListener('input', (e) => {
-      const t = /** @type {HTMLElement} */ (e.target);
-      // Don't autosave the ingest textarea — that has its own action.
-      if (t?.matches?.('[data-ingest]')) return;
-      scheduleGroupAutosave();
-    });
-
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      if (detailAutosaveTimer) {
-        clearTimeout(detailAutosaveTimer);
-        detailAutosaveTimer = null;
-      }
       await persistGroup();
     });
 

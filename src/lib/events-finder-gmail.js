@@ -1368,6 +1368,7 @@ export async function fetchSharedEmailsWithContact(contact, env = process.env, o
   const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 12, 1), 25);
   const email = normalizeGmailAddress(contact?.email || '');
   const name = String(contact?.displayName || '').trim();
+  const nickname = String(contact?.nickname || '').trim();
   const aliases = Array.isArray(contact?.aliases)
     ? contact.aliases.map((a) => String(a || '').trim()).filter(Boolean)
     : [];
@@ -1377,7 +1378,7 @@ export async function fetchSharedEmailsWithContact(contact, env = process.env, o
   if (email) {
     clauses.push(`from:${email}`, `to:${email}`, `cc:${email}`);
   }
-  for (const n of [name, ...aliases].filter(Boolean).slice(0, 4)) {
+  for (const n of [name, nickname, ...aliases].filter(Boolean).slice(0, 5)) {
     const q = /\s/.test(n) ? `"${n.replace(/"/g, '')}"` : n.replace(/"/g, '');
     if (q) clauses.push(q);
   }

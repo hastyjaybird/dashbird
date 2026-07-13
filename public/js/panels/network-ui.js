@@ -294,12 +294,8 @@ export function mountNetworkUi(root) {
   let orgAttrsExpanded = false;
   /** Session flag: contact detail "More attributes" panel open */
   let contactAttrsExpanded = false;
-  /** Bumps when detail pane is remounted; cancels stale autosaves */
+  /** Bumps when detail pane is remounted; cancels stale in-flight saves */
   let detailGeneration = 0;
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  let detailAutosaveTimer = null;
-  /** Debounce after typing stops before persisting the detail form. */
-  const AUTOSAVE_MS = 400;
   const MAX_UNDO = 25;
   /** @type {Map<string, object[]>} */
   const contactUndoStacks = new Map();
@@ -1098,9 +1094,9 @@ export function mountNetworkUi(root) {
    * @param {object} c
    */
   function renderDetail(c) {
-    if (detailAutosaveTimer) {
-      clearTimeout(detailAutosaveTimer);
-      detailAutosaveTimer = null;
+    // Don't let an in-progress voice note apply to a different contact.
+    if (voiceSession.contactId && voiceSession.contactId !== c.id) {
+      hideVoiceBar();
     }
     const gen = ++detailGeneration;
     /** @type {object} */
@@ -1467,7 +1463,7 @@ export function mountNetworkUi(root) {
     undoBtn.className = 'network-crm__btn';
     undoBtn.textContent = 'Undo';
     undoBtn.disabled = true;
-    undoBtn.title = 'Undo last autosave (Ctrl+Z outside a field uses this too)';
+    undoBtn.title = 'Undo last save (Ctrl+Z outside a field uses this too)';
 
     const enrichBtn = document.createElement('button');
     enrichBtn.type = 'button';
@@ -1546,7 +1542,7 @@ export function mountNetworkUi(root) {
     let dirtyWhileSaving = false;
 
     /**
-     * @param {{ remount?: boolean, fromUndo?: boolean, bodyOverride?: object, silent?: boolean }} [opts]
+     * @param {{ remount?: boolean, fromUndo?: boolean, bodyOverride?: object }} [opts]
      */
     async function persistContact(opts = {}) {
       if (gen !== detailGeneration) return;
@@ -1555,8 +1551,7 @@ export function mountNetworkUi(root) {
         return;
       }
       saveInFlight = true;
-      const silent = Boolean(opts.silent) && !opts.fromUndo;
-      if (!silent) showStatus(opts.fromUndo ? 'Undoing…' : 'Saving…');
+      showStatus(opts.fromUndo ? 'Undoing…' : 'Saving…');
       try {
         do {
           dirtyWhileSaving = false;
@@ -1601,9 +1596,7 @@ export function mountNetworkUi(root) {
           }
 
           if (mergedAway || opts.remount || opts.fromUndo) {
-            if (!silent || opts.fromUndo || mergedAway) {
-              showStatus(opts.fromUndo ? 'Undone' : mergedAway ? 'Saved (merged duplicate)' : 'Saved');
-            }
+            showStatus(opts.fromUndo ? 'Undone' : mergedAway ? 'Saved (merged duplicate)' : 'Saved');
             renderList();
             renderDetail(saved);
             return;
@@ -1631,7 +1624,7 @@ export function mountNetworkUi(root) {
             ? ` · updated ${formatNetworkTimestamp(saved.updatedAt)}`
             : '';
           enrichMeta.textContent = `${enrichedSaved} · source: ${saved.source || '—'}${createdSaved}${updatedSaved}`;
-          if (!silent) showStatus('Saved');
+          showStatus('Saved');
 
           // Sidebar only shows name / nick / kinds / circles — skip full rebuild for notes etc.
           const listLabelChanged =
@@ -1650,34 +1643,10 @@ export function mountNetworkUi(root) {
 
     async function undoContact() {
       if (!undoStack.length) return;
-      if (detailAutosaveTimer) {
-        clearTimeout(detailAutosaveTimer);
-        detailAutosaveTimer = null;
-      }
       const snap = undoStack.pop();
       syncUndoBtn();
       await persistContact({ fromUndo: true, bodyOverride: snap, remount: true });
     }
-
-    function scheduleContactAutosave() {
-      if (detailAutosaveTimer) clearTimeout(detailAutosaveTimer);
-      detailAutosaveTimer = setTimeout(() => {
-        detailAutosaveTimer = null;
-        if (gen !== detailGeneration) return;
-        void persistContact({ silent: true });
-      }, AUTOSAVE_MS);
-    }
-
-    form.addEventListener('input', (e) => {
-      const t = /** @type {HTMLElement} */ (e.target);
-      if (t?.closest?.('[readonly], .network-crm__input--readonly')) return;
-      scheduleContactAutosave();
-    });
-    form.addEventListener('change', (e) => {
-      const t = /** @type {HTMLElement} */ (e.target);
-      if (t?.closest?.('[readonly], .network-crm__input--readonly')) return;
-      scheduleContactAutosave();
-    });
 
     form.addEventListener('keydown', (e) => {
       if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || e.shiftKey || e.altKey) return;
@@ -1696,10 +1665,6 @@ export function mountNetworkUi(root) {
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      if (detailAutosaveTimer) {
-        clearTimeout(detailAutosaveTimer);
-        detailAutosaveTimer = null;
-      }
       await persistContact();
     });
 
@@ -1725,10 +1690,6 @@ export function mountNetworkUi(root) {
         return err;
       };
 
-      if (detailAutosaveTimer) {
-        clearTimeout(detailAutosaveTimer);
-        detailAutosaveTimer = null;
-      }
       const contactId = current.id;
       const card = buildContactBody();
 
@@ -1746,13 +1707,19 @@ export function mountNetworkUi(root) {
         });
         const saved = await save.json();
         if (!saved.ok) throw new Error(saved.error || 'save_failed');
+        const enrichId = saved.contact?.id || contactId;
         if (saved.contact) {
           const idx = contacts.findIndex((x) => x.id === contactId || x.id === saved.contact.id);
           if (idx >= 0) contacts[idx] = saved.contact;
+          else contacts.push(saved.contact);
+          selectedId = enrichId;
         }
+        const enrichPath = path.includes(encodeURIComponent(contactId))
+          ? path.replace(encodeURIComponent(contactId), encodeURIComponent(enrichId))
+          : path;
         let r;
         try {
-          r = await fetch(path, {
+          r = await fetch(enrichPath, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
@@ -2192,10 +2159,6 @@ export function mountNetworkUi(root) {
    * @param {object} o
    */
   function renderOrgDetail(o) {
-    if (detailAutosaveTimer) {
-      clearTimeout(detailAutosaveTimer);
-      detailAutosaveTimer = null;
-    }
     const gen = ++detailGeneration;
     /** @type {object} */
     let current = o;
@@ -2699,7 +2662,7 @@ export function mountNetworkUi(root) {
     undoBtn.className = 'network-crm__btn';
     undoBtn.textContent = 'Undo';
     undoBtn.disabled = true;
-    undoBtn.title = 'Undo last autosave (Ctrl+Z outside a field uses this too)';
+    undoBtn.title = 'Undo last save (Ctrl+Z outside a field uses this too)';
     const enrichBtn = document.createElement('button');
     enrichBtn.type = 'button';
     enrichBtn.className = 'network-crm__btn';
@@ -2762,7 +2725,7 @@ export function mountNetworkUi(root) {
     let dirtyWhileSaving = false;
 
     /**
-     * @param {{ fromUndo?: boolean, bodyOverride?: object, remount?: boolean, silent?: boolean }} [opts]
+     * @param {{ fromUndo?: boolean, bodyOverride?: object, remount?: boolean }} [opts]
      */
     async function persistOrg(opts = {}) {
       if (gen !== detailGeneration) return;
@@ -2771,8 +2734,7 @@ export function mountNetworkUi(root) {
         return;
       }
       saveInFlight = true;
-      const silent = Boolean(opts.silent) && !opts.fromUndo;
-      if (!silent) showStatus(opts.fromUndo ? 'Undoing…' : 'Saving…');
+      showStatus(opts.fromUndo ? 'Undoing…' : 'Saving…');
       try {
         do {
           dirtyWhileSaving = false;
@@ -2810,16 +2772,14 @@ export function mountNetworkUi(root) {
           current = saved;
 
           if (mergedAway || opts.fromUndo || opts.remount) {
-            if (!silent || opts.fromUndo || mergedAway) {
-              showStatus(opts.fromUndo ? 'Undone' : mergedAway ? 'Saved (merged duplicate)' : 'Saved');
-            }
+            showStatus(opts.fromUndo ? 'Undone' : mergedAway ? 'Saved (merged duplicate)' : 'Saved');
             renderList();
             renderOrgDetail(saved);
             return;
           }
 
           h.textContent = saved.name || 'Untitled company';
-          if (!silent) showStatus('Saved');
+          showStatus('Saved');
 
           const listLabelChanged =
             String(saved.name || '') !== String(priorBody.name || '')
@@ -2838,34 +2798,10 @@ export function mountNetworkUi(root) {
 
     async function undoOrg() {
       if (!undoStack.length) return;
-      if (detailAutosaveTimer) {
-        clearTimeout(detailAutosaveTimer);
-        detailAutosaveTimer = null;
-      }
       const snap = undoStack.pop();
       syncUndoBtn();
       await persistOrg({ fromUndo: true, bodyOverride: snap, remount: true });
     }
-
-    function scheduleOrgAutosave() {
-      if (detailAutosaveTimer) clearTimeout(detailAutosaveTimer);
-      detailAutosaveTimer = setTimeout(() => {
-        detailAutosaveTimer = null;
-        if (gen !== detailGeneration) return;
-        void persistOrg({ silent: true });
-      }, AUTOSAVE_MS);
-    }
-
-    form.addEventListener('input', (e) => {
-      const t = /** @type {HTMLElement} */ (e.target);
-      if (t?.closest?.('[readonly], .network-crm__input--readonly')) return;
-      scheduleOrgAutosave();
-    });
-    form.addEventListener('change', (e) => {
-      const t = /** @type {HTMLElement} */ (e.target);
-      if (t?.closest?.('[readonly], .network-crm__input--readonly')) return;
-      scheduleOrgAutosave();
-    });
 
     form.addEventListener('keydown', (e) => {
       if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || e.shiftKey || e.altKey) return;
@@ -2883,18 +2819,10 @@ export function mountNetworkUi(root) {
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      if (detailAutosaveTimer) {
-        clearTimeout(detailAutosaveTimer);
-        detailAutosaveTimer = null;
-      }
       await persistOrg();
     });
 
     enrichBtn.addEventListener('click', () => {
-      if (detailAutosaveTimer) {
-        clearTimeout(detailAutosaveTimer);
-        detailAutosaveTimer = null;
-      }
       const orgId = current.id;
       const card = buildOrgBody();
       openEnrichOptionsDialog({
@@ -2989,7 +2917,32 @@ export function mountNetworkUi(root) {
         void setView('people');
       },
       onContactsChanged: async () => {
-        await load();
+        const keepId = selectedId;
+        const prevView = view;
+        showStatus('Loading…');
+        try {
+          const [cr, or] = await Promise.all([
+            fetch('/api/network/contacts'),
+            fetch('/api/network/organizations'),
+          ]);
+          const j = await cr.json();
+          const oj = await or.json();
+          if (!j.ok) throw new Error(j.error || 'load_failed');
+          contacts = Array.isArray(j.contacts) ? j.contacts : [];
+          if (oj.ok) organizations = Array.isArray(oj.organizations) ? oj.organizations : [];
+          if (Array.isArray(j.preferredContactMethods) && j.preferredContactMethods.length) {
+            methodOptions = j.preferredContactMethods;
+          }
+          showStatus('');
+          if (keepId && contacts.some((c) => c.id === keepId)) selectedId = keepId;
+          else if (prevView !== 'groups') selectedId = contacts[0]?.id || null;
+          if (prevView === 'people') {
+            renderList();
+            if (selectedId) selectContact(selectedId);
+          }
+        } catch (err) {
+          showStatus(String(err?.message || err), true);
+        }
       },
     });
   }

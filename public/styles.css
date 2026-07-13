@@ -3386,8 +3386,10 @@ body.dashy--page-network .page-view--house-hunter {
 
 .network-crm__img-pick {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: 0.35rem;
   width: 100%;
   max-width: 14rem;
