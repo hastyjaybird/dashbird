@@ -44,6 +44,9 @@ export const SCENE_TOKEN_ALIASES = {
   idate: 'Ideate',
   flg: SCENE_OLD_SHIPYARD,
   miles: 'SF Polycule',
+  finn: 'Finn House',
+  'finn house': 'Finn House',
+  'fenn house': 'Finn House',
 };
 
 /** @type {Record<string, string>} lowercase displayName → preferred display name */
@@ -55,10 +58,17 @@ export const CONTACT_DISPLAY_ALIASES = {
 export const OUT_OF_TOWN_LOCATION = 'Out of town';
 
 /**
- * Bump when SCENE_TOKEN_ALIASES / CONTACT_DISPLAY_ALIASES gain entries that
- * should rewrite rows already stored in SQLite.
+ * Scene labels to strip entirely (not renamed). Deleted from contacts + groups
+ * on normalize / migration.
+ * @type {ReadonlySet<string>}
  */
-export const SCENE_ALIASES_MIGRATION = 'scene_aliases_v14';
+export const DROPPED_SCENE_TOKENS = new Set(['jake', 'jake crew']);
+
+/**
+ * Bump when SCENE_TOKEN_ALIASES / CONTACT_DISPLAY_ALIASES / DROPPED_SCENE_TOKENS
+ * gain entries that should rewrite rows already stored in SQLite.
+ */
+export const SCENE_ALIASES_MIGRATION = 'scene_aliases_v16';
 
 /**
  * @param {unknown} token
@@ -76,6 +86,14 @@ function sceneTokenKey(token) {
  */
 export function isPolidayToken(token) {
   return sceneTokenKey(token) === 'poliday';
+}
+
+/**
+ * Scenes Jay has retired — strip from contacts and delete matching groups.
+ * @param {unknown} token
+ */
+export function isDroppedSceneToken(token) {
+  return DROPPED_SCENE_TOKENS.has(sceneTokenKey(token));
 }
 
 /**
@@ -191,6 +209,7 @@ export function canonicalizeSceneToken(token) {
   if (!t) return '';
   if (isOutOfTownToken(t)) return '';
   if (isPolidayToken(t)) return '';
+  if (isDroppedSceneToken(t)) return '';
   const mapped = SCENE_TOKEN_ALIASES[t.toLowerCase()];
   return titleCaseSceneToken(mapped || t);
 }

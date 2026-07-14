@@ -2928,8 +2928,8 @@ body.dashy--page-network {
   flex-direction: column;
 }
 
-/* Manage spreadsheet: lock the page to the viewport so the table can pin to the bottom. */
-body.dashy--page-network:has(.network-crm__layout--manage) {
+/* Contacts / Manage / Groups: lock the page to the viewport so panels can pin to the bottom. */
+body.dashy--page-network:has(.network-crm--fill) {
   height: 100%;
   max-height: 100dvh;
   overflow: hidden;
@@ -2949,12 +2949,12 @@ body.dashy--page-network .page-view--house-hunter {
   padding: 0.75rem clamp(0.75rem, 2.5vw, 2.5rem) 2rem;
 }
 
-/* Manage spreadsheet: fill remaining viewport so the table box reaches the screen bottom. */
-.page-view--network:has(.network-crm__layout--manage) {
+/* Contacts / Manage / Groups: fill remaining viewport; keep a little bottom air for rounded corners. */
+.page-view--network:has(.network-crm--fill) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding-bottom: 0;
+  padding-bottom: 0.75rem;
 }
 
 .house-hunter-page {
@@ -2967,7 +2967,7 @@ body.dashy--page-network .page-view--house-hunter {
   margin: 0 auto;
 }
 
-.page-view--network:has(.network-crm__layout--manage) .network-page {
+.page-view--network:has(.network-crm--fill) .network-page {
   flex: 1;
   min-height: 0;
   width: 100%;
@@ -2975,17 +2975,14 @@ body.dashy--page-network .page-view--house-hunter {
   flex-direction: column;
 }
 
-.page-view--network:has(.network-crm__layout--manage) .network-page .panel--network {
+.page-view--network:has(.network-crm--fill) .network-page .panel--network {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-  border-bottom: 0;
 }
 
-.page-view--network:has(.network-crm__layout--manage) .network-page .panel--network > h2 {
+.page-view--network:has(.network-crm--fill) .network-page .panel--network > h2 {
   flex: 0 0 auto;
 }
 
@@ -2998,21 +2995,15 @@ body.dashy--page-network .page-view--house-hunter {
   padding: 0.55rem 0.75rem 0.85rem;
 }
 
-.page-view--network:has(.network-crm__layout--manage) .network-page .panel__body--network {
+.page-view--network:has(.network-crm--fill) .network-page .panel__body--network {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding-bottom: 0;
+  padding-bottom: 0.75rem;
 }
 
-.page-view--network:has(.network-crm__layout--manage) .network-manage__scroll {
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-  border-bottom: 0;
-}
-
-.page-view--network:has(.network-crm__layout--manage) .network-app {
+.page-view--network:has(.network-crm--fill) .network-app {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -3035,7 +3026,7 @@ body.dashy--page-network .page-view--house-hunter {
   gap: 0.75rem;
 }
 
-.page-view--network:has(.network-crm__layout--manage) .network-crm {
+.page-view--network:has(.network-crm--fill) .network-crm {
   flex: 1;
   min-height: 0;
 }
@@ -3048,18 +3039,77 @@ body.dashy--page-network .page-view--house-hunter {
   min-height: 0;
 }
 
-.page-view--network:has(.network-crm__layout--manage) .network-crm__main {
+.page-view--network:has(.network-crm--fill) .network-crm__main:not([hidden]) {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+}
+
+.page-view--network:has(.network-crm--fill) .network-crm__groups-pane:not([hidden]) {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.page-view--network:has(.network-crm--fill) .network-groups {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-view--network:has(.network-crm--fill) .network-groups__layout {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+  align-self: stretch;
+}
+
+.page-view--network:has(.network-crm--fill) .network-crm__tabs,
+.page-view--network:has(.network-crm--fill) .network-crm__subtabs,
+.page-view--network:has(.network-crm--fill) .network-crm__toolbar,
+.page-view--network:has(.network-crm--fill) .network-crm__filters,
+.page-view--network:has(.network-crm--fill) .network-crm__status,
+.page-view--network:has(.network-crm--fill) .network-crm__bulk {
+  flex: 0 0 auto;
+}
+
+/* Contacts / Companies list+detail: pin both columns to the viewport bottom. */
+.page-view--network:has(.network-crm--fill) .network-crm__layout:not(.network-crm__layout--manage) {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+  align-self: stretch;
+}
+
+.page-view--network:has(.network-crm--fill)
+  .network-crm__layout:not(.network-crm__layout--manage)
+  .network-crm__list {
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  align-self: stretch;
+  border-radius: 10px;
+}
+
+.page-view--network:has(.network-crm--fill)
+  .network-crm__layout:not(.network-crm__layout--manage)
+  .network-crm__detail {
+  min-height: 0;
+  overflow: auto;
+  align-self: stretch;
+  border: 1px solid color-mix(in srgb, var(--text, #e8e6e3) 12%, transparent);
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  background: color-mix(in srgb, var(--panel, #1a1c1e) 70%, transparent);
 }
 
 .network-crm__main[hidden],
 .network-crm__groups-pane[hidden] {
   display: none;
-}
-
-.network-groups--embedded .network-groups__title {
-  font-size: 1rem;
 }
 
 .network-crm__tabs {
@@ -3187,6 +3237,31 @@ body.dashy--page-network .page-view--house-hunter {
   font-size: 0.8rem;
 }
 
+.network-crm__filter--default {
+  min-width: 0;
+}
+
+.network-crm__filter-default-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.2rem 0;
+}
+
+.network-crm__filter-default-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.network-crm__filter-default-row input {
+  margin: 0;
+}
+
 .network-crm__btn {
   padding: 0.4rem 0.7rem;
   border-radius: 0.35rem;
@@ -3230,15 +3305,6 @@ body.dashy--page-network .page-view--house-hunter {
   min-height: 0;
   overflow: hidden;
   align-self: stretch;
-}
-
-.page-view--network:has(.network-crm__layout--manage) .network-crm__tabs,
-.page-view--network:has(.network-crm__layout--manage) .network-crm__subtabs,
-.page-view--network:has(.network-crm__layout--manage) .network-crm__toolbar,
-.page-view--network:has(.network-crm__layout--manage) .network-crm__filters,
-.page-view--network:has(.network-crm__layout--manage) .network-crm__status,
-.page-view--network:has(.network-crm__layout--manage) .network-crm__bulk {
-  flex: 0 0 auto;
 }
 
 .network-crm__layout--manage.network-crm__layout--manage-table-only {
@@ -3851,6 +3917,10 @@ body.dashy--page-network .page-view--house-hunter {
     min-height: 0;
     max-height: min(50vh, 24rem);
   }
+
+  .page-view--network:has(.network-crm--fill) .network-crm__list {
+    max-height: none;
+  }
 }
 
 .network-crm__list {
@@ -3919,6 +3989,20 @@ body.dashy--page-network .page-view--house-hunter {
   color: #1a1206;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   pointer-events: none;
+}
+
+.network-manage__name-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+}
+
+.network-manage__enrich-review {
+  position: static;
+  flex: 0 0 auto;
+  right: auto;
+  bottom: auto;
 }
 
 .network-crm__enrich-review-banner {
@@ -4729,12 +4813,6 @@ body.dashy--page-network .page-view--house-hunter {
   margin: 0 0.15rem 0 0;
 }
 
-.network-groups__title {
-  margin: 0;
-  flex: 1;
-  font-size: 1.1rem;
-}
-
 .network-groups__layout {
   align-items: stretch;
   min-height: 0;
@@ -4749,24 +4827,21 @@ body.dashy--page-network .page-view--house-hunter {
   min-height: 0;
 }
 
-.network-groups__col-head {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  align-items: center;
-  flex: 0 0 auto;
-}
-
 .network-groups__list-col .network-crm__list {
   flex: 1 1 auto;
   height: 0;
   min-height: 0;
+  border-radius: 10px;
 }
 
 .network-groups__detail-col .network-crm__detail {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--text, #e8e6e3) 12%, transparent);
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  background: color-mix(in srgb, var(--panel, #1a1c1e) 70%, transparent);
 }
 
 .network-groups__detail-status {

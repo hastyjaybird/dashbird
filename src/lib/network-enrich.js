@@ -1546,8 +1546,8 @@ ${excerpt || '(no pages fetched — only high-confidence public facts; else null
  */
 function markContactEnrichNeedsReview(patch) {
   const filled = Object.keys(patch).filter((k) => k !== 'enrichment' && k !== 'source');
+  // Any successful enrich write should flag the card for review (not only field fills).
   if (
-    filled.length &&
     patch.enrichment &&
     typeof patch.enrichment === 'object' &&
     !Array.isArray(patch.enrichment)

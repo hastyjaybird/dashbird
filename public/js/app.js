@@ -90,7 +90,7 @@ function showPage(page) {
   }
   if (page === 'network' && !networkLoaded) {
     networkLoaded = true;
-    import('./panels/network.js?v=group-kind-9')
+    import('./panels/network.js?v=cols-persist-1')
       .then(({ mountNetwork }) => {
         mountNetwork(document.getElementById('mount-network'));
       })

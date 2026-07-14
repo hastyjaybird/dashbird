@@ -8,14 +8,15 @@ import { collectSceneOptions, joinSceneTokens } from '../lib/network-scenes.js';
  * filter-by-condition, filter-by-values (checkboxes), OK/Cancel.
  *
  * Double-click (or Enter/F2) an editable cell to change its value. Pick-list
- * columns open a dropdown (or multi-select). Drag column headers to reorder
- * (saved in the browser). Ctrl/Cmd+C/V copies and pastes within the same column.
+ * columns open a dropdown (or multi-select). Drag column headers to reorder;
+ * which columns are shown (and their order) persist in localStorage across
+ * browser sessions. Ctrl/Cmd+C/V copies and pastes within the same column.
  * Right-click → Open details / Fill… (or drag the corner handle) for bulk fill.
  * Toolbar Undo restores the previous values.
  */
 
 const STORAGE_KEY = 'dashbird-network-manage-columns-v1';
-/** Session-scoped Manage filters + sort (survives soft reloads / remounts). */
+/** Manage column filters + sort — localStorage so they survive browser restarts. */
 const FILTER_SORT_KEY = 'dashbird-network-manage-filters-v1';
 
 /** Columns that must not be bulk-copied via drag-fill / clear / fill-down. */
@@ -484,7 +485,19 @@ function loadFilterSortState() {
   /** @type {{ key: string, dir: 'asc' | 'desc' } | null} */
   let sort = null;
   try {
-    const raw = sessionStorage.getItem(FILTER_SORT_KEY);
+    let raw = localStorage.getItem(FILTER_SORT_KEY);
+    if (!raw) {
+      // Migrate older session-only prefs into localStorage once.
+      raw = sessionStorage.getItem(FILTER_SORT_KEY);
+      if (raw) {
+        try {
+          localStorage.setItem(FILTER_SORT_KEY, raw);
+          sessionStorage.removeItem(FILTER_SORT_KEY);
+        } catch {
+          /* keep reading from session raw */
+        }
+      }
+    }
     if (!raw) return { filters, sort };
     const parsed = JSON.parse(raw);
     if (parsed?.sort?.key && (parsed.sort.dir === 'asc' || parsed.sort.dir === 'desc')) {
@@ -524,7 +537,12 @@ function persistFilterSortState(filters, sort) {
         values: f.values instanceof Set ? [...f.values] : null,
       })),
     };
-    sessionStorage.setItem(FILTER_SORT_KEY, JSON.stringify(payload));
+    localStorage.setItem(FILTER_SORT_KEY, JSON.stringify(payload));
+    try {
+      sessionStorage.removeItem(FILTER_SORT_KEY);
+    } catch {
+      /* ignore */
+    }
   } catch {
     /* ignore */
   }
@@ -735,11 +753,12 @@ export function mountNetworkManageTable(root, opts) {
   scroller.append(table);
   root.append(bar, scroller);
 
-  /** Cap the table scroller at the browser bottom so shorter monitors don't overflow. */
+  /** Cap the table scroller just above the browser bottom (room for rounded corners). */
   function syncScrollerToViewport() {
     if (!scroller.isConnected) return;
     const top = scroller.getBoundingClientRect().top;
-    const avail = Math.floor(window.innerHeight - top);
+    const pagePad = 12;
+    const avail = Math.floor(window.innerHeight - top - pagePad);
     scroller.style.maxHeight = `${Math.max(120, avail)}px`;
   }
 
@@ -2878,10 +2897,22 @@ export function mountNetworkManageTable(root, opts) {
           const val = col.get(c);
           const editable = canInlineEditColumn(col);
           if (col.key === 'displayName') {
+            const nameWrap = document.createElement('span');
+            nameWrap.className = 'network-manage__name-wrap';
             const name = document.createElement('span');
             name.className = 'network-manage__name';
             name.textContent = val || 'Untitled';
-            td.append(name);
+            nameWrap.append(name);
+            if (c.enrichment?.needsReview) {
+              const badge = document.createElement('span');
+              badge.className = 'network-crm__enrich-review network-manage__enrich-review';
+              badge.title = 'Last enrichment needs review';
+              badge.setAttribute('aria-label', 'Last enrichment needs review');
+              badge.innerHTML =
+                '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm0 2.2c.55 0 1 .45 1 1v4.1a1 1 0 1 1-2 0V4.7c0-.55.45-1 1-1zm0 8.1a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1z"/></svg>';
+              nameWrap.append(badge);
+            }
+            td.append(nameWrap);
           } else {
             td.textContent = val;
             td.title = val;

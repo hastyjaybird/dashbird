@@ -22,10 +22,13 @@ import {
   addContact,
   findContactByNameOrAlias,
   getContactById,
+  loadNetworkContacts,
   updateContact,
 } from './network-contacts-store.js';
 import {
   addSceneToken,
+  canonicalizeSceneToken,
+  isDroppedSceneToken,
   isOutOfTownToken,
   isPolidayToken,
   normalizeSceneGroupName,
@@ -122,6 +125,199 @@ export function newGroupId() {
 }
 
 /**
+ * Canonical scene labels from a contact's networkCircles string.
+ * @param {unknown} networkCircles
+ * @returns {string[]}
+ */
+export function sceneTokensFromCircles(networkCircles) {
+  return String(networkCircles ?? '')
+    .split(/[,;|/]+/)
+    .map((p) => canonicalizeSceneToken(p))
+    .filter(Boolean);
+}
+
+/**
+ * Persist memberIds without touching contact Scene tags (avoids sync loops).
+ * @param {object} group
+ * @param {string[]} memberIds
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function writeGroupMemberIds(group, memberIds, env = process.env) {
+  const now = new Date().toISOString();
+  const normalized = normalizeGroup({
+    ...group,
+    memberIds,
+    updatedAt: now,
+  });
+  if (!normalized) return null;
+  upsertGroupRow(openNetworkDb(env), normalized);
+  return normalized;
+}
+
+/**
+ * Align community group membership with a contact's Scene tags.
+ * Creates missing community groups for new scene tokens. Event groups are untouched.
+ * @param {string} contactId
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<{ added: string[], removed: string[], created: string[] }>}
+ */
+export async function syncContactToCommunityGroups(contactId, env = process.env) {
+  const id = remapLegacyNetworkId(cleanStr(contactId, 80));
+  const empty = { added: [], removed: [], created: [] };
+  if (!id) return empty;
+  const contact = await getContactById(id, env);
+  if (!contact) return empty;
+
+  const sceneNames = sceneTokensFromCircles(contact.networkCircles);
+  const sceneKeys = new Set(sceneNames.map((n) => n.toLowerCase()));
+  const { groups } = await loadNetworkGroups(env);
+  /** @type {string[]} */
+  const added = [];
+  /** @type {string[]} */
+  const removed = [];
+  /** @type {string[]} */
+  const created = [];
+  /** @type {Set<string>} */
+  const coveredKeys = new Set();
+
+  for (const g of groups) {
+    if (g.kind !== 'community') continue;
+    const name = normalizeSceneGroupName(g.name, 300);
+    if (!name || isOutOfTownToken(name) || isPolidayToken(name) || isDroppedSceneToken(name)) continue;
+    const key = name.toLowerCase();
+    coveredKeys.add(key);
+    const isMember = (g.memberIds || []).includes(id);
+    const shouldBe = sceneKeys.has(key);
+    if (shouldBe && !isMember) {
+      writeGroupMemberIds(g, [...(g.memberIds || []), id], env);
+      added.push(g.id);
+    } else if (!shouldBe && isMember) {
+      writeGroupMemberIds(
+        g,
+        (g.memberIds || []).filter((mid) => mid !== id),
+        env,
+      );
+      removed.push(g.id);
+    }
+  }
+
+  for (const name of sceneNames) {
+    const key = name.toLowerCase();
+    if (coveredKeys.has(key)) continue;
+    if (isOutOfTownToken(name) || isPolidayToken(name) || isDroppedSceneToken(name)) continue;
+    const groupId = key === 'runway house' ? RUNWAY_HOUSE_GROUP_ID : newGroupId();
+    const now = new Date().toISOString();
+    const createdGroup = normalizeGroup({
+      id: groupId,
+      name,
+      kind: 'community',
+      memberIds: [id],
+      description: '',
+      source: 'scene-sync',
+      createdAt: now,
+      updatedAt: now,
+    });
+    if (!createdGroup) continue;
+    upsertGroupRow(openNetworkDb(env), createdGroup);
+    coveredKeys.add(key);
+    created.push(createdGroup.id);
+    added.push(createdGroup.id);
+  }
+
+  return { added, removed, created };
+}
+
+/**
+ * Wipe all groups (without stripping contact Scene tags) and recreate
+ * community groups from every contact's Scene tokens.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function rebuildCommunityGroupsFromScenes(env = process.env) {
+  const { groups: prior } = await loadNetworkGroups(env);
+  const priorIds = prior.map((g) => g.id).filter(Boolean);
+  if (priorIds.length) {
+    await deleteGroups(priorIds, env, { stripScenes: false });
+  }
+
+  const { contacts } = await loadNetworkContacts(env);
+  /** @type {Map<string, { name: string, memberIds: string[] }>} */
+  const byScene = new Map();
+  for (const c of contacts) {
+    if (!c?.id) continue;
+    for (const name of sceneTokensFromCircles(c.networkCircles)) {
+      if (isOutOfTownToken(name) || isPolidayToken(name) || isDroppedSceneToken(name)) continue;
+      const key = name.toLowerCase();
+      let entry = byScene.get(key);
+      if (!entry) {
+        entry = { name, memberIds: [] };
+        byScene.set(key, entry);
+      }
+      if (!entry.memberIds.includes(c.id)) entry.memberIds.push(c.id);
+    }
+  }
+
+  const now = new Date().toISOString();
+  /** @type {object[]} */
+  const created = [];
+  const db = openNetworkDb(env);
+  for (const entry of [...byScene.values()].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
+  )) {
+    const id = entry.name.toLowerCase() === 'runway house' ? RUNWAY_HOUSE_GROUP_ID : newGroupId();
+    const group = normalizeGroup({
+      id,
+      name: entry.name,
+      kind: 'community',
+      memberIds: entry.memberIds,
+      description: '',
+      source: 'scene-rebuild',
+      createdAt: now,
+      updatedAt: now,
+    });
+    if (!group) continue;
+    upsertGroupRow(db, group);
+    created.push(group);
+  }
+
+  // Foundation: keep Runway House even when no Scene tags currently reference it.
+  const hasRunway = created.some(
+    (g) => g.id === RUNWAY_HOUSE_GROUP_ID || String(g.name || '').toLowerCase() === 'runway house',
+  );
+  if (!hasRunway) {
+    const memberIds = [];
+    for (const cid of [JULIA_CONTACT_ID, SAM_CONTACT_ID]) {
+      const c = await getContactById(cid, env);
+      if (!c) continue;
+      memberIds.push(c.id);
+      const next = addSceneToken(c.networkCircles, 'Runway House');
+      if (next !== String(c.networkCircles || '')) {
+        await updateContact(c.id, { networkCircles: next }, env, { skipGroupSync: true });
+      }
+    }
+    const runway = normalizeGroup({
+      id: RUNWAY_HOUSE_GROUP_ID,
+      name: 'Runway House',
+      kind: 'community',
+      memberIds,
+      description: 'Runway House network circle.',
+      source: 'manual',
+      createdAt: now,
+      updatedAt: now,
+    });
+    if (runway) {
+      upsertGroupRow(db, runway);
+      created.push(runway);
+    }
+  }
+
+  return {
+    deleted: priorIds.length,
+    created: created.length,
+    groups: created,
+  };
+}
+
+/**
  * Sync Scene / Out-of-town location for community group membership.
  * Event groups never touch contact attributes.
  * @param {object} group
@@ -141,7 +337,7 @@ async function syncCommunityMembership(group, contactIds, mode, env = process.en
 
     if (groupIsOutOfTown) {
       if (mode === 'add' && !String(contact.location || '').trim()) {
-        await updateContact(contact.id, { location: 'Out of town' }, env);
+        await updateContact(contact.id, { location: 'Out of town' }, env, { skipGroupSync: true });
       }
       // Do not clear location on remove — it may be set for other reasons.
       continue;
@@ -153,7 +349,7 @@ async function syncCommunityMembership(group, contactIds, mode, env = process.en
         ? addSceneToken(contact.networkCircles, group.name)
         : removeSceneToken(contact.networkCircles, group.name);
     if (next === String(contact.networkCircles || '')) continue;
-    await updateContact(contact.id, { networkCircles: next }, env);
+    await updateContact(contact.id, { networkCircles: next }, env, { skipGroupSync: true });
   }
 }
 
@@ -197,12 +393,12 @@ async function syncCommunityMetaChange(prev, next, env = process.env) {
     if (oldOut || newOut) {
       // Out-of-town is location, not Scene — only set location when becoming Out of town.
       if (newOut && !String(contact.location || '').trim()) {
-        await updateContact(contact.id, { location: 'Out of town' }, env);
+        await updateContact(contact.id, { location: 'Out of town' }, env, { skipGroupSync: true });
       }
       if (oldOut && !newOut && newName) {
         const nextCircles = addSceneToken(contact.networkCircles, newName);
         if (nextCircles !== String(contact.networkCircles || '')) {
-          await updateContact(contact.id, { networkCircles: nextCircles }, env);
+          await updateContact(contact.id, { networkCircles: nextCircles }, env, { skipGroupSync: true });
         }
       }
       continue;
@@ -210,7 +406,7 @@ async function syncCommunityMetaChange(prev, next, env = process.env) {
 
     const nextCircles = replaceSceneToken(contact.networkCircles, oldName, newName);
     if (nextCircles === String(contact.networkCircles || '')) continue;
-    await updateContact(contact.id, { networkCircles: nextCircles }, env);
+    await updateContact(contact.id, { networkCircles: nextCircles }, env, { skipGroupSync: true });
   }
 }
 
@@ -320,17 +516,22 @@ export async function updateGroup(id, patch, env = process.env) {
 /**
  * @param {string[]} ids
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ stripScenes?: boolean }} [opts] When stripScenes is false, delete rows
+ *   without removing Scene tags from contacts (used by rebuild-from-scenes).
  */
-export async function deleteGroups(ids, env = process.env) {
+export async function deleteGroups(ids, env = process.env, opts = {}) {
   const want = [...new Set((Array.isArray(ids) ? ids : []).map((id) => remapLegacyNetworkId(String(id))))].filter(
     Boolean,
   );
   if (!want.length) return { deleted: 0 };
+  const stripScenes = opts.stripScenes !== false;
 
-  for (const id of want) {
-    const group = await getGroupById(id, env);
-    if (group?.kind === 'community' && (group.memberIds || []).length) {
-      await syncCommunityMembership(group, group.memberIds, 'remove', env);
+  if (stripScenes) {
+    for (const id of want) {
+      const group = await getGroupById(id, env);
+      if (group?.kind === 'community' && (group.memberIds || []).length) {
+        await syncCommunityMembership(group, group.memberIds, 'remove', env);
+      }
     }
   }
 
@@ -448,12 +649,12 @@ export async function ingestPeopleIntoGroup(groupId, names, env = process.env) {
       if (isCommunity) {
         if (groupIsOutOfTown) {
           if (!String(contact.location || '').trim()) {
-            await updateContact(contact.id, { location: 'Out of town' }, env);
+            await updateContact(contact.id, { location: 'Out of town' }, env, { skipGroupSync: true });
           }
         } else if (group.name) {
           const next = addSceneToken(contact.networkCircles, group.name);
           if (next !== String(contact.networkCircles || '')) {
-            await updateContact(contact.id, { networkCircles: next }, env);
+            await updateContact(contact.id, { networkCircles: next }, env, { skipGroupSync: true });
           }
         }
       }

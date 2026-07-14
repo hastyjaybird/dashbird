@@ -578,8 +578,9 @@ export async function getContactById(id, env = process.env) {
 /**
  * @param {object} contact
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ skipGroupSync?: boolean }} [opts]
  */
-export async function addContact(contact, env = process.env) {
+export async function addContact(contact, env = process.env, opts = {}) {
   let payload = { ...contact };
   const orgName = cleanStr(payload?.org, 300);
   if (orgName) {
@@ -609,13 +610,31 @@ export async function addContact(contact, env = process.env) {
   try {
     const { absorbContactIfDuplicate } = await import('./network-dedup.js');
     const absorbed = await absorbContactIfDuplicate(normalized, env);
-    if (absorbed?.contact) return absorbed.contact;
+    if (absorbed?.contact) {
+      if (!opts.skipGroupSync && String(absorbed.contact.networkCircles || '').trim()) {
+        try {
+          const { syncContactToCommunityGroups } = await import('./network-groups-store.js');
+          await syncContactToCommunityGroups(absorbed.contact.id, env);
+        } catch {
+          /* best-effort */
+        }
+      }
+      return absorbed.contact;
+    }
   } catch {
     // Dedup is best-effort — still create the contact.
   }
 
   const db = openNetworkDb(env);
   upsertContactRow(db, normalized);
+  if (!opts.skipGroupSync && String(normalized.networkCircles || '').trim()) {
+    try {
+      const { syncContactToCommunityGroups } = await import('./network-groups-store.js');
+      await syncContactToCommunityGroups(normalized.id, env);
+    } catch {
+      /* best-effort */
+    }
+  }
   return normalized;
 }
 
@@ -708,8 +727,9 @@ export async function addContactsBulk(names, defaults = {}, env = process.env) {
  * @param {string} id
  * @param {object} patch
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ skipGroupSync?: boolean }} [opts]
  */
-export async function updateContact(id, patch, env = process.env) {
+export async function updateContact(id, patch, env = process.env, opts = {}) {
   const prev = await getContactById(id, env);
   if (!prev) return null;
   const merged = {
@@ -834,14 +854,27 @@ export async function updateContact(id, patch, env = process.env) {
   }
   upsertContactRow(openNetworkDb(env), normalized);
 
+  /** @type {object} */
+  let saved = normalized;
   try {
     const { dedupeContactAfterSave } = await import('./network-dedup.js');
     const result = await dedupeContactAfterSave(normalized, env);
-    if (result?.contact) return result.contact;
+    if (result?.contact) saved = result.contact;
   } catch {
     // Dedup is best-effort.
   }
-  return normalized;
+
+  const circlesChanged =
+    String(prev.networkCircles || '') !== String(saved.networkCircles || '');
+  if (circlesChanged && !opts.skipGroupSync) {
+    try {
+      const { syncContactToCommunityGroups } = await import('./network-groups-store.js');
+      await syncContactToCommunityGroups(saved.id, env);
+    } catch {
+      // Group sync is best-effort — contact save already succeeded.
+    }
+  }
+  return saved;
 }
 
 /**

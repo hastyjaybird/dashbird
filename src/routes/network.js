@@ -41,6 +41,7 @@ import {
   getGroupById,
   ingestPeopleIntoGroup,
   loadNetworkGroups,
+  rebuildCommunityGroupsFromScenes,
   removeMembersFromGroup,
   updateGroup,
 } from '../lib/network-groups-store.js';
@@ -514,6 +515,16 @@ router.post('/groups', async (req, res) => {
   } catch (e) {
     const code = e?.code === 'invalid_group' ? 400 : 500;
     res.status(code).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+/** Wipe all groups and recreate communities from contact Scene tags. */
+router.post('/groups/rebuild-from-scenes', async (_req, res) => {
+  try {
+    const result = await rebuildCommunityGroupsFromScenes();
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 

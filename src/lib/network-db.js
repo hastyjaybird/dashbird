@@ -13,6 +13,7 @@ import {
   SCENE_APL_EMPLOYEE,
   SCENE_APL_GROUPIE,
   SCENE_OLD_SHIPYARD,
+  isDroppedSceneToken,
   isOutOfTownToken,
   isPolidayToken,
   normalizeContactDisplayName,
@@ -695,6 +696,11 @@ function migrateSceneAliasesIfNeeded(db) {
     const g = rowToGroup(row);
     // "Out of town" was a misplaced location tag, not a scene group — drop it.
     if (isOutOfTownToken(g.name)) {
+      db.prepare('DELETE FROM groups WHERE id = ?').run(g.id);
+      continue;
+    }
+    // Retired scenes (e.g. Jake) — delete the group; tokens already stripped on contacts.
+    if (isDroppedSceneToken(g.name)) {
       db.prepare('DELETE FROM groups WHERE id = ?').run(g.id);
       continue;
     }

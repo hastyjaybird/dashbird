@@ -12,6 +12,7 @@ import {
  * @param {{
  *   contacts: object[],
  *   getContacts?: () => object[],
+ *   getFilteredContacts?: () => object[],
  *   isContactsLoading?: () => boolean,
  *   groups?: object[],
  *   selectGroupId?: string | null,
@@ -19,8 +20,17 @@ import {
  *   onClose?: () => void,
  *   onOpenContact?: (id: string) => void,
  *   onContactsChanged?: () => Promise<void> | void,
+ *   onToolbarSync?: () => void,
  * }} opts
- * @returns {{ focus: (opts?: { selectGroupId?: string | null, refresh?: boolean }) => Promise<void> }}
+ * @returns {{
+ *   focus: (opts?: { selectGroupId?: string | null, refresh?: boolean }) => Promise<void>,
+ *   setQuery: (q: string) => void,
+ *   createGroup: () => Promise<void>,
+ *   saveSelected: () => Promise<void>,
+ *   deleteSelected: () => Promise<void>,
+ *   canEditSelected: () => boolean,
+ *   destroy: () => void,
+ * }}
  */
 export function mountNetworkGroupsUi(root, opts) {
   const { onOpenContact } = opts;
@@ -31,6 +41,8 @@ export function mountNetworkGroupsUi(root, opts) {
   let contactMap = new Map();
   const getContacts =
     typeof opts.getContacts === 'function' ? opts.getContacts : () => opts.contacts;
+  const getFilteredContacts =
+    typeof opts.getFilteredContacts === 'function' ? opts.getFilteredContacts : getContacts;
   const isContactsLoading =
     typeof opts.isContactsLoading === 'function' ? opts.isContactsLoading : () => false;
 
@@ -55,11 +67,21 @@ export function mountNetworkGroupsUi(root, opts) {
   let groups = Array.isArray(opts.groups) ? opts.groups.slice() : [];
   /** @type {string | null} */
   let selectedId = null;
+  /** @type {string} */
+  let listQuery = '';
+  /** @type {{ save: () => Promise<void>, delete: () => Promise<void> } | null} */
+  let detailActions = null;
   /** @type {Set<string> | null} */
   let cachedMemberIds = null;
+  /** @type {(() => void) | null} */
+  let refreshOpenDetail = null;
   const UNGROUPED_ID = '__ungrouped__';
   /** Initial members to paint before yielding (rest fill in next frames). */
   const MEMBER_PAINT_CHUNK = 24;
+
+  function notifyToolbar() {
+    opts.onToolbarSync?.();
+  }
 
   root.replaceChildren();
   const wrap = document.createElement('div');
@@ -71,28 +93,12 @@ export function mountNetworkGroupsUi(root, opts) {
 
   const listCol = document.createElement('div');
   listCol.className = 'network-groups__list-col';
-  const listHead = document.createElement('div');
-  listHead.className = 'network-groups__col-head';
-  const title = document.createElement('h3');
-  title.className = 'network-groups__title';
-  title.textContent = 'Groups';
-  const addBtn = document.createElement('button');
-  addBtn.type = 'button';
-  addBtn.className = 'network-crm__btn network-crm__btn--primary';
-  addBtn.textContent = 'Add group';
-  listHead.append(title, addBtn);
   const list = document.createElement('ul');
   list.className = 'network-crm__list';
-  listCol.append(listHead, list);
+  listCol.append(list);
 
   const detailCol = document.createElement('div');
   detailCol.className = 'network-groups__detail-col';
-  const detailHead = document.createElement('div');
-  detailHead.className = 'network-groups__col-head';
-  const detailTitle = document.createElement('h3');
-  detailTitle.className = 'network-groups__title';
-  detailTitle.textContent = 'Group Detail';
-  detailHead.append(detailTitle);
   const detail = document.createElement('div');
   detail.className = 'network-crm__detail';
   detail.innerHTML = '<p class="muted">Select a group</p>';
@@ -101,12 +107,32 @@ export function mountNetworkGroupsUi(root, opts) {
   status.className = 'network-crm__status network-groups__detail-status muted';
   status.hidden = true;
 
-  detailCol.append(detailHead, detail, status);
+  detailCol.append(detail, status);
 
   layout.append(listCol, detailCol);
 
   wrap.append(layout);
   root.append(wrap);
+
+  /** Cap list + detail just above the browser bottom (room for rounded corners). */
+  function syncColumnsToViewport() {
+    if (!list.isConnected) return;
+    const pagePad = 12;
+    for (const el of [list, detail]) {
+      const top = el.getBoundingClientRect().top;
+      const avail = Math.floor(window.innerHeight - top - pagePad);
+      el.style.maxHeight = `${Math.max(120, avail)}px`;
+    }
+  }
+
+  const onViewportChange = () => {
+    requestAnimationFrame(syncColumnsToViewport);
+  };
+  window.addEventListener('resize', onViewportChange);
+  window.visualViewport?.addEventListener('resize', onViewportChange);
+  const scrollFitObs = new ResizeObserver(onViewportChange);
+  scrollFitObs.observe(wrap);
+  if (root.parentElement) scrollFitObs.observe(root.parentElement);
 
   function showStatus(msg, isErr = false) {
     status.hidden = !msg;
@@ -150,7 +176,9 @@ export function mountNetworkGroupsUi(root, opts) {
 
   function ungroupedContacts() {
     const inGroup = memberIdSet();
-    return contacts
+    const pool = getFilteredContacts();
+    const list = Array.isArray(pool) ? pool : contacts;
+    return list
       .filter((c) => c?.id && !inGroup.has(c.id))
       .slice()
       .sort((a, b) =>
@@ -295,28 +323,56 @@ export function mountNetworkGroupsUi(root, opts) {
     }
   }
 
+  function groupMatchesQuery(g, q) {
+    if (!q) return true;
+    const memberPreview = (g.memberIds || [])
+      .slice(0, 12)
+      .map((id) => contactName(id))
+      .join(' ');
+    const hay = [g.name, g.description, g.eventType, groupKindLabel(g), memberPreview]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return hay.includes(q);
+  }
+
   function renderList() {
     list.replaceChildren();
-    appendUngroupedRow();
+    const q = listQuery.trim().toLowerCase();
+    if (!q) appendUngroupedRow();
     if (!groups.length) {
       const empty = document.createElement('li');
       empty.className = 'network-crm__empty muted';
       empty.textContent = 'No groups yet — add a community or event group';
       list.append(empty);
+      syncColumnsToViewport();
       return;
     }
-    const communities = groups.filter((g) => groupKind(g) === 'community');
-    const events = groups.filter((g) => groupKind(g) === 'event');
+    const visible = groups.filter((g) => groupMatchesQuery(g, q));
+    if (!visible.length) {
+      const empty = document.createElement('li');
+      empty.className = 'network-crm__empty muted';
+      empty.textContent = 'No groups match your search';
+      list.append(empty);
+      syncColumnsToViewport();
+      return;
+    }
+    const communities = visible.filter((g) => groupKind(g) === 'community');
+    const events = visible.filter((g) => groupKind(g) === 'event');
     appendGroupSection('Communities', communities);
     appendGroupSection('Events', events);
+    syncColumnsToViewport();
   }
 
   let detailGeneration = 0;
 
   function selectUngrouped() {
     selectedId = UNGROUPED_ID;
+    detailActions = null;
+    refreshOpenDetail = null;
     renderList();
     renderUngroupedDetail();
+    notifyToolbar();
   }
 
   /**
@@ -324,17 +380,23 @@ export function mountNetworkGroupsUi(root, opts) {
    */
   function selectGroup(id) {
     selectedId = id;
+    detailActions = null;
+    refreshOpenDetail = null;
     renderList();
     const g = groups.find((x) => x.id === id);
     if (!g) {
       detail.innerHTML = '<p class="muted">Group not found</p>';
+      notifyToolbar();
       return;
     }
     renderDetail(g);
+    notifyToolbar();
   }
 
   function renderUngroupedDetail() {
     const gen = ++detailGeneration;
+    detailActions = null;
+    refreshOpenDetail = null;
     detail.replaceChildren();
 
     const wrapEl = document.createElement('div');
@@ -509,19 +571,11 @@ export function mountNetworkGroupsUi(root, opts) {
 
     const topActions = document.createElement('div');
     topActions.className = 'network-crm__actions network-groups__top-actions';
-    const saveBtn = document.createElement('button');
-    saveBtn.type = 'button';
-    saveBtn.className = 'network-crm__btn network-crm__btn--primary';
-    saveBtn.textContent = 'Save';
     const analyzeBtn = document.createElement('button');
     analyzeBtn.type = 'button';
     analyzeBtn.className = 'network-crm__btn';
     analyzeBtn.textContent = 'Analyze commonalities';
-    const delBtn = document.createElement('button');
-    delBtn.type = 'button';
-    delBtn.className = 'network-crm__btn network-crm__btn--danger';
-    delBtn.textContent = 'Delete group';
-    topActions.append(saveBtn, analyzeBtn, delBtn);
+    topActions.append(analyzeBtn);
 
     form.append(
       field('Name', 'name', current.name),
@@ -643,8 +697,10 @@ export function mountNetworkGroupsUi(root, opts) {
     function renderAddCandidates() {
       addList.replaceChildren();
       const q = addSearch.value.trim().toLowerCase();
-      const candidates = contacts
-        .filter((c) => !memberSet.has(c.id))
+      const pool = getFilteredContacts();
+      const filteredPool = Array.isArray(pool) ? pool : contacts;
+      const candidates = filteredPool
+        .filter((c) => c?.id && !memberSet.has(c.id))
         .filter((c) => {
           if (!q) return true;
           const hay = [c.displayName, c.nickname, ...(c.aliases || []), c.org, c.networkCircles]
@@ -657,11 +713,16 @@ export function mountNetworkGroupsUi(root, opts) {
       if (!candidates.length) {
         const empty = document.createElement('p');
         empty.className = 'muted';
+        const anyOutsideFilters =
+          !isContactsLoading()
+          && contacts.some((c) => c?.id && !memberSet.has(c.id));
         empty.textContent = isContactsLoading()
           ? 'Loading…'
           : q
             ? 'No matching people'
-            : 'Everyone is already in this group';
+            : anyOutsideFilters
+              ? 'No people match the Manage filters'
+              : 'Everyone is already in this group';
         addList.append(empty);
         return;
       }
@@ -706,6 +767,10 @@ export function mountNetworkGroupsUi(root, opts) {
       }
     }
     addSearch.addEventListener('input', () => renderAddCandidates());
+    refreshOpenDetail = () => {
+      if (gen !== detailGeneration) return;
+      renderAddCandidates();
+    };
 
     const addNewContactsBtn = document.createElement('button');
     addNewContactsBtn.type = 'button';
@@ -914,15 +979,7 @@ export function mountNetworkGroupsUi(root, opts) {
       }
     }
 
-    const actions = document.createElement('div');
-    actions.className = 'network-crm__actions';
-    const saveBtnBottom = document.createElement('button');
-    saveBtnBottom.type = 'button';
-    saveBtnBottom.className = 'network-crm__btn network-crm__btn--primary';
-    saveBtnBottom.textContent = 'Save';
-    actions.append(saveBtnBottom);
-
-    toolsBox.append(ingest, commonBox, suggestBox, actions);
+    toolsBox.append(ingest, commonBox, suggestBox);
     form.append(peopleCols, toolsBox);
 
     let saveInFlight = false;
@@ -939,8 +996,7 @@ export function mountNetworkGroupsUi(root, opts) {
         return;
       }
       saveInFlight = true;
-      saveBtn.disabled = true;
-      saveBtnBottom.disabled = true;
+      notifyToolbar();
       showStatus('Saving…');
       const prevKind = groupKind(current);
       const prevName = String(current.name || '');
@@ -982,19 +1038,41 @@ export function mountNetworkGroupsUi(root, opts) {
         if (gen === detailGeneration) showStatus(String(err?.message || err), true);
       } finally {
         saveInFlight = false;
-        if (gen === detailGeneration) {
-          saveBtn.disabled = false;
-          saveBtnBottom.disabled = false;
-        }
+        if (gen === detailGeneration) notifyToolbar();
       }
     }
 
-    saveBtn.addEventListener('click', () => {
-      void persistGroup();
-    });
-    saveBtnBottom.addEventListener('click', () => {
-      void persistGroup();
-    });
+    async function deleteGroup() {
+      if (!confirm(`Delete group ${g.name || ''}?`)) return;
+      try {
+        const wasCommunity = groupKind(g) === 'community';
+        const r = await fetch(`/api/network/groups/${encodeURIComponent(g.id)}`, { method: 'DELETE' });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || 'delete_failed');
+        groups = groups.filter((x) => x.id !== g.id);
+        invalidateMemberCache();
+        if (wasCommunity) await pullLatestContacts();
+        selectedId = groups[0]?.id || null;
+        detailActions = null;
+        showStatus('Deleted');
+        renderList();
+        if (selectedId) selectGroup(selectedId);
+        else {
+          detail.innerHTML = '<p class="muted">Select a group</p>';
+          notifyToolbar();
+        }
+      } catch (err) {
+        showStatus(String(err?.message || err), true);
+      }
+    }
+
+    detailActions = {
+      save: persistGroup,
+      delete: deleteGroup,
+      saving: () => saveInFlight,
+    };
+    notifyToolbar();
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       await persistGroup();
@@ -1020,26 +1098,6 @@ export function mountNetworkGroupsUi(root, opts) {
       } finally {
         endWaitCursor();
         analyzeBtn.disabled = false;
-      }
-    });
-
-    delBtn.addEventListener('click', async () => {
-      if (!confirm(`Delete group ${g.name || ''}?`)) return;
-      try {
-        const wasCommunity = groupKind(g) === 'community';
-        const r = await fetch(`/api/network/groups/${encodeURIComponent(g.id)}`, { method: 'DELETE' });
-        const j = await r.json();
-        if (!j.ok) throw new Error(j.error || 'delete_failed');
-        groups = groups.filter((x) => x.id !== g.id);
-        invalidateMemberCache();
-        if (wasCommunity) await pullLatestContacts();
-        selectedId = groups[0]?.id || null;
-        showStatus('Deleted');
-        renderList();
-        if (selectedId) selectGroup(selectedId);
-        else detail.innerHTML = '<p class="muted">Select a group</p>';
-      } catch (err) {
-        showStatus(String(err?.message || err), true);
       }
     });
 
@@ -1087,9 +1145,11 @@ export function mountNetworkGroupsUi(root, opts) {
     }
     renderList();
     if (paintOpts.paintDetail === false) {
+      detailActions = null;
       detail.innerHTML = selectedId
         ? '<p class="muted">Loading…</p>'
         : '<p class="muted">Select a group</p>';
+      notifyToolbar();
       return;
     }
     if (paintOpts.listOnly) {
@@ -1107,10 +1167,14 @@ export function mountNetworkGroupsUi(root, opts) {
     }
     if (selectedId === UNGROUPED_ID) selectUngrouped();
     else if (selectedId) selectGroup(selectedId);
-    else detail.innerHTML = '<p class="muted">Select a group</p>';
+    else {
+      detailActions = null;
+      detail.innerHTML = '<p class="muted">Select a group</p>';
+      notifyToolbar();
+    }
   }
 
-  addBtn.addEventListener('click', async () => {
+  async function createGroup() {
     const kind = await openGroupKindDialog({ title: 'Group kind' });
     if (kind == null) {
       showStatus('Cancelled');
@@ -1139,7 +1203,26 @@ export function mountNetworkGroupsUi(root, opts) {
     } catch (err) {
       showStatus(String(err?.message || err), true);
     }
-  });
+  }
+
+  function setQuery(q) {
+    listQuery = String(q || '');
+    renderList();
+  }
+
+  function canEditSelected() {
+    return Boolean(detailActions && selectedId && selectedId !== UNGROUPED_ID);
+  }
+
+  async function saveSelected() {
+    if (!detailActions?.save) return;
+    await detailActions.save();
+  }
+
+  async function deleteSelected() {
+    if (!detailActions?.delete) return;
+    await detailActions.delete();
+  }
 
   /**
    * @param {{ selectGroupId?: string | null }} [focusOpts]
@@ -1185,7 +1268,10 @@ export function mountNetworkGroupsUi(root, opts) {
       else selectGroup(selectedId);
       return;
     }
-    // Pane was kept mounted while hidden — nothing to rebuild.
+    // Pane was kept mounted while hidden — refresh lists against current Manage filters.
+    if (selectedId === UNGROUPED_ID) selectUngrouped();
+    else refreshOpenDetail?.();
+    syncColumnsToViewport();
   }
 
   // Instant shell from prefetch when available; refresh in background for freshness.
@@ -1213,5 +1299,21 @@ export function mountNetworkGroupsUi(root, opts) {
     void fetchAndPaint({ selectGroupId: opts.selectGroupId || null });
   }
 
-  return { focus };
+  syncColumnsToViewport();
+
+  return {
+    focus,
+    setQuery,
+    createGroup,
+    saveSelected,
+    deleteSelected,
+    canEditSelected,
+    destroy() {
+      window.removeEventListener('resize', onViewportChange);
+      window.visualViewport?.removeEventListener('resize', onViewportChange);
+      scrollFitObs.disconnect();
+      detailActions = null;
+      root.replaceChildren();
+    },
+  };
 }
