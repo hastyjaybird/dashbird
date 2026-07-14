@@ -26,6 +26,8 @@ data/gmail-intake-tokens/
 data/gmail-events-cache.json
 data/facebook-events-cache.json
 data/facebook-billing-log.json
+data/dashboard-costs.json
+data/manual-calendar-events.json
 data/meetup-events-cache.json
 data/multiverse-events-cache.json
 data/luma-events-cache.json

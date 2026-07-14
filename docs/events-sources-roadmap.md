@@ -178,12 +178,16 @@ event-page seeds.
 | Input | Path |
 | --- | --- |
 | Flyer / text-invite screenshot | Download photo → OpenRouter vision → event JSON |
-| Voice note | Whisper transcription → same NL parse as text |
-| Text | e.g. “event on July 18 called Rooftop Jazz invited by Sam” → OpenRouter JSON |
+| Business card / LinkedIn / social screenshot / headshot | Vision intake-kind classify → Network contact (fields + avatar crop when identified) |
+| Guest / RSVP / attendee list screenshot | Vision classify → Network contacts for each readable name (cap 40); event title noted when visible |
+| Company logo | Vision classify → Network company card + logo |
+| Name + phone / email text | Text classifier → Network contact |
+| Voice note | Whisper transcription → same NL classify as text |
+| Text | e.g. “event on July 18…” / `/todo` / `/note` / `/contact` / `/company` |
 
-**Image:** flyer photo is saved under `public/data/telegram-events/` and used as the card art. Text/voice with no graphic → `/assets/tile-telegram.svg`.
+**Image:** flyer photo is saved under `public/data/telegram-events/` and used as the card art. Contact headshots/logos land in `data/network-assets/`. Text/voice events with no graphic → `/assets/tile-telegram.svg`.
 
-**Today:** Modules `src/lib/events-finder-telegram.js` + `events-finder-invite-parse.js`. Status: `/api/events-finder/telegram/status`. Poller starts from `server.js` when `TELEGRAM_BOT_TOKEN` is set.
+**Today:** Modules `src/lib/events-finder-telegram.js` + `telegram-message-classify.js` + `events-finder-invite-parse.js`. Status: `/api/events-finder/telegram/status`. Poller starts from `server.js` when `TELEGRAM_BOT_TOKEN` is set.
 
 **Setup**
 

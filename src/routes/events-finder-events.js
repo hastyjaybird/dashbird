@@ -447,7 +447,8 @@ router.get('/', async (req, res) => {
     const skippedFeed = [];
     let tasteSkipped = 0;
     let calendarHidden = 0;
-    const filtersBase = { ...(criteria.filters || {}), cities: [] };
+    // Apply full browse filters including cities (client also mirrors city checks).
+    const filtersBase = { ...(criteria.filters || {}) };
     for (const event of deduped) {
       const eventId = String(event?.id || '').trim();
       // Skipped events never enter the main feed — regardless of filter/taste changes.

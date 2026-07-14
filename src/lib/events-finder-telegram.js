@@ -23,11 +23,25 @@ import {
   resolveEventPageUrl,
 } from './events-finder-event-url.js';
 import { cropFlyerRegion, pickBestFlyerImage } from './events-finder-flyer-crop.js';
-import { classifyTelegramMessage, parseTelegramTypeOverride } from './telegram-message-classify.js';
+import {
+  TELEGRAM_CONTACT_IMAGE_KINDS,
+  TELEGRAM_COMPANY_IMAGE_KINDS,
+  TELEGRAM_GUEST_LIST_MAX,
+  classifyTelegramImage,
+  classifyTelegramMessage,
+  cropImageRegion,
+  extractContactHintsFromText,
+  heuristicTelegramImageClassify,
+  parseTelegramTypeOverride,
+} from './telegram-message-classify.js';
 import { createPanelTodo } from './vikunja-client.js';
 import { addNetworkNote } from './network-notes-store.js';
-import { upsertFromTelegram } from './network-contacts-store.js';
-import { enrichContact } from './network-enrich.js';
+import { saveContactAvatar, upsertFromTelegram } from './network-contacts-store.js';
+import {
+  saveOrganizationLogo,
+  upsertOrganizationFromTelegram,
+} from './network-organizations-store.js';
+import { enrichContact, enrichContactFromFile, enrichOrganization } from './network-enrich.js';
 import {
   attachIntakeMediaToMessage,
   deleteTelegramAlbumBuffer,
@@ -834,16 +848,66 @@ function heuristicTelegramClassify(text) {
   if (
     /^(contact|friend|met)\b/i.test(body)
     || /\b(add contact|new contact|phone|linkedin)\b/i.test(lower)
+    || (
+      /\b(?:\+?\d{1,3}[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b|\+\d{8,15}\b/.test(body)
+      && /[A-Za-z]{2,}/.test(body)
+      && body.length < 280
+    )
+    || (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(body) && body.length < 280)
   ) {
-    const name = body.split(/[,\n]/)[0]?.replace(/^(contact|friend|met)\b[:\s-]*/i, '').trim() || body;
+    const hints = extractContactHintsFromText(body);
+    const name =
+      hints.displayName
+      || body.split(/[,\n]/)[0]?.replace(/^(contact|friend|met)\b[:\s-]*/i, '').trim()
+      || body;
     return {
       ok: true,
       type: 'contact',
-      confidence: 0.5,
+      confidence: hints.phone || hints.email || hints.linkedin ? 0.72 : 0.5,
       reason: 'heuristic_contact',
       todoText: null,
       noteText: null,
-      contact: { displayName: name, notes: body, aliases: [], kind: 'friend' },
+      contact: {
+        displayName: name,
+        notes: body,
+        aliases: [],
+        kind: 'friend',
+        org: hints.org,
+        email: hints.email,
+        phone: hints.phone,
+        officePhone: hints.officePhone,
+        telegram: hints.telegram,
+        linkedin: hints.linkedin,
+        website: hints.website,
+      },
+      company: null,
+    };
+  }
+  if (
+    /^(company|org|organization)\b/i.test(body)
+    || /\b(add company|new company|new org)\b/i.test(lower)
+  ) {
+    const hints = extractContactHintsFromText(body);
+    const name =
+      hints.displayName
+      || body.split(/[,\n]/)[0]?.replace(/^(company|org|organization)\b[:\s-]*/i, '').trim()
+      || body;
+    return {
+      ok: true,
+      type: 'company',
+      confidence: 0.65,
+      reason: 'heuristic_company',
+      todoText: null,
+      noteText: null,
+      contact: null,
+      company: {
+        name,
+        website: hints.website,
+        phone: hints.phone,
+        email: hints.email,
+        linkedin: hints.linkedin,
+        notes: body,
+      },
     };
   }
   // Bare invite / ticket URLs are almost certainly events.
@@ -871,12 +935,14 @@ function heuristicTelegramClassify(text) {
     todoText: null,
     noteText: null,
     contact: null,
+    company: null,
   };
 }
 
 /**
- * Process one Telegram message: classify → event | todo | note | contact.
- * Flyer photos/albums still prefer the event path.
+ * Process one Telegram message: classify → event | todo | note | contact | company.
+ * Photos run a vision intake-kind classifier (flyer vs card/LinkedIn/headshot/logo).
+ *
  * @param {any} message
  * @param {NodeJS.ProcessEnv} [env]
  * @param {{ notifyUser?: boolean }} [opts]
@@ -892,7 +958,7 @@ export async function processTelegramEventMessage(message, env = process.env, op
     await telegramSendMessage(
       chatId,
       allowed
-        ? 'Dashbird intake is ready. Send text, voice, or a flyer photo.\nI classify as event / todo / note / contact.\nOverrides: /event /todo /note /contact …\nAlbums of screenshots → one event.'
+        ? 'Dashbird intake is ready. Send text, voice, flyer, business card, LinkedIn screenshot, guest list, headshot, or company logo.\nI classify as event / todo / note / contact / company.\nOverrides: /event /todo /note /contact /company …\nAlbums of screenshots → one event.'
         : `Your Telegram chat id is ${chatId}.\nAdd it to TELEGRAM_ALLOWED_CHAT_IDS in Dashbird .env, then restart.`,
       env,
     );
@@ -902,7 +968,7 @@ export async function processTelegramEventMessage(message, env = process.env, op
   if (text === '/help') {
     await telegramSendMessage(
       chatId,
-      'Send:\n• Flyer photo / album → event\n• Voice or text → auto-classified\n• /todo buy milk\n• /note idea for weekend\n• /contact Sam, met at party, 555-…\n• /event July 18 Rooftop Jazz invited by Maya',
+      'Send:\n• Flyer photo / album → event\n• Business card / LinkedIn / headshot → contact\n• Guest list screenshot → contacts (everyone listed)\n• Company logo → company card\n• Voice or text → auto-classified\n• Name + phone → contact\n• /todo buy milk\n• /note idea for weekend\n• /contact Sam, met at party, 555-…\n• /company Acme Labs, acme.com\n• /event July 18 Rooftop Jazz invited by Maya',
       env,
     );
     return { ok: true, skipped: true, reason: 'help' };
@@ -936,7 +1002,7 @@ export async function processTelegramEventMessage(message, env = process.env, op
       : null;
   })();
 
-  // Flyer / image → event path (legacy), unless caption has an explicit non-event override.
+  // Flyer / CRM image → classify kind, then event | contact | company.
   if (
     photoId
     || docIsImage
@@ -944,13 +1010,139 @@ export async function processTelegramEventMessage(message, env = process.env, op
     || getAttachedIntakeMedia(message, 'document_image')
   ) {
     const override = parseTelegramTypeOverride(caption || text);
-    if (override && override.type !== 'event') {
+    if (override && (override.type === 'todo' || override.type === 'note')) {
       return routeNonEventType(override.type, override.rest || caption || text, chatId, env, {
         force: true,
       });
     }
+
+    const kind = photoId || getAttachedIntakeMedia(message, 'photo') ? 'photo' : 'document_image';
+    const fileId = photoId || docIsImage || '';
+    let file;
+    try {
+      file = await resolveTelegramMedia(message, kind, fileId, env);
+    } catch (e) {
+      await notifyIntake(chatId, `Image download failed: ${String(e?.message || e).slice(0, 160)}`, env, {
+        notifyUser,
+      });
+      return { ok: false, error: String(e?.message || e) };
+    }
+
+    const mime = file.mimeType || 'image/jpeg';
+    const dataUrl = `data:${mime.startsWith('image/') ? mime : 'image/jpeg'};base64,${file.buffer.toString('base64')}`;
+
+    if (override?.type === 'event') {
+      return ingestTelegramEventFromMessage(message, env, {
+        photoId: fileId,
+        caption,
+        text,
+        notifyUser,
+      });
+    }
+    if (override?.type === 'contact') {
+      return ingestTelegramContactFromImage(message, file, env, {
+        caption: override.rest || caption || text,
+        classified: null,
+        forceKind: 'business_card',
+        notifyUser,
+      });
+    }
+    if (override?.type === 'company') {
+      return ingestTelegramCompanyFromImage(message, file, env, {
+        caption: override.rest || caption || text,
+        classified: null,
+        notifyUser,
+      });
+    }
+
+    let classified = null;
+    try {
+      classified = await classifyTelegramImage(dataUrl, caption || text || '', env);
+    } catch (e) {
+      console.warn('[telegram-events] image classify error', e?.message || e);
+    }
+    if (!classified?.ok) {
+      const heur = heuristicTelegramImageClassify(caption || text || '');
+      if (heur) classified = heur;
+    }
+
+    const imageKind = String(classified?.kind || '').toLowerCase();
+    const conf = Number(classified?.confidence) || 0;
+
+    if (
+      imageKind === 'guest_list'
+      && (conf >= 0.45
+        || classified?.reason === 'heuristic_caption_guest_list'
+        || (Array.isArray(classified?.contacts) && classified.contacts.length >= 1))
+    ) {
+      return ingestTelegramGuestListFromImage(message, file, env, {
+        caption: caption || text,
+        classified,
+        notifyUser,
+      });
+    }
+    if (
+      TELEGRAM_CONTACT_IMAGE_KINDS.has(imageKind)
+      && (conf >= 0.45 || classified?.reason === 'heuristic_caption_contact' || classified?.reason === 'heuristic_caption_crm')
+    ) {
+      return ingestTelegramContactFromImage(message, file, env, {
+        caption: caption || text,
+        classified,
+        notifyUser,
+      });
+    }
+    if (
+      TELEGRAM_COMPANY_IMAGE_KINDS.has(imageKind)
+      && (conf >= 0.45 || classified?.reason === 'heuristic_caption_company' || classified?.reason === 'heuristic_caption_logo')
+    ) {
+      return ingestTelegramCompanyFromImage(message, file, env, {
+        caption: caption || text,
+        classified,
+        notifyUser,
+      });
+    }
+
+    // Ambiguous CRM-ish caption with phone/email → contact even if vision said other.
+    const captionHints = extractContactHintsFromText(caption || text || '');
+    if (
+      (imageKind === 'other' || !classified?.ok)
+      && captionHints.displayName
+      && (captionHints.phone || captionHints.email || captionHints.linkedin)
+    ) {
+      return ingestTelegramContactFromImage(message, file, env, {
+        caption: caption || text,
+        classified: {
+          ok: true,
+          kind: 'business_card',
+          confidence: 0.55,
+          reason: 'caption_contact_hints',
+          hasHeadshot: Boolean(classified?.hasHeadshot),
+          headshotCrop: classified?.headshotCrop || null,
+          hasLogo: Boolean(classified?.hasLogo),
+          logoCrop: classified?.logoCrop || null,
+          contact: {
+            displayName: captionHints.displayName,
+            notes: caption || text,
+            aliases: [],
+            kind: 'business',
+            org: captionHints.org,
+            email: captionHints.email,
+            phone: captionHints.phone,
+            officePhone: captionHints.officePhone,
+            telegram: captionHints.telegram,
+            linkedin: captionHints.linkedin,
+            website: captionHints.website,
+            title: null,
+            location: null,
+          },
+          company: null,
+        },
+        notifyUser,
+      });
+    }
+
     return ingestTelegramEventFromMessage(message, env, {
-      photoId: photoId || docIsImage || '',
+      photoId: fileId,
       caption,
       text,
       notifyUser,
@@ -1018,7 +1210,7 @@ export async function processTelegramEventMessage(message, env = process.env, op
   if (!classified.ok || !classified.type) {
     await notifyIntake(
       chatId,
-      `Could not classify (${classified.error || 'unknown'}). Try /event /todo /note /contact.`,
+      `Could not classify (${classified.error || 'unknown'}). Try /event /todo /note /contact /company.`,
       env,
       { notifyUser },
     );
@@ -1029,7 +1221,7 @@ export async function processTelegramEventMessage(message, env = process.env, op
   if (confidence < 0.55 && classified.reason !== 'command_override') {
     await notifyIntake(
       chatId,
-      `Not sure if this is an event, todo, note, or contact (confidence ${confidence.toFixed(2)}).\nReply with /event /todo /note or /contact plus the text.`,
+      `Not sure if this is an event, todo, note, contact, or company (confidence ${confidence.toFixed(2)}).\nReply with /event /todo /note /contact or /company plus the text.`,
       env,
       { notifyUser },
     );
@@ -1087,8 +1279,10 @@ async function routeNonEventType(type, text, chatId, env, meta = {}) {
 
   if (type === 'contact') {
     const c = classified.contact && typeof classified.contact === 'object' ? classified.contact : {};
+    const hints = extractContactHintsFromText(text);
     const displayName =
       String(c.displayName || '').trim()
+      || hints.displayName
       || String(text).split(/[,\n]/)[0]?.trim()
       || '';
     if (!displayName) {
@@ -1102,14 +1296,19 @@ async function routeNonEventType(type, text, chatId, env, meta = {}) {
           aliases: Array.isArray(c.aliases) ? c.aliases : [],
           kinds: c.kind === 'business' ? ['business'] : ['friend'],
           notes: String(c.notes || text).trim(),
-          org: c.org || '',
+          org: c.org || hints.org || '',
           title: c.title || '',
+          location: c.location || '',
+          address: c.address || '',
+          website: c.website || hints.website || '',
           tags: ['telegram'],
           channels: {
-            email: c.email || null,
-            phone: c.phone || null,
-            telegram: c.telegram || null,
-            linkedin: c.linkedin || null,
+            email: c.email || hints.email || null,
+            phone: c.phone || hints.phone || null,
+            officePhone: c.officePhone || hints.officePhone || null,
+            telegram: c.telegram || hints.telegram || null,
+            linkedin: c.linkedin || hints.linkedin || null,
+            urls: c.website || hints.website ? [c.website || hints.website].filter(Boolean) : [],
           },
         },
         env,
@@ -1134,8 +1333,472 @@ async function routeNonEventType(type, text, chatId, env, meta = {}) {
     }
   }
 
-  await telegramSendMessage(chatId, `Unknown type “${type}”. Use /event /todo /note /contact.`, env);
+  if (type === 'company') {
+    const co = classified.company && typeof classified.company === 'object' ? classified.company : {};
+    const hints = extractContactHintsFromText(text);
+    const name =
+      String(co.name || '').trim()
+      || hints.displayName
+      || String(text).split(/[,\n]/)[0]?.trim()
+      || '';
+    if (!name) {
+      await telegramSendMessage(chatId, 'Company needs a name. Try: /company Acme Labs, acme.com', env);
+      return { ok: false, error: 'company_name_required', type: 'company' };
+    }
+    try {
+      let org = await upsertOrganizationFromTelegram(
+        {
+          name,
+          notes: String(co.notes || text).trim(),
+          website: co.website || hints.website || '',
+          phone: co.phone || hints.phone || '',
+          email: co.email || hints.email || '',
+          linkedin: co.linkedin || hints.linkedin || '',
+          location: co.location || '',
+        },
+        env,
+      );
+      try {
+        const er = await enrichOrganization(org.id, {}, env);
+        if (er.ok && er.organization) org = er.organization;
+      } catch {
+        // ignore
+      }
+      await telegramSendMessage(chatId, `Company saved: ${org.name}`, env);
+      return { ok: true, type: 'company', organization: org };
+    } catch (e) {
+      await telegramSendMessage(chatId, `Company failed: ${String(e?.message || e).slice(0, 200)}`, env);
+      return { ok: false, error: String(e?.message || e), type: 'company' };
+    }
+  }
+
+  await telegramSendMessage(chatId, `Unknown type “${type}”. Use /event /todo /note /contact /company.`, env);
   return { ok: false, error: 'unknown_type', type };
+}
+
+/**
+ * @param {Buffer} buf
+ * @param {string} mimeType
+ */
+function bufferToDataUrl(buf, mimeType = 'image/jpeg') {
+  const mime = String(mimeType || 'image/jpeg').startsWith('image/')
+    ? String(mimeType || 'image/jpeg')
+    : 'image/jpeg';
+  return `data:${mime};base64,${buf.toString('base64')}`;
+}
+
+/**
+ * Guest / RSVP / attendee list screenshot → many Network contacts.
+ * @param {any} message
+ * @param {{ buffer: Buffer, filePath?: string, mimeType?: string }} file
+ * @param {NodeJS.ProcessEnv} env
+ * @param {{ caption?: string, classified?: object | null, notifyUser?: boolean }} [meta]
+ */
+async function ingestTelegramGuestListFromImage(message, file, env, meta = {}) {
+  const chatId = message?.chat?.id;
+  const notifyUser = meta.notifyUser !== false;
+  const caption = String(meta.caption || message?.caption || message?.text || '').trim();
+  const classified = meta.classified && typeof meta.classified === 'object' ? meta.classified : {};
+  const eventName = String(classified.eventName || '').trim() || null;
+  const noteBase = [
+    eventName ? `Guest list: ${eventName}` : 'Guest list (Telegram)',
+    caption && caption !== eventName ? caption : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 2000);
+
+  /** @type {object[]} */
+  let people = Array.isArray(classified.contacts) ? classified.contacts.filter((c) => c?.displayName) : [];
+  if (!people.length && classified.contact?.displayName) {
+    people = [classified.contact];
+  }
+
+  // Vision may have labeled guest_list but failed to fill contacts — one more pass via enrich prompt is too heavy;
+  // ask the user to caption if empty.
+  if (!people.length) {
+    await notifyIntake(
+      chatId,
+      'Looks like a guest list, but I could not read any names. Resend with a clearer crop, or caption /contact Name1, Name2…',
+      env,
+      { notifyUser },
+    );
+    return { ok: false, error: 'guest_list_empty', type: 'contact' };
+  }
+
+  people = people.slice(0, TELEGRAM_GUEST_LIST_MAX);
+  /** @type {object[]} */
+  const saved = [];
+  /** @type {string[]} */
+  const failed = [];
+
+  for (const person of people) {
+    const displayName = String(person.displayName || '').trim();
+    if (!displayName) continue;
+    try {
+      let contact = await upsertFromTelegram(
+        {
+          displayName,
+          aliases: Array.isArray(person.aliases) ? person.aliases : [],
+          kinds: person.kind === 'business' ? ['business'] : ['friend'],
+          notes: String(person.notes || noteBase).trim(),
+          org: person.org || '',
+          title: person.title || '',
+          location: person.location || '',
+          address: person.address || '',
+          website: person.website || '',
+          channels: {
+            email: person.email || null,
+            phone: person.phone || null,
+            officePhone: person.officePhone || null,
+            telegram: person.telegram || null,
+            linkedin: person.linkedin || null,
+            urls: person.website ? [person.website] : [],
+          },
+        },
+        env,
+      );
+
+      if ((person.hasHeadshot || person.headshotCrop) && !contact.avatarUrl && person.headshotCrop) {
+        try {
+          const avatarBuf = await cropImageRegion(file.buffer, person.headshotCrop);
+          if (avatarBuf) {
+            contact = await saveContactAvatar(
+              contact.id,
+              { base64: avatarBuf.toString('base64'), mimeType: 'image/jpeg' },
+              env,
+            );
+          }
+        } catch (e) {
+          console.warn('[telegram-events] guest avatar crop failed', displayName, e?.message || e);
+        }
+      }
+
+      saved.push(contact);
+    } catch (e) {
+      failed.push(displayName);
+      console.warn('[telegram-events] guest upsert failed', displayName, e?.message || e);
+    }
+  }
+
+  if (!saved.length) {
+    await notifyIntake(chatId, 'Guest list ingest failed — could not save any contacts.', env, {
+      notifyUser,
+    });
+    return { ok: false, error: 'guest_list_save_failed', type: 'contact' };
+  }
+
+  const preview = saved
+    .slice(0, 8)
+    .map((c) => c.displayName)
+    .join(', ');
+  const more = saved.length > 8 ? ` (+${saved.length - 8} more)` : '';
+  const failBit = failed.length ? `\nSkipped ${failed.length}: ${failed.slice(0, 5).join(', ')}` : '';
+  await notifyIntake(
+    chatId,
+    `Guest list → ${saved.length} contact${saved.length === 1 ? '' : 's'}${
+      eventName ? ` · ${eventName}` : ''
+    }:\n${preview}${more}${failBit}`,
+    env,
+    { notifyUser },
+  );
+
+  return {
+    ok: true,
+    type: 'contact',
+    imageKind: 'guest_list',
+    eventName,
+    contacts: saved,
+    saved: saved.length,
+    failed: failed.length,
+    // Keep single-contact shape for older status tooling.
+    contact: saved[0],
+  };
+}
+
+/**
+ * Business card / LinkedIn / social / headshot → Network contact (+ optional company logo).
+ * @param {any} message
+ * @param {{ buffer: Buffer, filePath?: string, mimeType?: string }} file
+ * @param {NodeJS.ProcessEnv} env
+ * @param {{
+ *   caption?: string,
+ *   classified?: object | null,
+ *   forceKind?: string,
+ *   notifyUser?: boolean,
+ * }} [meta]
+ */
+async function ingestTelegramContactFromImage(message, file, env, meta = {}) {
+  const chatId = message?.chat?.id;
+  const notifyUser = meta.notifyUser !== false;
+  const caption = String(meta.caption || message?.caption || message?.text || '').trim();
+  const classified = meta.classified && typeof meta.classified === 'object' ? meta.classified : {};
+  const c = classified.contact && typeof classified.contact === 'object' ? classified.contact : {};
+  const co = classified.company && typeof classified.company === 'object' ? classified.company : {};
+  const hints = extractContactHintsFromText(caption);
+
+  const displayName =
+    String(c.displayName || '').trim()
+    || hints.displayName
+    || caption.split(/[,\n]/)[0]?.replace(/^\/contact(?:@\w+)?\s*/i, '').trim()
+    || '';
+
+  if (!displayName) {
+    await notifyIntake(
+      chatId,
+      'Looks like a contact photo, but I need a name. Caption with /contact Jane Doe or resend with the name visible.',
+      env,
+      { notifyUser },
+    );
+    return { ok: false, error: 'contact_name_required', type: 'contact' };
+  }
+
+  const imageKind = String(classified.kind || meta.forceKind || 'business_card').toLowerCase();
+  // Physical/digital business cards are always Type = business only (not friend).
+  const kinds = imageKind === 'business_card' ? ['business'] : c.kind === 'business' ? ['business'] : ['friend'];
+
+  try {
+    let contact = await upsertFromTelegram(
+      {
+        displayName,
+        aliases: Array.isArray(c.aliases) ? c.aliases : [],
+        kinds,
+        notes: String(c.notes || caption || `Telegram ${classified.kind || 'contact'} photo`).trim(),
+        org: c.org || co.name || hints.org || '',
+        title: c.title || '',
+        location: c.location || co.location || '',
+        address: c.address || '',
+        website: c.website || co.website || hints.website || '',
+        channels: {
+          email: c.email || hints.email || null,
+          phone: c.phone || hints.phone || null,
+          officePhone: c.officePhone || hints.officePhone || null,
+          telegram: c.telegram || hints.telegram || null,
+          linkedin: c.linkedin || hints.linkedin || null,
+          urls: [c.website, co.website, hints.website].filter(Boolean),
+        },
+      },
+      env,
+    );
+
+    const mime = file.mimeType || 'image/jpeg';
+    const dataUrl = bufferToDataUrl(file.buffer, mime);
+    const wantAvatar = Boolean(classified.hasHeadshot) || imageKind === 'headshot';
+
+    // Prefer a cropped face region; only use the full frame for pure headshots.
+    if (wantAvatar && !contact.avatarUrl) {
+      try {
+        let avatarBuf = null;
+        if (classified.headshotCrop) {
+          avatarBuf = await cropImageRegion(file.buffer, classified.headshotCrop);
+        }
+        if (!avatarBuf && imageKind === 'headshot') {
+          avatarBuf = file.buffer;
+        }
+        if (avatarBuf) {
+          contact = await saveContactAvatar(
+            contact.id,
+            {
+              base64: avatarBuf.toString('base64'),
+              mimeType: avatarBuf === file.buffer ? mime : 'image/jpeg',
+            },
+            env,
+          );
+        }
+      } catch (e) {
+        console.warn('[telegram-events] avatar apply failed', e?.message || e);
+      }
+    }
+
+    try {
+      const er = await enrichContactFromFile(
+        contact.id,
+        {
+          dataUrl,
+          filename: path.basename(file.filePath || 'telegram-contact.jpg'),
+          mimeType: mime,
+          force: true,
+          useImageAsAvatar: imageKind === 'headshot' && !contact.avatarUrl,
+        },
+        env,
+      );
+      if (er.ok && er.contact) contact = er.contact;
+    } catch (e) {
+      console.warn('[telegram-events] contact file enrich failed', e?.message || e);
+    }
+
+    // Best-effort web enrich for LinkedIn / missing fields.
+    try {
+      const er = await enrichContact(contact.id, {}, env);
+      if (er.ok && er.contact) contact = er.contact;
+    } catch {
+      // ignore
+    }
+
+    // If company was identified on the card, ensure org + optional logo.
+    const orgName = String(co.name || contact.org || '').trim();
+    if (orgName) {
+      try {
+        let org = await upsertOrganizationFromTelegram(
+          {
+            name: orgName,
+            website: co.website || '',
+            phone: co.phone || '',
+            email: co.email || '',
+            linkedin: co.linkedin || '',
+            location: co.location || '',
+            notes: co.notes || `From Telegram contact ${displayName}`,
+          },
+          env,
+        );
+        if (classified.hasLogo || classified.logoCrop) {
+          try {
+            let logoBuf = null;
+            if (classified.logoCrop) {
+              logoBuf = await cropImageRegion(file.buffer, classified.logoCrop, { maxEdge: 512 });
+            }
+            // Only use full image as logo when the image is primarily a logo (not a person card).
+            if (!logoBuf && imageKind === 'company_logo') logoBuf = file.buffer;
+            if (logoBuf) {
+              org = await saveOrganizationLogo(
+                org.id,
+                {
+                  base64: logoBuf.toString('base64'),
+                  mimeType: logoBuf === file.buffer ? mime : 'image/jpeg',
+                },
+                env,
+              );
+            } else {
+              console.warn(
+                '[telegram-events] logo crop empty',
+                JSON.stringify({
+                  hasLogo: Boolean(classified.hasLogo),
+                  logoCrop: classified.logoCrop || null,
+                  imageKind,
+                }),
+              );
+            }
+          } catch (e) {
+            console.warn('[telegram-events] company logo from contact card failed', e?.message || e);
+          }
+        }
+        // Link contact → org if still missing orgId.
+        if (!contact.orgId || contact.org !== org.name) {
+          const { updateContact } = await import('./network-contacts-store.js');
+          contact = await updateContact(contact.id, { org: org.name, orgId: org.id }, env);
+        }
+      } catch (e) {
+        console.warn('[telegram-events] org from contact image failed', e?.message || e);
+      }
+    }
+
+    await notifyIntake(
+      chatId,
+      `Contact saved: ${contact.displayName}${contact.org ? ` (${contact.org})` : ''}${
+        contact.avatarUrl ? ' · photo set' : ''
+      }`,
+      env,
+      { notifyUser },
+    );
+    return {
+      ok: true,
+      type: 'contact',
+      contact,
+      imageKind,
+      hasHeadshot: Boolean(classified.hasHeadshot),
+    };
+  } catch (e) {
+    await notifyIntake(chatId, `Contact failed: ${String(e?.message || e).slice(0, 200)}`, env, {
+      notifyUser,
+    });
+    return { ok: false, error: String(e?.message || e), type: 'contact' };
+  }
+}
+
+/**
+ * Company logo / brand mark → Network organization card.
+ * @param {any} message
+ * @param {{ buffer: Buffer, filePath?: string, mimeType?: string }} file
+ * @param {NodeJS.ProcessEnv} env
+ * @param {{ caption?: string, classified?: object | null, notifyUser?: boolean }} [meta]
+ */
+async function ingestTelegramCompanyFromImage(message, file, env, meta = {}) {
+  const chatId = message?.chat?.id;
+  const notifyUser = meta.notifyUser !== false;
+  const caption = String(meta.caption || message?.caption || message?.text || '').trim();
+  const classified = meta.classified && typeof meta.classified === 'object' ? meta.classified : {};
+  const co = classified.company && typeof classified.company === 'object' ? classified.company : {};
+  const hints = extractContactHintsFromText(caption);
+
+  const name =
+    String(co.name || '').trim()
+    || hints.displayName
+    || caption.split(/[,\n]/)[0]?.replace(/^\/company(?:@\w+)?\s*/i, '').trim()
+    || '';
+
+  if (!name) {
+    await notifyIntake(
+      chatId,
+      'Looks like a company logo, but I need a name. Caption with /company Acme Labs.',
+      env,
+      { notifyUser },
+    );
+    return { ok: false, error: 'company_name_required', type: 'company' };
+  }
+
+  try {
+    let org = await upsertOrganizationFromTelegram(
+      {
+        name,
+        notes: String(co.notes || caption || 'Telegram company logo').trim(),
+        website: co.website || hints.website || '',
+        phone: co.phone || hints.phone || '',
+        email: co.email || hints.email || '',
+        linkedin: co.linkedin || hints.linkedin || '',
+        location: co.location || '',
+      },
+      env,
+    );
+
+    const mime = file.mimeType || 'image/jpeg';
+    try {
+      let logoBuf = null;
+      if (classified.logoCrop) {
+        logoBuf = await cropImageRegion(file.buffer, classified.logoCrop, { maxEdge: 512 });
+      }
+      if (!logoBuf) logoBuf = file.buffer;
+      org = await saveOrganizationLogo(
+        org.id,
+        {
+          base64: logoBuf.toString('base64'),
+          mimeType: logoBuf === file.buffer ? mime : 'image/jpeg',
+        },
+        env,
+      );
+    } catch (e) {
+      console.warn('[telegram-events] company logo apply failed', e?.message || e);
+    }
+
+    try {
+      const er = await enrichOrganization(org.id, {}, env);
+      if (er.ok && er.organization) org = er.organization;
+    } catch {
+      // ignore
+    }
+
+    await notifyIntake(
+      chatId,
+      `Company saved: ${org.name}${org.logoUrl ? ' · logo set' : ''}`,
+      env,
+      { notifyUser },
+    );
+    return { ok: true, type: 'company', organization: org };
+  } catch (e) {
+    await notifyIntake(chatId, `Company failed: ${String(e?.message || e).slice(0, 200)}`, env, {
+      notifyUser,
+    });
+    return { ok: false, error: String(e?.message || e), type: 'company' };
+  }
 }
 
 /**
@@ -1560,7 +2223,7 @@ export async function probeTelegramEventsIntake(env = process.env) {
     return {
       active: true,
       value: `Bot ${username} · polling`,
-      output: `Allowlist ${allowed.length} chat(s). Text, voice, and flyer screenshots → Events catalog. Durable intake queue survives Bot API 24h retention.`,
+      output: `Allowlist ${allowed.length} chat(s). Text/voice/photos → event, todo, note, contact, or company. Durable intake queue survives Bot API 24h retention.`,
       ingestOk: true,
       ingestTest: `Pass — ${username} ready (${allowed.length} chat id(s))`,
       bot: me,

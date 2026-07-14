@@ -852,81 +852,174 @@ function stripHtml(html) {
  * @param {string} email
  * @param {NodeJS.ProcessEnv} [env]
  */
-export async function probeGmailMailbox(email, env = process.env) {
+export async function probeGmailMailbox(email, env = process.env, opts = {}) {
   const address = normalizeGmailAddress(email);
-  const appPassword = gmailAppPasswordFor(address, env);
-  if (appPassword) {
-    const { probeGmailMailboxViaImap } = await import('./events-finder-gmail-imap.js');
-    return probeGmailMailboxViaImap(address, appPassword, env);
-  }
-  const auth = await getGmailAccessTokenFor(address, env);
-  if (!auth.ok) {
-    return {
-      ok: false,
-      ingestOk: null,
-      active: false,
-      connected: false,
-      value: auth.code === 'oauth_not_configured'
-        ? 'OAuth app not configured'
-        : 'Gmail not connected',
-      output: auth.error || 'Connect Gmail intake OAuth',
-      ingestTest:
-        auth.code === 'oauth_not_configured'
-          ? 'Not wired — set GOOGLE_OAUTH_CLIENT_ID / SECRET in .env'
-          : `Not wired — connect ${address} (OAuth or App Password)`,
-      email: address,
-      messageCount: 0,
-    };
-  }
+  const quick = Boolean(opts.quick);
+  const timeoutMs = Math.max(500, Number(opts.timeoutMs) || (quick ? 2500 : 20_000));
 
-  try {
-    const q = encodeURIComponent(gmailEventsQuery(env));
-    const list = await gmailGet(
-      auth.accessToken,
-      `/users/me/messages?maxResults=40&q=${q}`,
-    );
-    const profile = await gmailGet(auth.accessToken, '/users/me/profile');
-    const profileEmail = String(profile?.emailAddress || auth.email || address).toLowerCase();
-    const count = Array.isArray(list?.messages) ? list.messages.length : 0;
-    const resultSize = Number(list?.resultSizeEstimate || count) || count;
-
-    if (profileEmail && profileEmail !== address) {
+  // Settings: filesystem-only — never block on Google token refresh / message list.
+  if (quick) {
+    const client = gmailOAuthClient(env);
+    if (!client) {
       return {
-        ok: true,
-        ingestOk: false,
-        active: true,
-        connected: true,
-        value: `Connected as ${profileEmail} (expected ${address})`,
-        output: `Wrong mailbox — re-auth with login_hint ${address}`,
-        ingestTest: `Fail — token is ${profileEmail}, want ${address}`,
-        email: profileEmail,
-        messageCount: count,
+        ok: false,
+        ingestOk: null,
+        active: false,
+        connected: false,
+        value: 'OAuth app not configured',
+        output: 'Set GOOGLE_OAUTH_CLIENT_ID / SECRET in .env',
+        ingestTest: 'Not wired — set GOOGLE_OAUTH_CLIENT_ID / SECRET in .env',
+        email: address,
+        messageCount: 0,
       };
     }
-
+    const appPassword = gmailAppPasswordFor(address, env);
+    if (appPassword) {
+      return {
+        ok: true,
+        ingestOk: true,
+        active: true,
+        connected: true,
+        value: `App Password configured (${address})`,
+        output: 'IMAP credentials on disk (skipped live IMAP for speed)',
+        ingestTest: 'Pass — App Password present',
+        email: address,
+        messageCount: 0,
+      };
+    }
+    const stored = await loadGmailTokenFor(address, env);
+    if (!stored?.refresh_token && !stored?.access_token) {
+      return {
+        ok: false,
+        ingestOk: null,
+        active: false,
+        connected: false,
+        value: 'Gmail not connected',
+        output: `Connect ${address} via Settings → Events sources`,
+        ingestTest: `Not wired — connect ${address} (OAuth or App Password)`,
+        email: address,
+        messageCount: 0,
+      };
+    }
+    const expiry = Number(stored.expiry_date) || 0;
+    const freshAccess = Boolean(stored.access_token && expiry > Date.now() + 60_000);
+    const emailOnFile = normalizeGmailAddress(stored.email) || address;
     return {
       ok: true,
       ingestOk: true,
       active: true,
       connected: true,
-      value: `Connected (${profileEmail}) · API ok`,
-      output: `${resultSize} candidate message(s) in query window`,
-      ingestTest: `Pass — ${count} recent message(s) matched event query`,
-      email: profileEmail,
-      messageCount: count,
-    };
-  } catch (e) {
-    return {
-      ok: false,
-      ingestOk: false,
-      active: false,
-      connected: true,
-      value: 'Gmail API error',
-      output: String(e?.message || e).slice(0, 120),
-      ingestTest: `Fail — ${String(e?.message || e).slice(0, 100)}`,
-      email: address,
+      value: freshAccess
+        ? `Connected (${emailOnFile}) · token fresh`
+        : `Connected (${emailOnFile}) · refresh on file`,
+      output: freshAccess
+        ? 'OAuth access token still valid on disk'
+        : 'Refresh token on disk (live API check skipped for Settings speed)',
+      ingestTest: 'Pass — Gmail OAuth credentials on disk',
+      email: emailOnFile,
       messageCount: 0,
     };
+  }
+
+  const run = async () => {
+    const appPassword = gmailAppPasswordFor(address, env);
+    if (appPassword) {
+      const { probeGmailMailboxViaImap } = await import('./events-finder-gmail-imap.js');
+      return probeGmailMailboxViaImap(address, appPassword, env);
+    }
+    const auth = await getGmailAccessTokenFor(address, env);
+    if (!auth.ok) {
+      return {
+        ok: false,
+        ingestOk: null,
+        active: false,
+        connected: false,
+        value: auth.code === 'oauth_not_configured'
+          ? 'OAuth app not configured'
+          : 'Gmail not connected',
+        output: auth.error || 'Connect Gmail intake OAuth',
+        ingestTest:
+          auth.code === 'oauth_not_configured'
+            ? 'Not wired — set GOOGLE_OAUTH_CLIENT_ID / SECRET in .env'
+            : `Not wired — connect ${address} (OAuth or App Password)`,
+        email: address,
+        messageCount: 0,
+      };
+    }
+
+    try {
+      const q = encodeURIComponent(gmailEventsQuery(env));
+      const list = await gmailGet(
+        auth.accessToken,
+        `/users/me/messages?maxResults=40&q=${q}`,
+      );
+      const profile = await gmailGet(auth.accessToken, '/users/me/profile');
+      const profileEmail = String(profile?.emailAddress || auth.email || address).toLowerCase();
+      const count = Array.isArray(list?.messages) ? list.messages.length : 0;
+      const resultSize = Number(list?.resultSizeEstimate || count) || count;
+
+      if (profileEmail && profileEmail !== address) {
+        return {
+          ok: true,
+          ingestOk: false,
+          active: true,
+          connected: true,
+          value: `Connected as ${profileEmail} (expected ${address})`,
+          output: `Wrong mailbox — re-auth with login_hint ${address}`,
+          ingestTest: `Fail — token is ${profileEmail}, want ${address}`,
+          email: profileEmail,
+          messageCount: count,
+        };
+      }
+
+      return {
+        ok: true,
+        ingestOk: true,
+        active: true,
+        connected: true,
+        value: `Connected (${profileEmail}) · API ok`,
+        output: `${resultSize} candidate message(s) in query window`,
+        ingestTest: `Pass — ${count} recent message(s) matched event query`,
+        email: profileEmail,
+        messageCount: count,
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        ingestOk: false,
+        active: false,
+        connected: true,
+        value: 'Gmail API error',
+        output: String(e?.message || e).slice(0, 120),
+        ingestTest: `Fail — ${String(e?.message || e).slice(0, 100)}`,
+        email: address,
+        messageCount: 0,
+      };
+    }
+  };
+
+  try {
+    return await Promise.race([
+      run(),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(Object.assign(new Error('gmail_probe_timeout'), { code: 'timeout' })), timeoutMs);
+      }),
+    ]);
+  } catch (e) {
+    if (e?.code === 'timeout' || String(e?.message || e).includes('gmail_probe_timeout')) {
+      return {
+        ok: false,
+        ingestOk: null,
+        active: true,
+        connected: true,
+        value: 'Gmail probe timed out',
+        output: `Still connected — status check exceeded ${timeoutMs}ms`,
+        ingestTest: `Slow — Gmail status check timed out (${timeoutMs}ms)`,
+        email: address,
+        messageCount: 0,
+      };
+    }
+    throw e;
   }
 }
 

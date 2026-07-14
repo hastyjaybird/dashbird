@@ -5,10 +5,26 @@
 
 import { beginWaitCursor, endWaitCursor } from '../lib/wait-cursor.js';
 import { formatContactLastContact } from '../lib/network-last-contact.js';
-import { mountNetworkManageTable } from './network-manage-table.js?v=manage-fill-kbd-3';
+import {
+  collectSceneOptions,
+  joinSceneTokens,
+  splitSceneTokens,
+} from '../lib/network-scenes.js';
+import {
+  invalidateNetworkPrefetch,
+  takeGroupsPrefetch,
+  takeNetworkPrefetch,
+  warmNetworkPages,
+} from '../lib/network-prefetch.js';
+import { mountNetworkManageTable } from './network-manage-table.js?v=fill-highlight-1';
+import { openGroupKindDialog } from '../lib/network-group-kind-dialog.js?v=group-kind-9';
+
+const WORKBENCH_KEY = 'dashbird-network-workbench-v1';
+
 
 const METHOD_LABELS = {
   phone: 'Phone',
+  office_phone: 'Office phone',
   email: 'Email',
   signal: 'Signal',
   whatsapp: 'WhatsApp',
@@ -17,6 +33,43 @@ const METHOD_LABELS = {
 };
 
 const DEFAULT_METHODS = Object.keys(METHOD_LABELS);
+
+/** Fallback until `/api/network/contacts` returns `relationshipStatuses`. */
+const DEFAULT_RELATIONSHIP_STATUSES = [
+  'Lead',
+  'Acquaintance',
+  'Cultivating',
+  'Inner Circle',
+  'Collaborator',
+  'Meta',
+  'Family',
+  'Paused',
+  'Former',
+];
+
+/**
+ * Replace `<select>` options while preserving the current value when possible.
+ * @param {HTMLSelectElement} sel
+ * @param {string[]} options
+ * @param {{ blankLabel?: string }} [opts]
+ */
+function setSelectStringOptions(sel, options, opts = {}) {
+  const prev = sel.value;
+  const blankLabel = opts.blankLabel ?? 'All';
+  sel.replaceChildren();
+  const all = document.createElement('option');
+  all.value = '';
+  all.textContent = blankLabel;
+  sel.append(all);
+  for (const opt of options) {
+    const el = document.createElement('option');
+    el.value = opt;
+    el.textContent = opt;
+    sel.append(el);
+  }
+  if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  else sel.value = '';
+}
 
 /** Compact local display for ISO timestamps: MMDDYY-HH:mm (Pacific). */
 function formatNetworkTimestamp(iso) {
@@ -226,15 +279,19 @@ export function mountNetworkUi(root) {
     { value: 'organizer', label: 'Organizer' },
     { value: 'business', label: 'Business' },
   ]);
-  const relationshipFilter = makeFilterSelect('Relationship', 'filter-relationship', [
-    'Lead',
-    'Cultivating',
-    'Collaborator',
-    'Family',
-    'Acquaintance',
-    'Paused',
-    'Former',
+  const hasKidsFilter = makeFilterSelect('Have kids', 'filter-has-kids', [
+    { value: 'yes', label: 'Yes' },
+    { value: 'no', label: 'No' },
   ]);
+  const hasTaskFilter = makeFilterSelect('Has task', 'filter-has-task', [
+    { value: 'yes', label: 'Yes' },
+    { value: 'no', label: 'No' },
+  ]);
+  const relationshipFilter = makeFilterSelect(
+    'Relationship',
+    'filter-relationship',
+    DEFAULT_RELATIONSHIP_STATUSES,
+  );
   const statusFilter = makeFilterSelect('Status', 'filter-status', [
     'Fan',
     'Hot',
@@ -248,6 +305,8 @@ export function mountNetworkUi(root) {
   ]);
   peopleFilterBar.append(
     kindFilter.wrapEl,
+    hasKidsFilter.wrapEl,
+    hasTaskFilter.wrapEl,
     relationshipFilter.wrapEl,
     statusFilter.wrapEl,
     sensitivityFilter.wrapEl,
@@ -265,6 +324,7 @@ export function mountNetworkUi(root) {
       <label class="network-crm__check"><input type="checkbox" name="bulk-friend" checked> Friend</label>
       <label class="network-crm__check"><input type="checkbox" name="bulk-organizer"> Organizer</label>
       <label class="network-crm__check"><input type="checkbox" name="bulk-business"> Business</label>
+      <label class="network-crm__check"><input type="checkbox" name="bulk-has-kids"> Have kids</label>
     </div>
     <div class="network-crm__bulk-actions">
       <button type="button" class="network-crm__btn network-crm__btn--primary" data-bulk-submit>Add all</button>
@@ -318,10 +378,14 @@ export function mountNetworkUi(root) {
 
   /** @type {object[]} */
   let contacts = [];
+  /** False until the first contacts fetch finishes (success or empty). */
+  let contactsReady = false;
   /** @type {object[]} */
   let organizations = [];
   /** @type {string[]} */
   let methodOptions = DEFAULT_METHODS;
+  /** @type {string[]} */
+  let relationshipOptions = DEFAULT_RELATIONSHIP_STATUSES;
   /** @type {string | null} */
   let selectedId = null;
   /** Unsaved edits in the open contact detail form. */
@@ -332,7 +396,11 @@ export function mountNetworkUi(root) {
   let peopleSubTab = 'contacts';
   /** @type {boolean} */
   let groupsUiMounted = false;
-  /** @type {{ render: () => void, destroy: () => void } | null} */
+  /** @type {{ focus: (opts?: { selectGroupId?: string | null, refresh?: boolean }) => Promise<void> } | null} */
+  let groupsUiApi = null;
+  /** Prefetched groups for instant Groups tab paint. */
+  let groupsCache = [];
+  /** @type {{ render: () => void, syncSelectionUi?: () => void, destroy: () => void } | null} */
   let manageTableApi = null;
   /** @type {string | null} */
   let selectedOrgId = null;
@@ -341,8 +409,60 @@ export function mountNetworkUi(root) {
   /** @type {Set<string>} */
   const selectedOrgIds = new Set();
   let query = '';
-  /** @type {{ kind: string, relationship: string, status: string, sensitivity: string }} */
-  let peopleFilters = { kind: '', relationship: '', status: '', sensitivity: '' };
+  /** @type {{ kind: string, hasKids: string, hasTask: string, relationship: string, status: string, sensitivity: string }} */
+  let peopleFilters = {
+    kind: '',
+    hasKids: '',
+    hasTask: '',
+    relationship: '',
+    status: '',
+    sensitivity: '',
+  };
+
+  function persistWorkbenchState() {
+    try {
+      sessionStorage.setItem(
+        WORKBENCH_KEY,
+        JSON.stringify({
+          view,
+          peopleSubTab,
+          query: search.value || query || '',
+          peopleFilters,
+        }),
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
+   * @returns {{
+   *   view?: 'people' | 'companies',
+   *   peopleSubTab?: 'contacts' | 'manage' | 'groups',
+   *   query?: string,
+   *   peopleFilters?: { kind: string, hasKids: string, hasTask: string, relationship: string, status: string, sensitivity: string },
+   * } | null}
+   */
+  function readWorkbenchState() {
+    try {
+      const raw = sessionStorage.getItem(WORKBENCH_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function applyWorkbenchFiltersToUi() {
+    kindFilter.sel.value = peopleFilters.kind || '';
+    hasKidsFilter.sel.value = peopleFilters.hasKids || '';
+    hasTaskFilter.sel.value = peopleFilters.hasTask || '';
+    relationshipFilter.sel.value = peopleFilters.relationship || '';
+    statusFilter.sel.value = peopleFilters.status || '';
+    sensitivityFilter.sel.value = peopleFilters.sensitivity || '';
+    if (typeof query === 'string') search.value = query;
+  }
   /** Session flag: org detail "More attributes" panel open */
   let orgAttrsExpanded = false;
   /** Session flag: contact detail "More attributes" panel open */
@@ -379,6 +499,8 @@ export function mountNetworkUi(root) {
       enrichedAt: e?.enrichedAt || null,
       rawSummary: e?.rawSummary || null,
       confidence: typeof e?.confidence === 'number' ? e.confidence : null,
+      needsReview: Boolean(e?.needsReview),
+      lastMode: e?.lastMode || null,
     };
   }
 
@@ -390,19 +512,29 @@ export function mountNetworkUi(root) {
   function contactToPutBody(c) {
     return {
       displayName: c.displayName || '',
+      firstName: c.firstName || '',
+      lastName: c.lastName || '',
       nickname: c.nickname || '',
       memoryJog: c.memoryJog || '',
       title: c.title || '',
       org: c.org || '',
       kinds: Array.isArray(c.kinds) && c.kinds.length ? [...c.kinds] : ['friend'],
+      hasKids: Boolean(c.hasKids),
       location: c.location || '',
-      region: c.region || '',
+      address: c.address || '',
       relationshipStatus: c.relationshipStatus || '',
       aliases: Array.isArray(c.aliases) ? [...c.aliases] : [],
       department: c.department || '',
       rating: c.rating || '',
       sensitivity: c.sensitivity || '',
       nextStep: c.nextStep || '',
+      tasks: Array.isArray(c.tasks)
+        ? c.tasks.map((t) => ({
+            id: String(t.id || ''),
+            text: String(t.text || ''),
+            done: Boolean(t.done),
+          }))
+        : [],
       bio: c.bio || '',
       howWeMet: c.howWeMet || '',
       networkCircles: c.networkCircles || '',
@@ -416,9 +548,11 @@ export function mountNetworkUi(root) {
       channels: {
         email: c.channels?.email || null,
         phone: c.channels?.phone || null,
+        officePhone: c.channels?.officePhone || null,
         sms: c.channels?.sms || null,
         signal: c.channels?.signal || null,
         whatsapp: c.channels?.whatsapp || null,
+        telegram: c.channels?.telegram || null,
         linkedin: c.channels?.linkedin || null,
         other: c.channels?.other || null,
         urls: Array.isArray(c.channels?.urls) ? [...c.channels.urls] : [],
@@ -564,6 +698,7 @@ export function mountNetworkUi(root) {
     mergeBtn.disabled = n < 2;
     deleteSelBtn.textContent = `Delete${count}`;
     enhanceSelBtn.textContent = `Enhance${count}`;
+    if (peopleSubTab === 'manage') manageTableApi?.syncSelectionUi?.();
   }
 
   /**
@@ -588,15 +723,13 @@ export function mountNetworkUi(root) {
     } else if (next === 'companies') {
       peopleSubTab = 'contacts';
     }
+    persistWorkbenchState();
     syncTabs();
     if (next === 'people' && peopleSubTab === 'groups') {
       await openGroupsUi({ selectGroupId: opts.selectGroupId || null });
       return;
     }
-    if (groupsUiMounted) {
-      groupsPane.replaceChildren();
-      groupsUiMounted = false;
-    }
+    // Keep Groups UI mounted while hidden so re-entry is instant.
     list.setAttribute('aria-label', next === 'people' ? 'People' : 'Companies');
     list.setAttribute(
       'aria-labelledby',
@@ -614,12 +747,12 @@ export function mountNetworkUi(root) {
     if (peopleSubTab === 'manage') {
       if (!manageDetailOpen) {
         selectedId = null;
-        detail.innerHTML = '<p class="muted">Double-click a row to edit details</p>';
+        detail.innerHTML = '<p class="muted">Double-click a name for details · double-click other cells to edit</p>';
       } else if (selectedId) {
         selectContact(selectedId);
       } else {
         manageDetailOpen = false;
-        detail.innerHTML = '<p class="muted">Double-click a row to edit details</p>';
+        detail.innerHTML = '<p class="muted">Double-click a name for details · double-click other cells to edit</p>';
       }
       syncPeopleSubView();
       return;
@@ -644,33 +777,56 @@ export function mountNetworkUi(root) {
 
   function ensureManageTable() {
     if (manageTableApi) return;
-    manageTableApi = mountNetworkManageTable(managePane, {
-      getContacts: () => filtered(),
-      getSelectedIds: () => selectedContactIds,
-      setSelectedIds: (ids) => {
-        selectedContactIds.clear();
-        for (const id of ids) selectedContactIds.add(id);
-        syncSelectionActions();
-      },
-      onSelectContact: (id) => {
-        manageDetailOpen = true;
-        syncPeopleSubView();
-        selectContact(id);
-      },
-      onContactsUpdated: (updated) => {
-        for (const u of updated) {
-          const idx = contacts.findIndex((x) => x.id === u.id);
-          if (idx >= 0) contacts[idx] = u;
-        }
-        if (peopleSubTab === 'manage') manageTableApi?.render();
-        else if (peopleSubTab === 'contacts') renderList();
-        if (selectedId && updated.some((u) => u.id === selectedId)) {
-          const c = contacts.find((x) => x.id === selectedId);
-          if (c) renderDetail(c);
-        }
-      },
-      showStatus,
-    });
+    try {
+      manageTableApi = mountNetworkManageTable(managePane, {
+        getContacts: () => filtered(),
+        getSelectedIds: () => selectedContactIds,
+        getRelationshipStatuses: () => relationshipOptions,
+        getPreferredContactMethods: () => methodOptions,
+        isLoading: () => !contactsReady,
+        setSelectedIds: (ids) => {
+          selectedContactIds.clear();
+          for (const id of ids) selectedContactIds.add(id);
+          syncSelectionActions();
+        },
+        onSelectContact: (id) => {
+          manageDetailOpen = true;
+          syncPeopleSubView();
+          selectContact(id, { force: true });
+        },
+        onContactsUpdated: (updated) => {
+          for (const u of updated) {
+            const idx = contacts.findIndex((x) => x.id === u.id);
+            if (idx >= 0) contacts[idx] = u;
+          }
+          if (peopleSubTab === 'manage') manageTableApi?.render();
+          else if (peopleSubTab === 'contacts') renderList();
+          if (selectedId && updated.some((u) => u.id === selectedId)) {
+            const c = contacts.find((x) => x.id === selectedId);
+            if (c) renderDetail(c);
+          }
+        },
+        showStatus,
+      });
+    } catch (err) {
+      manageTableApi = null;
+      managePane.replaceChildren();
+      const p = document.createElement('p');
+      p.className = 'muted';
+      p.textContent = 'Manage table failed to load — hard-refresh the page.';
+      managePane.append(p);
+      throw err;
+    }
+  }
+
+  function applyContactEnumsFromApi(j) {
+    if (Array.isArray(j.preferredContactMethods) && j.preferredContactMethods.length) {
+      methodOptions = j.preferredContactMethods;
+    }
+    if (Array.isArray(j.relationshipStatuses) && j.relationshipStatuses.length) {
+      relationshipOptions = j.relationshipStatuses;
+      setSelectStringOptions(relationshipFilter.sel, relationshipOptions);
+    }
   }
 
   function showStatus(msg, isErr = false) {
@@ -681,7 +837,8 @@ export function mountNetworkUi(root) {
 
   function kindsLabel(c) {
     const kinds = Array.isArray(c.kinds) ? c.kinds : [];
-    return kinds.length ? kinds.join(' + ') : 'friend';
+    const base = kinds.length ? kinds.join(' + ') : 'friend';
+    return c.hasKids ? `${base} · have kids` : base;
   }
 
   function filtered() {
@@ -690,6 +847,15 @@ export function mountNetworkUi(root) {
       if (peopleFilters.kind) {
         const kinds = Array.isArray(c.kinds) ? c.kinds.map((k) => String(k).toLowerCase()) : [];
         if (!kinds.includes(peopleFilters.kind.toLowerCase())) return false;
+      }
+      if (peopleFilters.hasKids === 'yes' && !c.hasKids) return false;
+      if (peopleFilters.hasKids === 'no' && c.hasKids) return false;
+      if (peopleFilters.hasTask === 'yes' || peopleFilters.hasTask === 'no') {
+        const hasOpen = Array.isArray(c.tasks)
+          ? c.tasks.some((t) => t && !t.done && String(t.text || '').trim())
+          : Boolean(String(c.nextStep || '').trim());
+        if (peopleFilters.hasTask === 'yes' && !hasOpen) return false;
+        if (peopleFilters.hasTask === 'no' && hasOpen) return false;
       }
       if (peopleFilters.relationship) {
         if (String(c.relationshipStatus || '') !== peopleFilters.relationship) return false;
@@ -703,10 +869,15 @@ export function mountNetworkUi(root) {
       if (!q) return true;
       const hay = [
         c.displayName,
+        c.firstName,
+        c.lastName,
         c.nickname,
         c.memoryJog,
         ...(c.aliases || []),
         ...(c.kinds || []),
+        c.hasKids ? 'have kids kids' : '',
+        ...(Array.isArray(c.tasks) ? c.tasks.map((t) => t?.text || '') : []),
+        c.nextStep,
         ...(c.alignedActivities || []),
         ...(c.preferredContactMethods || []),
         c.summary,
@@ -721,6 +892,7 @@ export function mountNetworkUi(root) {
         c.rating,
         c.sensitivity,
         c.location,
+        c.address,
       ]
         .filter(Boolean)
         .join(' ')
@@ -759,12 +931,18 @@ export function mountNetworkUi(root) {
       img.height = 48;
       box.append(img);
     } else {
-      const initials = String(contact.displayName || '?')
-        .split(/\s+/)
-        .slice(0, 2)
-        .map((p) => p[0] || '')
-        .join('')
-        .toUpperCase();
+      const first = String(contact.firstName || '').trim();
+      const last = String(contact.lastName || '').trim();
+      const initials = first || last
+        ? `${first.charAt(0)}${last.charAt(0)}`.toUpperCase()
+        : String(contact.displayName || '?')
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean)
+            .map((p, i, arr) => (i === 0 || i === arr.length - 1 ? p[0] || '' : ''))
+            .join('')
+            .toUpperCase()
+            .slice(0, 2);
       box.textContent = initials || '?';
     }
     return box;
@@ -795,6 +973,7 @@ export function mountNetworkUi(root) {
   /**
    * Image-candidate picker in a pop-out dialog. Skips broken previews.
    * When `querySearch` is true (logos + people photos), a top text box drives image search.
+   * One Search button: same query with more results continues; otherwise starts fresh.
    * @param {{
    *   candidatesUrl: string,
    *   applyUrl: string,
@@ -938,15 +1117,15 @@ export function mountNetworkUi(root) {
     }
 
     /**
+     * One Search control: same query + hasMore → append; otherwise fresh search.
      * @param {{ reset?: boolean }} [fetchOpts]
      */
     async function loadCandidates(fetchOpts = {}) {
       if (!backdrop) return;
       const grid = backdrop.querySelector('.network-crm__img-pick-grid');
-      const furtherBtn = backdrop.querySelector('.network-crm__img-pick-further');
       const queryInput = backdrop.querySelector('.network-crm__img-pick-query');
       const searchBtn = backdrop.querySelector('.network-crm__img-pick-search');
-      if (!grid || !furtherBtn) return;
+      if (!grid || !searchBtn) return;
 
       const query = querySearch ? String(queryInput?.value || '').trim().slice(0, 160) : '';
       if (querySearch && !query) {
@@ -955,7 +1134,11 @@ export function mountNetworkUi(root) {
         return;
       }
 
-      const reset = Boolean(fetchOpts.reset);
+      let reset = Boolean(fetchOpts.reset);
+      if (fetchOpts.reset == null) {
+        // Button click / Enter: continue when query unchanged and more pages exist.
+        reset = !(hasMore && query === activeQuery && nextOffset > 0);
+      }
       if (reset) {
         nextOffset = 0;
         hasMore = false;
@@ -964,8 +1147,7 @@ export function mountNetworkUi(root) {
         grid.replaceChildren();
       }
 
-      furtherBtn.disabled = true;
-      if (searchBtn) searchBtn.disabled = true;
+      searchBtn.disabled = true;
       if (queryInput) queryInput.disabled = true;
       findBtn.disabled = true;
       const loading = document.createElement('p');
@@ -1009,8 +1191,7 @@ export function mountNetworkUi(root) {
         } else {
           showStatus(added ? `Loaded ${added} image${added === 1 ? '' : 's'}` : 'No new images');
         }
-        furtherBtn.hidden = !hasMore;
-        furtherBtn.disabled = !hasMore;
+        searchBtn.textContent = hasMore ? 'Search further' : 'Search';
       } catch (err) {
         grid.querySelector('[data-loading="1"]')?.remove();
         if (!grid.querySelector('.network-crm__img-pick-item')) {
@@ -1020,11 +1201,10 @@ export function mountNetworkUi(root) {
           grid.replaceChildren(empty);
         }
         showStatus(String(err?.message || err), true);
-        furtherBtn.hidden = !hasMore;
-        furtherBtn.disabled = !hasMore;
+        searchBtn.textContent = hasMore ? 'Search further' : 'Search';
       } finally {
         findBtn.disabled = false;
-        if (searchBtn) searchBtn.disabled = false;
+        searchBtn.disabled = false;
         if (queryInput) queryInput.disabled = false;
       }
     }
@@ -1117,6 +1297,15 @@ export function mountNetworkUi(root) {
       const actions = document.createElement('div');
       actions.className = 'network-crm__img-pick-dialog-actions';
 
+      const searchBtn = document.createElement('button');
+      searchBtn.type = 'button';
+      searchBtn.className =
+        'network-crm__btn network-crm__btn--primary network-crm__btn--tiny network-crm__img-pick-search';
+      searchBtn.textContent = 'Search';
+      searchBtn.addEventListener('click', () => {
+        void loadCandidates({});
+      });
+
       if (querySearch) {
         const queryInput = document.createElement('input');
         queryInput.type = 'search';
@@ -1126,32 +1315,21 @@ export function mountNetworkUi(root) {
         queryInput.spellcheck = true;
         queryInput.setAttribute('aria-label', opts.queryAriaLabel || 'Search images');
         queryInput.value = resolveDefaultQuery();
-        const searchBtn = document.createElement('button');
-        searchBtn.type = 'button';
-        searchBtn.className =
-          'network-crm__btn network-crm__btn--primary network-crm__btn--tiny network-crm__img-pick-search';
-        searchBtn.textContent = 'Search';
-        searchBtn.addEventListener('click', () => {
-          void loadCandidates({ reset: true });
-        });
         queryInput.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') {
             e.preventDefault();
-            void loadCandidates({ reset: true });
+            void loadCandidates({});
           }
         });
+        queryInput.addEventListener('input', () => {
+          const q = String(queryInput.value || '').trim().slice(0, 160);
+          if (q !== activeQuery) searchBtn.textContent = 'Search';
+          else if (hasMore) searchBtn.textContent = 'Search further';
+        });
         actions.append(queryInput, searchBtn);
+      } else {
+        actions.append(searchBtn);
       }
-
-      const furtherBtn = document.createElement('button');
-      furtherBtn.type = 'button';
-      furtherBtn.className = 'network-crm__btn network-crm__img-pick-further';
-      furtherBtn.textContent = 'Search further';
-      furtherBtn.hidden = true;
-      furtherBtn.addEventListener('click', () => {
-        void loadCandidates({ reset: false });
-      });
-      actions.append(furtherBtn);
 
       if (uploadUrl) {
         const uploadBtn = document.createElement('button');
@@ -1257,6 +1435,18 @@ export function mountNetworkUi(root) {
       });
 
       const av = avatarEl(c, 'network-crm__avatar');
+      const avWrap = document.createElement('div');
+      avWrap.className = 'network-crm__row-avatar';
+      avWrap.append(av);
+      if (c.enrichment?.needsReview) {
+        const badge = document.createElement('span');
+        badge.className = 'network-crm__enrich-review';
+        badge.title = 'Last enrichment needs review';
+        badge.setAttribute('aria-label', 'Last enrichment needs review');
+        badge.innerHTML =
+          '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm0 2.2c.55 0 1 .45 1 1v4.1a1 1 0 1 1-2 0V4.7c0-.55.45-1 1-1zm0 8.1a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1z"/></svg>';
+        avWrap.append(badge);
+      }
       const meta = document.createElement('div');
       meta.className = 'network-crm__row-meta';
       const name = document.createElement('div');
@@ -1275,7 +1465,7 @@ export function mountNetworkUi(root) {
       const bits = [kindsLabel(c), c.networkCircles].filter(Boolean);
       sub.textContent = bits.join(' · ');
       meta.append(name, sub);
-      li.append(check, av, meta);
+      li.append(check, avWrap, meta);
       li.addEventListener('click', () => selectContact(c.id));
       li.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -1342,14 +1532,71 @@ export function mountNetworkUi(root) {
     return window.confirm('You have unsaved contact edits. Leave without saving?');
   }
 
+  function hideManageDetail() {
+    if (!confirmLeaveUnsaved()) return;
+    manageDetailOpen = false;
+    detailDirty = false;
+    detailGeneration += 1;
+    detail.replaceChildren();
+    detail.innerHTML = '<p class="muted">Double-click a name for details · double-click other cells to edit</p>';
+    syncPeopleSubView();
+  }
+
+  /**
+   * Clear the persistent "enrichment needs review" flag after Jay reviews it
+   * (Save or Mark reviewed). Survives refresh/restart until then.
+   * @param {string} contactId
+   * @param {{ remount?: boolean }} [opts]
+   */
+  function acknowledgeEnrichNeedsReview(contactId, opts = {}) {
+    const idx = contacts.findIndex((x) => x.id === contactId);
+    if (idx < 0) return;
+    const c = contacts[idx];
+    if (!c?.enrichment?.needsReview) return;
+    const enrichment = { ...c.enrichment, needsReview: false };
+    contacts[idx] = { ...c, enrichment };
+    renderList();
+    void fetch(`/api/network/contacts/${encodeURIComponent(contactId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enrichment: { needsReview: false } }),
+    })
+      .then(async (r) => {
+        const j = await r.json().catch(() => ({}));
+        if (j?.ok && j.contact) {
+          const i = contacts.findIndex((x) => x.id === j.contact.id);
+          if (i >= 0) contacts[i] = j.contact;
+          if (opts.remount && selectedId === j.contact.id && !detailDirty) {
+            renderDetail(j.contact);
+          }
+        }
+      })
+      .catch(() => {
+        // Local clear already applied; next load restores until retry succeeds.
+      });
+  }
+
   /**
    * @param {string} id
    */
-  function selectContact(id) {
-    if (selectedId === id) {
+  function isViewingContactDetail(id) {
+    if (view !== 'people' || selectedId !== id) return false;
+    if (peopleSubTab === 'manage') return manageDetailOpen;
+    return peopleSubTab === 'contacts';
+  }
+
+  /**
+   * @param {string} id
+   * @param {{ force?: boolean }} [opts]
+   */
+  function selectContact(id, opts = {}) {
+    const force = Boolean(opts.force);
+    if (selectedId === id && !force) {
       // Already on this person — don't remount and wipe an in-progress edit.
       if (detailDirty) return;
-    } else if (selectedId && !confirmLeaveUnsaved()) {
+      // After Manage "Hide", selectedId stays set but the card was cleared — remount.
+      if (detail.querySelector('.network-crm__form')) return;
+    } else if (selectedId && selectedId !== id && !confirmLeaveUnsaved()) {
       return;
     }
     selectedId = id;
@@ -1361,6 +1608,27 @@ export function mountNetworkUi(root) {
       return;
     }
     renderDetail(c);
+  }
+
+  /**
+   * Show a contact's detail card (works from Contacts, Manage, Companies, or Groups).
+   * @param {string} id
+   */
+  async function openContactDetail(id) {
+    if (!id) return;
+    if (view === 'companies' || peopleSubTab === 'groups') {
+      selectedId = id;
+      manageDetailOpen = false;
+      await setView('people', { peopleSubTab: 'contacts' });
+      return;
+    }
+    if (peopleSubTab === 'manage') {
+      manageDetailOpen = true;
+      syncPeopleSubView();
+      selectContact(id, { force: true });
+      return;
+    }
+    selectContact(id);
   }
 
   /**
@@ -1393,6 +1661,20 @@ export function mountNetworkUi(root) {
     const head = document.createElement('div');
     head.className = 'network-crm__detail-head';
 
+    if (peopleSubTab === 'manage') {
+      const hideBtn = document.createElement('button');
+      hideBtn.type = 'button';
+      hideBtn.className = 'network-crm__detail-hide';
+      hideBtn.setAttribute('aria-label', 'Hide details');
+      hideBtn.title = 'Hide details';
+      hideBtn.innerHTML =
+        '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5.5 2.5 11 8l-5.5 5.5-.9-.9L9.2 8 4.6 3.4z"/></svg>';
+      hideBtn.addEventListener('click', () => {
+        hideManageDetail();
+      });
+      head.append(hideBtn);
+    }
+
     const avWrap = document.createElement('div');
     avWrap.className = 'network-crm__avatar-wrap';
 
@@ -1412,12 +1694,17 @@ export function mountNetworkUi(root) {
       queryPlaceholder: 'Type a name or search phrase…',
       queryAriaLabel: 'Search photos',
       defaultQuery: () => {
-        const liveName = detail.querySelector('.network-crm__form [name="displayName"]');
-        const liveOrg = detail.querySelector('.network-crm__form [name="org"]');
-        const name = String(liveName?.value || current.displayName || '').trim();
-        const org = String(liveOrg?.value || current.org || '').trim();
-        if (name && org) return `"${name}" ${org}`;
-        return name || '';
+        const liveFirst = detail.querySelector('.network-crm__form [name="firstName"]');
+        const liveLast = detail.querySelector('.network-crm__form [name="lastName"]');
+        const name = [
+          String(liveFirst?.value || current.firstName || '').trim(),
+          String(liveLast?.value || current.lastName || '').trim(),
+        ]
+          .filter(Boolean)
+          .join(' ')
+          || String(current.displayName || '').trim();
+        // First search always pairs name with LinkedIn so headshots rank ahead of random hits.
+        return name ? `"${name}" linkedin` : '';
       },
       clear: current.avatarUrl
         ? {
@@ -1449,6 +1736,24 @@ export function mountNetworkUi(root) {
     }
     titles.append(h);
     head.append(titles);
+
+    /** @type {HTMLElement | null} */
+    let reviewBanner = null;
+    if (current.enrichment?.needsReview) {
+      reviewBanner = document.createElement('div');
+      reviewBanner.className = 'network-crm__enrich-review-banner';
+      const reviewText = document.createElement('span');
+      reviewText.textContent = 'Last enrichment needs review';
+      const reviewBtn = document.createElement('button');
+      reviewBtn.type = 'button';
+      reviewBtn.className = 'network-crm__btn';
+      reviewBtn.textContent = 'Mark reviewed';
+      reviewBtn.title = 'Clear the review badge (also clears when you Save)';
+      reviewBtn.addEventListener('click', () => {
+        acknowledgeEnrichNeedsReview(current.id, { remount: true });
+      });
+      reviewBanner.append(reviewText, reviewBtn);
+    }
 
     const form = document.createElement('form');
     form.className = 'network-crm__form';
@@ -1502,6 +1807,100 @@ export function mountNetworkUi(root) {
       return wrapEl;
     }
 
+    /**
+     * Scene: chips for current tags + dropdown of known scenes / new scene.
+     * @param {string} initialValue
+     */
+    function mountSceneField(initialValue) {
+      const wrapEl = document.createElement('div');
+      wrapEl.className = 'network-crm__field network-crm__field--full network-crm__scene-field';
+      const span = document.createElement('span');
+      span.textContent = 'Scene';
+      const hidden = document.createElement('input');
+      hidden.type = 'hidden';
+      hidden.name = 'networkCircles';
+      const chips = document.createElement('div');
+      chips.className = 'network-crm__scene-chips';
+      chips.setAttribute('aria-label', 'Selected scenes');
+      const select = document.createElement('select');
+      select.className = 'network-crm__input';
+      select.setAttribute('aria-label', 'Add scene');
+
+      /** @type {string[]} */
+      let selected = splitSceneTokens(initialValue);
+
+      function notifyChanged() {
+        hidden.dispatchEvent(new Event('input', { bubbles: true }));
+        hidden.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+
+      function renderSceneUi() {
+        chips.replaceChildren();
+        for (const token of selected) {
+          const chip = document.createElement('button');
+          chip.type = 'button';
+          chip.className = 'network-crm__scene-chip';
+          chip.title = `Remove ${token}`;
+          const label = document.createElement('span');
+          label.textContent = token;
+          const x = document.createElement('span');
+          x.className = 'network-crm__scene-chip-x';
+          x.setAttribute('aria-hidden', 'true');
+          x.textContent = '×';
+          chip.append(label, x);
+          chip.addEventListener('click', () => {
+            selected = selected.filter((t) => t.toLowerCase() !== token.toLowerCase());
+            renderSceneUi();
+            notifyChanged();
+          });
+          chips.append(chip);
+        }
+
+        select.replaceChildren();
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = selected.length ? 'Add scene…' : 'Choose scene…';
+        select.append(placeholder);
+
+        const selectedKeys = new Set(selected.map((t) => t.toLowerCase()));
+        const known = collectSceneOptions(contacts, selected);
+        for (const opt of known) {
+          if (selectedKeys.has(opt.toLowerCase())) continue;
+          const o = document.createElement('option');
+          o.value = opt;
+          o.textContent = opt;
+          select.append(o);
+        }
+        const addNew = document.createElement('option');
+        addNew.value = '__new__';
+        addNew.textContent = '＋ New scene…';
+        select.append(addNew);
+        select.value = '';
+        hidden.value = joinSceneTokens(selected);
+      }
+
+      select.addEventListener('change', () => {
+        const v = select.value;
+        if (!v) return;
+        if (v === '__new__') {
+          const name = (prompt('New scene name?') || '').replace(/\s+/g, ' ').trim();
+          select.value = '';
+          if (!name) return;
+          if (!selected.some((t) => t.toLowerCase() === name.toLowerCase())) {
+            selected = [...selected, name];
+          }
+        } else if (!selected.some((t) => t.toLowerCase() === v.toLowerCase())) {
+          selected = [...selected, v];
+        }
+        renderSceneUi();
+        notifyChanged();
+      });
+
+      wrapEl.append(span, chips, select, hidden);
+      renderSceneUi();
+      return wrapEl;
+    }
+
     const kindsBox = document.createElement('div');
     kindsBox.className = 'network-crm__checks';
     const kindsLabelEl = document.createElement('span');
@@ -1521,11 +1920,23 @@ export function mountNetworkUi(root) {
       kindsBox.append(lab);
     }
 
+    const hasKidsBox = document.createElement('div');
+    hasKidsBox.className = 'network-crm__checks';
+    const hasKidsLab = document.createElement('label');
+    hasKidsLab.className = 'network-crm__check';
+    const hasKidsCb = document.createElement('input');
+    hasKidsCb.type = 'checkbox';
+    hasKidsCb.name = 'hasKids';
+    hasKidsCb.checked = Boolean(c.hasKids);
+    hasKidsLab.append(hasKidsCb, document.createTextNode(' Have kids'));
+    hasKidsBox.append(hasKidsLab);
+
     const preferred = new Set(c.preferredContactMethods || []);
 
     /** @type {Record<string, HTMLElement>} */
     const channelFieldsByMethod = {
       phone: field('Phone', 'phone', c.channels?.phone || ''),
+      office_phone: field('Office phone', 'officePhone', c.channels?.officePhone || ''),
       email: field('Email', 'email', c.channels?.email || '', { type: 'email' }),
       signal: field('Signal', 'signal', c.channels?.signal || ''),
       whatsapp: field('WhatsApp', 'whatsapp', c.channels?.whatsapp || ''),
@@ -1636,6 +2047,7 @@ export function mountNetworkUi(root) {
     attrsPanel.className = 'network-crm__attrs-panel';
     attrsPanel.hidden = !contactAttrsExpanded;
     attrsPanel.append(
+      hasKidsBox,
       orgField,
       field('Role', 'title', c.title),
       field('Department', 'department', c.department || ''),
@@ -1687,7 +2099,8 @@ export function mountNetworkUi(root) {
     }
 
     form.append(
-      field('Name', 'displayName', c.displayName),
+      field('First name', 'firstName', c.firstName || ''),
+      field('Last name', 'lastName', c.lastName || ''),
       field('Nickname', 'nickname', c.nickname || ''),
       (() => {
         const jog = field('Memory jog', 'memoryJog', c.memoryJog || '');
@@ -1699,18 +2112,11 @@ export function mountNetworkUi(root) {
         }
         return jog;
       })(),
-      field('Scene', 'networkCircles', c.networkCircles || ''),
+      mountSceneField(c.networkCircles || ''),
       field('Location', 'location', c.location),
+      field('Address', 'address', c.address || '', { rows: 2 }),
       field('Relationship', 'relationshipStatus', c.relationshipStatus || '', {
-        options: [
-          'Lead',
-          'Cultivating',
-          'Collaborator',
-          'Family',
-          'Acquaintance',
-          'Paused',
-          'Former',
-        ],
+        options: relationshipOptions,
       }),
       field('Status', 'rating', c.rating || '', {
         options: ['Fan', 'Hot', 'Warm', 'Cold'],
@@ -1718,18 +2124,126 @@ export function mountNetworkUi(root) {
       field('Sensitivity', 'sensitivity', c.sensitivity || '', {
         options: ['Down', 'Situational', 'Proper'],
       }),
-      field('Next step', 'nextStep', c.nextStep || ''),
+      (() => {
+        /** @type {{ id: string, text: string, done: boolean }[]} */
+        let draftTasks = Array.isArray(c.tasks)
+          ? c.tasks.map((t) => ({
+              id: String(t.id || `task_${Math.random().toString(36).slice(2, 10)}`),
+              text: String(t.text || '').trim(),
+              done: Boolean(t.done),
+            })).filter((t) => t.text)
+          : String(c.nextStep || '')
+              .split(/\n+|;/)
+              .map((s) => s.trim())
+              .filter(Boolean)
+              .map((text) => ({
+                id: `task_${Math.random().toString(36).slice(2, 10)}`,
+                text,
+                done: false,
+              }));
+
+        const wrap = document.createElement('div');
+        wrap.className = 'network-crm__field network-crm__field--full network-crm__tasks';
+        wrap.dataset.tasksField = '1';
+
+        const label = document.createElement('span');
+        label.textContent = 'Tasks';
+
+        const addRow = document.createElement('div');
+        addRow.className = 'network-crm__tasks-add';
+
+        const addInput = document.createElement('input');
+        addInput.type = 'text';
+        addInput.className = 'network-crm__input network-crm__tasks-input';
+        addInput.placeholder = 'Add a task…';
+        addInput.autocomplete = 'off';
+        addInput.maxLength = 500;
+        addInput.setAttribute('aria-label', 'Add a task');
+
+        addRow.append(addInput);
+
+        const list = document.createElement('ul');
+        list.className = 'network-crm__tasks-list';
+        list.setAttribute('role', 'list');
+
+        function renderTasks() {
+          list.replaceChildren();
+          for (const task of draftTasks) {
+            const li = document.createElement('li');
+            li.className = 'network-crm__tasks-item';
+            if (task.done) li.classList.add('network-crm__tasks-item--done');
+            li.dataset.id = task.id;
+
+            const row = document.createElement('label');
+            row.className = 'network-crm__tasks-row';
+
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.className = 'network-crm__tasks-check';
+            cb.checked = task.done;
+            cb.addEventListener('change', () => {
+              task.done = cb.checked;
+              li.classList.toggle('network-crm__tasks-item--done', task.done);
+              markDirty();
+            });
+
+            const text = document.createElement('span');
+            text.className = 'network-crm__tasks-text';
+            text.textContent = task.text;
+
+            row.append(cb, text);
+            li.append(row);
+            list.append(li);
+          }
+        }
+
+        function tryAddTask() {
+          const text = String(addInput.value || '').trim();
+          if (!text) return;
+          draftTasks = [
+            ...draftTasks,
+            {
+              id: `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+              text,
+              done: false,
+            },
+          ];
+          addInput.value = '';
+          renderTasks();
+          markDirty();
+        }
+
+        addInput.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          e.stopPropagation();
+          tryAddTask();
+        });
+
+        wrap.getTasks = () =>
+          draftTasks
+            .map((t) => ({
+              id: t.id,
+              text: String(t.text || '').trim(),
+              done: Boolean(t.done),
+            }))
+            .filter((t) => t.text);
+
+        wrap.append(label, addRow, list);
+        renderTasks();
+        return wrap;
+      })(),
       lastContactField,
       kindsBox,
       moreChannels,
-      field('Bio', 'bio', c.bio || '', { rows: 3 }),
-      field('How we met', 'howWeMet', c.howWeMet || '', { rows: 3 }),
       field(
-        'Aligned activities (one per line — things you’d do or work on together)',
+        'Aligned activities (one per line)',
         'alignedActivities',
         (c.alignedActivities || []).join('\n'),
         { rows: 4 },
       ),
+      field('Bio', 'bio', c.bio || '', { rows: 3 }),
+      field('How we met', 'howWeMet', c.howWeMet || '', { rows: 3 }),
       toggleAttrs,
       attrsPanel,
     );
@@ -1800,19 +2314,29 @@ export function mountNetworkUi(root) {
       const kindsSel = ['friend', 'organizer', 'business'].filter((k) => form.querySelector(`[name="kind-${k}"]`)?.checked);
       const prefs = methodOptions.filter((m) => form.querySelector(`[name="pref-${m}"]`)?.checked);
       return {
-        displayName: String(fd.get('displayName') || '').trim(),
+        firstName: String(fd.get('firstName') || '').trim(),
+        lastName: String(fd.get('lastName') || '').trim(),
+        displayName: [String(fd.get('firstName') || '').trim(), String(fd.get('lastName') || '').trim()]
+          .filter(Boolean)
+          .join(' '),
         nickname: String(fd.get('nickname') || '').trim(),
         memoryJog: String(fd.get('memoryJog') || '').trim().slice(0, 80),
         title: String(fd.get('title') || '').trim(),
         org: String(fd.get('org') || '').trim(),
         kinds: kindsSel.length ? kindsSel : ['friend'],
+        hasKids: Boolean(form.querySelector('[name="hasKids"]')?.checked),
         location: String(fd.get('location') || '').trim(),
+        address: String(fd.get('address') || '').trim(),
         relationshipStatus: String(fd.get('relationshipStatus') || '').trim(),
         aliases: splitCsv(fd.get('aliases')),
         department: String(fd.get('department') || '').trim(),
         rating: String(fd.get('rating') || '').trim(),
         sensitivity: String(fd.get('sensitivity') || '').trim(),
-        nextStep: String(fd.get('nextStep') || '').trim(),
+        tasks: (() => {
+          const el = form.querySelector('[data-tasks-field]');
+          if (el && typeof el.getTasks === 'function') return el.getTasks();
+          return Array.isArray(current.tasks) ? current.tasks : [];
+        })(),
         bio: String(fd.get('bio') || '').trim(),
         howWeMet: String(fd.get('howWeMet') || '').trim(),
         networkCircles: String(fd.get('networkCircles') || '').trim(),
@@ -1826,9 +2350,12 @@ export function mountNetworkUi(root) {
         channels: {
           email: String(fd.get('email') ?? current.channels?.email ?? '').trim() || null,
           phone: String(fd.get('phone') ?? current.channels?.phone ?? '').trim() || null,
+          officePhone:
+            String(fd.get('officePhone') ?? current.channels?.officePhone ?? '').trim() || null,
           sms: current.channels?.sms || null,
           signal: String(fd.get('signal') ?? current.channels?.signal ?? '').trim() || null,
           whatsapp: String(fd.get('whatsapp') ?? current.channels?.whatsapp ?? '').trim() || null,
+          telegram: current.channels?.telegram || null,
           linkedin: String(fd.get('linkedin') ?? current.channels?.linkedin ?? '').trim() || null,
           other: String(fd.get('other') ?? current.channels?.other ?? '').trim() || null,
           urls: String(fd.get('urls') ?? (current.channels?.urls || []).join('\n') ?? '')
@@ -1861,6 +2388,13 @@ export function mountNetworkUi(root) {
           const body = opts.bodyOverride || buildContactBody();
           // Only consume bodyOverride once (follow-up dirty saves use the form).
           opts = { ...opts, bodyOverride: undefined };
+          // Saving the card counts as reviewing autofilled enrichment.
+          if (!opts.fromUndo && current.enrichment?.needsReview) {
+            body.enrichment = {
+              ...enrichmentToPutBody(current.enrichment),
+              needsReview: false,
+            };
+          }
           const r = await fetch(`/api/network/contacts/${encodeURIComponent(priorId)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -1899,6 +2433,11 @@ export function mountNetworkUi(root) {
           if (mergedAway || opts.remount || opts.fromUndo) {
             showStatus(opts.fromUndo ? 'Undone' : mergedAway ? 'Saved (merged duplicate)' : 'Saved');
             renderList();
+            if (!opts.fromUndo && peopleSubTab === 'manage') {
+              detailDirty = false;
+              hideManageDetail();
+              return;
+            }
             renderDetail(saved);
             return;
           }
@@ -1930,13 +2469,24 @@ export function mountNetworkUi(root) {
           showStatus('Saved');
 
           // Sidebar only shows name / nick / kinds / circles — skip full rebuild for notes etc.
+          // Manage table shows many columns, so always refresh when that tab is open.
           const listLabelChanged =
             String(saved.displayName || '') !== String(priorBody.displayName || '')
             || String(saved.nickname || '') !== String(priorBody.nickname || '')
             || !sameJson(saved.kinds || [], priorBody.kinds || [])
+            || Boolean(saved.hasKids) !== Boolean(priorBody.hasKids)
             || String(saved.networkCircles || '') !== String(priorBody.networkCircles || '');
-          if (listLabelChanged) renderList();
+          if (listLabelChanged || peopleSubTab === 'manage') renderList();
         } while (dirtyWhileSaving && gen === detailGeneration);
+
+        // Manage tab: collapse detail after a successful Save (keep open after Undo).
+        if (
+          !opts.fromUndo
+          && peopleSubTab === 'manage'
+          && gen === detailGeneration
+        ) {
+          hideManageDetail();
+        }
       } catch (err) {
         if (gen === detailGeneration) showStatus(String(err?.message || err), true);
       } finally {
@@ -2112,7 +2662,8 @@ export function mountNetworkUi(root) {
       }
     });
 
-    detail.append(head, form);
+    if (reviewBanner) detail.append(head, reviewBanner, form);
+    else detail.append(head, form);
   }
 
   /**
@@ -2159,12 +2710,25 @@ export function mountNetworkUi(root) {
     if (prev && !sameJson(contactToPutBody(prev), contactToPutBody(contact))) {
       pushUndoSnap(contactUndoStacks, contact.id, contactToPutBody(prev));
     }
-    const idx = contacts.findIndex((x) => x.id === contact.id);
-    if (idx >= 0) contacts[idx] = contact;
-    else contacts.push(contact);
+    let next = contact;
+    if (isViewingContactDetail(contact.id) && contact.enrichment?.needsReview) {
+      // Jay is already looking at the card — no review badge needed.
+      next = {
+        ...contact,
+        enrichment: { ...contact.enrichment, needsReview: false },
+      };
+      void fetch(`/api/network/contacts/${encodeURIComponent(contact.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enrichment: { needsReview: false } }),
+      }).catch(() => {});
+    }
+    const idx = contacts.findIndex((x) => x.id === next.id);
+    if (idx >= 0) contacts[idx] = next;
+    else contacts.push(next);
     renderList();
-    if (view === 'people' && selectedId === contact.id) {
-      selectContact(contact.id);
+    if (isViewingContactDetail(next.id)) {
+      selectContact(next.id);
     }
     if (okMsg) showStatus(`${okMsg} · Undo to revert`);
   }
@@ -2471,10 +3035,6 @@ export function mountNetworkUi(root) {
    * @param {string} id
    */
   function openOrganization(id) {
-    if (groupsUiMounted) {
-      groupsPane.replaceChildren();
-      groupsUiMounted = false;
-    }
     view = 'companies';
     selectedOrgId = id;
     syncTabs();
@@ -2723,8 +3283,7 @@ export function mountNetworkUi(root) {
     } else {
       for (const p of linkedPeople) {
         const openBtn = tinyBtn('Open', () => {
-          selectedId = p.id;
-          void setPeopleSubTab('contacts');
+          void openContactDetail(p.id);
         });
         const renameBtn = tinyBtn('Rename', async () => {
           const next = prompt('Name', p.displayName || '');
@@ -2847,9 +3406,9 @@ export function mountNetworkUi(root) {
                   const j = await r.json();
                   if (!j.ok) throw new Error(j.error || 'create_failed');
                   contacts.unshift(j.contact);
-                  const orgNext = await patchSuggestion(s.id, (p) => ({ ...p, status: 'added' }));
+                  await patchSuggestion(s.id, (p) => ({ ...p, status: 'added' }));
                   showStatus('Added to network');
-                  renderOrgDetail(orgNext);
+                  await openContactDetail(j.contact.id);
                 } catch (err) {
                   showStatus(String(err?.message || err), true);
                 }
@@ -2914,7 +3473,7 @@ export function mountNetworkUi(root) {
         if (!j.ok) throw new Error(j.error || 'create_failed');
         contacts.unshift(j.contact);
         showStatus('Added');
-        renderOrgDetail(o);
+        await openContactDetail(j.contact.id);
       } catch (err) {
         showStatus(String(err?.message || err), true);
       }
@@ -3232,9 +3791,13 @@ export function mountNetworkUi(root) {
 
   async function loadOrganizations() {
     try {
+      invalidateNetworkPrefetch();
       const r = await fetch('/api/network/organizations');
       const j = await r.json();
-      if (j.ok) organizations = Array.isArray(j.organizations) ? j.organizations : [];
+      if (j.ok) {
+        organizations = Array.isArray(j.organizations) ? j.organizations : [];
+        warmNetworkPages(contacts, organizations);
+      }
     } catch {
       // keep previous
     }
@@ -3260,11 +3823,25 @@ export function mountNetworkUi(root) {
    * @param {{ selectGroupId?: string | null }} [opts]
    */
   async function openGroupsUi(opts = {}) {
-    const { mountNetworkGroupsUi } = await import('./network-groups-ui.js');
+    if (groupsUiMounted && groupsUiApi) {
+      await groupsUiApi.focus({
+        selectGroupId: opts.selectGroupId || null,
+        // Fresh group from Start group / deep-link — reload list.
+        refresh: Boolean(opts.selectGroupId),
+      });
+      return;
+    }
+    const [{ mountNetworkGroupsUi }, prefetched] = await Promise.all([
+      import('./network-groups-ui.js?v=group-kind-9'),
+      takeGroupsPrefetch().catch(() => groupsCache),
+    ]);
+    if (Array.isArray(prefetched)) groupsCache = prefetched;
     groupsUiMounted = true;
-    mountNetworkGroupsUi(groupsPane, {
+    groupsUiApi = mountNetworkGroupsUi(groupsPane, {
       contacts,
+      groups: groupsCache,
       getContacts: () => contacts,
+      isContactsLoading: () => !contactsReady,
       selectGroupId: opts.selectGroupId || null,
       embedded: true,
       onClose: () => {
@@ -3279,6 +3856,7 @@ export function mountNetworkUi(root) {
         const wasWorkbench = peopleSubTab === 'contacts' || peopleSubTab === 'manage';
         showStatus('Loading…');
         try {
+          invalidateNetworkPrefetch();
           const [cr, or] = await Promise.all([
             fetch('/api/network/contacts'),
             fetch('/api/network/organizations'),
@@ -3288,9 +3866,7 @@ export function mountNetworkUi(root) {
           if (!j.ok) throw new Error(j.error || 'load_failed');
           contacts = Array.isArray(j.contacts) ? j.contacts : [];
           if (oj.ok) organizations = Array.isArray(oj.organizations) ? oj.organizations : [];
-          if (Array.isArray(j.preferredContactMethods) && j.preferredContactMethods.length) {
-            methodOptions = j.preferredContactMethods;
-          }
+          applyContactEnumsFromApi(j);
           showStatus('');
           if (keepId && contacts.some((c) => c.id === keepId)) selectedId = keepId;
           else if (wasWorkbench) selectedId = contacts[0]?.id || null;
@@ -3298,6 +3874,7 @@ export function mountNetworkUi(root) {
             renderList();
             if (selectedId) selectContact(selectedId);
           }
+          warmNetworkPages(contacts, organizations);
         } catch (err) {
           showStatus(String(err?.message || err), true);
         }
@@ -3305,11 +3882,28 @@ export function mountNetworkUi(root) {
     });
   }
 
+  async function refreshContactsQuiet() {
+    try {
+      invalidateNetworkPrefetch();
+      const cr = await fetch('/api/network/contacts');
+      const j = await cr.json();
+      if (!j.ok) return;
+      contacts = Array.isArray(j.contacts) ? j.contacts : [];
+      applyContactEnumsFromApi(j);
+      // Images only — do not re-warm hundreds of detail GETs after every mutation.
+      warmNetworkPages(contacts, organizations);
+    } catch {
+      /* keep existing contacts */
+    }
+  }
+
   startGroupSelBtn.addEventListener('click', async () => {
     const ids = [...selectedContactIds];
     if (!ids.length) return;
-    const name = prompt(`Group name for ${ids.length} people?`) || '';
-    if (!name.trim()) {
+    const kind = await openGroupKindDialog({
+      title: `Group kind for ${ids.length} people`,
+    });
+    if (kind == null) {
       showStatus('Cancelled');
       return;
     }
@@ -3318,14 +3912,15 @@ export function mountNetworkUi(root) {
       const r = await fetch('/api/network/groups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), memberIds: ids }),
+        body: JSON.stringify({ name: '', kind, eventType: '', memberIds: ids }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'create_failed');
       selectedContactIds.clear();
       syncSelectionActions();
+      if (kind === 'community') await refreshContactsQuiet();
       renderList();
-      showStatus(`Started ${j.group?.name || 'group'}`);
+      showStatus('Created — fill in optional details');
       await setPeopleSubTab('groups', { selectGroupId: j.group?.id || null });
     } catch (err) {
       showStatus(String(err?.message || err), true);
@@ -3345,7 +3940,13 @@ export function mountNetworkUi(root) {
         showStatus('No groups yet — use Groups or Start group first', true);
         return;
       }
-      const labels = groups.map((g, i) => `${i + 1}. ${g.name || 'Untitled'} (${(g.memberIds || []).length})`).join('\n');
+      const labels = groups
+        .map((g, i) => {
+          const kind = g.kind === 'event' ? 'Event' : 'Community';
+          const typeBit = g.kind === 'event' && g.eventType ? ` · ${g.eventType}` : '';
+          return `${i + 1}. [${kind}${typeBit}] ${g.name || 'Untitled'} (${(g.memberIds || []).length})`;
+        })
+        .join('\n');
       const pick = prompt(`Add ${ids.length} contact(s) to which group?\n${labels}\n\nEnter number:`);
       const idx = Number(pick) - 1;
       if (!Number.isFinite(idx) || idx < 0 || idx >= groups.length) {
@@ -3362,6 +3963,7 @@ export function mountNetworkUi(root) {
       if (!aj.ok) throw new Error(aj.error || 'add_failed');
       selectedContactIds.clear();
       syncSelectionActions();
+      if (group.kind !== 'event') await refreshContactsQuiet();
       renderList();
       showStatus(`Added to ${group.name || 'group'}`);
     } catch (err) {
@@ -3372,27 +3974,94 @@ export function mountNetworkUi(root) {
   mergeBtn.addEventListener('click', async () => {
     const ids = [...selectedContactIds];
     if (ids.length < 2) return;
-    const names = ids
-      .map((id) => contacts.find((c) => c.id === id)?.displayName || id)
-      .join(', ');
+    // Capture before confirm/prompt/await — keep Manage after merge finishes.
+    const fromManage = view === 'people' && peopleSubTab === 'manage';
+    const fromManageDetail = fromManage && manageDetailOpen;
+    const selected = ids.map((id) => contacts.find((c) => c.id === id)).filter(Boolean);
+    const names = selected.map((c) => c.displayName || c.id).join(', ');
     if (!confirm(`Merge ${ids.length} contacts into one?\n\n${names}`)) return;
+    const suggestedName = selected
+      .map((c) => String(c.displayName || '').trim())
+      .filter(Boolean)
+      .reduce((best, next) => {
+        const a = best.toLowerCase().split(/\s+/).filter(Boolean);
+        const b = next.toLowerCase().split(/\s+/).filter(Boolean);
+        const setA = new Set(a);
+        const setB = new Set(b);
+        const aInB = a.length && a.every((t) => setB.has(t));
+        const bInA = b.length && b.every((t) => setA.has(t));
+        if (aInB && !bInA) return next;
+        if (bInA && !aInB) return best;
+        if (best.toLowerCase().includes(next.toLowerCase()) && !next.toLowerCase().includes(best.toLowerCase())) {
+          return best;
+        }
+        if (next.toLowerCase().includes(best.toLowerCase()) && !best.toLowerCase().includes(next.toLowerCase())) {
+          return next;
+        }
+        if (a.length !== b.length) return a.length > b.length ? best : next;
+        return best.length >= next.length ? best : next;
+      }, '');
+    const displayName = prompt('Merged name (edit if needed):', suggestedName || names.split(', ')[0] || '');
+    if (displayName == null) return;
+    const trimmedName = String(displayName).trim();
+    if (!trimmedName) {
+      showStatus('Name required to merge', true);
+      return;
+    }
     showStatus('Merging…');
     try {
       const r = await fetch('/api/network/contacts/merge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids }),
+        body: JSON.stringify({ ids, displayName: trimmedName }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'merge_failed');
+      const survivorId = j.contact?.id || null;
+      const dropIds = new Set(ids.filter((id) => id !== survivorId));
+
       selectedContactIds.clear();
       syncSelectionActions();
-      await load();
-      if (j.contact?.id) {
-        selectedId = j.contact.id;
-        selectContact(selectedId);
+
+      if (j.contact && survivorId) {
+        contacts = contacts
+          .filter((c) => !dropIds.has(c.id))
+          .map((c) => (c.id === survivorId ? j.contact : c));
+        if (!contacts.some((c) => c.id === survivorId)) {
+          contacts = [j.contact, ...contacts];
+        }
+      } else if (dropIds.size) {
+        contacts = contacts.filter((c) => !dropIds.has(c.id));
       }
+
+      if (fromManage) {
+        view = 'people';
+        peopleSubTab = 'manage';
+        manageDetailOpen = Boolean(fromManageDetail && survivorId);
+        selectedId = manageDetailOpen ? survivorId : null;
+        persistWorkbenchState();
+        syncTabs();
+        renderList();
+        if (manageDetailOpen && survivorId) {
+          selectContact(survivorId, { force: true });
+        } else {
+          detail.innerHTML =
+            '<p class="muted">Double-click a name for details · double-click other cells to edit</p>';
+        }
+        showStatus(`Merged into ${j.contact?.displayName || 'one contact'}`);
+        // Optimistic Manage paint already applied — skip a second full table rebuild
+        // (was ~150ms+ main-thread freeze after merge felt "done").
+        void refreshContactsQuiet();
+        return;
+      }
+
+      selectedId = survivorId || selectedId;
+      persistWorkbenchState();
+      syncTabs();
+      renderList();
+      if (survivorId) selectContact(survivorId, { force: true });
       showStatus(`Merged into ${j.contact?.displayName || 'one contact'}`);
+      void refreshContactsQuiet();
     } catch (err) {
       showStatus(String(err?.message || err), true);
     }
@@ -3496,7 +4165,7 @@ export function mountNetworkUi(root) {
       selectedId = j.contact.id;
       showStatus('Created');
       renderList();
-      selectContact(selectedId);
+      await openContactDetail(j.contact.id);
     } catch (err) {
       showStatus(String(err?.message || err), true);
     }
@@ -3536,12 +4205,17 @@ export function mountNetworkUi(root) {
     if (bulkPanel.querySelector('[name="bulk-friend"]')?.checked) kinds.push('friend');
     if (bulkPanel.querySelector('[name="bulk-organizer"]')?.checked) kinds.push('organizer');
     if (bulkPanel.querySelector('[name="bulk-business"]')?.checked) kinds.push('business');
+    const hasKids = Boolean(bulkPanel.querySelector('[name="bulk-has-kids"]')?.checked);
     showStatus('Bulk adding…');
     try {
       const r = await fetch('/api/network/contacts/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ names: text, kinds: kinds.length ? kinds : ['friend'] }),
+        body: JSON.stringify({
+          names: text,
+          kinds: kinds.length ? kinds : ['friend'],
+          hasKids,
+        }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'bulk_failed');
@@ -3554,7 +4228,7 @@ export function mountNetworkUi(root) {
       if (created[0]) {
         selectedId = created[0].id;
         renderList();
-        selectContact(selectedId);
+        await openContactDetail(created[0].id);
       } else {
         renderList();
       }
@@ -3563,50 +4237,107 @@ export function mountNetworkUi(root) {
     }
   });
 
-  search.addEventListener('input', () => {
-    query = search.value;
-    renderList();
-  });
-
   function syncPeopleFiltersFromUi() {
     peopleFilters = {
       kind: kindFilter.sel.value || '',
+      hasKids: hasKidsFilter.sel.value || '',
+      hasTask: hasTaskFilter.sel.value || '',
       relationship: relationshipFilter.sel.value || '',
       status: statusFilter.sel.value || '',
       sensitivity: sensitivityFilter.sel.value || '',
     };
+    persistWorkbenchState();
     renderList();
   }
   kindFilter.sel.addEventListener('change', syncPeopleFiltersFromUi);
+  hasKidsFilter.sel.addEventListener('change', syncPeopleFiltersFromUi);
+  hasTaskFilter.sel.addEventListener('change', syncPeopleFiltersFromUi);
   relationshipFilter.sel.addEventListener('change', syncPeopleFiltersFromUi);
   statusFilter.sel.addEventListener('change', syncPeopleFiltersFromUi);
   sensitivityFilter.sel.addEventListener('change', syncPeopleFiltersFromUi);
 
+  search.addEventListener('input', () => {
+    query = search.value;
+    persistWorkbenchState();
+    renderList();
+  });
+
   async function load() {
     showStatus('Loading…');
     try {
-      const [cr, or] = await Promise.all([
-        fetch('/api/network/contacts'),
-        fetch('/api/network/organizations'),
-      ]);
-      const j = await cr.json();
-      const oj = await or.json();
-      if (!j.ok) throw new Error(j.error || 'load_failed');
-      contacts = Array.isArray(j.contacts) ? j.contacts : [];
-      if (oj.ok) organizations = Array.isArray(oj.organizations) ? oj.organizations : [];
-      if (Array.isArray(j.preferredContactMethods) && j.preferredContactMethods.length) {
-        methodOptions = j.preferredContactMethods;
-      }
+      const data = await takeNetworkPrefetch();
+      contacts = data.contacts;
+      organizations = data.organizations;
+      if (Array.isArray(data.groups)) groupsCache = data.groups;
+      applyContactEnumsFromApi({
+        preferredContactMethods: data.preferredContactMethods,
+        relationshipStatuses: data.relationshipStatuses,
+      });
+      contactsReady = true;
       showStatus('');
-      selectedId = contacts[0]?.id || null;
-      peopleSubTab = 'contacts';
       detailDirty = false;
-      syncTabs();
-      renderList();
-      if (selectedId) selectContact(selectedId);
-      else detail.innerHTML = '<p class="muted">Select a person</p>';
+      selectedContactIds.clear();
+
+      const restored = readWorkbenchState();
+      if (restored?.view === 'people' || restored?.view === 'companies') {
+        view = restored.view;
+      }
+      if (
+        restored?.peopleSubTab === 'contacts'
+        || restored?.peopleSubTab === 'manage'
+        || restored?.peopleSubTab === 'groups'
+      ) {
+        peopleSubTab = restored.peopleSubTab;
+      } else {
+        peopleSubTab = 'contacts';
+      }
+      if (restored?.peopleFilters && typeof restored.peopleFilters === 'object') {
+        peopleFilters = {
+          kind: String(restored.peopleFilters.kind || ''),
+          hasKids: String(restored.peopleFilters.hasKids || ''),
+          hasTask: String(restored.peopleFilters.hasTask || ''),
+          relationship: String(restored.peopleFilters.relationship || ''),
+          status: String(restored.peopleFilters.status || ''),
+          sensitivity: String(restored.peopleFilters.sensitivity || ''),
+        };
+      }
+      if (typeof restored?.query === 'string') {
+        query = restored.query;
+      }
+      applyWorkbenchFiltersToUi();
+
+      if (view === 'companies') {
+        selectedId = null;
+        manageDetailOpen = false;
+        await setView('companies');
+      } else if (peopleSubTab === 'groups') {
+        selectedId = null;
+        manageDetailOpen = false;
+        await setView('people', { peopleSubTab: 'groups' });
+      } else if (peopleSubTab === 'manage') {
+        selectedId = null;
+        manageDetailOpen = false;
+        syncTabs();
+        renderList();
+        detail.innerHTML =
+          '<p class="muted">Double-click a name for details · double-click other cells to edit</p>';
+      } else {
+        selectedId = contacts[0]?.id || null;
+        manageDetailOpen = false;
+        syncTabs();
+        renderList();
+        if (selectedId) selectContact(selectedId);
+        else detail.innerHTML = '<p class="muted">Select a person</p>';
+      }
+      persistWorkbenchState();
+      warmNetworkPages(contacts, organizations);
     } catch (err) {
+      contactsReady = true;
       showStatus(String(err?.message || err), true);
+      if (peopleSubTab === 'manage') manageTableApi?.render();
+      else if (peopleSubTab === 'groups' && groupsUiApi) {
+        await groupsUiApi.focus({});
+      }
     }
   }
 

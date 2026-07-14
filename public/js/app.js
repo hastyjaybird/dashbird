@@ -3,6 +3,7 @@ import { mountBookmarkGrid } from './panels/bookmarks.js';
 import { mountCalendarUpcoming } from './panels/calendar-upcoming.js';
 import { mountPageTabs } from './panels/page-tabs.js';
 import { mountSettingsPage } from './panels/settings-page.js';
+import { mountSkySidebarToggle } from './panels/sky-sidebar-toggle.js';
 import { debugLog } from './lib/debugLog.js';
 import { readPanelCache, writePanelCache } from './lib/panel-cache.js';
 
@@ -81,9 +82,15 @@ function showPage(page) {
       })
       .catch((e) => console.error('House Hunter mount failed:', e));
   }
+  if (page === 'network') {
+    // Start contacts + companies fetch immediately (parallel with Network UI chunk).
+    import('./lib/network-prefetch.js')
+      .then(({ beginNetworkPrefetch }) => beginNetworkPrefetch())
+      .catch(() => {});
+  }
   if (page === 'network' && !networkLoaded) {
     networkLoaded = true;
-    import('./panels/network.js?v=manage-fill-kbd-2')
+    import('./panels/network.js?v=group-kind-9')
       .then(({ mountNetwork }) => {
         mountNetwork(document.getElementById('mount-network'));
       })
@@ -186,7 +193,7 @@ async function mountDeferredPanels(config) {
       }),
     ),
     mountWhenReady('events-finder', () =>
-      import('./panels/events-finder.js?v=filter-save-1').then(({ mountEventsFinder }) => {
+      import('./panels/events-finder.js?v=multi-dates-7').then(({ mountEventsFinder }) => {
         mountEventsFinder(document.getElementById('mount-events-finder'));
       }),
     ),
@@ -211,6 +218,7 @@ async function mountDeferredPanels(config) {
 
 async function main() {
   mountPageTabs(document.getElementById('mount-page-tabs'), { onChange: showPage });
+  mountSkySidebarToggle(document.getElementById('sky-sidebar-toggle'));
 
   const bookmarksPersonalPromise = mountBookmarkGrid(
     document.getElementById('mount-bookmarks-personal'),

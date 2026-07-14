@@ -28,6 +28,526 @@ function createCollapsibleSection({ title, headingId, className = '', open = fal
   return { details, body, summary };
 }
 
+const COST_CADENCE_LABELS = {
+  usage: 'Usage',
+  fixed_weekly: 'Fixed / wk',
+  fixed_monthly: 'Fixed / mo',
+  free_tier: 'Free tier',
+  optional: 'Optional',
+};
+
+/**
+ * @param {number} n
+ * @param {string} [currency]
+ */
+function formatCostUsd(n, currency = 'USD') {
+  const v = Number(n);
+  const amount = Number.isFinite(v) ? v : 0;
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currency || 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `$${amount.toFixed(2)}`;
+  }
+}
+
+/**
+ * Financial tracking for Dashbird spend (weekly budgets + measured Apify).
+ * @param {HTMLElement} root
+ */
+function buildCostsBlock(root) {
+  const { details: block, body } = createCollapsibleSection({
+    title: 'Costs',
+    headingId: 'settings-costs-heading',
+    className: 'settings-page__costs-block',
+    open: true,
+  });
+
+  const intro = document.createElement('p');
+  intro.className = 'settings-page__intro';
+  intro.textContent =
+    'Everything Dashbird spends money on — weekly budgets you can edit, plus measured Apify charges from the Facebook scrape log. Inactive rows stay listed but are excluded from totals.';
+  body.append(intro);
+
+  const kpi = document.createElement('div');
+  kpi.className = 'settings-page__costs-kpi';
+  kpi.setAttribute('aria-label', 'Weekly cost summary');
+  body.append(kpi);
+
+  const categories = document.createElement('div');
+  categories.className = 'settings-page__costs-categories';
+  categories.hidden = true;
+  body.append(categories);
+
+  const apifyBar = document.createElement('div');
+  apifyBar.className = 'settings-page__costs-apify';
+  apifyBar.hidden = true;
+  body.append(apifyBar);
+
+  const loadStatus = document.createElement('p');
+  loadStatus.className = 'settings-page__load-status';
+  loadStatus.setAttribute('aria-live', 'polite');
+  loadStatus.textContent = 'Loading costs…';
+  body.append(loadStatus);
+
+  const tableWrap = document.createElement('div');
+  tableWrap.className = 'settings-page__costs-table-wrap';
+  tableWrap.hidden = true;
+
+  const table = document.createElement('table');
+  table.className = 'settings-page__table settings-page__table--costs';
+  table.setAttribute('aria-labelledby', 'settings-costs-heading');
+
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  for (const label of ['On', 'Service', 'Category', 'Cadence', '$ / week', 'Measured', 'Notes']) {
+    const th = document.createElement('th');
+    th.scope = 'col';
+    th.textContent = label;
+    hr.append(th);
+  }
+  thead.append(hr);
+  table.append(thead);
+
+  const tbody = document.createElement('tbody');
+  table.append(tbody);
+  tableWrap.append(table);
+  body.append(tableWrap);
+
+  const actions = document.createElement('div');
+  actions.className = 'settings-page__costs-actions';
+  actions.hidden = true;
+
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'settings-page__secondary-cancel';
+  addBtn.textContent = '+ Line item';
+
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.className = 'settings-page__rain-save';
+  saveBtn.textContent = 'Save costs';
+
+  const msg = document.createElement('p');
+  msg.className = 'settings-page__rain-msg';
+  msg.hidden = true;
+  msg.setAttribute('aria-live', 'polite');
+
+  actions.append(addBtn, saveBtn, msg);
+  body.append(actions);
+
+  const note = document.createElement('p');
+  note.className = 'settings-page__note';
+  note.hidden = true;
+  body.append(note);
+
+  const firstEvents = root.querySelector('.settings-page__events-sources-block, .settings-page__events-block');
+  if (firstEvents) root.insertBefore(block, firstEvents);
+  else root.append(block);
+
+  /** @type {{ currency: string, items: object[] }} */
+  let state = { currency: 'USD', items: [] };
+
+  /**
+   * @param {object} data
+   */
+  function renderKpi(data) {
+    const summary = data.summary || {};
+    const currency = data.currency || 'USD';
+    kpi.replaceChildren();
+
+    const cards = [
+      {
+        label: 'This week',
+        value: formatCostUsd(summary.effectiveWeeklyUsd, currency),
+        hint: 'Budget + measured',
+        tone: 'primary',
+      },
+      {
+        label: 'Budgeted / wk',
+        value: formatCostUsd(summary.budgetedWeeklyUsd, currency),
+        hint: 'Active line items',
+        tone: '',
+      },
+      {
+        label: 'Measured / wk',
+        value: formatCostUsd(summary.measuredWeeklyUsd, currency),
+        hint: 'Apify last 7 days',
+        tone: 'amber',
+      },
+      {
+        label: 'Projected / mo',
+        value: formatCostUsd(summary.projectedMonthlyUsd, currency),
+        hint: 'Week × 4.33',
+        tone: '',
+      },
+    ];
+
+    for (const card of cards) {
+      const el = document.createElement('div');
+      el.className = `settings-page__costs-kpi-card${card.tone ? ` settings-page__costs-kpi-card--${card.tone}` : ''}`;
+      const lab = document.createElement('span');
+      lab.className = 'settings-page__costs-kpi-label';
+      lab.textContent = card.label;
+      const val = document.createElement('span');
+      val.className = 'settings-page__costs-kpi-value';
+      val.textContent = card.value;
+      const hint = document.createElement('span');
+      hint.className = 'settings-page__costs-kpi-hint';
+      hint.textContent = card.hint;
+      el.append(lab, val, hint);
+      kpi.append(el);
+    }
+  }
+
+  /**
+   * @param {object} data
+   */
+  function renderCategories(data) {
+    const byCategory = data.summary?.byCategory || {};
+    const entries = Object.entries(byCategory).sort((a, b) => Number(b[1]) - Number(a[1]));
+    categories.replaceChildren();
+    if (!entries.length) {
+      categories.hidden = true;
+      return;
+    }
+    categories.hidden = false;
+    const total = entries.reduce((s, [, v]) => s + Number(v), 0) || 1;
+    const title = document.createElement('p');
+    title.className = 'settings-page__costs-section-label';
+    title.textContent = 'By category (this week)';
+    categories.append(title);
+    for (const [name, amount] of entries) {
+      const row = document.createElement('div');
+      row.className = 'settings-page__costs-cat-row';
+      const lab = document.createElement('span');
+      lab.className = 'settings-page__costs-cat-name';
+      lab.textContent = name;
+      const barWrap = document.createElement('div');
+      barWrap.className = 'settings-page__costs-cat-bar';
+      const fill = document.createElement('div');
+      fill.className = 'settings-page__costs-cat-fill';
+      fill.style.width = `${Math.max(2, Math.round((Number(amount) / total) * 100))}%`;
+      barWrap.append(fill);
+      const amt = document.createElement('span');
+      amt.className = 'settings-page__costs-cat-amt';
+      amt.textContent = formatCostUsd(amount, data.currency);
+      row.append(lab, barWrap, amt);
+      categories.append(row);
+    }
+  }
+
+  /**
+   * @param {object} data
+   */
+  function renderApifyMeter(data) {
+    const month = data.measured?.facebook?.month;
+    apifyBar.replaceChildren();
+    if (!month) {
+      apifyBar.hidden = true;
+      return;
+    }
+    apifyBar.hidden = false;
+    const used = Number(month.totalUsd) || 0;
+    const credits = Number(month.monthlyCreditsUsd) || 5;
+    const remaining =
+      month.remainingCreditsUsd != null ? Number(month.remainingCreditsUsd) : Math.max(0, credits - used);
+    const pct = credits > 0 ? Math.min(100, Math.round((used / credits) * 100)) : 0;
+
+    const title = document.createElement('p');
+    title.className = 'settings-page__costs-section-label';
+    title.textContent = `Apify credits · ${month.month || 'this month'}`;
+    apifyBar.append(title);
+
+    const meter = document.createElement('div');
+    meter.className = 'settings-page__costs-meter';
+    meter.setAttribute('role', 'progressbar');
+    meter.setAttribute('aria-valuemin', '0');
+    meter.setAttribute('aria-valuemax', String(credits));
+    meter.setAttribute('aria-valuenow', String(used));
+    const fill = document.createElement('div');
+    fill.className = 'settings-page__costs-meter-fill';
+    if (pct >= 90) fill.classList.add('settings-page__costs-meter-fill--hot');
+    else if (pct >= 70) fill.classList.add('settings-page__costs-meter-fill--warn');
+    fill.style.width = `${pct}%`;
+    meter.append(fill);
+    apifyBar.append(meter);
+
+    const caption = document.createElement('p');
+    caption.className = 'settings-page__costs-meter-caption';
+    const week = data.measured?.facebook?.week;
+    const weekBit =
+      week && Number(week.totalUsd) > 0
+        ? ` · last 7 days ${formatCostUsd(week.totalUsd, data.currency)} (${week.runCount || 0} runs)`
+        : '';
+    caption.textContent = `${formatCostUsd(used, data.currency)} of ${formatCostUsd(
+      credits,
+      data.currency,
+    )} used · ${formatCostUsd(remaining, data.currency)} left${weekBit}`;
+    apifyBar.append(caption);
+  }
+
+  function readRowsFromDom() {
+    /** @type {object[]} */
+    const items = [];
+    for (const tr of tbody.querySelectorAll('tr')) {
+      const id = String(tr.dataset.itemId || '').trim();
+      if (!id) continue;
+      const activeEl = tr.querySelector('input[data-field="active"]');
+      const labelEl = tr.querySelector('[data-field="label"]');
+      const categoryEl = tr.querySelector('[data-field="category"]');
+      const cadenceEl = tr.querySelector('[data-field="cadence"]');
+      const weeklyEl = tr.querySelector('input[data-field="weeklyUsd"]');
+      const notesEl = tr.querySelector('[data-field="notes"]');
+      items.push({
+        id,
+        active: activeEl instanceof HTMLInputElement ? activeEl.checked : true,
+        label:
+          labelEl instanceof HTMLInputElement
+            ? labelEl.value
+            : String(labelEl?.textContent || id).trim(),
+        category:
+          categoryEl instanceof HTMLInputElement
+            ? categoryEl.value
+            : String(categoryEl?.textContent || 'Other').trim(),
+        cadence:
+          cadenceEl instanceof HTMLSelectElement
+            ? cadenceEl.value
+            : String(tr.dataset.cadence || 'usage'),
+        weeklyUsd: weeklyEl instanceof HTMLInputElement ? weeklyEl.value : 0,
+        notes:
+          notesEl instanceof HTMLInputElement
+            ? notesEl.value
+            : String(notesEl?.textContent || '').trim(),
+        measuredSource: tr.dataset.measuredSource || null,
+        monthlyBudgetUsd: tr.dataset.monthlyBudgetUsd
+          ? Number(tr.dataset.monthlyBudgetUsd)
+          : null,
+      });
+    }
+    return items;
+  }
+
+  /**
+   * @param {object[]} items
+   * @param {string} currency
+   */
+  function populateRows(items, currency) {
+    tbody.replaceChildren();
+    for (const item of items) {
+      const tr = document.createElement('tr');
+      tr.dataset.itemId = item.id;
+      tr.dataset.cadence = item.cadence || 'usage';
+      if (item.measuredSource) tr.dataset.measuredSource = item.measuredSource;
+      if (item.monthlyBudgetUsd != null) {
+        tr.dataset.monthlyBudgetUsd = String(item.monthlyBudgetUsd);
+      }
+      if (item.active === false) tr.classList.add('settings-page__costs-row--off');
+
+      const tdOn = document.createElement('td');
+      tdOn.className = 'settings-page__costs-on';
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.dataset.field = 'active';
+      check.checked = item.active !== false;
+      check.title = 'Include in weekly totals';
+      check.addEventListener('change', () => {
+        tr.classList.toggle('settings-page__costs-row--off', !check.checked);
+      });
+      tdOn.append(check);
+
+      const tdService = document.createElement('td');
+      tdService.className = 'settings-page__type-label';
+      const isCustom = String(item.id || '').startsWith('custom-');
+      if (isCustom) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'settings-page__costs-input settings-page__costs-input--label';
+        input.dataset.field = 'label';
+        input.value = item.label || '';
+        input.placeholder = 'Service name';
+        tdService.append(input);
+      } else {
+        const span = document.createElement('span');
+        span.dataset.field = 'label';
+        span.textContent = item.label || item.id;
+        tdService.append(span);
+      }
+
+      const tdCat = document.createElement('td');
+      if (isCustom) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'settings-page__costs-input';
+        input.dataset.field = 'category';
+        input.value = item.category || 'Other';
+        tdCat.append(input);
+      } else {
+        const span = document.createElement('span');
+        span.dataset.field = 'category';
+        span.textContent = item.category || 'Other';
+        tdCat.append(span);
+      }
+
+      const tdCadence = document.createElement('td');
+      tdCadence.className = 'settings-page__costs-cadence';
+      if (isCustom) {
+        const sel = document.createElement('select');
+        sel.className = 'settings-page__costs-select';
+        sel.dataset.field = 'cadence';
+        for (const [id, lab] of Object.entries(COST_CADENCE_LABELS)) {
+          const opt = document.createElement('option');
+          opt.value = id;
+          opt.textContent = lab;
+          if (id === (item.cadence || 'usage')) opt.selected = true;
+          sel.append(opt);
+        }
+        tdCadence.append(sel);
+      } else {
+        tdCadence.textContent = COST_CADENCE_LABELS[item.cadence] || item.cadence || '—';
+      }
+
+      const tdWeek = document.createElement('td');
+      tdWeek.className = 'settings-page__costs-weekly';
+      const weekInput = document.createElement('input');
+      weekInput.type = 'number';
+      weekInput.min = '0';
+      weekInput.step = '0.01';
+      weekInput.className = 'settings-page__costs-input settings-page__costs-input--money';
+      weekInput.dataset.field = 'weeklyUsd';
+      weekInput.value = String(Number(item.weeklyUsd) || 0);
+      weekInput.setAttribute('aria-label', `${item.label || item.id} dollars per week`);
+      tdWeek.append(weekInput);
+
+      const tdMeasured = document.createElement('td');
+      tdMeasured.className = 'settings-page__value settings-page__costs-measured';
+      if (item.measuredWeeklyUsd != null && Number.isFinite(Number(item.measuredWeeklyUsd))) {
+        tdMeasured.textContent = formatCostUsd(item.measuredWeeklyUsd, currency);
+        tdMeasured.title = item.measuredMonthlyUsd != null
+          ? `Month to date: ${formatCostUsd(item.measuredMonthlyUsd, currency)}`
+          : '';
+        if (Number(item.measuredWeeklyUsd) > 0) {
+          tdMeasured.classList.add('settings-page__costs-measured--live');
+        }
+      } else {
+        tdMeasured.textContent = '—';
+        tdMeasured.classList.add('settings-page__costs-measured--na');
+      }
+
+      const tdNotes = document.createElement('td');
+      tdNotes.className = 'settings-page__costs-notes';
+      const notesInput = document.createElement('input');
+      notesInput.type = 'text';
+      notesInput.className = 'settings-page__costs-input settings-page__costs-input--notes';
+      notesInput.dataset.field = 'notes';
+      notesInput.value = item.notes || '';
+      notesInput.placeholder = 'Notes';
+      tdNotes.append(notesInput);
+
+      tr.append(tdOn, tdService, tdCat, tdCadence, tdWeek, tdMeasured, tdNotes);
+      tbody.append(tr);
+    }
+  }
+
+  /**
+   * @param {object} data
+   */
+  function applyPayload(data) {
+    state = {
+      currency: data.currency || 'USD',
+      items: Array.isArray(data.items) ? data.items : [],
+    };
+    renderKpi(data);
+    renderCategories(data);
+    renderApifyMeter(data);
+    populateRows(state.items, state.currency);
+    tableWrap.hidden = false;
+    actions.hidden = false;
+    loadStatus.hidden = true;
+    loadStatus.textContent = '';
+    note.hidden = false;
+    const when = data.updatedAt
+      ? new Date(data.updatedAt).toLocaleString()
+      : 'defaults (not saved yet)';
+    note.textContent = `Costs ledger · last saved ${when} · edit $/week and Save`;
+  }
+
+  function reload() {
+    loadStatus.hidden = false;
+    loadStatus.className = 'settings-page__load-status';
+    loadStatus.textContent = 'Loading costs…';
+    fetch('/api/dashboard-costs', { cache: 'no-store' })
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+        applyPayload(data);
+      })
+      .catch((e) => {
+        loadStatus.className = 'settings-page__err';
+        loadStatus.textContent =
+          e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+      });
+  }
+
+  addBtn.addEventListener('click', () => {
+    const id = `custom-${Date.now().toString(36)}`;
+    state.items = [
+      ...readRowsFromDom(),
+      {
+        id,
+        label: '',
+        category: 'Other',
+        cadence: 'fixed_weekly',
+        weeklyUsd: 0,
+        notes: '',
+        active: true,
+        measuredWeeklyUsd: null,
+      },
+    ];
+    populateRows(state.items, state.currency);
+    const last = tbody.querySelector('tr:last-child input[data-field="label"]');
+    if (last instanceof HTMLInputElement) last.focus();
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    msg.hidden = false;
+    msg.classList.remove('settings-page__rain-msg--err');
+    msg.textContent = 'Saving…';
+    try {
+      const r = await fetch('/api/dashboard-costs', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currency: state.currency,
+          items: readRowsFromDom(),
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false) {
+        throw new Error(data.error || `HTTP ${r.status}`);
+      }
+      applyPayload(data);
+      msg.textContent = 'Saved.';
+      setTimeout(() => {
+        if (msg.textContent === 'Saved.') msg.hidden = true;
+      }, 1800);
+    } catch (e) {
+      msg.classList.add('settings-page__rain-msg--err');
+      msg.textContent =
+        e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  reload();
+}
+
 /**
  * Secondary ZIP for lightning bugs + fall foliage.
  * Shows the stored ZIP; “Change secondary ZIP” reveals the editor.
@@ -1698,7 +2218,7 @@ function buildEventsFinderSourcesBlock(root) {
         return;
       }
       populateRows(data.sources);
-      loadStatus.textContent = 'Probing sources…';
+      loadStatus.textContent = 'Checking sources…';
       return fetch('/api/events-finder-status', { cache: 'no-store' });
     })
     .then(async (r) => {
@@ -1715,7 +2235,11 @@ function buildEventsFinderSourcesBlock(root) {
       loadStatus.hidden = true;
       note.hidden = false;
       const when = data.checkedAt ? new Date(data.checkedAt).toLocaleString() : new Date().toLocaleString();
-      note.textContent = `Events sources snapshot: ${when}`;
+      const cacheBit =
+        data.cached && Number(data.cacheAgeMs) > 0
+          ? ` · cached ${Math.round(Number(data.cacheAgeMs) / 1000)}s ago`
+          : '';
+      note.textContent = `Events sources snapshot: ${when}${cacheBit}`;
     })
     .catch((e) => {
       loadStatus.className = 'settings-page__err';
@@ -1737,8 +2261,8 @@ function buildEventsFinderSourcesBlock(root) {
           throw new Error(data.error || `HTTP ${r.status}`);
         }
         populateRows(data.sources);
-        loadStatus.textContent = 'Probing sources…';
-        return fetch('/api/events-finder-status', { cache: 'no-store' });
+        loadStatus.textContent = 'Checking sources…';
+        return fetch('/api/events-finder-status?fresh=1', { cache: 'no-store' });
       })
       .then(async (r) => {
         if (!r) return;
@@ -1775,6 +2299,7 @@ export async function mountSettingsPage(mount) {
   const { tbodyByGroup, status, meta } = buildSettingsShell(mount, WINDOW_HOURS);
   buildSecondaryWatchBlock(mount);
   buildEventsFinderSourcesBlock(mount);
+  buildCostsBlock(mount);
   mount.setAttribute('aria-busy', 'true');
 
   /** @type {Map<string, HTMLTableRowElement>} */

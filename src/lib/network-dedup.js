@@ -205,7 +205,7 @@ function contactHardKeys(channels) {
   const keys = [];
   const email = normalizeEmail(c.email);
   if (email) keys.push(`email:${email}`);
-  for (const field of ['phone', 'sms', 'whatsapp']) {
+  for (const field of ['phone', 'officePhone', 'sms', 'whatsapp']) {
     const p = normalizePhone(c[field]);
     if (p) keys.push(`phone:${p}`);
   }
@@ -508,15 +508,64 @@ function unionStrList(listA, listB, max = 40) {
 }
 
 /**
- * Prefer non-empty; if both set and different, keep `preferred` then append other into notes-style fields separately.
+ * Prefer non-empty `preferred`, else `other`. Does not append.
  * @param {string} preferred
  * @param {string} other
+ * @param {number} [max]
  */
-function preferStr(preferred, other) {
-  const a = cleanStr(preferred, 8000);
-  const b = cleanStr(other, 8000);
+function preferStr(preferred, other, max = 8000) {
+  const a = cleanStr(preferred, max);
+  const b = cleanStr(other, max);
   if (a) return a;
   return b;
+}
+
+/**
+ * Prefer the name/value with more information.
+ * If one token-set is a subset of the other (e.g. "Ivy" ⊂ "Ivy Anderson"), keep the richer.
+ * If neither subsumes the other, prefer more tokens, then longer length, then `a`.
+ * @param {string} a
+ * @param {string} b
+ * @param {number} [max]
+ */
+export function preferRicherName(a, b, max = 200) {
+  const sa = cleanStr(a, max);
+  const sb = cleanStr(b, max);
+  if (!sa) return sb;
+  if (!sb) return sa;
+  if (sa.toLowerCase() === sb.toLowerCase()) return sa;
+
+  const tokensA = sa.toLowerCase().split(/\s+/).filter(Boolean);
+  const tokensB = sb.toLowerCase().split(/\s+/).filter(Boolean);
+  const setA = new Set(tokensA);
+  const setB = new Set(tokensB);
+  const aSubsetB = tokensA.length > 0 && tokensA.every((t) => setB.has(t));
+  const bSubsetA = tokensB.length > 0 && tokensB.every((t) => setA.has(t));
+  if (aSubsetB && !bSubsetA) return sb;
+  if (bSubsetA && !aSubsetB) return sa;
+
+  const la = sa.toLowerCase();
+  const lb = sb.toLowerCase();
+  if (la.includes(lb) && !lb.includes(la)) return sa;
+  if (lb.includes(la) && !la.includes(lb)) return sb;
+
+  if (tokensA.length !== tokensB.length) {
+    return tokensA.length > tokensB.length ? sa : sb;
+  }
+  if (sa.length !== sb.length) return sa.length >= sb.length ? sa : sb;
+  return sa;
+}
+
+/**
+ * Suggest a merged display name from several contacts (richest / most informative).
+ * @param {object[]} contacts
+ */
+export function suggestMergedDisplayName(contacts) {
+  const names = (contacts || [])
+    .map((c) => cleanStr(c?.displayName, 200))
+    .filter(Boolean);
+  if (!names.length) return '';
+  return names.reduce((best, next) => preferRicherName(best, next, 200));
 }
 
 /**
@@ -525,36 +574,133 @@ function preferStr(preferred, other) {
  * @param {number} [max]
  */
 function joinUniqueText(a, b, max = 8000) {
-  const sa = cleanStr(a, max);
-  const sb = cleanStr(b, max);
-  if (!sa) return sb;
-  if (!sb) return sa;
-  if (sa.toLowerCase() === sb.toLowerCase()) return sa;
-  if (sa.toLowerCase().includes(sb.toLowerCase())) return sa;
-  if (sb.toLowerCase().includes(sa.toLowerCase())) return sb;
+  const sa = String(a ?? '').replace(/\r\n/g, '\n').trim();
+  const sb = String(b ?? '').replace(/\r\n/g, '\n').trim();
+  if (!sa) return sb.slice(0, max);
+  if (!sb) return sa.slice(0, max);
+  if (sa.toLowerCase() === sb.toLowerCase()) return sa.slice(0, max);
+  if (sa.toLowerCase().includes(sb.toLowerCase())) return sa.slice(0, max);
+  if (sb.toLowerCase().includes(sa.toLowerCase())) return sb.slice(0, max);
   return `${sa}\n\n${sb}`.slice(0, max);
 }
 
 /**
- * Build merged contact payload (keep.id preserved).
+ * Union delimited single-line fields (emails, phones, titles) without dropping either side.
+ * @param {string} a
+ * @param {string} b
+ * @param {string} [sep]
+ * @param {number} [max]
+ */
+function joinUniqueDelimited(a, b, sep = '; ', max = 8000) {
+  const parts = [];
+  const seen = new Set();
+  for (const raw of [a, b]) {
+    const chunks = String(raw ?? '')
+      .split(/[;\n|]+/)
+      .map((s) => s.replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+    for (const chunk of chunks) {
+      const key = chunk.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      parts.push(chunk);
+    }
+  }
+  return parts.join(sep).slice(0, max);
+}
+
+/**
+ * Union contact task checklists; same text keeps done if either side is done.
+ * Also folds legacy nextStep strings when tasks arrays are empty.
  * @param {object} keep
  * @param {object} drop
+ * @returns {{ id: string, text: string, done: boolean }[]}
  */
-export function buildMergedContact(keep, drop) {
+function mergeContactTasks(keep, drop) {
+  /** @type {{ id: string, text: string, done: boolean }[]} */
+  const out = [];
+  /** @type {Map<string, number>} */
+  const byText = new Map();
+
+  /**
+   * @param {unknown} list
+   * @param {unknown} legacyNext
+   */
+  function ingest(list, legacyNext) {
+    const rows = Array.isArray(list) ? list : [];
+    if (rows.length) {
+      for (const item of rows) {
+        if (!item || typeof item !== 'object') continue;
+        const text = String(item.text || item.title || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+        if (!text) continue;
+        const key = text.toLowerCase();
+        const done = Boolean(item.done);
+        const idx = byText.get(key);
+        if (idx == null) {
+          byText.set(key, out.length);
+          out.push({
+            id: String(item.id || '').trim().slice(0, 80) || `task_${out.length + 1}`,
+            text,
+            done,
+          });
+        } else if (done) {
+          out[idx].done = true;
+        }
+      }
+      return;
+    }
+    const legacy = String(legacyNext || '')
+      .replace(/\r\n/g, '\n')
+      .trim();
+    if (!legacy) return;
+    for (const chunk of legacy.split(/\n+|;/)) {
+      const text = chunk.replace(/\s+/g, ' ').trim().slice(0, 500);
+      if (!text) continue;
+      const key = text.toLowerCase();
+      if (byText.has(key)) continue;
+      byText.set(key, out.length);
+      out.push({ id: `task_${out.length + 1}`, text, done: false });
+    }
+  }
+
+  ingest(keep?.tasks, keep?.nextStep);
+  ingest(drop?.tasks, drop?.nextStep);
+  return out.slice(0, 40);
+}
+
+/**
+ * Build merged contact payload (keep.id preserved).
+ * Fields append / union when both sides have distinct values; displayName prefers the richer name.
+ * @param {object} keep
+ * @param {object} drop
+ * @param {{ displayName?: string }} [opts]
+ */
+export function buildMergedContact(keep, drop, opts = {}) {
+  const overrideName = cleanStr(opts.displayName, 200);
+  const mergedDisplayName =
+    overrideName || preferRicherName(keep.displayName, drop.displayName, 200);
+
   const aliases = unionStrList(
-    [...(keep.aliases || []), keep.displayName !== drop.displayName ? drop.displayName : null],
+    [
+      ...(keep.aliases || []),
+      keep.displayName,
+      drop.displayName,
+    ],
     drop.aliases,
     20,
-  ).filter((a) => a.toLowerCase() !== String(keep.displayName || '').toLowerCase());
+  ).filter((a) => a.toLowerCase() !== String(mergedDisplayName || '').toLowerCase());
 
   const channels = {
-    email: preferStr(keep.channels?.email, drop.channels?.email) || null,
-    phone: preferStr(keep.channels?.phone, drop.channels?.phone) || null,
-    sms: preferStr(keep.channels?.sms, drop.channels?.sms) || null,
-    signal: preferStr(keep.channels?.signal, drop.channels?.signal) || null,
-    whatsapp: preferStr(keep.channels?.whatsapp, drop.channels?.whatsapp) || null,
-    linkedin: preferStr(keep.channels?.linkedin, drop.channels?.linkedin) || null,
-    other: preferStr(keep.channels?.other, drop.channels?.other) || null,
+    email: joinUniqueDelimited(keep.channels?.email, drop.channels?.email, '; ', 320) || null,
+    phone: joinUniqueDelimited(keep.channels?.phone, drop.channels?.phone, '; ', 80) || null,
+    officePhone:
+      joinUniqueDelimited(keep.channels?.officePhone, drop.channels?.officePhone, '; ', 80) || null,
+    sms: joinUniqueDelimited(keep.channels?.sms, drop.channels?.sms, '; ', 80) || null,
+    signal: joinUniqueDelimited(keep.channels?.signal, drop.channels?.signal, '; ', 120) || null,
+    whatsapp: joinUniqueDelimited(keep.channels?.whatsapp, drop.channels?.whatsapp, '; ', 80) || null,
+    telegram: joinUniqueDelimited(keep.channels?.telegram, drop.channels?.telegram, '; ', 120) || null,
+    linkedin: joinUniqueDelimited(keep.channels?.linkedin, drop.channels?.linkedin, '; ', 500) || null,
+    other: joinUniqueDelimited(keep.channels?.other, drop.channels?.other, '; ', 500) || null,
     urls: unionStrList(keep.channels?.urls, drop.channels?.urls, 20),
   };
 
@@ -564,23 +710,47 @@ export function buildMergedContact(keep, drop) {
 
   return {
     ...keep,
-    nickname: preferStr(keep.nickname, drop.nickname),
-    memoryJog: preferStr(keep.memoryJog, drop.memoryJog),
+    displayName: mergedDisplayName,
+    firstName: (() => {
+      const parts = String(mergedDisplayName || '')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+      if (parts.length <= 1) {
+        return parts[0] || preferRicherName(keep.firstName, drop.firstName, 120);
+      }
+      return parts.slice(0, -1).join(' ');
+    })(),
+    lastName: (() => {
+      const parts = String(mergedDisplayName || '')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+      if (parts.length <= 1) {
+        return preferRicherName(keep.lastName, drop.lastName, 120);
+      }
+      return parts[parts.length - 1];
+    })(),
+    nickname: preferRicherName(keep.nickname, drop.nickname, 200),
+    memoryJog: joinUniqueText(keep.memoryJog, drop.memoryJog, 2000),
     aliases,
     kinds: unionStrList(keep.kinds, drop.kinds, 10),
+    hasKids: Boolean(keep.hasKids || drop.hasKids),
     summary: joinUniqueText(keep.summary, drop.summary, 8000),
     notes: joinUniqueText(keep.notes, drop.notes, 8000),
-    bio: preferStr(keep.bio, drop.bio) || joinUniqueText(keep.bio, drop.bio, 8000),
-    howWeMet: preferStr(keep.howWeMet, drop.howWeMet),
-    networkCircles: joinUniqueText(keep.networkCircles, drop.networkCircles, 4000).replace(/\n\n/g, ', '),
+    bio: joinUniqueText(keep.bio, drop.bio, 8000),
+    howWeMet: joinUniqueText(keep.howWeMet, drop.howWeMet, 4000),
+    networkCircles: joinUniqueDelimited(keep.networkCircles, drop.networkCircles, ', ', 4000),
     alignedActivities: unionStrList(keep.alignedActivities, drop.alignedActivities, 60),
-    org: preferStr(keep.org, drop.org),
+    org: preferRicherName(keep.org, drop.org, 300),
     orgId: keep.orgId || drop.orgId || null,
-    title: preferStr(keep.title, drop.title),
-    location: preferStr(keep.location, drop.location),
-    sensitivity: preferStr(keep.sensitivity, drop.sensitivity),
+    title: joinUniqueDelimited(keep.title, drop.title, '; ', 300),
+    location: preferRicherName(keep.location, drop.location, 300),
+    address: preferRicherName(keep.address, drop.address, 500),
+    sensitivity: preferRicherName(keep.sensitivity, drop.sensitivity, 200),
     preferredContactMethods: unionStrList(keep.preferredContactMethods, drop.preferredContactMethods, 20),
     channels,
+    tasks: mergeContactTasks(keep, drop),
     avatarUrl: keep.avatarUrl || drop.avatarUrl || null,
     lastContactAt: useDropLast ? drop.lastContactAt : keep.lastContactAt,
     lastContactPrecision: useDropLast ? drop.lastContactPrecision : keep.lastContactPrecision,
@@ -588,7 +758,15 @@ export function buildMergedContact(keep, drop) {
     enrichment: {
       sources: unionStrList(keep.enrichment?.sources, drop.enrichment?.sources, 30),
       enrichedAt: preferStr(keep.enrichment?.enrichedAt, drop.enrichment?.enrichedAt) || null,
-      rawSummary: preferStr(keep.enrichment?.rawSummary, drop.enrichment?.rawSummary) || null,
+      rawSummary: joinUniqueText(keep.enrichment?.rawSummary, drop.enrichment?.rawSummary, 8000) || null,
+      confidence:
+        typeof keep.enrichment?.confidence === 'number'
+          ? keep.enrichment.confidence
+          : typeof drop.enrichment?.confidence === 'number'
+            ? drop.enrichment.confidence
+            : null,
+      needsReview: Boolean(keep.enrichment?.needsReview || drop.enrichment?.needsReview),
+      lastMode: preferStr(keep.enrichment?.lastMode, drop.enrichment?.lastMode) || null,
     },
     createdAt: keep.createdAt || drop.createdAt,
     updatedAt: new Date().toISOString(),
@@ -599,13 +777,17 @@ export function buildMergedContact(keep, drop) {
 /**
  * @param {object} keep
  * @param {object} drop
+ * @param {{ name?: string }} [opts]
  */
-export function buildMergedOrganization(keep, drop) {
+export function buildMergedOrganization(keep, drop, opts = {}) {
+  const overrideName = cleanStr(opts.name, 300);
+  const mergedName = overrideName || preferRicherName(keep.name, drop.name, 300);
+
   const aliases = unionStrList(
-    [...(keep.aliases || []), keep.name !== drop.name ? drop.name : null],
+    [...(keep.aliases || []), keep.name, drop.name],
     drop.aliases,
     20,
-  ).filter((a) => a.toLowerCase() !== String(keep.name || '').toLowerCase());
+  ).filter((a) => a.toLowerCase() !== String(mergedName || '').toLowerCase());
 
   const suggestedMap = new Map();
   for (const p of [...(keep.suggestedPeople || []), ...(drop.suggestedPeople || [])]) {
@@ -624,20 +806,28 @@ export function buildMergedOrganization(keep, drop) {
     else suggestedMap.set(key, { ...p, ...prev });
   }
 
+  const website = preferStr(keep.website, drop.website) || null;
+  const urls = unionStrList(
+    [...(Array.isArray(keep.urls) ? keep.urls : []), keep.website, drop.website],
+    drop.urls,
+    20,
+  ).filter((u) => !website || u.toLowerCase() !== String(website).toLowerCase());
+
   return {
     ...keep,
+    name: mergedName,
     aliases,
     summary: joinUniqueText(keep.summary, drop.summary, 8000),
-    description: preferStr(keep.description, drop.description) || joinUniqueText(keep.description, drop.description, 8000),
-    website: preferStr(keep.website, drop.website) || null,
-    location: preferStr(keep.location, drop.location),
-    urls: unionStrList(keep.urls, drop.urls, 20),
+    description: joinUniqueText(keep.description, drop.description, 8000),
+    website,
+    location: preferRicherName(keep.location, drop.location, 300),
+    urls,
     logoUrl: keep.logoUrl || drop.logoUrl || null,
     suggestedPeople: [...suggestedMap.values()].slice(0, 40),
     enrichment: {
       sources: unionStrList(keep.enrichment?.sources, drop.enrichment?.sources, 30),
       enrichedAt: preferStr(keep.enrichment?.enrichedAt, drop.enrichment?.enrichedAt) || null,
-      rawSummary: preferStr(keep.enrichment?.rawSummary, drop.enrichment?.rawSummary) || null,
+      rawSummary: joinUniqueText(keep.enrichment?.rawSummary, drop.enrichment?.rawSummary, 8000) || null,
     },
     createdAt: keep.createdAt || drop.createdAt,
     updatedAt: new Date().toISOString(),
@@ -740,14 +930,15 @@ export function findBestOrgMatch(org, candidates, threshold = ORG_MERGE_THRESHOL
  * @param {object} a
  * @param {object} b
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ displayName?: string }} [opts]
  * @returns {Promise<{ contact: object, mergedFromId: string, verdict: object }>}
  */
-export async function mergeContacts(a, b, env = process.env) {
+export async function mergeContacts(a, b, env = process.env, opts = {}) {
   const { normalizeContact } = await import('./network-contacts-store.js');
   const { keep, drop } = pickSurvivor(a, b, PROTECTED_CONTACT_IDS);
 
   const verdict = scoreContactPair(keep, drop);
-  const mergedRaw = buildMergedContact(keep, drop);
+  const mergedRaw = buildMergedContact(keep, drop, opts);
   const normalized = normalizeContact(mergedRaw);
   if (!normalized) {
     const err = new Error('invalid_contact_merge');

@@ -132,9 +132,14 @@ export function mountCalendarUpcoming(root, config, opts = {}) {
     if (skip >= events.length) skip = 0;
     const ev = events[skip];
     title.textContent = ev.title;
-    when.textContent = formatWhen(ev, timeZone);
+    const calName = String(ev.calendarName || '').trim();
+    const whenBase = formatWhen(ev, timeZone);
+    when.textContent =
+      calName && !/@/.test(calName) && calName.toLowerCase() !== 'synced'
+        ? `${whenBase} · ${calName}`
+        : whenBase;
     const loc = (ev.location || '').trim();
-    wrap.title = [ev.title, formatWhen(ev, timeZone), loc].filter(Boolean).join('\n');
+    wrap.title = [ev.title, when.textContent, loc].filter(Boolean).join('\n');
     const navDisabled = events.length <= 1;
     backBtn.disabled = navDisabled;
     advanceBtn.disabled = navDisabled;

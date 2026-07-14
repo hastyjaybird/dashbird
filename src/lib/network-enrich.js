@@ -5,6 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   getContactById,
+  newContactTaskId,
   saveContactAvatar,
   saveNetworkAsset,
   updateContact,
@@ -25,9 +26,9 @@ Return JSON only:
   "title": string | null,
   "department": string | null,
   "location": string | null,
-  "region": string | null,
+  "address": string | null,
   "rating": "Fan" | "Hot" | "Warm" | "Cold" | null,
-  "relationshipStatus": "Lead" | "Cultivating" | "Collaborator" | "Family" | "Acquaintance" | "Paused" | "Former" | null,
+  "relationshipStatus": "Lead" | "Cultivating" | "Collaborator" | "Family" | "Inner Circle" | "Acquaintance" | "Meta" | "Paused" | "Former" | null,
   "nextStep": string | null,
   "howWeMet": string | null,
   "notes": string | null,
@@ -35,6 +36,7 @@ Return JSON only:
   "linkedin": string | null,
   "email": string | null,
   "phone": string | null,
+  "officePhone": string | null,
   "nickname": string | null,
   "aliases": string[],
   "urls": string[],
@@ -51,7 +53,8 @@ Rules:
 - nickname: the primary short name / moniker they go by day-to-day (e.g. "Jay" for Julia), if clearly stated; else null.
 - title: role / job title when stated.
 - department: team or department when stated.
-- region: geographic market / metro when known; location: city/area freeform.
+- location: city / area freeform when known.
+- address: full mailing / street / P.O. Box address when explicitly present; keep separate from location.
 - rating / relationshipStatus: only when clearly implied; else null. Prefer null over guessing "Hot" or "Fan". Fan is higher than Hot (closest / strongest fans).
 - avatarImageUrl: direct image URL of a headshot if present; else null.
 - confidence: 0-1.`;
@@ -551,7 +554,6 @@ export function contactSearchQueries(contact) {
   const org = String(contact?.org || '').trim();
   const title = String(contact?.title || '').trim();
   const location = String(contact?.location || '').trim();
-  const region = String(contact?.region || '').trim();
   const circles = String(contact?.networkCircles || '')
     .split(/[,;|/]+/)
     .map((s) => s.trim())
@@ -567,7 +569,7 @@ export function contactSearchQueries(contact) {
     .map((s) => s.trim())
     .filter((w) => w.length >= 4)
     .slice(0, 8);
-  const place = location || region;
+  const place = location;
 
   /** @type {string[]} */
   const queries = [];
@@ -764,7 +766,7 @@ function applyContactCardHints(contact, card) {
     title: card.title != null ? String(card.title) : contact.title,
     department: card.department != null ? String(card.department) : contact.department,
     location: card.location != null ? String(card.location) : contact.location,
-    region: card.region != null ? String(card.region) : contact.region,
+    address: card.address != null ? String(card.address) : contact.address,
     bio: card.bio != null ? String(card.bio) : contact.bio,
     summary: card.summary != null ? String(card.summary) : contact.summary,
     notes: card.notes != null ? String(card.notes) : contact.notes,
@@ -939,7 +941,7 @@ function pushCandidate(list, url, thumbUrl = null) {
 
 /**
  * Re-run image search for a contact; return a page of candidates without saving.
- * Default path: scrape known pages, then DuckDuckGo Images for `"Name"` / `"Name" Org` / Name.
+ * Default path: scrape known pages, then DuckDuckGo Images for `"Name" linkedin` first, then org/name.
  * When `opts.query` is set (picker text box), skip page scrapes and search with that hint.
  * @param {string} contactId
  * @param {{ offset?: number, limit?: number, query?: string }} [opts]
@@ -978,8 +980,10 @@ export async function findContactAvatarCandidates(contactId, opts = {}, env = pr
     if (name && org) pushQ(`"${name}" ${org}`);
     if (name) pushQ(`"${name}"`);
   } else {
-    if (name) pushQ(`"${name}"`);
+    // First image query always includes LinkedIn so profile photos surface early.
+    if (name) pushQ(`"${name}" linkedin`);
     if (name && org) pushQ(`"${name}" ${org}`);
+    if (name) pushQ(`"${name}"`);
     if (name) pushQ(name);
   }
 
@@ -1216,6 +1220,35 @@ function emptyField(v) {
 }
 
 /**
+ * Append an open follow-up task when enrich finds a nextStep and the contact has none open.
+ * @param {object} contact
+ * @param {Record<string, unknown>} patch
+ * @param {unknown} value
+ * @param {boolean} force
+ */
+function maybeAppendOpenTask(contact, patch, value, force) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 500);
+  if (!text) return;
+  const existing = Array.isArray(patch.tasks)
+    ? /** @type {{ id: string, text: string, done: boolean }[]} */ (patch.tasks)
+    : Array.isArray(contact.tasks)
+      ? contact.tasks.map((t) => ({
+          id: String(t.id || ''),
+          text: String(t.text || '').trim(),
+          done: Boolean(t.done),
+        }))
+      : [];
+  const hasOpen = existing.some((t) => t && !t.done && String(t.text || '').trim());
+  if (!force && hasOpen) return;
+  const key = text.toLowerCase();
+  if (existing.some((t) => !t.done && String(t.text || '').trim().toLowerCase() === key)) return;
+  patch.tasks = [
+    ...existing,
+    { id: newContactTaskId(), text, done: false },
+  ].slice(0, 40);
+}
+
+/**
  * LinkedIn / Facebook / personal profile URLs — safe to store on the card.
  * @param {string} url
  */
@@ -1330,12 +1363,13 @@ aliases: ${(contact.aliases || []).join(', ') || '(none)'}
 org: ${contact.org || '(none)'}
 title: ${contact.title || '(none)'}
 location: ${contact.location || '(none)'}
-region: ${contact.region || '(none)'}
+address: ${contact.address || '(none)'}
 scene/circles: ${contact.networkCircles || '(none)'}
 bio: ${contact.bio || '(none)'}
 summary: ${contact.summary || '(none)'}
 email: ${contact.channels?.email || '(none)'}
 phone: ${contact.channels?.phone || '(none)'}
+officePhone: ${contact.channels?.officePhone || '(none)'}
 linkedin: ${contact.channels?.linkedin || '(none)'}
 search queries used: ${searchQueries.join(' | ') || '(none)'}
 known urls: ${urls.join(', ') || '(none)'}
@@ -1386,11 +1420,11 @@ ${excerpt || '(no pages fetched — only high-confidence public facts; else null
   maybeSet('org', parsed.org);
   maybeSet('title', parsed.title);
   maybeSet('department', parsed.department);
-  maybeSet('location', parsed.location);
-  maybeSet('region', parsed.region);
+  maybeSet('location', parsed.location || parsed.region);
+  maybeSet('address', parsed.address);
   maybeSet('rating', parsed.rating);
   maybeSet('relationshipStatus', parsed.relationshipStatus);
-  maybeSet('nextStep', parsed.nextStep);
+  maybeAppendOpenTask(contact, patch, parsed.nextStep, force);
   maybeSet('howWeMet', parsed.howWeMet);
   maybeSet('notes', parsed.notes);
   maybeSet('networkCircles', parsed.networkCircles);
@@ -1419,6 +1453,7 @@ ${excerpt || '(no pages fetched — only high-confidence public facts; else null
   setChannel('linkedin', parsed.linkedin);
   setChannel('email', parsed.email);
   setChannel('phone', parsed.phone);
+  setChannel('officePhone', parsed.officePhone);
   {
     // Keep enrichment.sources for audit; only promote clear profile URLs onto the card.
     const profileUrls = [
@@ -1449,12 +1484,13 @@ ${excerpt || '(no pages fetched — only high-confidence public facts; else null
     if (avatarUrl) patch.avatarUrl = avatarUrl;
   }
 
-  // Same path you see in the browser: DuckDuckGo Images for the person's name (+ org).
+  // Same path you see in the browser: DuckDuckGo Images for name + LinkedIn first, then org/name.
   if ((force || emptyField(contact.avatarUrl)) && !patch.avatarUrl && Date.now() < deadlineAt - 8_000) {
     const name = String(contact.displayName || '').trim();
     const org = String(patch.org || contact.org || '').trim();
     /** @type {string[]} */
     const queries = [];
+    if (name) queries.push(`"${name}" linkedin`);
     if (name && org) queries.push(`"${name}" ${org}`);
     else if (name) queries.push(`"${name}"`);
     if (name && queries[0] !== name) queries.push(name);
@@ -1498,8 +1534,27 @@ ${excerpt || '(no pages fetched — only high-confidence public facts; else null
     }
   }
 
+  const filled = markContactEnrichNeedsReview(patch);
   const updated = await updateContact(contactId, patch, env);
-  return { ok: true, contact: updated, filled: Object.keys(patch).filter((k) => k !== 'enrichment' && k !== 'source') };
+  return { ok: true, contact: updated, filled };
+}
+
+/**
+ * Flag autofilled enrichments for human review when any card fields changed.
+ * @param {Record<string, unknown>} patch
+ * @returns {string[]}
+ */
+function markContactEnrichNeedsReview(patch) {
+  const filled = Object.keys(patch).filter((k) => k !== 'enrichment' && k !== 'source');
+  if (
+    filled.length &&
+    patch.enrichment &&
+    typeof patch.enrichment === 'object' &&
+    !Array.isArray(patch.enrichment)
+  ) {
+    /** @type {Record<string, unknown>} */ (patch.enrichment).needsReview = true;
+  }
+  return filled;
 }
 
 /**
@@ -1548,11 +1603,11 @@ function buildContactEnrichPatch(contact, parsed, opts = {}) {
   maybeSet('org', parsed.org);
   maybeSet('title', parsed.title);
   maybeSet('department', parsed.department);
-  maybeSet('location', parsed.location);
-  maybeSet('region', parsed.region);
+  maybeSet('location', parsed.location || parsed.region);
+  maybeSet('address', parsed.address);
   maybeSet('rating', parsed.rating);
   maybeSet('relationshipStatus', parsed.relationshipStatus);
-  maybeSet('nextStep', parsed.nextStep);
+  maybeAppendOpenTask(contact, patch, parsed.nextStep, force);
   maybeSet('howWeMet', parsed.howWeMet);
   maybeSet('notes', parsed.notes);
   maybeSet('networkCircles', parsed.networkCircles);
@@ -1582,6 +1637,7 @@ function buildContactEnrichPatch(contact, parsed, opts = {}) {
   setChannel('linkedin', parsed.linkedin);
   setChannel('email', parsed.email);
   setChannel('phone', parsed.phone);
+  setChannel('officePhone', parsed.officePhone);
   {
     const profileUrls = [
       ...sourceUrls,
@@ -1636,8 +1692,10 @@ aliases: ${(contact.aliases || []).join(', ') || '(none)'}
 org: ${contact.org || '(none)'}
 title: ${contact.title || '(none)'}
 location: ${contact.location || '(none)'}
+address: ${contact.address || '(none)'}
 email: ${contact.channels?.email || '(none)'}
 phone: ${contact.channels?.phone || '(none)'}
+officePhone: ${contact.channels?.officePhone || '(none)'}
 linkedin: ${contact.channels?.linkedin || '(none)'}
 howWeMet: ${contact.howWeMet || '(none)'}
 notes: ${contact.notes || '(none)'}
@@ -1676,11 +1734,12 @@ ${sourceText.slice(0, 28_000)}`,
     }
   }
 
+  const filled = markContactEnrichNeedsReview(patch);
   const updated = await updateContact(contactId, patch, env);
   return {
     ok: true,
     contact: updated,
-    filled: Object.keys(patch).filter((k) => k !== 'enrichment' && k !== 'source'),
+    filled,
     mode: sourceLabel,
   };
 }
@@ -1694,6 +1753,7 @@ ${sourceText.slice(0, 28_000)}`,
  *   base64?: string,
  *   dataUrl?: string,
  *   force?: boolean,
+ *   useImageAsAvatar?: boolean,
  *   card?: object,
  * }} opts
  * @param {NodeJS.ProcessEnv} [env]
@@ -1760,12 +1820,45 @@ export async function enrichContactFromFile(contactId, opts = {}, env = process.
     if (!chat.ok) return { ok: false, error: chat.error || 'openrouter_failed', contact: stored };
     const parsed = extractJsonObject(chat.content);
     if (!parsed || typeof parsed !== 'object') return { ok: false, error: 'parse_failed', contact: stored };
+    const force = Boolean(opts.force);
     const patch = buildContactEnrichPatch(contact, parsed, {
-      force: Boolean(opts.force),
+      force,
       sourceLabel: `file:${filename}`,
     });
+
+    if ((force || emptyField(contact.avatarUrl)) && parsed.avatarImageUrl) {
+      const avatarUrl = await tryDownloadImage(String(parsed.avatarImageUrl), contact.id, 'avatar', env);
+      if (avatarUrl) patch.avatarUrl = avatarUrl;
+    }
+    if ((force || emptyField(contact.avatarUrl)) && !patch.avatarUrl && opts.useImageAsAvatar) {
+      try {
+        const updatedAvatar = await saveContactAvatar(
+          contactId,
+          { base64: b64, mimeType: mime.startsWith('image/') ? mime : 'image/jpeg' },
+          env,
+        );
+        if (updatedAvatar?.avatarUrl) patch.avatarUrl = updatedAvatar.avatarUrl;
+      } catch {
+        // Avatar apply is best-effort.
+      }
+    }
+
+    const orgName = String(patch.org || contact.org || '').trim();
+    if (orgName) {
+      try {
+        const org = await ensureOrganizationByName(orgName, env);
+        if (org) {
+          patch.org = org.name;
+          patch.orgId = org.id;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const filled = markContactEnrichNeedsReview(patch);
     const updated = await updateContact(contactId, patch, env);
-    return { ok: true, contact: updated, mode: 'file', filename };
+    return { ok: true, contact: updated, mode: 'file', filename, filled };
   }
 
   if (!isTextish) {

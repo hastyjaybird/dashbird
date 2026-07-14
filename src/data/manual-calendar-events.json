@@ -1,0 +1,21 @@
+{
+  "events": [
+    {
+      "id": "manual:opensauce-2026",
+      "title": "Open Sauce 2026",
+      "start": "2026-07-17T16:00:00.000Z",
+      "end": "2026-07-20T01:00:00.000Z",
+      "allDay": false,
+      "venue": "San Mateo County Event Center",
+      "location": "1346 Saratoga Dr, San Mateo, CA 94403",
+      "city": "San Mateo",
+      "lat": 37.5466305,
+      "lon": -122.3020783,
+      "url": "https://www.opensauce.com/",
+      "description": "Annual tech & creator festival — one conference per year. Industry Day Jul 17; main event Jul 18–19 (GA 10am–6pm, VIP from 9am). Tickets: https://www.opensauce.com/tickets",
+      "calendarName": "Manual",
+      "source": "manual",
+      "imageUrl": "https://opensauce.com/og-image.jpg"
+    }
+  ]
+}

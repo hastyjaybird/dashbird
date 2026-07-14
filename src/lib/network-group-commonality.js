@@ -65,6 +65,7 @@ function compactContact(c) {
     memoryJog: c.memoryJog || '',
     aliases: c.aliases || [],
     kinds: c.kinds || [],
+    hasKids: Boolean(c.hasKids),
     org: c.org || null,
     title: c.title || null,
     location: c.location || null,

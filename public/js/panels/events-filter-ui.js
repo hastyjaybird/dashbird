@@ -6,7 +6,7 @@
  * @param {string | null | undefined} ymd
  * @returns {Date | null}
  */
-export function parseYmd(ymd) {
+function parseYmd(ymd) {
   if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return null;
   const [y, m, d] = ymd.split('-').map(Number);
   const dt = new Date(y, m - 1, d);
@@ -17,7 +17,7 @@ export function parseYmd(ymd) {
  * @param {Date} d
  * @returns {string}
  */
-export function formatYmd(d) {
+function formatYmd(d) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
@@ -28,7 +28,7 @@ export function formatYmd(d) {
  * @param {unknown} raw
  * @returns {string[]}
  */
-export function normalizeDateList(raw) {
+function normalizeDateList(raw) {
   if (!Array.isArray(raw)) return [];
   const out = [];
   const seen = new Set();
@@ -132,7 +132,7 @@ export function checksToAttendance(checks) {
 }
 
 /**
- * Clickable month calendar — toggle individual days; click-drag paints select/deselect.
+ * Clickable month calendar — toggle individual days (multi-select); click-drag paints select/deselect.
  * @param {{
  *   idPrefix?: string,
  *   classPrefix?: string,
@@ -194,18 +194,17 @@ export function createRangeCalendar(opts = {}) {
   const grid = document.createElement('div');
   grid.className = `${prefix}__grid`;
   grid.setAttribute('role', 'grid');
-  grid.setAttribute('aria-label', 'Select dates; click and drag to paint');
+  grid.setAttribute('aria-label', 'Select dates; click to toggle, drag to paint');
 
   root.append(head, clearBtn, dow, grid);
 
   const now = new Date();
   let viewYear = now.getFullYear();
   let viewMonth = now.getMonth();
+  const initialDates = normalizeDateList(opts.dates);
   /** @type {Set<string>} */
   let selectedDays = new Set(
-    normalizeDateList(opts.dates).length
-      ? normalizeDateList(opts.dates)
-      : expandDateRange(opts.dateFrom, opts.dateTo),
+    initialDates.length ? initialDates : expandDateRange(opts.dateFrom, opts.dateTo),
   );
   let disabled = false;
   /** @type {'add' | 'remove' | null} */
@@ -219,11 +218,6 @@ export function createRangeCalendar(opts = {}) {
     if (onChange) onChange();
   }
 
-  /**
-   * @param {string} ymd
-   * @param {HTMLElement} btn
-   * @param {'add' | 'remove'} mode
-   */
   /**
    * @param {string} ymd
    * @param {HTMLElement} btn
@@ -248,12 +242,13 @@ export function createRangeCalendar(opts = {}) {
   /**
    * @param {number} clientX
    * @param {number} clientY
+   * @param {EventTarget | null} [fallbackTarget]
    * @returns {HTMLElement | null}
    */
-  function dayButtonAt(clientX, clientY) {
-    const el = document.elementFromPoint(clientX, clientY);
-    if (!el || typeof el.closest !== 'function') return null;
-    const btn = el.closest(`.${prefix}__day`);
+  function dayButtonAt(clientX, clientY, fallbackTarget = null) {
+    const el = document.elementFromPoint(clientX, clientY) || fallbackTarget;
+    if (!el || typeof /** @type {Element} */ (el).closest !== 'function') return null;
+    const btn = /** @type {Element} */ (el).closest(`.${prefix}__day`);
     if (!btn || !(btn instanceof HTMLElement) || !grid.contains(btn)) return null;
     if (!btn.dataset.ymd || btn.classList.contains(`${prefix}__day--empty`)) return null;
     return btn;
@@ -312,10 +307,11 @@ export function createRangeCalendar(opts = {}) {
 
   grid.addEventListener('pointerdown', (e) => {
     if (disabled || e.button !== 0) return;
-    const btn = dayButtonAt(e.clientX, e.clientY);
+    const btn = dayButtonAt(e.clientX, e.clientY, e.target);
     if (!btn || !btn.dataset.ymd) return;
     e.preventDefault();
     const ymd = btn.dataset.ymd;
+    // Toggle the day; drag continues in the same add/remove mode for multi-select.
     dragMode = selectedDays.has(ymd) ? 'remove' : 'add';
     dragPointerId = e.pointerId;
     dragDirty = false;
@@ -330,7 +326,7 @@ export function createRangeCalendar(opts = {}) {
 
   grid.addEventListener('pointermove', (e) => {
     if (!dragMode || (dragPointerId != null && e.pointerId !== dragPointerId)) return;
-    const btn = dayButtonAt(e.clientX, e.clientY);
+    const btn = dayButtonAt(e.clientX, e.clientY, e.target);
     if (!btn || !btn.dataset.ymd) return;
     if (applyDay(btn.dataset.ymd, btn, dragMode)) dragDirty = true;
   });
@@ -339,7 +335,7 @@ export function createRangeCalendar(opts = {}) {
   grid.addEventListener('pointercancel', endDrag);
   grid.addEventListener('lostpointercapture', endDrag);
 
-  // Keyboard: Space/Enter still toggles the focused day.
+  // Keyboard: Space/Enter toggles the focused day (multi-select).
   grid.addEventListener('keydown', (e) => {
     if (disabled) return;
     if (e.key !== ' ' && e.key !== 'Enter') return;

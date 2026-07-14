@@ -1,0 +1,17 @@
+---
+description: Keep Settings → Costs ledger updated when Dashbird spends money
+alwaysApply: true
+---
+
+# Settings → Costs when spend changes
+
+Whenever a change introduces, removes, or materially changes **money Dashbird spends** (paid APIs, cloud hosting/VPS, SaaS, subscriptions allocated to this project, metered scrapers, paid model credits, domains, etc.):
+
+1. Add or update the line item in `src/data/dashboard-costs.default.json` (id, label, category, cadence, `weeklyUsd` estimate, notes).
+2. If `data/dashboard-costs.json` already exists, update that live ledger too (or tell Jay to Save from Settings after seed changes).
+3. Wire measured spend when a billing log exists (see Apify + `measuredSource: "facebook-billing"` in `src/routes/dashboard-costs.js`).
+4. Confirm Settings → **Costs** still shows the item (`buildCostsBlock` in `public/js/panels/settings-page.js` reads `/api/dashboard-costs`).
+
+Examples that require a Costs update: moving off the home host onto a paid server, enabling a paid Apify plan, new paid OpenRouter/model usage, Supabase beyond free tier, a domain, or any new paid integration.
+
+Do **not** list free public APIs or zero-cost self-hosted defaults as active spend unless Jay wants them tracked at $0.

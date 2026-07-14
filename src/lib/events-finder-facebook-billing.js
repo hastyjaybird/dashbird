@@ -142,3 +142,41 @@ export async function getFacebookBillingMonthSummary(env = process.env, opts = {
     runs: runs.slice(-30),
   };
 }
+
+/**
+ * Sum Apify charges over a rolling window (default last 7 days).
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ days?: number, now?: Date }} [opts]
+ */
+export async function getFacebookBillingWeekSummary(env = process.env, opts = {}) {
+  const timeZone =
+    String(env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim() || 'America/Los_Angeles';
+  const days = Math.min(Math.max(Number(opts.days) || 7, 1), 31);
+  const now = opts.now instanceof Date ? opts.now : new Date();
+  const sinceMs = now.getTime() - days * 24 * 60 * 60 * 1000;
+  const log = await readLog(env);
+  const runs = log.runs.filter((r) => {
+    const t = Date.parse(String(r.runAt || ''));
+    return Number.isFinite(t) && t >= sinceMs && t <= now.getTime();
+  });
+  let totalUsd = 0;
+  let known = 0;
+  let estimated = 0;
+  for (const r of runs) {
+    if (r.chargeUsd == null || !Number.isFinite(Number(r.chargeUsd))) continue;
+    totalUsd += Number(r.chargeUsd);
+    known += 1;
+    if (r.estimated) estimated += 1;
+  }
+  return {
+    days,
+    timeZone,
+    since: new Date(sinceMs).toISOString(),
+    until: now.toISOString(),
+    runCount: runs.length,
+    chargedRunCount: known,
+    estimatedRunCount: estimated,
+    totalUsd: Math.round(totalUsd * 10000) / 10000,
+    runs: runs.slice(-30),
+  };
+}

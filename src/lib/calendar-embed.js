@@ -56,3 +56,64 @@ export function normalizeCalendarEmbedUrl(raw) {
     return '';
   }
 }
+
+/**
+ * Extra Google Calendar IDs to layer onto the embed (Partiful sync, Random Events, …).
+ * From CALENDAR_EMBED_EXTRA_SRCS + EVENTS_FINDER_GOOGLE_CALENDAR_SRC.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {string[]}
+ */
+export function resolveCalendarEmbedExtraSrcs(env = process.env) {
+  /** @type {string[]} */
+  const out = [];
+  const seen = new Set();
+
+  /**
+   * @param {unknown} raw
+   */
+  function push(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return;
+    const key = s.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(s);
+  }
+
+  for (const part of String(env.CALENDAR_EMBED_EXTRA_SRCS || '').split(/[\n,|]/)) {
+    push(part);
+  }
+  push(env.EVENTS_FINDER_GOOGLE_CALENDAR_SRC);
+
+  return out;
+}
+
+/**
+ * Append calendar IDs as extra `src` query params (Google multi-calendar embed).
+ * @param {string} embedUrl
+ * @param {string[]} srcs
+ * @returns {string}
+ */
+export function appendCalendarEmbedSrcs(embedUrl, srcs) {
+  const base = String(embedUrl || '').trim();
+  if (!base) return '';
+  const list = Array.isArray(srcs) ? srcs.map((s) => String(s || '').trim()).filter(Boolean) : [];
+  if (!list.length) return base;
+  try {
+    const u = new URL(base);
+    if (!isGoogleCalendarEmbedUrl(u)) return base;
+    const existing = new Set(
+      u.searchParams.getAll('src').map((s) => decodeURIComponent(String(s || '')).toLowerCase()),
+    );
+    for (const src of list) {
+      const key = src.toLowerCase();
+      if (existing.has(key)) continue;
+      u.searchParams.append('src', src);
+      existing.add(key);
+    }
+    applyGoogleCalendarEmbedDefaults(u);
+    return u.toString();
+  } catch {
+    return base;
+  }
+}

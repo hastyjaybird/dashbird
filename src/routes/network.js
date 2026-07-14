@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   addContact,
   addContactsBulk,
+  CONTACT_RELATIONSHIP_STATUSES,
   deleteContacts,
   getContactById,
   loadNetworkContacts,
@@ -71,6 +72,7 @@ router.get('/contacts', async (_req, res) => {
       ok: true,
       contacts: data.contacts,
       preferredContactMethods: PREFERRED_CONTACT_METHODS,
+      relationshipStatuses: CONTACT_RELATIONSHIP_STATUSES,
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
@@ -92,6 +94,7 @@ router.post('/contacts/bulk', async (req, res) => {
     const result = await addContactsBulk(req.body?.names ?? req.body?.text, {
       kinds: req.body?.kinds,
       preferredContactMethods: req.body?.preferredContactMethods,
+      hasKids: Boolean(req.body?.hasKids),
     });
     res.status(201).json({ ok: true, ...result });
   } catch (e) {
@@ -125,6 +128,8 @@ router.post('/contacts/merge', async (req, res) => {
       res.status(400).json({ ok: false, error: 'need_at_least_two' });
       return;
     }
+    const displayNameOverride =
+      typeof req.body?.displayName === 'string' ? String(req.body.displayName).trim() : '';
     /** @type {object[]} */
     const loaded = [];
     for (const id of ids) {
@@ -142,7 +147,12 @@ router.post('/contacts/merge', async (req, res) => {
       const keep = (await getContactById(survivor.id)) || survivor;
       const other = await getContactById(loaded[i].id);
       if (!other || other.id === keep.id) continue;
-      const result = await mergeContacts(keep, other);
+      // Apply the chosen name on the final pairwise merge so intermediate
+      // richer-name picks still accumulate fields from every contact.
+      const isLast = i === loaded.length - 1;
+      const result = await mergeContacts(keep, other, process.env, {
+        displayName: isLast && displayNameOverride ? displayNameOverride : undefined,
+      });
       survivor = result.contact;
       mergedFromIds.push(result.mergedFromId);
     }

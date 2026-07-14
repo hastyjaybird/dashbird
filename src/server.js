@@ -13,6 +13,7 @@ import hostHealthRouter from './routes/host-health.js';
 import dashboardCheckRouter from './routes/dashboard-check.js';
 import monitoringSourcesRouter from './routes/monitoring-sources.js';
 import dashboardSettingsRouter from './routes/dashboard-settings.js';
+import dashboardCostsRouter from './routes/dashboard-costs.js';
 import eventTypesStatusRouter from './routes/event-types-status.js';
 import eventsFinderStatusRouter from './routes/events-finder-status.js';
 import eventsFinderCriteriaRouter from './routes/events-finder-criteria.js';
@@ -49,6 +50,7 @@ import secondaryWatchRouter from './routes/secondary-watch.js';
 import aircraftNearbyRouter from './routes/aircraft-nearby.js';
 import { startSuperbloomAgent } from './lib/superbloom-agent.js';
 import { warmGoogleCalendarCache } from './lib/google-calendar-ical.js';
+import { syncManualCalendarEventsToCatalog } from './lib/manual-calendar-events.js';
 import { resolveDashboardWeatherLatLon } from './lib/hero-weather-location.js';
 import toolLibraryRouter from './routes/tool-library.js';
 import webCatalogRouter from './routes/web-catalog.js';
@@ -134,6 +136,7 @@ app.use('/api/aircraft-nearby', aircraftNearbyRouter);
 app.use('/api/dashboard-check', dashboardCheckRouter);
 app.use('/api/monitoring-sources', monitoringSourcesRouter);
 app.use('/api/dashboard-settings', dashboardSettingsRouter);
+app.use('/api/dashboard-costs', dashboardCostsRouter);
 app.use('/api/event-types-status', eventTypesStatusRouter);
 app.use('/api/events-finder-status', eventsFinderStatusRouter);
 app.use('/api/events-finder-criteria', eventsFinderCriteriaRouter);
@@ -146,6 +149,7 @@ app.use('/api/open-desktop', openDesktopRouter);
 app.use('/api/tool-library', toolLibraryRouter);
 app.use('/api/web-catalog', webCatalogRouter);
 app.use('/api/dev-notes', devNotesRouter);
+
 
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api')) {
@@ -189,6 +193,13 @@ app.listen(port, '0.0.0.0', () => {
   kick(() => startTelegramEventsPoller(), 1000);
   kick(() => startToolsContactsBackupScheduler(), 1100);
   kick(() => warmGoogleCalendarCache(), 1200);
+  kick(() => {
+    void syncManualCalendarEventsToCatalog()
+      .then((r) => {
+        if (r?.upserted) console.log(`[manual-calendar] synced ${r.upserted}/${r.count} events`);
+      })
+      .catch((e) => console.warn('[manual-calendar]', e?.message || e));
+  }, 1400);
   kick(() => {
     void resolveDashboardWeatherLatLon().catch(() => {});
   }, 300);

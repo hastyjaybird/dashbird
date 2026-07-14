@@ -3,11 +3,10 @@
  * Browse filters share /api/events-finder-criteria with Settings ingestion criteria
  * (same JSON file; filters vs scrape/lookFor/skip are applied at different stages).
  */
-import { createCityChecks, createRangeCalendar, normalizeLocalTime } from './events-filter-ui.js';
+import { createCityChecks, createRangeCalendar, normalizeLocalTime } from './events-filter-ui.js?v=multi-dates-7';
 import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
 import { beginWaitCursor, endWaitCursor } from '../lib/wait-cursor.js';
 
-const FILTERS_OPEN_KEY = 'dashbird.events.filtersOpen';
 const SHOW_SKIPPED_KEY = 'dashbird.events.showSkipped';
 const FILTER_AUTOSAVE_MS = 650;
 const EVENTS_CACHE_KEY = 'events-finder:events';
@@ -56,31 +55,6 @@ const PUNCHY_RE =
 /**
  * @returns {boolean}
  */
-function readFiltersOpen() {
-  try {
-    const v = localStorage.getItem(FILTERS_OPEN_KEY);
-    if (v === '0') return false;
-    if (v === '1') return true;
-  } catch {
-    /* ignore */
-  }
-  return false;
-}
-
-/**
- * @param {boolean} open
- */
-function writeFiltersOpen(open) {
-  try {
-    localStorage.setItem(FILTERS_OPEN_KEY, open ? '1' : '0');
-  } catch {
-    /* ignore */
-  }
-}
-
-/**
- * @returns {boolean}
- */
 function readShowSkipped() {
   try {
     return localStorage.getItem(SHOW_SKIPPED_KEY) === '1';
@@ -113,6 +87,40 @@ function fieldLabel(parent, labelText, forId) {
   label.textContent = labelText;
   parent.append(label);
   return label;
+}
+
+/**
+ * Local calendar day + minutes-from-midnight for an event start (dashboard TZ).
+ * @param {string | Date | null | undefined} start
+ * @param {string} [timeZone]
+ * @returns {{ day: string, minutes: number } | null}
+ */
+function eventLocalDayAndMinutes(start, timeZone = 'America/Los_Angeles') {
+  if (!start) return null;
+  const d = start instanceof Date ? start : new Date(start);
+  if (Number.isNaN(d.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(d);
+    const get = (/** @type {Intl.DateTimeFormatPartTypes} */ type) =>
+      parts.find((p) => p.type === type)?.value;
+    const y = get('year');
+    const m = get('month');
+    const day = get('day');
+    const hour = Number(get('hour'));
+    const minute = Number(get('minute'));
+    if (!y || !m || !day || !Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+    return { day: `${y}-${m}-${day}`, minutes: hour * 60 + minute };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -572,6 +580,8 @@ export function mountEventsFinder(root) {
     idPrefix: 'events-finder-cal',
     classPrefix: 'events-cal',
     onChange: () => {
+      // Instant client refilter so picking a date updates the list before Save/reload.
+      if (lastEventsPayload) paintEvents(lastEventsPayload);
       scheduleFilterAutosave({ reload: true });
     },
   });
@@ -745,17 +755,14 @@ export function mountEventsFinder(root) {
     const mappable = events.filter((ev) => eventCoords(ev));
     const unmapped = events.length - mappable.length;
     if (mapNoteEl) {
+      mapNoteEl.hidden = false;
       if (!events.length) {
-        mapNoteEl.hidden = false;
         mapNoteEl.textContent = 'No events to show on the map.';
       } else if (!mappable.length) {
-        mapNoteEl.hidden = false;
         mapNoteEl.textContent = 'No mapped locations for these events (missing coordinates).';
       } else if (unmapped > 0) {
-        mapNoteEl.hidden = false;
         mapNoteEl.textContent = `${mappable.length} on map · ${unmapped} without coordinates`;
       } else {
-        mapNoteEl.hidden = false;
         mapNoteEl.textContent = `${mappable.length} event${mappable.length === 1 ? '' : 's'} on map`;
       }
     }
@@ -1036,8 +1043,9 @@ export function mountEventsFinder(root) {
    * @param {{ reload?: boolean }} [opts]
    */
   function scheduleFilterAutosave(opts = {}) {
-    if (!filtersReady || applyingCriteria) return;
+    // Remember reload even if filters aren't ready yet (rapid date picks during boot).
     if (opts.reload) filterAutosaveReload = true;
+    if (!filtersReady || applyingCriteria) return;
     if (filterAutosaveTimer) clearTimeout(filterAutosaveTimer);
     filterAutosaveTimer = setTimeout(() => {
       filterAutosaveTimer = null;
@@ -1252,14 +1260,12 @@ export function mountEventsFinder(root) {
   /**
    * Persist browse filters and refresh the feed from the saved catalog.
    * Does not start a live source ingest (that made Save feel stuck for minutes).
-   * Catalog reload is fire-and-forget so the Save click returns immediately after
-   * the criteria write; paint updates when SQLite read completes.
    * @returns {Promise<boolean>}
    */
   async function saveFilters() {
     const ok = await saveCriteria({ waitForIdle: true });
     if (ok) {
-      void loadEvents({ catalogOnly: true, quiet: true });
+      await loadEvents({ catalogOnly: true, quiet: true });
     }
     return ok;
   }
@@ -1633,13 +1639,12 @@ export function mountEventsFinder(root) {
       };
       paintEvents(lastEventsPayload);
     }
-    const ok = await saveCriteria({
+    await saveCriteria({
       unskipEventIds: [id],
       silent: true,
       waitForIdle: true,
     });
-    if (ok) void loadEvents();
-    else void loadEvents();
+    void loadEvents();
   }
 
   function syncShowSkippedButton() {
@@ -1740,10 +1745,8 @@ export function mountEventsFinder(root) {
   async function markCalendarAdded(ev, calBtn) {
     const id = String(ev.id || '').trim();
     if (!id || !filtersReady) return;
-    const prev = [...(taste?.calendarAddedEventIds || [])].map(String);
-    if (prev.includes(id)) {
-      paintCalButton(calBtn, true);
-      // Already tracked — still hide from the main feed.
+
+    const hideFromMainFeed = () => {
       if (lastEventsPayload && Array.isArray(lastEventsPayload.events) && !showSkipped) {
         lastEventsPayload = {
           ...lastEventsPayload,
@@ -1751,19 +1754,18 @@ export function mountEventsFinder(root) {
         };
         paintEvents(lastEventsPayload);
       }
+    };
+
+    const prev = [...(taste?.calendarAddedEventIds || [])].map(String);
+    if (prev.includes(id)) {
+      paintCalButton(calBtn, true);
+      hideFromMainFeed();
       return;
     }
     const next = [...prev, id];
     if (taste) taste = { ...taste, calendarAddedEventIds: next };
     paintCalButton(calBtn, true);
-    // Hide from the main feed right away.
-    if (lastEventsPayload && Array.isArray(lastEventsPayload.events) && !showSkipped) {
-      lastEventsPayload = {
-        ...lastEventsPayload,
-        events: lastEventsPayload.events.filter((e) => String(e?.id || '') !== id),
-      };
-      paintEvents(lastEventsPayload);
-    }
+    hideFromMainFeed();
     const ok = await saveCriteria({
       calendarAddedEventIds: next,
       silent: true,
@@ -2077,11 +2079,15 @@ export function mountEventsFinder(root) {
     /** @type {string[] | null} */
     let selectedForUi = null;
     if (savedCitySelection && savedCitySelection.length) {
-      selectedForUi = savedCitySelection;
-      // Newly seen cities default to checked.
-      for (const city of available) {
-        if (!prevAvailable.includes(city) && !selectedForUi.includes(city)) {
-          selectedForUi = [...selectedForUi, city];
+      selectedForUi = [...savedCitySelection];
+      // Newly seen cities default to checked — but only on a refresh when we already
+      // had a checklist. On first paint prevAvailable is empty, so treating every
+      // city as "new" would expand a saved subset to all cities and disable filtering.
+      if (prevAvailable.length) {
+        for (const city of available) {
+          if (!prevAvailable.includes(city) && !selectedForUi.includes(city)) {
+            selectedForUi = [...selectedForUi, city];
+          }
         }
       }
     } else if (prevAvailable.length && prevSelected.length && prevSelected.length < prevAvailable.length) {
@@ -2098,6 +2104,17 @@ export function mountEventsFinder(root) {
       cityChecks.getSelected().map((c) => c.toLowerCase()),
     );
     const allChecked = selected.size === 0 || selected.size === available.length;
+    const dateRange = calendar.getRange();
+    const selectedDates = new Set(
+      Array.isArray(dateRange.dates) ? dateRange.dates.map(String) : [],
+    );
+    const earliest = normalizeLocalTime(timeInput.value);
+    const earliestMins = earliest
+      ? (() => {
+          const [eh, em] = earliest.split(':').map(Number);
+          return eh * 60 + em;
+        })()
+      : null;
 
     /**
      * @param {object} ev
@@ -2108,8 +2125,47 @@ export function mountEventsFinder(root) {
       return selected.has(eventCityLabel(ev).toLowerCase());
     }
 
-    const mainEvents = (Array.isArray(data.events) ? data.events : [])
+    const rawEvents = Array.isArray(data.events) ? data.events : [];
+    /** @type {Set<string>} */
+    const payloadDays = new Set();
+    for (const ev of rawEvents) {
+      const day = eventLocalDayAndMinutes(ev?.start)?.day;
+      if (day) payloadDays.add(day);
+    }
+    // Compare UI picks to the criteria that produced this catalog payload — not to
+    // event days present (empty days never appear in payloadDays and would loop).
+    const criteriaDates = new Set(
+      (Array.isArray(data.filters?.dates) ? data.filters.dates : []).map(String).filter(Boolean),
+    );
+    const selectedInPayload = [...selectedDates].filter((d) => payloadDays.has(d));
+    const dateReloadPending =
+      selectedDates.size > 0 && [...selectedDates].some((d) => !criteriaDates.has(d));
+
+    /**
+     * Client mirror of browse date/time filters (instant while Save/reload runs).
+     * @param {object} ev
+     * @returns {boolean}
+     */
+    function passesDateTime(ev) {
+      if (!selectedDates.size && earliestMins == null) return true;
+      const local = eventLocalDayAndMinutes(ev?.start);
+      if (selectedDates.size) {
+        // While some selected days are still loading, keep showing days we already have.
+        const activeDates =
+          dateReloadPending && selectedInPayload.length
+            ? new Set(selectedInPayload)
+            : selectedDates;
+        if (!local?.day || !activeDates.has(local.day)) return false;
+      }
+      if (earliestMins != null && local?.minutes != null && local.minutes < earliestMins) {
+        return false;
+      }
+      return true;
+    }
+
+    const mainEvents = rawEvents
       .filter(passesCity)
+      .filter(passesDateTime)
       .filter((ev) => {
         // Never show skipped in the main feed, even if a stale payload still lists them.
         const skippedPool = [
@@ -2120,6 +2176,7 @@ export function mountEventsFinder(root) {
       });
     const skippedList = (Array.isArray(data.skippedEvents) ? data.skippedEvents : [])
       .filter(passesCity)
+      .filter(passesDateTime)
       .slice()
       .sort((a, b) => {
         const ta = Date.parse(String(a?.skippedAt || ''));
@@ -2144,7 +2201,11 @@ export function mountEventsFinder(root) {
       listEl.append(updating);
     }
     if (!events.length) {
-      if ((opts.fromCache || data.ingestPending) && !showSkipped) {
+      if ((opts.fromCache || data.ingestPending || dateReloadPending) && !showSkipped) {
+        if (dateReloadPending) {
+          // Ensure catalog reload catches up when UI dates aren't in this payload yet.
+          scheduleFilterAutosave({ reload: true });
+        }
         listStatus.className = 'events-finder__stub muted';
         listStatus.textContent = data.ingestPending
           ? 'Updating from sources…'
@@ -2286,10 +2347,13 @@ export function mountEventsFinder(root) {
     filterPanel.hidden = !open;
     toggleBtn.classList.toggle('events-finder__toggle--open', open);
     toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    writeFiltersOpen(open);
   }
 
-  setFiltersOpen(readFiltersOpen());
+  // Always start collapsed (including bfcache restore).
+  setFiltersOpen(false);
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) setFiltersOpen(false);
+  });
   viewBtn.addEventListener('click', (ev) => {
     if (mapBackdrop) closeMapWindow();
     else openMapWindow(ev);
@@ -2487,6 +2551,9 @@ export function mountEventsFinder(root) {
       if (lastEventsPayload) refilterFeedForTaste(taste);
     } finally {
       applyingCriteria = false;
+      if (filtersReady && filterAutosaveReload) {
+        scheduleFilterAutosave({ reload: true });
+      }
     }
   }
 
@@ -2499,6 +2566,12 @@ export function mountEventsFinder(root) {
 
   const cachedEvents = readPanelCache(EVENTS_CACHE_KEY, EVENTS_CACHE_MAX_MS);
 
+  function paintCachedEventsIfNeeded() {
+    if (!cachedEvents || typeof cachedEvents !== 'object' || lastEventsPayload) return;
+    const painted = taste ? applyTasteToEventsPayload(cachedEvents, taste) : cachedEvents;
+    paintEvents(painted, { fromCache: true });
+  }
+
   void loadEvents();
 
   fetch('/api/events-finder-criteria', { cache: 'no-store' })
@@ -2510,22 +2583,12 @@ export function mountEventsFinder(root) {
       writePanelCache(CRITERIA_CACHE_KEY, data);
       applyCriteria(data, { enable: true });
       // Paint cached events only after authoritative skips are loaded.
-      if (cachedEvents && typeof cachedEvents === 'object' && !lastEventsPayload) {
-        const painted = taste
-          ? applyTasteToEventsPayload(cachedEvents, taste)
-          : cachedEvents;
-        paintEvents(painted, { fromCache: true });
-      }
+      paintCachedEventsIfNeeded();
     })
     .catch((e) => {
       if (filtersReady) {
         // Criteria fetch failed but cache enabled UI — still show cached events.
-        if (cachedEvents && typeof cachedEvents === 'object' && !lastEventsPayload) {
-          const painted = taste
-            ? applyTasteToEventsPayload(cachedEvents, taste)
-            : cachedEvents;
-          paintEvents(painted, { fromCache: true });
-        }
+        paintCachedEventsIfNeeded();
         return;
       }
       filterMsg.classList.add('events-finder__msg--err');
@@ -2539,8 +2602,15 @@ export function mountEventsFinder(root) {
       clearTimeout(filterAutosaveTimer);
       filterAutosaveTimer = null;
     }
+    filterAutosaveReload = false;
     const ok = await saveFilters();
-    if (ok) setFiltersOpen(false);
+    if (!ok) {
+      filterMsg.hidden = false;
+      filterMsg.classList.add('events-finder__msg--err');
+      filterMsg.textContent = lastCriteriaSaveError || 'Could not save filters.';
+      return;
+    }
+    setFiltersOpen(false);
   });
 
   zipInput.addEventListener('input', () => {
@@ -2549,10 +2619,9 @@ export function mountEventsFinder(root) {
   milesInput.addEventListener('input', () => {
     scheduleFilterAutosave({ reload: true });
   });
-  timeInput.addEventListener('change', () => {
+  const onTimeFilterChange = () => {
+    if (lastEventsPayload) paintEvents(lastEventsPayload);
     scheduleFilterAutosave({ reload: true });
-  });
-  timeInput.addEventListener('input', () => {
-    scheduleFilterAutosave({ reload: true });
-  });
+  };
+  timeInput.addEventListener('input', onTimeFilterChange);
 }

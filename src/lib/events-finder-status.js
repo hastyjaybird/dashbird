@@ -1,6 +1,9 @@
 /**
  * Events finder — per-source status + ingestion smoke test for Settings.
  * Reachability stays strategy-aware; ingestTest tries a lightweight parse/signal check.
+ *
+ * Fast path: short timeouts, one outbound fetch per public source (not probe+HTML),
+ * skip redundant HTTP for Gmail/Facebook/Telegram, and a short TTL memory cache.
  */
 import { probeFacebookEventsIntake } from './events-finder-facebook.js';
 import { loadEventsFinderSources } from './events-finder-sources.js';
@@ -21,20 +24,38 @@ const FETCH_HEADERS = {
   'Upgrade-Insecure-Requests': '1',
 };
 
+/** Reachability probe budget (Settings must stay snappy). */
+const PROBE_TIMEOUT_MS = 2500;
+/** HTML sniff budget for public_pages ingest smoke test. */
+const HTML_TIMEOUT_MS = 3500;
+/** Serve cached live status this long (ms). */
+const STATUS_CACHE_TTL_MS = 90_000;
+
+/** @type {{ at: number, payload: object } | null} */
+let statusCache = null;
+/** @type {Promise<object> | null} */
+let statusInflight = null;
+
+const FETCH_HEADERS_PROBE = {
+  ...FETCH_HEADERS,
+  Accept: '*/*',
+};
+
 /**
  * Probe an external HTTPS URL (same rules as dashboard-check bookmark probes).
  * @param {string} url
+ * @param {number} [timeoutMs]
  * @returns {Promise<{ ok: boolean, status: number, err?: string }>}
  */
-async function probeExternalHttp(url) {
+async function probeExternalHttp(url, timeoutMs = PROBE_TIMEOUT_MS) {
   const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), 12_000);
+  const t = setTimeout(() => ac.abort(), timeoutMs);
   try {
     const r = await fetch(url, {
       method: 'GET',
       redirect: 'manual',
       signal: ac.signal,
-      headers: FETCH_HEADERS,
+      headers: FETCH_HEADERS_PROBE,
     });
     const reader = r.body?.getReader?.();
     if (reader) {
@@ -71,16 +92,17 @@ async function probeExternalHttp(url) {
 /**
  * Fetch a capped HTML body for ingest smoke tests (follows one redirect hop).
  * @param {string} url
+ * @param {number} [timeoutMs]
  * @returns {Promise<{ ok: boolean, status: number, finalUrl: string, html: string, err?: string }>}
  */
-async function fetchHtmlSnippet(url) {
+async function fetchHtmlSnippet(url, timeoutMs = HTML_TIMEOUT_MS) {
   const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), 14_000);
+  const t = setTimeout(() => ac.abort(), timeoutMs);
   try {
     let current = url;
     /** @type {Response | null} */
     let r = null;
-    for (let hop = 0; hop < 3; hop += 1) {
+    for (let hop = 0; hop < 3; hop++) {
       r = await fetch(current, {
         method: 'GET',
         redirect: 'manual',
@@ -90,23 +112,70 @@ async function fetchHtmlSnippet(url) {
       if (r.status >= 300 && r.status < 400) {
         const loc = r.headers.get('location');
         if (!loc) break;
-        current = new URL(loc, current).href;
-        continue;
+        try {
+          current = new URL(loc, current).href;
+          continue;
+        } catch {
+          break;
+        }
       }
       break;
     }
     if (!r) {
-      return { ok: false, status: 0, finalUrl: url, html: '', err: 'no response' };
+      return { ok: false, status: 0, finalUrl: current, html: '', err: 'no_response' };
     }
     const status = r.status;
+    // Reachable-but-gated still counts as a successful transport for Settings.
     if (status === 401 || status === 403) {
-      return { ok: false, status, finalUrl: current, html: '', err: `HTTP ${status}` };
+      try {
+        r.body?.cancel?.();
+      } catch {
+        /* ignore */
+      }
+      return {
+        ok: true,
+        status,
+        finalUrl: current,
+        html: '',
+        err: `HTTP ${status}`,
+        gated: true,
+      };
     }
-    if (!(status >= 200 && status < 300)) {
-      return { ok: false, status, finalUrl: current, html: '', err: `HTTP ${status}` };
+    const ok = status >= 200 && status < 400 && ![404, 410, 429].includes(status);
+    if (!ok) {
+      try {
+        r.body?.cancel?.();
+      } catch {
+        /* ignore */
+      }
+      return {
+        ok: false,
+        status,
+        finalUrl: current,
+        html: '',
+        err: `HTTP ${status}`,
+      };
     }
-    const raw = await r.text();
-    const html = String(raw || '').slice(0, 180_000);
+    const reader = r.body?.getReader?.();
+    const chunks = [];
+    let total = 0;
+    const maxBytes = 48_000;
+    if (reader) {
+      while (total < maxBytes) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value?.byteLength) {
+          chunks.push(value);
+          total += value.byteLength;
+        }
+      }
+      try {
+        await reader.cancel();
+      } catch {
+        /* ignore */
+      }
+    }
+    const html = Buffer.concat(chunks.map((c) => Buffer.from(c))).toString('utf8');
     return { ok: true, status, finalUrl: current, html };
   } catch (e) {
     const msg = e?.cause?.message ? `${e.message}: ${e.cause.message}` : String(e?.message || e);
@@ -118,33 +187,24 @@ async function fetchHtmlSnippet(url) {
 
 /**
  * @param {string} html
- * @returns {{
- *   title: string,
- *   schemaEvents: number,
- *   timeTags: number,
- *   eventWordHits: number,
- *   calendarLinks: number,
- *   loginSignals: number,
- * }}
  */
 function scanEventSignals(html) {
-  const lower = html.toLowerCase();
-  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  const title = titleMatch ? titleMatch[1].replace(/\s+/g, ' ').trim().slice(0, 80) : '';
-
-  const schemaEvents = (lower.match(/itemtype=["'][^"']*schema\.org\/event/g) || []).length
+  const body = String(html || '');
+  const lower = body.toLowerCase();
+  const schemaEvents =
+    (lower.match(/itemtype=["'][^"']*schema\.org\/event/g) || []).length
     + (lower.match(/"@type"\s*:\s*"event"/g) || []).length
     + (lower.match(/"@type"\s*:\s*\[\s*"[^"]*event/g) || []).length;
-
   const timeTags = (lower.match(/<time[\s>]/g) || []).length;
-  const eventWordHits = (lower.match(/\bevents?\b/g) || []).length;
   const calendarLinks = (lower.match(/\.ics\b|text\/calendar|webcal:|google\.com\/calendar/g) || [])
     .length;
+  const eventWordHits = (lower.match(/\bevents?\b/g) || []).length;
   const loginSignals = (
     lower.match(/\blog[\s-]?in\b|\bsign[\s-]?in\b|\bcreate account\b|\bpassword\b/g) || []
   ).length;
-
-  return { title, schemaEvents, timeTags, eventWordHits, calendarLinks, loginSignals };
+  const titleMatch = body.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = titleMatch ? titleMatch[1].replace(/\s+/g, ' ').trim().slice(0, 80) : '';
+  return { schemaEvents, timeTags, calendarLinks, eventWordHits, loginSignals, title };
 }
 
 /**
@@ -173,7 +233,6 @@ function interpretProbe(source, probe) {
 
   if (source.strategy === 'official_api') {
     if (source.host === 'mail.google.com') {
-      // Filled by per-mailbox Gmail probe in buildEventsFinderStatus — placeholders only.
       const inbox = normalizeGmailAddress(source.gmailEmail) || 'intake';
       if (probe.ok) {
         return {
@@ -246,84 +305,16 @@ function interpretProbe(source, probe) {
 }
 
 /**
- * Strategy-aware ingestion smoke test (not full feed ingest).
- * @param {import('./events-finder-sources.js').EventsFinderSource} source
- * @param {{ ok: boolean, status: number, err?: string }} probe
- * @returns {Promise<{ ingestOk: boolean | null, ingestTest: string }>}
+ * Build ingestTest from an already-fetched HTML snippet (no second network hop).
+ * @param {{ ok: boolean, status: number, html: string, err?: string }} page
  */
-async function runIngestionTest(source, probe) {
-  if (source.host === 'fetlife.com') {
-    if (!probe.ok) {
-      return {
-        ingestOk: false,
-        ingestTest: `Fail — host unreachable (${probe.status || probe.err || 'no response'})`,
-      };
-    }
+function ingestFromHtmlPage(page) {
+  if (page.gated || page.status === 401 || page.status === 403) {
     return {
-      ingestOk: null,
-      ingestTest: 'Deferred — no auto-ingest for now',
+      ingestOk: false,
+      ingestTest: `Fail — page looks login-gated (HTTP ${page.status})`,
     };
   }
-
-  if (source.strategy === 'login_walled') {
-    if (!probe.ok) {
-      return {
-        ingestOk: false,
-        ingestTest: `Fail — host unreachable (${probe.status || probe.err || 'no response'})`,
-      };
-    }
-    return {
-      ingestOk: null,
-      ingestTest: 'Blocked — login required (expected; no anonymous ingest)',
-    };
-  }
-
-  if (source.strategy === 'official_api') {
-    if (source.host === 'mail.google.com') {
-      const email = normalizeGmailAddress(source.gmailEmail);
-      if (!email) {
-        return {
-          ingestOk: null,
-          ingestTest: 'Not wired — missing gmailEmail on source row',
-        };
-      }
-      const g = await probeGmailMailbox(email);
-      return {
-        ingestOk: g.ingestOk,
-        ingestTest: g.ingestTest,
-        _gmailProbe: g,
-      };
-    }
-    if (source.host === 'facebook.com') {
-      const f = await probeFacebookEventsIntake();
-      return {
-        ingestOk: f.ingestOk,
-        ingestTest: f.ingestTest,
-        _facebookProbe: f,
-      };
-    }
-    if (source.host === 't.me' || source.host === 'telegram.org') {
-      const t = await probeTelegramEventsIntake();
-      return {
-        ingestOk: t.ingestOk,
-        ingestTest: t.ingestTest,
-        _telegramProbe: t,
-      };
-    }
-    if (!probe.ok) {
-      return {
-        ingestOk: false,
-        ingestTest: `Fail — host unreachable (${probe.status || probe.err || 'no response'})`,
-      };
-    }
-    return {
-      ingestOk: null,
-      ingestTest: 'Not wired — official API key / local search not configured',
-    };
-  }
-
-  // public_pages + unknown: fetch HTML and look for event-ish signals
-  const page = await fetchHtmlSnippet(source.url);
   if (!page.ok) {
     return {
       ingestOk: false,
@@ -367,10 +358,132 @@ async function runIngestionTest(source, probe) {
 }
 
 /**
+ * Probe + ingest one Events bookmark source (optimized for Settings latency).
+ * @param {import('./events-finder-sources.js').EventsFinderSource} source
+ */
+async function statusForSource(source) {
+  // Dedicated intake probes — no outbound website GET.
+  if (source.host === 'mail.google.com') {
+    const email = normalizeGmailAddress(source.gmailEmail);
+    if (!email) {
+      return {
+        ...source,
+        pending: false,
+        active: false,
+        value: 'Not wired — missing gmailEmail',
+        output: 'Add gmailEmail on the source row.',
+        httpStatus: 0,
+        ingestOk: null,
+        ingestTest: 'Not wired — missing gmailEmail on source row',
+      };
+    }
+    const g = await probeGmailMailbox(email, process.env, { quick: true });
+    return {
+      ...source,
+      pending: false,
+      active: g.active,
+      value: g.value,
+      output: g.output,
+      httpStatus: 0,
+      ingestOk: g.ingestOk,
+      ingestTest: g.ingestTest,
+    };
+  }
+
+  if (source.host === 'facebook.com') {
+    const f = await probeFacebookEventsIntake();
+    return {
+      ...source,
+      pending: false,
+      active: f.active,
+      value: f.value,
+      output: f.output,
+      httpStatus: 0,
+      ingestOk: f.ingestOk,
+      ingestTest: f.ingestTest,
+    };
+  }
+
+  if (source.host === 't.me' || source.host === 'telegram.org') {
+    const t = await probeTelegramEventsIntake();
+    return {
+      ...source,
+      pending: false,
+      active: t.active,
+      value: t.value,
+      output: t.output,
+      httpStatus: 0,
+      ingestOk: t.ingestOk,
+      ingestTest: t.ingestTest,
+    };
+  }
+
+  if (source.host === 'fetlife.com' || source.strategy === 'login_walled') {
+    const probe = await probeExternalHttp(source.url);
+    const interpreted = interpretProbe(source, probe);
+    return {
+      ...source,
+      pending: false,
+      active: interpreted.active,
+      value: interpreted.value,
+      output: interpreted.output,
+      httpStatus: probe.status,
+      ingestOk: probe.ok ? null : false,
+      ingestTest: probe.ok
+        ? source.host === 'fetlife.com'
+          ? 'Deferred — no auto-ingest for now'
+          : 'Blocked — login required (expected; no anonymous ingest)'
+        : `Fail — host unreachable (${probe.status || probe.err || 'no response'})`,
+    };
+  }
+
+  if (source.strategy === 'public_pages') {
+    // One fetch serves reachability + ingest smoke test (was two sequential hops).
+    const page = await fetchHtmlSnippet(source.url);
+    const probe = {
+      ok: page.ok,
+      status: page.status,
+      err: page.err,
+    };
+    const interpreted = interpretProbe(source, probe);
+    const ingest = ingestFromHtmlPage(page);
+    return {
+      ...source,
+      pending: false,
+      active: interpreted.active,
+      value: interpreted.value,
+      output: interpreted.output,
+      httpStatus: probe.status,
+      ingestOk: ingest.ingestOk,
+      ingestTest: ingest.ingestTest,
+    };
+  }
+
+  // Fallback official_api / unknown: cheap reachability only.
+  const probe = await probeExternalHttp(source.url);
+  const interpreted = interpretProbe(source, probe);
+  return {
+    ...source,
+    pending: false,
+    active: interpreted.active,
+    value: interpreted.value,
+    output: interpreted.output,
+    httpStatus: probe.status,
+    ingestOk: probe.ok ? null : false,
+    ingestTest: probe.ok
+      ? 'Not wired — official API key / local search not configured'
+      : `Fail — host unreachable (${probe.status || probe.err || 'no response'})`,
+  };
+}
+
+/**
  * Live status for each Events bookmark source.
+ * @param {{ fresh?: boolean }} [opts]
  * @returns {Promise<{
  *   ok: true,
  *   checkedAt: string,
+ *   cached?: boolean,
+ *   cacheAgeMs?: number,
  *   sources: Array<import('./events-finder-sources.js').EventsFinderSource & {
  *     pending: false,
  *     active: boolean,
@@ -382,66 +495,39 @@ async function runIngestionTest(source, probe) {
  *   }>
  * }>}
  */
-export async function buildEventsFinderStatus() {
-  const sources = await loadEventsFinderSources();
-  const checkedAt = new Date().toISOString();
+export async function buildEventsFinderStatus(opts = {}) {
+  const fresh = Boolean(opts.fresh);
+  const now = Date.now();
+  if (!fresh && statusCache && now - statusCache.at < STATUS_CACHE_TTL_MS) {
+    return {
+      ...statusCache.payload,
+      cached: true,
+      cacheAgeMs: now - statusCache.at,
+    };
+  }
 
-  const rows = await Promise.all(
-    sources.map(async (source) => {
-      const probe = await probeExternalHttp(source.url);
-      const interpreted = interpretProbe(source, probe);
-      const ingest = await runIngestionTest(source, probe);
-      if (source.host === 'mail.google.com' && ingest._gmailProbe) {
-        const g = ingest._gmailProbe;
-        return {
-          ...source,
-          pending: false,
-          active: g.active,
-          value: g.value,
-          output: g.output,
-          httpStatus: probe.status,
-          ingestOk: ingest.ingestOk,
-          ingestTest: ingest.ingestTest,
-        };
-      }
-      if (source.host === 'facebook.com' && ingest._facebookProbe) {
-        const f = ingest._facebookProbe;
-        return {
-          ...source,
-          pending: false,
-          active: f.active,
-          value: f.value,
-          output: f.output,
-          httpStatus: probe.status,
-          ingestOk: ingest.ingestOk,
-          ingestTest: ingest.ingestTest,
-        };
-      }
-      if ((source.host === 't.me' || source.host === 'telegram.org') && ingest._telegramProbe) {
-        const t = ingest._telegramProbe;
-        return {
-          ...source,
-          pending: false,
-          active: t.active,
-          value: t.value,
-          output: t.output,
-          httpStatus: probe.status,
-          ingestOk: ingest.ingestOk,
-          ingestTest: ingest.ingestTest,
-        };
-      }
-      return {
-        ...source,
-        pending: false,
-        active: interpreted.active,
-        value: interpreted.value,
-        output: interpreted.output,
-        httpStatus: probe.status,
-        ingestOk: ingest.ingestOk,
-        ingestTest: ingest.ingestTest,
-      };
-    }),
-  );
+  if (!fresh && statusInflight) {
+    const payload = await statusInflight;
+    return {
+      ...payload,
+      cached: true,
+      cacheAgeMs: statusCache ? Date.now() - statusCache.at : 0,
+    };
+  }
 
-  return { ok: true, checkedAt, sources: rows };
+  statusInflight = (async () => {
+    const sources = await loadEventsFinderSources();
+    const checkedAt = new Date().toISOString();
+    const rows = await Promise.all(sources.map((source) => statusForSource(source)));
+    const payload = { ok: true, checkedAt, sources: rows };
+    statusCache = { at: Date.now(), payload };
+    return payload;
+  })();
+
+  try {
+    const payload = await statusInflight;
+    return { ...payload, cached: false, cacheAgeMs: 0 };
+  } finally {
+    statusInflight = null;
+  }
 }

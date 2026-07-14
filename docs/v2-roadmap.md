@@ -51,7 +51,7 @@ Cross-reference: v1 ships the dashboard shell and core panels; v2 items mount in
 
 - **Tab:** topbar **Network** page (`page-network`) — friends + business contacts CRM.
 - **Fields:** people, notes, last contact, tags, org/title, channels, enrichment.
-- **Ingest:** Telegram classifier routes contact messages into Network (same bot as events; distinct destination).
+- **Ingest:** Telegram classifier routes contact/company messages and CRM photos (business cards, LinkedIn/social screenshots, headshots, logos) into Network (same bot as events; distinct destination).
 
 ### 7. Optional expansions (v2 or later)
 

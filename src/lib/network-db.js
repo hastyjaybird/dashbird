@@ -4,14 +4,21 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import {
   CONTACT_DISPLAY_ALIASES,
   SCENE_ALIASES_MIGRATION,
+  SCENE_APL_EMPLOYEE,
+  SCENE_APL_GROUPIE,
+  SCENE_OLD_SHIPYARD,
+  isOutOfTownToken,
+  isPolidayToken,
   normalizeContactDisplayName,
-  normalizeSceneCircles,
   normalizeSceneGroupName,
+  remapAplShipyardCircles,
+  relocateOutOfTownFromScenes,
 } from './network-scene-normalize.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
@@ -586,6 +593,7 @@ function ensureFoundationRows(db, env = process.env) {
     upsertGroupRow(db, {
       id: RUNWAY_HOUSE_GROUP_ID,
       name: 'Runway House',
+      kind: 'community',
       description: 'Runway House network circle.',
       memberIds: [JULIA_CONTACT_ID, SAM_CONTACT_ID],
       commonalities: [],
@@ -649,12 +657,24 @@ function migrateSceneAliasesIfNeeded(db) {
     // Prefer alias map; otherwise keep existing casing (don't title-case in migration).
     const aliased = CONTACT_DISPLAY_ALIASES[String(c.displayName || '').trim().toLowerCase()];
     const displayName = aliased || nextName || c.displayName || '';
-    const networkCircles = normalizeSceneCircles(c.networkCircles, 4000);
-    if (displayName === c.displayName && networkCircles === (c.networkCircles || '')) continue;
+    const relocated = relocateOutOfTownFromScenes(c.networkCircles, c.location, 4000, 300);
+    const networkCircles = remapAplShipyardCircles(relocated.networkCircles, {
+      id: c.id,
+      displayName,
+      kinds: c.kinds,
+    });
+    if (
+      displayName === c.displayName
+      && networkCircles === (c.networkCircles || '')
+      && relocated.location === (c.location || '')
+    ) {
+      continue;
+    }
     const next = {
       ...c,
       displayName,
       networkCircles,
+      location: relocated.location,
       updatedAt: now,
     };
     upsert.run(contactToRow(next));
@@ -673,6 +693,26 @@ function migrateSceneAliasesIfNeeded(db) {
   const byCanon = new Map();
   for (const row of groupRows) {
     const g = rowToGroup(row);
+    // "Out of town" was a misplaced location tag, not a scene group — drop it.
+    if (isOutOfTownToken(g.name)) {
+      db.prepare('DELETE FROM groups WHERE id = ?').run(g.id);
+      continue;
+    }
+    // Poliday is event-only — demote community → event and keep members.
+    if (isPolidayToken(g.name)) {
+      const name = String(g.name || '')
+        .replace(/\s+/g, ' ')
+        .trim() || 'Poliday';
+      upsertG.run(
+        groupToRow({
+          ...g,
+          name,
+          kind: 'event',
+          updatedAt: now,
+        }),
+      );
+      continue;
+    }
     const name = normalizeSceneGroupName(g.name, 300);
     if (!name) continue;
     const key = name.toLowerCase();
@@ -704,7 +744,142 @@ function migrateSceneAliasesIfNeeded(db) {
     upsertG.run(groupToRow(payload));
   }
 
+  // Rebuild APL / shipyard community membership from contact Scene tags.
+  const sceneBuckets = [SCENE_APL_GROUPIE, SCENE_APL_EMPLOYEE, SCENE_OLD_SHIPYARD];
+  /** @type {Map<string, string[]>} */
+  const membersByScene = new Map(sceneBuckets.map((n) => [n.toLowerCase(), []]));
+  const refreshedContacts = db
+    .prepare('SELECT id, display_name, org, payload, created_at, updated_at FROM contacts')
+    .all();
+  for (const row of refreshedContacts) {
+    const c = rowToContact(row);
+    const tokens = String(c.networkCircles || '')
+      .split(/[,;|/]+/)
+      .map((p) => String(p || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+    for (const token of tokens) {
+      const list = membersByScene.get(token.toLowerCase());
+      if (!list) continue;
+      if (!list.includes(c.id)) list.push(c.id);
+    }
+  }
+  for (const sceneName of sceneBuckets) {
+    const key = sceneName.toLowerCase();
+    const memberIds = membersByScene.get(key) || [];
+    const existing = byCanon.get(key);
+    if (existing) {
+      upsertG.run(
+        groupToRow({
+          ...existing.payload,
+          id: existing.keepId,
+          name: sceneName,
+          kind: 'community',
+          memberIds,
+          updatedAt: now,
+        }),
+      );
+      continue;
+    }
+    if (!memberIds.length) continue;
+    upsertG.run(
+      groupToRow({
+        id: randomUUID(),
+        name: sceneName,
+        kind: 'community',
+        memberIds,
+        notes: '',
+        createdAt: now,
+        updatedAt: now,
+        source: 'manual',
+      }),
+    );
+  }
+
   setMeta(db, SCENE_ALIASES_MIGRATION, '1');
+}
+
+const ORPHAN_CONTACT_REFS_MIGRATION = 'orphan_contact_refs_v1';
+
+/**
+ * Drop group memberIds / note contact_ids that no longer point at a contact row.
+ * @param {DatabaseSync} db
+ * @returns {{ groupsTouched: number, membersRemoved: number, notesCleared: number }}
+ */
+export function pruneOrphanContactRefs(db) {
+  const contactIds = new Set(db.prepare('SELECT id FROM contacts').all().map((r) => String(r.id)));
+  let groupsTouched = 0;
+  let membersRemoved = 0;
+  const now = new Date().toISOString();
+
+  const groupRows = db.prepare('SELECT id, name, payload, created_at, updated_at FROM groups').all();
+  for (const row of groupRows) {
+    const g = rowToGroup(row);
+    const members = Array.isArray(g.memberIds) ? g.memberIds.map((id) => String(id)) : [];
+    const next = members.filter((id) => contactIds.has(id));
+    const removed = members.length - next.length;
+    if (!removed) continue;
+    membersRemoved += removed;
+    groupsTouched += 1;
+    upsertGroupRow(db, { ...g, memberIds: next, updatedAt: now });
+  }
+
+  const noteRows = db.prepare('SELECT id, contact_id FROM notes WHERE contact_id IS NOT NULL').all();
+  let notesCleared = 0;
+  const clearNote = db.prepare('UPDATE notes SET contact_id = NULL WHERE id = ?');
+  for (const row of noteRows) {
+    const cid = String(row.contact_id || '');
+    if (!cid || contactIds.has(cid)) continue;
+    clearNote.run(row.id);
+    notesCleared += 1;
+  }
+
+
+  return { groupsTouched, membersRemoved, notesCleared };
+}
+
+/**
+ * @param {DatabaseSync} db
+ */
+function migrateOrphanContactRefsIfNeeded(db) {
+  if (getMeta(db, ORPHAN_CONTACT_REFS_MIGRATION) === '1') return;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    pruneOrphanContactRefs(db);
+    setMeta(db, ORPHAN_CONTACT_REFS_MIGRATION, '1');
+    db.exec('COMMIT');
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
+}
+
+/**
+ * Remove deleted contact ids from groups + notes (no survivor remap).
+ * @param {DatabaseSync} db
+ * @param {string[]} ids
+ */
+export function removeContactRefs(db, ids) {
+  const drop = new Set((Array.isArray(ids) ? ids : []).map((id) => remapLegacyNetworkId(String(id))).filter(Boolean));
+  if (!drop.size) return;
+
+  db.prepare(
+    `UPDATE notes SET contact_id = NULL WHERE contact_id IN (${[...drop].map(() => '?').join(',')})`,
+  ).run(...drop);
+
+  const now = new Date().toISOString();
+  const groupRows = db.prepare('SELECT id, name, payload, created_at, updated_at FROM groups').all();
+  for (const row of groupRows) {
+    const g = rowToGroup(row);
+    const members = Array.isArray(g.memberIds) ? g.memberIds.map((id) => String(id)) : [];
+    if (!members.some((id) => drop.has(remapLegacyNetworkId(id)))) continue;
+    const memberIds = members.filter((id) => !drop.has(remapLegacyNetworkId(id)));
+    upsertGroupRow(db, { ...g, memberIds, updatedAt: now });
+  }
+
 }
 
 /**
@@ -738,6 +913,7 @@ export function openNetworkDb(env = process.env) {
   migrateFromJsonIfNeeded(db, env);
   ensureFoundationRows(db, env);
   migrateSceneAliasesIfNeeded(db);
+  migrateOrphanContactRefsIfNeeded(db);
   dbSingleton = db;
   dbPathSingleton = dbPath;
   return db;

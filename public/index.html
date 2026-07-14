@@ -4,13 +4,23 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>dashbird</title>
-    <link rel="stylesheet" href="/styles.css?v=manage-filters-3" />
+    <link rel="stylesheet" href="/styles.css?v=float-pick-2" />
     <link rel="preload" href="/api/config" as="fetch" crossorigin />
     <link rel="preload" href="/data/bookmarks-personal.json" as="fetch" crossorigin />
     <link rel="preload" href="/data/bookmarks-work.json" as="fetch" crossorigin />
     <link rel="preload" href="/api/calendar/upcoming" as="fetch" crossorigin />
     <link rel="preload" href="/assets/search-brave.png" as="image" />
     <link rel="preload" href="/assets/search-duckduckgo.png" as="image" />
+    <!-- Persist sky-sidebar hide before paint to avoid a flash of the rail. -->
+    <script>
+      (function () {
+        try {
+          if (localStorage.getItem('dashbird-sky-sidebar-hidden') === '1') {
+            document.documentElement.classList.add('sky-sidebar-hidden');
+          }
+        } catch (e) {}
+      })();
+    </script>
     <!-- Instant search: no modules — Enter opens a new tab before app.js loads. -->
     <script>
       window.__dashbirdSearch = (function () {
@@ -336,7 +346,27 @@
         </main>
       </div>
 
-      <aside class="sky-sidebar boot-deferred" aria-label="Side widgets" aria-busy="true">
+      <button
+        type="button"
+        class="sky-sidebar-toggle"
+        id="sky-sidebar-toggle"
+        aria-controls="sky-sidebar"
+        aria-expanded="true"
+        title="Hide side widgets"
+        aria-label="Hide side widgets"
+      >
+        <svg class="sky-sidebar-toggle__icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+          <path
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.75"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M6 3.5L10.5 8 6 12.5"
+          />
+        </svg>
+      </button>
+      <aside id="sky-sidebar" class="sky-sidebar boot-deferred" aria-label="Side widgets" aria-busy="true">
         <div class="sky-sidebar__stack">
           <section
             class="sky-sidebar__card sky-sidebar__card--todo panel panel--glass"
@@ -471,6 +501,6 @@
       </section>
     </div>
     </div>
-    <script type="module" src="/js/app.js?v=filter-save-1"></script>
+    <script type="module" src="/js/app.js?v=group-kind-9"></script>
   </body>
 </html>

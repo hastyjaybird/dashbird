@@ -380,6 +380,57 @@ export async function saveOrganizationLogo(orgId, payload, env = process.env) {
 }
 
 /**
+ * Create or merge an organization from Telegram intake.
+ * @param {object} payload
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function upsertOrganizationFromTelegram(payload, env = process.env) {
+  const name = cleanStr(payload?.name, 300);
+  if (!name) {
+    const err = new Error('name_required');
+    err.code = 'name_required';
+    throw err;
+  }
+  const existing = await findOrganizationByName(name, env);
+  const noteLine = cleanStr(payload?.notes, 2000);
+  const website = cleanStr(payload?.website, 500);
+  const phone = cleanStr(payload?.phone, 80);
+  const email = cleanStr(payload?.email, 320);
+  const linkedin = cleanStr(payload?.linkedin, 500);
+  const location = cleanStr(payload?.location, 300);
+  if (existing) {
+    const description = [existing.description, noteLine].filter(Boolean).join('\n\n').slice(0, 8000);
+    return updateOrganization(
+      existing.id,
+      {
+        description,
+        website: website || existing.website,
+        phone: phone || existing.phone,
+        email: email || existing.email,
+        linkedin: linkedin || existing.linkedin,
+        location: location || existing.location,
+        source: 'telegram',
+      },
+      env,
+    );
+  }
+  return addOrganization(
+    {
+      name,
+      description: noteLine,
+      website,
+      phone,
+      email,
+      linkedin,
+      location,
+      source: 'telegram',
+      summary: 'telegram',
+    },
+    env,
+  );
+}
+
+/**
  * @param {string[]} ids
  * @param {NodeJS.ProcessEnv} [env]
  */

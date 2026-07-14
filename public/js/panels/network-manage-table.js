@@ -1,15 +1,22 @@
+import { collectSceneOptions, joinSceneTokens } from '../lib/network-scenes.js';
+
 /**
  * Manage contacts — spreadsheet table with column filters, cell selection,
- * context menu, drag-fill (corner handle), and double-click bulk fill.
+ * context menu, and drag-fill (corner handle / Fill…).
  *
  * Filter UX mirrors Google Sheets: funnel icon on each header → sort,
  * filter-by-condition, filter-by-values (checkboxes), OK/Cancel.
  *
- * Double-click a selected fillable column → type or pick a value → Enter fills
- * all selected cells. Toolbar Undo restores the previous values.
+ * Double-click (or Enter/F2) an editable cell to change its value. Pick-list
+ * columns open a dropdown (or multi-select). Drag column headers to reorder
+ * (saved in the browser). Ctrl/Cmd+C/V copies and pastes within the same column.
+ * Right-click → Open details / Fill… (or drag the corner handle) for bulk fill.
+ * Toolbar Undo restores the previous values.
  */
 
 const STORAGE_KEY = 'dashbird-network-manage-columns-v1';
+/** Session-scoped Manage filters + sort (survives soft reloads / remounts). */
+const FILTER_SORT_KEY = 'dashbird-network-manage-filters-v1';
 
 /** Columns that must not be bulk-copied via drag-fill / clear / fill-down. */
 const NO_FILL_KEYS = new Set(['displayName', 'id', 'createdAt', 'updatedAt', 'orgId', 'avatarUrl']);
@@ -17,24 +24,103 @@ const NO_FILL_KEYS = new Set(['displayName', 'id', 'createdAt', 'updatedAt', 'or
 /** Known pick-list values for columns that use a fixed vocabulary. */
 const FILL_OPTIONS = {
   kinds: ['friend', 'organizer', 'business'],
+  hasKids: ['Yes', 'No'],
+  hasTask: ['Yes', 'No'],
   rating: ['Fan', 'Hot', 'Warm', 'Cold'],
   sensitivity: ['Down', 'Situational', 'Proper'],
   relationshipStatus: [
     'Lead',
-    'Cultivating',
-    'Collaborator',
-    'Family',
     'Acquaintance',
+    'Cultivating',
+    'Inner Circle',
+    'Collaborator',
+    'Meta',
+    'Family',
     'Paused',
     'Former',
   ],
+  preferredContactMethods: ['phone', 'office_phone', 'email', 'signal', 'whatsapp', 'linkedin', 'other'],
 };
+
+/**
+ * Resolve pick-list presets, preferring live options from the parent (API-backed).
+ * @param {{ key: string } | null | undefined} col
+ * @param {object} opts
+ * @param {object[]} [contacts]
+ */
+function resolveFillOptions(col, opts, contacts = []) {
+  if (!col) return null;
+  if (col.key === 'networkCircles') {
+    const sceneOpts = collectSceneOptions(contacts);
+    return sceneOpts.length ? sceneOpts : [];
+  }
+  if (col.key === 'relationshipStatus' && typeof opts.getRelationshipStatuses === 'function') {
+    const live = opts.getRelationshipStatuses();
+    if (Array.isArray(live) && live.length) return live;
+  }
+  if (col.key === 'preferredContactMethods' && typeof opts.getPreferredContactMethods === 'function') {
+    const live = opts.getPreferredContactMethods();
+    if (Array.isArray(live) && live.length) return live;
+  }
+  const fixed = FILL_OPTIONS[col.key];
+  return Array.isArray(fixed) && fixed.length ? fixed : null;
+}
+
+/** Yes/No columns that store blank for No. */
+const YES_NO_KEYS = new Set(['hasKids', 'hasTask']);
+
+/** Pick-list columns that allow choosing more than one value. */
+const MULTI_SELECT_KEYS = new Set(['kinds', 'preferredContactMethods', 'networkCircles']);
 
 const KIND_VALUES = new Set(['friend', 'organizer', 'business']);
 
+/**
+ * @param {string} colKey
+ * @param {string} value
+ */
+function pickOptionLabel(colKey, value) {
+  if (colKey === 'kinds') {
+    return value ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
+  }
+  if (colKey === 'preferredContactMethods') {
+    return String(value || '')
+      .split('_')
+      .filter(Boolean)
+      .map((p) => `${p[0].toUpperCase()}${p.slice(1)}`)
+      .join(' ');
+  }
+  return value;
+}
+
+/**
+ * @param {{ key: string } | null | undefined} col
+ * @param {object} [liveOpts]
+ * @param {object[]} [contacts]
+ */
+function pickOptionsForCol(col, liveOpts = {}, contacts = []) {
+  return resolveFillOptions(col, liveOpts, contacts);
+}
+
+/**
+ * @param {{ key: string } | null | undefined} col
+ * @param {object} [liveOpts]
+ */
+function isPickListCol(col, liveOpts = {}) {
+  if (!col) return false;
+  if (col.key === 'networkCircles') return true;
+  return Boolean(resolveFillOptions(col, liveOpts)?.length);
+}
+
+/**
+ * @param {{ key: string } | null | undefined} col
+ */
+function isMultiSelectCol(col) {
+  return Boolean(col && MULTI_SELECT_KEYS.has(col.key));
+}
+
 const BLANK_LABEL = '(Blanks)';
 
-/** @type {{ id: string, label: string, needsValue?: boolean, needsTwo?: boolean }[]} */
+/** @type {{ id: string, label: string, needsValue?: boolean }[]} */
 const FILTER_OPS = [
   { id: 'none', label: 'None' },
   { id: 'empty', label: 'Is empty' },
@@ -182,6 +268,8 @@ function channelCol(channelKey, label, opts = {}) {
 /** @type {{ key: string, label: string, default?: boolean, get: (c: object) => string, set?: (c: object, v: string) => object, filterSplit?: boolean | RegExp }[]} */
 const COLUMNS = [
   strCol('displayName', 'Name', { default: true }),
+  strCol('firstName', 'First name', { default: false }),
+  strCol('lastName', 'Last name', { default: false }),
   strCol('nickname', 'Nickname', { default: true }),
   strCol('memoryJog', 'Memory jog', { default: true }),
   {
@@ -204,9 +292,21 @@ const COLUMNS = [
     }),
     filterSplit: true,
   },
+  {
+    key: 'hasKids',
+    label: 'Have kids',
+    default: true,
+    get: (c) => (c.hasKids ? 'Yes' : ''),
+    set: (_c, v) => {
+      const s = String(v || '').trim().toLowerCase();
+      if (!s || s === 'no' || s === 'false' || s === '0' || s === 'n') return { hasKids: false };
+      if (s === 'yes' || s === 'true' || s === '1' || s === 'y' || s === 'kids') return { hasKids: true };
+      return { hasKids: Boolean(s) };
+    },
+  },
   strCol('networkCircles', 'Scene', { default: true, filterSplit: true }),
   strCol('location', 'Location', { default: true }),
-  strCol('region', 'Region', { default: false }),
+  strCol('address', 'Address', { default: false }),
   strCol('rating', 'Status', { default: true }),
   {
     key: 'sensitivity',
@@ -222,7 +322,47 @@ const COLUMNS = [
     get: (c) => c.relationshipStatus || '',
     set: (_c, v) => ({ relationshipStatus: v }),
   },
-  strCol('nextStep', 'Next step', { default: true }),
+  {
+    key: 'hasTask',
+    label: 'Has task',
+    default: true,
+    get: (c) => {
+      const open = Array.isArray(c.tasks)
+        ? c.tasks.some((t) => t && !t.done && String(t.text || '').trim())
+        : Boolean(String(c.nextStep || '').trim());
+      return open ? 'Yes' : '';
+    },
+    set: (c, v) => {
+      const s = String(v || '').trim().toLowerCase();
+      const want =
+        s === 'yes' || s === 'true' || s === '1' || s === 'y' || s === 'task' || s === 'tasks';
+      const existing = Array.isArray(c.tasks)
+        ? c.tasks.map((t) => ({
+            id: String(t?.id || ''),
+            text: String(t?.text || '').trim(),
+            done: Boolean(t?.done),
+          })).filter((t) => t.text)
+        : String(c.nextStep || '')
+            .split(/\n+|;/)
+            .map((text) => text.trim())
+            .filter(Boolean)
+            .map((text, i) => ({ id: `task_${i + 1}`, text, done: false }));
+      if (want) {
+        if (existing.some((t) => !t.done)) return { tasks: existing };
+        return {
+          tasks: [
+            ...existing,
+            {
+              id: `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+              text: 'Follow up',
+              done: false,
+            },
+          ],
+        };
+      }
+      return { tasks: existing.map((t) => ({ ...t, done: true })) };
+    },
+  },
   strCol('lastContactAt', 'Last contact', { default: true }),
   strCol('lastContactChannel', 'Last contact via', { default: false }),
   strCol('lastContactPrecision', 'Last contact precision', {
@@ -232,10 +372,6 @@ const COLUMNS = [
   strCol('org', 'Organization', { default: true }),
   strCol('title', 'Role', { default: false }),
   strCol('department', 'Department', { default: false }),
-  strCol('bio', 'Bio', { default: false }),
-  strCol('summary', 'Summary', { default: false }),
-  strCol('notes', 'Notes', { default: false }),
-  strCol('howWeMet', 'How we met', { default: false }),
   {
     key: 'alignedActivities',
     label: 'Aligned activities',
@@ -244,6 +380,10 @@ const COLUMNS = [
     set: (_c, v) => ({ alignedActivities: listSplit(v, /\n+/) }),
     filterSplit: /\n+/,
   },
+  strCol('bio', 'Bio', { default: false }),
+  strCol('summary', 'Summary', { default: false }),
+  strCol('notes', 'Notes', { default: false }),
+  strCol('howWeMet', 'How we met', { default: false }),
   {
     key: 'preferredContactMethods',
     label: 'Preferred methods',
@@ -258,6 +398,7 @@ const COLUMNS = [
   },
   channelCol('email', 'Email'),
   channelCol('phone', 'Phone'),
+  channelCol('officePhone', 'Office phone'),
   channelCol('sms', 'SMS'),
   channelCol('signal', 'Signal'),
   channelCol('whatsapp', 'WhatsApp'),
@@ -321,6 +462,75 @@ function loadVisibleKeys() {
 }
 
 /**
+ * @param {string[]} keys
+ */
+function persistVisibleKeys(keys) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(keys));
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * @returns {{
+ *   filters: Map<string, { condition: { op: string, value: string }, values: Set<string> | null }>,
+ *   sort: { key: string, dir: 'asc' | 'desc' } | null,
+ * }}
+ */
+function loadFilterSortState() {
+  /** @type {Map<string, { condition: { op: string, value: string }, values: Set<string> | null }>} */
+  const filters = new Map();
+  /** @type {{ key: string, dir: 'asc' | 'desc' } | null} */
+  let sort = null;
+  try {
+    const raw = sessionStorage.getItem(FILTER_SORT_KEY);
+    if (!raw) return { filters, sort };
+    const parsed = JSON.parse(raw);
+    if (parsed?.sort?.key && (parsed.sort.dir === 'asc' || parsed.sort.dir === 'desc')) {
+      sort = { key: String(parsed.sort.key), dir: parsed.sort.dir };
+    }
+    if (Array.isArray(parsed?.filters)) {
+      for (const entry of parsed.filters) {
+        if (!entry?.key) continue;
+        const condition =
+          entry.condition && typeof entry.condition === 'object'
+            ? {
+                op: String(entry.condition.op || 'none'),
+                value: String(entry.condition.value || ''),
+              }
+            : { op: 'none', value: '' };
+        const values = Array.isArray(entry.values) ? new Set(entry.values.map(String)) : null;
+        filters.set(String(entry.key), { condition, values });
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return { filters, sort };
+}
+
+/**
+ * @param {Map<string, { condition: { op: string, value: string }, values: Set<string> | null }>} filters
+ * @param {{ key: string, dir: 'asc' | 'desc' } | null} sort
+ */
+function persistFilterSortState(filters, sort) {
+  try {
+    const payload = {
+      sort,
+      filters: [...filters.entries()].map(([key, f]) => ({
+        key,
+        condition: f.condition || { op: 'none', value: '' },
+        values: f.values instanceof Set ? [...f.values] : null,
+      })),
+    };
+    sessionStorage.setItem(FILTER_SORT_KEY, JSON.stringify(payload));
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
  * @param {string} raw
  */
 function valueKey(raw) {
@@ -345,7 +555,7 @@ function filterKeysForCell(col, cell) {
 
 /**
  * @param {string} cell
- * @param {{ op: string, value: string, value2?: string }} condition
+ * @param {{ op: string, value: string }} condition
  */
 function matchesCondition(cell, condition) {
   const op = condition?.op || 'none';
@@ -385,6 +595,7 @@ function matchesCondition(cell, condition) {
  *   onSelectContact: (id: string) => void,
  *   onContactsUpdated: (contacts: object[]) => void,
  *   showStatus: (msg: string, isErr?: boolean) => void,
+ *   isLoading?: () => boolean,
  * }} opts
  */
 export function mountNetworkManageTable(root, opts) {
@@ -394,11 +605,17 @@ export function mountNetworkManageTable(root, opts) {
   /** @type {string[]} */
   let visibleKeys = loadVisibleKeys();
 
+  const restoredFilterSort = loadFilterSortState();
+
   /** @type {Map<string, { condition: { op: string, value: string }, values: Set<string> | null }>} */
-  const filters = new Map();
+  const filters = restoredFilterSort.filters;
 
   /** @type {{ key: string, dir: 'asc' | 'desc' } | null} */
-  let sort = null;
+  let sort = restoredFilterSort.sort;
+
+  function rememberFilterSort() {
+    persistFilterSortState(filters, sort);
+  }
 
   /** @type {{ colKey: string, rows: Set<number>, anchor: number, focus: number } | null} */
   let cellSel = null;
@@ -411,6 +628,18 @@ export function mountNetworkManageTable(root, opts) {
 
   /** @type {{ colKey: string, label: string, entries: { id: string, value: string }[] } | null} */
   let lastBulkUndo = null;
+
+  /** @type {{ colKey: string, rowIdx: number, getValue: () => string, focus: () => void, el: HTMLElement, floating?: boolean } | null} */
+  let cellEdit = null;
+
+  /**
+   * Internal cell clipboard for Ctrl+C / Ctrl+V (same-column only).
+   * @type {{ colKey: string, value: string, values: string[] } | null}
+   */
+  let cellClipboard = null;
+
+  /** @type {string | null} */
+  let colDragKey = null;
 
   /** @type {object[]} */
   let viewRows = [];
@@ -446,11 +675,7 @@ export function mountNetworkManageTable(root, opts) {
         visibleKeys = visibleKeys.filter((k) => k !== col.key);
         if (!visibleKeys.length) visibleKeys = ['displayName'];
       }
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(visibleKeys));
-      } catch {
-        /* ignore */
-      }
+      persistVisibleKeys(visibleKeys);
       render();
     });
     lab.append(cb, document.createTextNode(` ${col.label}`));
@@ -501,12 +726,7 @@ export function mountNetworkManageTable(root, opts) {
       : 'Undo the last bulk fill / clear';
   }
 
-  const fillHint = document.createElement('p');
-  fillHint.className = 'muted network-manage__hint';
-  fillHint.textContent =
-    'Filter via header funnel. Click-drag or Shift/Ctrl+click to select in one column; arrows move (Shift/Ctrl ↑↓ extend/add). Double-click to fill.';
-
-  bar.append(colsBtn, clearFiltersBtn, undoBtn, colsPanel, fillHint);
+  bar.append(colsBtn, clearFiltersBtn, undoBtn, colsPanel);
 
   const scroller = document.createElement('div');
   scroller.className = 'network-manage__scroll';
@@ -514,6 +734,23 @@ export function mountNetworkManageTable(root, opts) {
   table.className = 'network-manage__table';
   scroller.append(table);
   root.append(bar, scroller);
+
+  /** Cap the table scroller at the browser bottom so shorter monitors don't overflow. */
+  function syncScrollerToViewport() {
+    if (!scroller.isConnected) return;
+    const top = scroller.getBoundingClientRect().top;
+    const avail = Math.floor(window.innerHeight - top);
+    scroller.style.maxHeight = `${Math.max(120, avail)}px`;
+  }
+
+  const onViewportChange = () => {
+    requestAnimationFrame(syncScrollerToViewport);
+  };
+  window.addEventListener('resize', onViewportChange);
+  window.visualViewport?.addEventListener('resize', onViewportChange);
+  const scrollFitObs = new ResizeObserver(onViewportChange);
+  scrollFitObs.observe(root);
+  if (root.parentElement) scrollFitObs.observe(root.parentElement);
 
   const filterMenu = document.createElement('div');
   filterMenu.className = 'network-manage__filter-menu';
@@ -535,12 +772,86 @@ export function mountNetworkManageTable(root, opts) {
   fillEditor.setAttribute('aria-label', 'Fill selected cells');
   root.append(fillEditor);
 
+  const cellEditorFloat = document.createElement('div');
+  cellEditorFloat.className = 'network-manage__cell-editor';
+  cellEditorFloat.hidden = true;
+  cellEditorFloat.setAttribute('role', 'presentation');
+  // Fixed to the viewport (not inside the table) so pick lists never widen columns.
+  document.body.append(cellEditorFloat);
+
+  function closeCellEditorFloat() {
+    cellEditorFloat.hidden = true;
+    cellEditorFloat.replaceChildren();
+    cellEditorFloat.style.minWidth = '';
+    cellEditorFloat.style.width = '';
+    cellEditorFloat.style.maxWidth = '';
+    cellEditorFloat.style.left = '';
+    cellEditorFloat.style.top = '';
+  }
+
+  /**
+   * Sheets-style: fixed overlay anchored to the cell. Never mounted inside <td>.
+   * @param {HTMLElement} editorEl
+   * @param {HTMLElement} td
+   */
+  function openCellEditorFloat(editorEl, td) {
+    cellEditorFloat.replaceChildren(editorEl);
+    cellEditorFloat.hidden = false;
+    const tdRect = td.getBoundingClientRect();
+    const minW = Math.max(Math.ceil(tdRect.width), 140);
+    const maxW = Math.min(288, Math.floor(window.innerWidth - 16));
+    cellEditorFloat.style.minWidth = `${Math.min(minW, maxW)}px`;
+    cellEditorFloat.style.maxWidth = `${maxW}px`;
+    cellEditorFloat.style.width = 'max-content';
+    cellEditorFloat.style.left = '0px';
+    cellEditorFloat.style.top = '0px';
+    const w = Math.min(Math.max(cellEditorFloat.offsetWidth, minW), maxW);
+    const h = cellEditorFloat.offsetHeight;
+    let x = tdRect.left;
+    let y = tdRect.top;
+    // Prefer opening down from the cell; flip up if needed.
+    if (y + h > window.innerHeight - 8 && tdRect.bottom - h >= 8) {
+      y = tdRect.bottom - h;
+    }
+    x = Math.max(8, Math.min(x, window.innerWidth - w - 8));
+    y = Math.max(8, Math.min(y, window.innerHeight - h - 8));
+    cellEditorFloat.style.left = `${x}px`;
+    cellEditorFloat.style.top = `${y}px`;
+  }
+
   function visibleCols() {
-    const order = new Map(COLUMNS.map((c, i) => [c.key, i]));
-    return visibleKeys
-      .map((k) => COLUMNS.find((c) => c.key === k))
-      .filter(Boolean)
-      .sort((a, b) => (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0));
+    return visibleKeys.map((k) => COLUMNS.find((c) => c.key === k)).filter(Boolean);
+  }
+
+  /**
+   * @param {string} fromKey
+   * @param {string} toKey
+   * @param {boolean} placeAfter
+   */
+  function reorderVisibleColumn(fromKey, toKey, placeAfter) {
+    if (!fromKey || !toKey || fromKey === toKey) return;
+    const from = visibleKeys.indexOf(fromKey);
+    if (from < 0 || visibleKeys.indexOf(toKey) < 0) return;
+    const next = visibleKeys.filter((k) => k !== fromKey);
+    let insertAt = next.indexOf(toKey);
+    if (insertAt < 0) return;
+    if (placeAfter) insertAt += 1;
+    next.splice(insertAt, 0, fromKey);
+    visibleKeys = next;
+    persistVisibleKeys(visibleKeys);
+    render();
+  }
+
+  function clearColumnDropIndicators() {
+    for (const el of table.querySelectorAll(
+      '.network-manage__th--drop-before, .network-manage__th--drop-after, .network-manage__th--dragging',
+    )) {
+      el.classList.remove(
+        'network-manage__th--drop-before',
+        'network-manage__th--drop-after',
+        'network-manage__th--dragging',
+      );
+    }
   }
 
   function colByKey(key) {
@@ -616,7 +927,6 @@ export function mountNetworkManageTable(root, opts) {
    *   count: number,
    *   anchor: number,
    *   focus: number,
-   *   contiguous: boolean,
    * } | null}
    */
   function selectionInfo() {
@@ -632,15 +942,7 @@ export function mountNetworkManageTable(root, opts) {
       count: rows.length,
       anchor: cellSel.anchor,
       focus: cellSel.focus,
-      contiguous: hi - lo + 1 === rows.length,
     };
-  }
-
-  /** @deprecated use selectionInfo — kept as thin alias for lo/hi callers during transition */
-  function selectionBounds() {
-    const info = selectionInfo();
-    if (!info) return null;
-    return { colKey: info.colKey, lo: info.lo, hi: info.hi };
   }
 
   /**
@@ -806,8 +1108,62 @@ export function mountNetworkManageTable(root, opts) {
     });
   }
 
+  /**
+   * @param {string} colKey
+   * @param {number} startRow
+   * @param {number} endRow
+   */
+  function paintFillRange(colKey, startRow, endRow) {
+    const lo = Math.min(startRow, endRow);
+    const hi = Math.max(startRow, endRow);
+    table.querySelectorAll('.network-manage__cell').forEach((el) => {
+      const r = Number(el.dataset.rowIdx);
+      const k = el.dataset.colKey;
+      el.classList.toggle('network-manage__cell--fill', k === colKey && r >= lo && r <= hi);
+    });
+  }
+
+  /**
+   * Resolve the manage-table cell under the pointer (handles nested fill-handle hits).
+   * @param {number} clientX
+   * @param {number} clientY
+   * @param {string} colKey
+   * @returns {HTMLElement | null}
+   */
+  function fillCellFromPoint(clientX, clientY, colKey) {
+    const stack =
+      typeof document.elementsFromPoint === 'function'
+        ? document.elementsFromPoint(clientX, clientY)
+        : [document.elementFromPoint(clientX, clientY)].filter(Boolean);
+    for (const el of stack) {
+      if (!(el instanceof Element)) continue;
+      const cell = el.closest('.network-manage__cell');
+      if (cell instanceof HTMLElement && cell.dataset.colKey === colKey) return cell;
+    }
+    return null;
+  }
+
+  /**
+   * Keep fill endRow aligned with the pointer (mouseenter alone can miss the last row).
+   * @param {number} clientX
+   * @param {number} clientY
+   * @returns {number | null} updated endRow, or null if unchanged / unknown
+   */
+  function syncFillEndFromPointer(clientX, clientY) {
+    if (!fillDrag) return null;
+    const cell = fillCellFromPoint(clientX, clientY, fillDrag.colKey);
+    if (!cell) return null;
+    const row = Number(cell.dataset.rowIdx);
+    if (!Number.isFinite(row)) return null;
+    if (row === fillDrag.endRow) return row;
+    fillDrag.endRow = row;
+    paintFillRange(fillDrag.colKey, fillDrag.startRow, fillDrag.endRow);
+    return row;
+  }
+
   function closeFilterMenu() {
     filterMenu.hidden = true;
+    filterMenu.style.maxHeight = '';
     filterMenu.replaceChildren();
   }
 
@@ -821,8 +1177,522 @@ export function mountNetworkManageTable(root, opts) {
     fillEditor.replaceChildren();
   }
 
+  function canEditColumn(col) {
+    return Boolean(col?.set);
+  }
+
+  /** Name opens the detail pane instead of inline editing. */
+  function opensDetailsOnActivate(col) {
+    return col?.key === 'displayName';
+  }
+
+  /** Inline spreadsheet edit (not Name → details). */
+  function canInlineEditColumn(col) {
+    return canEditColumn(col) && !opensDetailsOnActivate(col);
+  }
+
   function canFillColumn(col) {
     return Boolean(col?.set) && !NO_FILL_KEYS.has(col.key);
+  }
+
+  /**
+   * Copy the current cell selection into the internal clipboard (and system clipboard).
+   * Paste only works into the same column.
+   */
+  async function copySelectedCells() {
+    const sel = selectionInfo();
+    if (!sel) {
+      opts.showStatus('Select a cell to copy', true);
+      return;
+    }
+    const col = colByKey(sel.colKey);
+    if (!col) return;
+
+    const lines = [];
+    for (const i of sel.rows) {
+      const c = contactAt(i);
+      lines.push(c ? col.get(c) : '');
+    }
+    const focusContact = contactAt(sel.focus);
+    const pasteValue = focusContact ? col.get(focusContact) : lines[0] || '';
+    cellClipboard = { colKey: sel.colKey, value: pasteValue, values: lines };
+
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+    } catch {
+      /* internal clipboard still works */
+    }
+    opts.showStatus(
+      sel.count === 1
+        ? `Copied ${col.label}`
+        : `Copied ${col.label} (${sel.count} cells)`,
+    );
+  }
+
+  /**
+   * Paste the internal cell clipboard into the current selection (same column only).
+   */
+  async function pasteIntoSelectedCells() {
+    const sel = selectionInfo();
+    if (!sel) {
+      opts.showStatus('Select a cell to paste into', true);
+      return;
+    }
+    if (!cellClipboard) {
+      opts.showStatus('Nothing to paste — copy a cell first (Ctrl/Cmd+C)', true);
+      return;
+    }
+    if (cellClipboard.colKey !== sel.colKey) {
+      const from = colByKey(cellClipboard.colKey)?.label || cellClipboard.colKey;
+      const to = colByKey(sel.colKey)?.label || sel.colKey;
+      opts.showStatus(`Paste only within the same column (${from} → ${to})`, true);
+      return;
+    }
+    const col = colByKey(sel.colKey);
+    if (!canEditColumn(col)) {
+      opts.showStatus('This column is read-only', true);
+      return;
+    }
+
+    // Same-size multi-copy → paste 1:1 onto the selection; otherwise fill selection
+    // with the focused source cell's value (typical one-cell → other-cell paste).
+    const src = cellClipboard.values;
+    if (src.length > 1 && src.length === sel.count) {
+      await writePerRowValues(
+        col,
+        sel.rows.map((rowIdx, i) => ({ rowIdx, value: src[i] ?? '' })),
+      );
+      return;
+    }
+    await writeValueToRowIndexes(col, cellClipboard.value, sel.rows);
+  }
+
+  /** Clear selected cell(s) with no confirmation prompt. */
+  async function clearSelectedCells() {
+    const sel = selectionInfo();
+    if (!sel) return;
+    const col = colByKey(sel.colKey);
+    if (!canEditColumn(col)) {
+      opts.showStatus('This column cannot be cleared', true);
+      return;
+    }
+    await writeValueToRowIndexes(col, '', sel.rows);
+  }
+
+  /**
+   * @param {{ key: string, label: string, set?: (c: object, v: string) => object, get?: (c: object) => string, filterSplit?: boolean | RegExp }} col
+   * @param {{ rowIdx: number, value: string }[]} entries
+   */
+  async function writePerRowValues(col, entries) {
+    if (!col.set) return;
+    /** @type {{ id: string, value: string }[]} */
+    const undoEntries = [];
+    /** @type {{ id: string, patch: object }[]} */
+    const jobs = [];
+    /** @type {object[]} */
+    const optimistic = [];
+    for (const { rowIdx, value } of entries) {
+      const c = contactAt(rowIdx);
+      if (!c) continue;
+      undoEntries.push({ id: c.id, value: col.get(c) });
+      const patch = patchForColumnValue(col, value, c);
+      jobs.push({ id: c.id, patch });
+      optimistic.push(mergeContactPatch(c, patch));
+    }
+    if (!jobs.length) return;
+
+    opts.onContactsUpdated(optimistic);
+    opts.showStatus(`Updating ${col.label} on ${jobs.length} contact${jobs.length === 1 ? '' : 's'}…`);
+
+    try {
+      const updated = await Promise.all(jobs.map((job) => patchContact(job.id, job.patch)));
+      lastBulkUndo = {
+        colKey: col.key,
+        label: col.label,
+        entries: undoEntries,
+      };
+      syncUndoBtn();
+      opts.onContactsUpdated(updated);
+      opts.showStatus(
+        `Updated ${col.label} on ${updated.length} contact${updated.length === 1 ? '' : 's'}`,
+      );
+    } catch (err) {
+      /** @type {object[]} */
+      const reverted = [];
+      const byId = new Map(opts.getContacts().map((c) => [c.id, c]));
+      for (const entry of undoEntries) {
+        const c = byId.get(entry.id);
+        if (!c) continue;
+        reverted.push(mergeContactPatch(c, patchForColumnValue(col, entry.value, c)));
+      }
+      if (reverted.length) opts.onContactsUpdated(reverted);
+      opts.showStatus(String(err?.message || err), true);
+    }
+  }
+
+  /**
+   * @param {{ key: string, filterSplit?: boolean | RegExp } | null | undefined} col
+   */
+  function isMultilineCol(col) {
+    if (!col) return false;
+    if (
+      col.key === 'notes' ||
+      col.key === 'bio' ||
+      col.key === 'summary' ||
+      col.key === 'memoryJog' ||
+      col.key === 'howWeMet' ||
+      col.key === 'alignedActivities' ||
+      col.key === 'ch_urls'
+    ) {
+      return true;
+    }
+    return col.filterSplit instanceof RegExp && String(col.filterSplit.source).includes('\\n');
+  }
+
+  function cancelCellEdit() {
+    if (!cellEdit) return;
+    cellEdit = null;
+    closeCellEditorFloat();
+    render();
+  }
+
+  async function commitCellEdit() {
+    if (!cellEdit) return;
+    const { colKey, rowIdx, getValue } = cellEdit;
+    const value = getValue();
+    cellEdit = null;
+    closeCellEditorFloat();
+    const col = colByKey(colKey);
+    if (!canEditColumn(col)) {
+      render();
+      return;
+    }
+    const c = contactAt(rowIdx);
+    if (c && col.get(c) === value) {
+      render();
+      return;
+    }
+    await writeValueToRowIndexes(col, value, [rowIdx]);
+  }
+
+  /**
+   * Shared keyboard handling for inline editors (text / select / multi).
+   * @param {KeyboardEvent} e
+   * @param {{ multiline?: boolean, colKey: string, rowIdx: number }} cfg
+   */
+  function onCellEditorKeydown(e, cfg) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelCellEdit();
+      return;
+    }
+    if (e.key === 'Enter' && (!cfg.multiline || !e.shiftKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      void commitCellEdit();
+      return;
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      e.stopPropagation();
+      const cols = visibleCols();
+      const colIdx = cols.findIndex((x) => x.key === cfg.colKey);
+      void commitCellEdit().then(() => {
+        const delta = e.shiftKey ? -1 : 1;
+        let nextCol = colIdx + delta;
+        while (nextCol >= 0 && nextCol < cols.length && !canInlineEditColumn(cols[nextCol])) {
+          nextCol += delta;
+        }
+        if (nextCol >= 0 && nextCol < cols.length) {
+          startCellEdit(cols[nextCol].key, cfg.rowIdx);
+        }
+      });
+    }
+  }
+
+  /**
+   * @param {string} colKey
+   * @param {number} rowIdx
+   */
+  function startCellEdit(colKey, rowIdx) {
+    const col = colByKey(colKey);
+    if (!canInlineEditColumn(col)) {
+      if (opensDetailsOnActivate(col)) {
+        const c = contactAt(rowIdx);
+        if (c) opts.onSelectContact(c.id);
+      }
+      return;
+    }
+
+    if (cellEdit) {
+      if (cellEdit.colKey === colKey && cellEdit.rowIdx === rowIdx) {
+        cellEdit.focus();
+        return;
+      }
+      const prev = cellEdit;
+      cellEdit = null;
+      const prevCol = colByKey(prev.colKey);
+      const prevVal = prev.getValue();
+      const prevContact = contactAt(prev.rowIdx);
+      if (prevCol && canEditColumn(prevCol) && (!prevContact || prevCol.get(prevContact) !== prevVal)) {
+        void writeValueToRowIndexes(prevCol, prevVal, [prev.rowIdx]).then(() => {
+          startCellEdit(colKey, rowIdx);
+        });
+        return;
+      }
+    }
+
+    closeFilterMenu();
+    closeContextMenu();
+    closeFillEditor();
+    selectSingleCell(colKey, rowIdx);
+
+    const td = table.querySelector(
+      `.network-manage__cell[data-col-key="${CSS.escape(colKey)}"][data-row-idx="${rowIdx}"]`,
+    );
+    if (!(td instanceof HTMLElement)) return;
+    const c = contactAt(rowIdx);
+    if (!c) return;
+
+    const initial = col.get(c);
+    const pickOpts = pickOptionsForCol(col, opts, opts.getContacts());
+    const multi = isMultiSelectCol(col);
+    const pickList = isPickListCol(col, opts);
+
+    /** @type {() => string} */
+    let getValue;
+    /** @type {() => void} */
+    let focusEditor;
+    /** @type {HTMLElement} */
+    let editorEl;
+    let floating = false;
+
+    if (pickList && multi) {
+      floating = true;
+      const panel = document.createElement('div');
+      panel.className = 'network-manage__cell-multi';
+      panel.setAttribute('role', 'group');
+      panel.setAttribute('aria-label', `Edit ${col.label}`);
+      panel.tabIndex = -1;
+
+      /** @type {HTMLInputElement[]} */
+      const checks = [];
+      /** @type {string[]} */
+      let optionList = [...(pickOpts || [])];
+      const selected = new Set(
+        listSplit(initial, listSepForCol(col))
+          .map((p) => normalizeListPart(col, p))
+          .filter(Boolean),
+      );
+      // kinds defaults to friend in get() when empty — keep checkboxes honest to storage.
+      if (col.key === 'kinds' && !selected.size) selected.add('friend');
+      // Include any current values that aren't in the known list yet.
+      for (const token of selected) {
+        if (!optionList.some((o) => o.toLowerCase() === token.toLowerCase())) {
+          optionList.push(token);
+        }
+      }
+      if (col.key === 'networkCircles') {
+        optionList = collectSceneOptions(opts.getContacts(), [...selected]);
+      }
+
+      const optsWrap = document.createElement('div');
+      optsWrap.className = 'network-manage__cell-multi-opts';
+
+      function rebuildChecks() {
+        optsWrap.replaceChildren();
+        checks.length = 0;
+        for (const opt of optionList) {
+          const lab = document.createElement('label');
+          lab.className = 'network-manage__cell-multi-opt';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.value = opt;
+          cb.checked = [...selected].some((s) => s.toLowerCase() === opt.toLowerCase());
+          checks.push(cb);
+          cb.addEventListener('change', () => {
+            if (cb.checked) selected.add(opt);
+            else {
+              for (const s of [...selected]) {
+                if (s.toLowerCase() === opt.toLowerCase()) selected.delete(s);
+              }
+            }
+          });
+          lab.append(cb, document.createTextNode(` ${pickOptionLabel(col.key, opt)}`));
+          optsWrap.append(lab);
+        }
+      }
+      rebuildChecks();
+      panel.append(optsWrap);
+
+      if (col.key === 'networkCircles') {
+        const addNew = document.createElement('button');
+        addNew.type = 'button';
+        addNew.className = 'network-crm__btn network-crm__btn--tiny';
+        addNew.textContent = 'New scene…';
+        addNew.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const name = (prompt('New scene name?') || '').replace(/\s+/g, ' ').trim();
+          if (!name) return;
+          if (!optionList.some((o) => o.toLowerCase() === name.toLowerCase())) {
+            optionList = [...optionList, name].sort((a, b) =>
+              a.localeCompare(b, undefined, { sensitivity: 'base' }),
+            );
+          }
+          selected.add(name);
+          rebuildChecks();
+        });
+        panel.append(addNew);
+      }
+
+      const done = document.createElement('button');
+      done.type = 'button';
+      done.className = 'network-crm__btn network-crm__btn--tiny network-crm__btn--primary';
+      done.textContent = 'Done';
+      done.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void commitCellEdit();
+      });
+      panel.append(done);
+
+      getValue = () => {
+        const picked = checks.filter((cb) => cb.checked).map((cb) => cb.value);
+        if (col.key === 'networkCircles') return joinSceneTokens(picked);
+        return listJoin(picked, listJoinSepForCol(col));
+      };
+      focusEditor = () => {
+        const first = checks.find((cb) => cb.checked) || checks[0];
+        (first || panel).focus();
+      };
+      editorEl = panel;
+
+      panel.addEventListener('keydown', (e) => onCellEditorKeydown(e, { colKey, rowIdx }));
+      panel.addEventListener('mousedown', (e) => e.stopPropagation());
+      panel.addEventListener('click', (e) => e.stopPropagation());
+      panel.addEventListener('dblclick', (e) => e.stopPropagation());
+
+      openCellEditorFloat(panel, td);
+    } else if (pickList && pickOpts) {
+      floating = true;
+      const panel = document.createElement('div');
+      panel.className = 'network-manage__cell-pick';
+      panel.setAttribute('role', 'listbox');
+      panel.setAttribute('aria-label', `Edit ${col.label}`);
+      panel.tabIndex = -1;
+
+      let selectValue = initial;
+      if (YES_NO_KEYS.has(col.key)) {
+        selectValue = initial === 'Yes' ? 'Yes' : '';
+      }
+
+      /** @type {string} */
+      let picked = selectValue;
+
+      /**
+       * @param {string} value
+       * @param {string} label
+       */
+      function addPickOpt(value, label) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'network-manage__cell-pick-opt';
+        btn.setAttribute('role', 'option');
+        btn.setAttribute('aria-selected', value === picked ? 'true' : 'false');
+        if (value === picked) btn.classList.add('network-manage__cell-pick-opt--active');
+        btn.textContent = label;
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          picked = value;
+          void commitCellEdit();
+        });
+        panel.append(btn);
+      }
+
+      addPickOpt('', YES_NO_KEYS.has(col.key) ? 'No' : '(blank)');
+      for (const opt of pickOpts) {
+        if (YES_NO_KEYS.has(col.key) && opt === 'No') continue;
+        addPickOpt(opt, pickOptionLabel(col.key, opt));
+      }
+      if (
+        selectValue &&
+        !YES_NO_KEYS.has(col.key) &&
+        !pickOpts.some((o) => o === selectValue)
+      ) {
+        addPickOpt(selectValue, selectValue);
+      }
+
+      getValue = () => picked;
+      focusEditor = () => {
+        const active =
+          panel.querySelector('.network-manage__cell-pick-opt--active') ||
+          panel.querySelector('.network-manage__cell-pick-opt');
+        (active instanceof HTMLElement ? active : panel).focus();
+      };
+      editorEl = panel;
+
+      panel.addEventListener('keydown', (e) => onCellEditorKeydown(e, { colKey, rowIdx }));
+      panel.addEventListener('mousedown', (e) => e.stopPropagation());
+      panel.addEventListener('click', (e) => e.stopPropagation());
+      panel.addEventListener('dblclick', (e) => e.stopPropagation());
+
+      openCellEditorFloat(panel, td);
+    } else {
+      const multiline = isMultilineCol(col);
+      /** @type {HTMLInputElement | HTMLTextAreaElement} */
+      const input = multiline ? document.createElement('textarea') : document.createElement('input');
+      if (!multiline && input instanceof HTMLInputElement) input.type = 'text';
+      input.className = 'network-manage__cell-input';
+      if (multiline) input.classList.add('network-manage__cell-input--multiline');
+      input.value = initial;
+      input.setAttribute('aria-label', `Edit ${col.label}`);
+
+      const suggestions = fillSuggestionsForColumn(col.key);
+      if (suggestions.length && !multiline) {
+        const listId = `network-manage-cell-opts-${col.key}`;
+        input.setAttribute('list', listId);
+        const datalist = document.createElement('datalist');
+        datalist.id = listId;
+        for (const opt of suggestions) {
+          const o = document.createElement('option');
+          o.value = opt;
+          datalist.append(o);
+        }
+        td.replaceChildren(input, datalist);
+      } else {
+        td.replaceChildren(input);
+      }
+
+      getValue = () => input.value;
+      focusEditor = () => {
+        input.focus();
+        input.select();
+      };
+      editorEl = input;
+
+      input.addEventListener('keydown', (e) =>
+        onCellEditorKeydown(e, { multiline, colKey, rowIdx }),
+      );
+      input.addEventListener('blur', () => {
+        window.requestAnimationFrame(() => {
+          if (cellEdit?.el === input) void commitCellEdit();
+        });
+      });
+      input.addEventListener('mousedown', (e) => e.stopPropagation());
+      input.addEventListener('click', (e) => e.stopPropagation());
+      input.addEventListener('dblclick', (e) => e.stopPropagation());
+    }
+
+    td.classList.add('network-manage__cell--editing');
+    if (floating) td.classList.add('network-manage__cell--editing-float');
+    cellEdit = { colKey, rowIdx, getValue, focus: focusEditor, el: editorEl, floating };
+
+    window.requestAnimationFrame(() => {
+      focusEditor();
+    });
   }
 
   /**
@@ -845,6 +1715,40 @@ export function mountNetworkManageTable(root, opts) {
     el.style.top = `${y}px`;
   }
 
+    /**
+   * Local merge mirroring server updateContact so the table can refresh before PUTs finish.
+   * @param {object} contact
+   * @param {object} patch
+   */
+  function mergeContactPatch(contact, patch) {
+    return {
+      ...contact,
+      ...(patch && typeof patch === 'object' ? patch : {}),
+      id: contact.id,
+      channels: {
+        ...(contact.channels && typeof contact.channels === 'object' ? contact.channels : {}),
+        ...(patch?.channels && typeof patch.channels === 'object' ? patch.channels : {}),
+      },
+      enrichment: {
+        ...(contact.enrichment && typeof contact.enrichment === 'object' ? contact.enrichment : {}),
+        ...(patch?.enrichment && typeof patch.enrichment === 'object' ? patch.enrichment : {}),
+      },
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * @param {{ key: string, set: (c: object, v: string) => object }} col
+   * @param {string} value
+   */
+  function patchForColumnValue(col, value, contact = {}) {
+    const patch = col.set(contact, value);
+    if (col.key === 'kinds' && (!Array.isArray(patch.kinds) || !patch.kinds.length)) {
+      patch.kinds = ['friend'];
+    }
+    return patch;
+  }
+
   /**
    * @param {string} contactId
    * @param {object} patch
@@ -860,9 +1764,128 @@ export function mountNetworkManageTable(root, opts) {
     return j.contact;
   }
 
-  async function applyFill() {
+  /** Skip one outside-click dismiss after opening the drag-fill chooser. */
+  let ignoreFillEditorOutsideClick = false;
+
+  /**
+   * After a drag-fill release on a multi-value column, ask Overwrite vs Append.
+   * @param {number} clientX
+   * @param {number} clientY
+   * @param {{
+   *   col: { key: string, label: string, set?: (c: object, v: string) => object, get?: (c: object) => string, filterSplit?: boolean | RegExp },
+   *   value: string,
+   *   preview: string,
+   *   targetCount: number,
+   *   rowIndexes: number[],
+   * }} pending
+   */
+  function openDragFillChooser(clientX, clientY, pending) {
+    const { col, value, preview, targetCount, rowIndexes } = pending;
+    closeFilterMenu();
+    closeContextMenu();
+    closeFillEditor();
+
+    fillEditor.replaceChildren();
+
+    const title = document.createElement('div');
+    title.className = 'network-manage__fill-editor-title';
+    title.textContent = `Copy ${col.label} · ${targetCount} contact${targetCount === 1 ? '' : 's'}`;
+
+    const hint = document.createElement('p');
+    hint.className = 'muted network-manage__fill-editor-hint';
+    hint.textContent = `“${preview}” — overwrite existing values, or append what’s missing?`;
+
+    const actions = document.createElement('div');
+    actions.className = 'network-manage__fill-editor-actions';
+
+    const overwriteBtn = document.createElement('button');
+    overwriteBtn.type = 'button';
+    overwriteBtn.className = 'btn';
+    overwriteBtn.textContent = 'Overwrite';
+    overwriteBtn.title = 'Replace the whole cell with the dragged value';
+
+    const appendBtn = document.createElement('button');
+    appendBtn.type = 'button';
+    appendBtn.className = 'btn';
+    appendBtn.textContent = 'Append';
+    appendBtn.title = 'Keep existing values and add any that are missing';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn btn--ghost';
+    cancelBtn.textContent = 'Cancel';
+
+    /**
+     * @param {'replace' | 'append'} mode
+     */
+    function choose(mode) {
+      closeFillEditor();
+      void writeValueToRowIndexes(col, value, rowIndexes, mode);
+    }
+
+    overwriteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      choose('replace');
+    });
+    appendBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      choose('append');
+    });
+    cancelBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeFillEditor();
+      opts.showStatus('Fill cancelled');
+    });
+
+    actions.append(overwriteBtn, appendBtn, cancelBtn);
+    fillEditor.append(title, hint, actions);
+    fillEditor.setAttribute('aria-label', `Drag fill ${col.label}`);
+
+    // mouseup is followed by a click on the cell under the cursor; ignore that dismiss.
+    ignoreFillEditorOutsideClick = true;
+    placeFloating(fillEditor, clientX, clientY);
+    overwriteBtn.focus();
+    window.setTimeout(() => {
+      ignoreFillEditorOutsideClick = false;
+    }, 0);
+  }
+
+  /**
+   * @param {number} [clientX]
+   * @param {number} [clientY]
+   */
+  async function applyFill(clientX = 0, clientY = 0) {
     if (!fillDrag) return;
-    const { colKey, startRow, endRow, value } = fillDrag;
+    const { colKey, startRow, value } = fillDrag;
+    let { endRow } = fillDrag;
+
+    // Prefer the cell under the pointer at release — mouseenter can miss the last
+    // row when the cursor settles on it without a fresh enter event.
+    const synced = syncFillEndFromPointer(clientX, clientY);
+    if (synced != null) endRow = synced;
+    else if (
+      Number.isFinite(Number(fillDrag.endRow))
+    ) {
+      endRow = fillDrag.endRow;
+    }
+
+    const underCell = fillCellFromPoint(clientX, clientY, colKey);
+
+    // Snapshot mouse-highlighted cells before clearing (contact ids, not raw indexes).
+    const highlighted = [...table.querySelectorAll('.network-manage__cell--fill')]
+      .filter((el) => el instanceof HTMLElement && el.dataset.colKey === colKey)
+      .map((el) => {
+        const row = Number(el.dataset.rowIdx);
+        const c = contactAt(row);
+        return {
+          row,
+          id: c?.id != null ? String(c.id) : null,
+          name: c?.displayName || null,
+        };
+      })
+      .filter((h) => Number.isFinite(h.row));
+
+
     fillDrag = null;
     clearFillHighlight();
     const col = colByKey(colKey);
@@ -870,30 +1893,42 @@ export function mountNetworkManageTable(root, opts) {
     const lo = Math.min(startRow, endRow);
     const hi = Math.max(startRow, endRow);
     if (hi <= lo) return;
-    const targetCount = hi - lo;
+    // Exclude the drag source so upward fills hit the destination row(s), not the source.
+    const rowIndexes = [];
+    for (let i = lo; i <= hi; i++) {
+      if (i !== startRow) rowIndexes.push(i);
+    }
+    const rangeIds = rowIndexes.map((i) => {
+      const c = contactAt(i);
+      return c?.id != null ? String(c.id) : null;
+    });
+    const highlightTargetIds = highlighted
+      .filter((h) => h.row !== startRow && h.id)
+      .map((h) => h.id);
+    const targetCount = rowIndexes.length;
+    if (!targetCount) return;
     const preview = value.length > 40 ? `${value.slice(0, 37)}…` : value || '(empty)';
+
+
+    if (isAppendableColumn(col)) {
+      openDragFillChooser(clientX, clientY, {
+        col,
+        value,
+        preview,
+        targetCount,
+        rowIndexes,
+      });
+      return;
+    }
+
     const ok = window.confirm(
-      `Copy ${col.label} “${preview}” onto ${targetCount} contact${targetCount === 1 ? '' : 's'} below?\n\nThis overwrites existing values.`,
+      `Copy ${col.label} “${preview}” onto ${targetCount} contact${targetCount === 1 ? '' : 's'}?\n\nThis overwrites existing values.`,
     );
     if (!ok) {
       opts.showStatus('Fill cancelled');
       return;
     }
-    await writeValueToRowIndexes(col, value, Array.from({ length: hi - lo }, (_, i) => lo + 1 + i));
-  }
-
-  /**
-   * @param {{ key: string, label: string, set?: (c: object, v: string) => object, get?: (c: object) => string, filterSplit?: boolean | RegExp }} col
-   * @param {string} value
-   * @param {number} lo
-   * @param {number} hi
-   * @param {'replace' | 'append'} [mode]
-   */
-  async function writeValueToRows(col, value, lo, hi, mode = 'replace') {
-    /** @type {number[]} */
-    const rows = [];
-    for (let i = lo; i <= hi; i += 1) rows.push(i);
-    await writeValueToRowIndexes(col, value, rows, mode);
+    await writeValueToRowIndexes(col, value, rowIndexes);
   }
 
   /**
@@ -909,44 +1944,68 @@ export function mountNetworkManageTable(root, opts) {
     const fillMode = mode === 'append' && isAppendableColumn(col) ? 'append' : 'replace';
     const count = rows.length;
     const verb = fillMode === 'append' ? 'Appending' : 'Updating';
-    opts.showStatus(`${verb} ${col.label} on ${count} contact${count === 1 ? '' : 's'}…`);
     /** @type {{ id: string, value: string }[]} */
     const undoEntries = [];
+    /** @type {{ id: string, patch: object }[]} */
+    const jobs = [];
     /** @type {object[]} */
-    const updated = [];
+    const optimistic = [];
+    for (const i of rows) {
+      const c = contactAt(i);
+      if (!c) continue;
+      const prev = col.get(c);
+      undoEntries.push({ id: c.id, value: prev });
+      const nextValue = fillMode === 'append' ? mergeAppendValue(col, prev, value) : value;
+      const patch = patchForColumnValue(col, nextValue, c);
+      jobs.push({ id: c.id, patch });
+      optimistic.push(mergeContactPatch(c, patch));
+    }
+    if (!jobs.length) return;
+
+
+    // Show the new values in the table immediately; persist in parallel afterward.
     try {
-      for (const i of rows) {
-        const c = contactAt(i);
-        if (!c) continue;
-        const prev = col.get(c);
-        undoEntries.push({ id: c.id, value: prev });
-        const nextValue =
-          fillMode === 'append' ? mergeAppendValue(col, prev, value) : value;
-        const patch = col.set({}, nextValue);
-        if (col.key === 'kinds' && (!Array.isArray(patch.kinds) || !patch.kinds.length)) {
-          patch.kinds = ['friend'];
-        }
-        const saved = await patchContact(c.id, patch);
-        updated.push(saved);
-      }
-      if (updated.length) {
-        lastBulkUndo = {
-          colKey: col.key,
-          label: col.label,
-          entries: undoEntries,
-        };
-        syncUndoBtn();
-        opts.onContactsUpdated(updated);
-      }
+      opts.onContactsUpdated(optimistic);
+    } catch (err) {
+      throw err;
+    }
+    opts.showStatus(`${verb} ${col.label} on ${count} contact${count === 1 ? '' : 's'}…`);
+
+    try {
+      const updated = await Promise.all(
+        jobs.map(async (job) => {
+          try {
+            const contact = await patchContact(job.id, job.patch);
+            return contact;
+          } catch (err) {
+            throw err;
+          }
+        }),
+      );
+      lastBulkUndo = {
+        colKey: col.key,
+        label: col.label,
+        entries: undoEntries,
+      };
+      syncUndoBtn();
+      opts.onContactsUpdated(updated);
       const done =
         fillMode === 'append'
           ? `Appended to ${col.label} on ${updated.length} contact${updated.length === 1 ? '' : 's'}`
           : `Updated ${col.label} on ${updated.length} contact${updated.length === 1 ? '' : 's'}`;
       opts.showStatus(done);
     } catch (err) {
+      /** @type {object[]} */
+      const reverted = [];
+      const byId = new Map(opts.getContacts().map((c) => [c.id, c]));
+      for (const entry of undoEntries) {
+        const c = byId.get(entry.id);
+        if (!c) continue;
+        reverted.push(mergeContactPatch(c, patchForColumnValue(col, entry.value, c)));
+      }
+      if (reverted.length) opts.onContactsUpdated(reverted);
       opts.showStatus(String(err?.message || err), true);
     }
-    render();
   }
 
   async function undoLastBulk() {
@@ -962,17 +2021,21 @@ export function mountNetworkManageTable(root, opts) {
     opts.showStatus(
       `Undoing ${snapshot.label} on ${snapshot.entries.length} contact${snapshot.entries.length === 1 ? '' : 's'}…`,
     );
+    /** @type {{ id: string, patch: object }[]} */
+    const jobs = [];
     /** @type {object[]} */
-    const updated = [];
+    const optimistic = [];
+    const byId = new Map(opts.getContacts().map((c) => [c.id, c]));
+    for (const entry of snapshot.entries) {
+      const c = byId.get(entry.id);
+      if (!c) continue;
+      const patch = patchForColumnValue(col, entry.value, c);
+      jobs.push({ id: entry.id, patch });
+      optimistic.push(mergeContactPatch(c, patch));
+    }
+    if (optimistic.length) opts.onContactsUpdated(optimistic);
     try {
-      for (const entry of snapshot.entries) {
-        const patch = col.set({}, entry.value);
-        if (col.key === 'kinds' && (!Array.isArray(patch.kinds) || !patch.kinds.length)) {
-          patch.kinds = ['friend'];
-        }
-        const saved = await patchContact(entry.id, patch);
-        updated.push(saved);
-      }
+      const updated = await Promise.all(jobs.map((job) => patchContact(job.id, job.patch)));
       if (updated.length) opts.onContactsUpdated(updated);
       opts.showStatus(
         `Restored ${snapshot.label} on ${updated.length} contact${updated.length === 1 ? '' : 's'}`,
@@ -980,7 +2043,6 @@ export function mountNetworkManageTable(root, opts) {
     } catch (err) {
       opts.showStatus(String(err?.message || err), true);
     }
-    render();
   }
 
   /**
@@ -989,7 +2051,10 @@ export function mountNetworkManageTable(root, opts) {
    * @returns {string[]}
    */
   function fillSuggestionsForColumn(colKey) {
-    const presets = FILL_OPTIONS[colKey] || [];
+    const presets =
+      colKey === 'networkCircles'
+        ? collectSceneOptions(opts.getContacts())
+        : resolveFillOptions({ key: colKey }, opts) || [];
     const seen = new Set(presets.map((v) => v.toLowerCase()));
     const fromData = [];
     for (const { value } of uniqueValuesForColumn(colKey)) {
@@ -1008,6 +2073,10 @@ export function mountNetworkManageTable(root, opts) {
    * @param {{ colKey: string, rowIdx: number }} target
    */
   function openFillEditor(clientX, clientY, target) {
+    if (cellEdit) {
+      void commitCellEdit().then(() => openFillEditor(clientX, clientY, target));
+      return;
+    }
     closeFilterMenu();
     closeContextMenu();
     setColsPanelOpen(false);
@@ -1030,7 +2099,7 @@ export function mountNetworkManageTable(root, opts) {
     const first = contactAt(sel.rows[0]);
     const initial = first ? col.get(first) : '';
     const suggestions = fillSuggestionsForColumn(col.key);
-    const hasPresets = Boolean(FILL_OPTIONS[col.key]?.length);
+    const hasPresets = isPickListCol(col, opts) || Boolean(suggestions.length);
     const appendable = isAppendableColumn(col);
     const selectedRows = [...sel.rows];
 
@@ -1073,7 +2142,7 @@ export function mountNetworkManageTable(root, opts) {
 
       addMode(
         'replace',
-        'Replace',
+        'Overwrite',
         'Overwrite the whole cell (e.g. friend + business → friend)',
       );
       addMode(
@@ -1143,7 +2212,7 @@ export function mountNetworkManageTable(root, opts) {
       hint.textContent =
         fillMode === 'append'
           ? 'Append keeps existing values and adds any that are missing.'
-          : 'Replace overwrites the whole cell with what you enter.';
+          : 'Overwrite replaces the whole cell with what you enter.';
       input.placeholder =
         fillMode === 'append'
           ? `Value(s) to add to ${col.label}`
@@ -1326,7 +2395,7 @@ export function mountNetworkManageTable(root, opts) {
     valsHead.className = 'network-manage__filter-section-toggle';
     valsHead.textContent = 'Filter by values';
     const valsBody = document.createElement('div');
-    valsBody.className = 'network-manage__filter-section';
+    valsBody.className = 'network-manage__filter-section network-manage__filter-section--values';
     const search = document.createElement('input');
     search.type = 'search';
     search.className = 'network-crm__input network-manage__filter-search';
@@ -1437,8 +2506,16 @@ export function mountNetworkManageTable(root, opts) {
     const menuW = filterMenu.offsetWidth;
     let left = anchorRect.right - rootRect.left - menuW;
     left = Math.max(4, Math.min(left, rootRect.width - menuW - 4));
+    const top = Math.max(4, anchorRect.bottom - rootRect.top + 2);
     filterMenu.style.left = `${left}px`;
-    filterMenu.style.top = `${Math.max(4, anchorRect.bottom - rootRect.top + 2)}px`;
+    filterMenu.style.top = `${top}px`;
+    // Grow into leftover space under the header (down to the viewport / manage root).
+    const menuTop = rootRect.top + top;
+    const avail = Math.min(
+      window.innerHeight - menuTop - 8,
+      rootRect.bottom - menuTop - 4,
+    );
+    filterMenu.style.maxHeight = `${Math.max(220, avail)}px`;
   }
 
   /**
@@ -1488,18 +2565,39 @@ export function mountNetworkManageTable(root, opts) {
       ctxMenu.append(btn);
     }
 
+    item('Edit cell', () => {
+      queueMicrotask(() => startCellEdit(col.key, target.rowIdx));
+    }, { disabled: !canInlineEditColumn(col) || count !== 1 });
+
+    item('Open details', () => {
+      const c = contactAt(target.rowIdx);
+      if (c) opts.onSelectContact(c.id);
+    });
+
     item(`Copy${count > 1 ? ` (${count})` : ''}`, async () => {
       const lines = [];
       for (const i of selectedRows) {
         const c = contactAt(i);
         lines.push(c ? col.get(c) : '');
       }
+      const focusContact = contactAt(sel.focus);
+      const pasteValue = focusContact ? col.get(focusContact) : firstVal;
+      cellClipboard = { colKey: col.key, value: pasteValue, values: lines };
       try {
         await navigator.clipboard.writeText(lines.join('\n'));
         opts.showStatus(`Copied ${count} cell${count === 1 ? '' : 's'}`);
       } catch {
-        opts.showStatus('Clipboard unavailable', true);
+        opts.showStatus(`Copied ${count} cell${count === 1 ? '' : 's'} (internal)`);
       }
+    });
+
+    item('Paste', async () => {
+      await pasteIntoSelectedCells();
+    }, {
+      disabled:
+        !cellClipboard ||
+        cellClipboard.colKey !== col.key ||
+        !canEditColumn(col),
     });
 
     item('Fill…', () => {
@@ -1510,14 +2608,12 @@ export function mountNetworkManageTable(root, opts) {
     }, { disabled: !canFillColumn(col) });
 
     item('Clear', async () => {
-      if (!canFillColumn(col)) {
+      if (!canEditColumn(col)) {
         opts.showStatus('This column cannot be cleared', true);
         return;
       }
-      const ok = window.confirm(`Clear ${col.label} on ${count} cell${count === 1 ? '' : 's'}?`);
-      if (!ok) return;
       await writeValueToRowIndexes(col, '', selectedRows);
-    }, { disabled: !canFillColumn(col) });
+    }, { disabled: !canEditColumn(col) });
 
     item('Fill down', async () => {
       if (!canFillColumn(col) || count < 2) {
@@ -1556,10 +2652,6 @@ export function mountNetworkManageTable(root, opts) {
       render();
     });
 
-    item('Open details', () => {
-      if (first) opts.onSelectContact(first.id);
-    }, { disabled: !first });
-
     item('Sort A → Z', () => {
       sort = { key: col.key, dir: 'asc' };
       render();
@@ -1572,10 +2664,36 @@ export function mountNetworkManageTable(root, opts) {
     placeFloating(ctxMenu, clientX, clientY);
   }
 
+  /** Update row / select-all checkboxes from opts.getSelectedIds() without a full re-render. */
+  function syncSelectionUi() {
+    const selected = opts.getSelectedIds();
+    const contacts = viewRows;
+    for (const tr of table.querySelectorAll('.network-manage__row')) {
+      const id = tr.dataset.contactId;
+      const cb = /** @type {HTMLInputElement | null} */ (
+        tr.querySelector('input.network-crm__select')
+      );
+      if (id && cb) cb.checked = selected.has(id);
+    }
+    const selectAll = /** @type {HTMLInputElement | null} */ (
+      table.querySelector('thead .network-manage__th--check input[type="checkbox"]')
+    );
+    if (selectAll) {
+      selectAll.checked =
+        contacts.length > 0 && contacts.every((c) => selected.has(c.id));
+      selectAll.indeterminate =
+        contacts.some((c) => selected.has(c.id))
+        && !contacts.every((c) => selected.has(c.id));
+    }
+  }
+
   function render() {
+    rememberFilterSort();
     closeFilterMenu();
     closeContextMenu();
     closeFillEditor();
+    closeCellEditorFloat();
+    cellEdit = null;
     const contacts = buildViewRows();
     const selected = opts.getSelectedIds();
     const cols = visibleCols();
@@ -1616,7 +2734,7 @@ export function mountNetworkManageTable(root, opts) {
       if (selectAll.checked) contacts.forEach((c) => next.add(c.id));
       else contacts.forEach((c) => next.delete(c.id));
       opts.setSelectedIds(next);
-      render();
+      syncSelectionUi();
     });
     thCheck.append(selectAll);
     hr.append(thCheck);
@@ -1624,6 +2742,9 @@ export function mountNetworkManageTable(root, opts) {
     for (const col of cols) {
       const th = document.createElement('th');
       th.className = 'network-manage__th';
+      th.draggable = true;
+      th.dataset.colKey = col.key;
+      th.title = `Drag to reorder · ${col.label}`;
       if (filterIsActive(col.key) || sort?.key === col.key) {
         th.classList.add('network-manage__th--filtered');
       }
@@ -1638,11 +2759,13 @@ export function mountNetworkManageTable(root, opts) {
       const filterBtn = document.createElement('button');
       filterBtn.type = 'button';
       filterBtn.className = 'network-manage__filter-btn';
+      filterBtn.draggable = false;
       if (filterIsActive(col.key)) filterBtn.classList.add('network-manage__filter-btn--on');
       filterBtn.title = `Filter ${col.label}`;
       filterBtn.setAttribute('aria-label', `Filter ${col.label}`);
       filterBtn.innerHTML =
         '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M2 3h12l-4.5 5.2V13l-3 1.5V8.2L2 3z"/></svg>';
+      filterBtn.addEventListener('mousedown', (e) => e.stopPropagation());
       filterBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         if (!filterMenu.hidden && filterMenu.dataset.colKey === col.key) {
@@ -1653,6 +2776,57 @@ export function mountNetworkManageTable(root, opts) {
       });
       head.append(label, filterBtn);
       th.append(head);
+
+      th.addEventListener('dragstart', (e) => {
+        if (e.target instanceof HTMLElement && e.target.closest('.network-manage__filter-btn')) {
+          e.preventDefault();
+          return;
+        }
+        colDragKey = col.key;
+        th.classList.add('network-manage__th--dragging');
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', col.key);
+        }
+        closeFilterMenu();
+        closeContextMenu();
+        closeFillEditor();
+      });
+      th.addEventListener('dragend', () => {
+        colDragKey = null;
+        clearColumnDropIndicators();
+      });
+      th.addEventListener('dragover', (e) => {
+        if (!colDragKey && !e.dataTransfer?.types.includes('text/plain')) return;
+        if (colDragKey === col.key) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        const rect = th.getBoundingClientRect();
+        const after = e.clientX > rect.left + rect.width / 2;
+        for (const el of table.querySelectorAll(
+          '.network-manage__th--drop-before, .network-manage__th--drop-after',
+        )) {
+          if (el !== th) {
+            el.classList.remove('network-manage__th--drop-before', 'network-manage__th--drop-after');
+          }
+        }
+        th.classList.toggle('network-manage__th--drop-before', !after);
+        th.classList.toggle('network-manage__th--drop-after', after);
+      });
+      th.addEventListener('dragleave', (e) => {
+        if (e.relatedTarget instanceof Node && th.contains(e.relatedTarget)) return;
+        th.classList.remove('network-manage__th--drop-before', 'network-manage__th--drop-after');
+      });
+      th.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const fromKey = (e.dataTransfer?.getData('text/plain') || colDragKey || '').trim();
+        const rect = th.getBoundingClientRect();
+        const after = e.clientX > rect.left + rect.width / 2;
+        colDragKey = null;
+        clearColumnDropIndicators();
+        reorderVisibleColumn(fromKey, col.key, after);
+      });
+
       hr.append(th);
     }
     thead.append(hr);
@@ -1664,7 +2838,12 @@ export function mountNetworkManageTable(root, opts) {
       const td = document.createElement('td');
       td.colSpan = cols.length + 1;
       td.className = 'muted network-manage__empty';
-      td.textContent = anyFilterOrSort() ? 'No people match these filters' : 'No people match';
+      const loading = typeof opts.isLoading === 'function' && opts.isLoading();
+      td.textContent = loading
+        ? 'Loading…'
+        : anyFilterOrSort()
+          ? 'No people match these filters'
+          : 'No people match';
       tr.append(td);
       tbody.append(tr);
     } else {
@@ -1673,27 +2852,6 @@ export function mountNetworkManageTable(root, opts) {
         tr.className = 'network-manage__row';
         tr.dataset.contactId = c.id;
         tr.dataset.rowIdx = String(rowIdx);
-        tr.title = 'Double-click a fillable cell to bulk-fill · double-click Name for details · right-click for actions';
-        tr.addEventListener('dblclick', (e) => {
-          if (
-            e.target instanceof HTMLElement &&
-            e.target.closest(
-              'input, .network-manage__fill-handle, .network-manage__filter-btn, .network-manage__fill-editor',
-            )
-          ) {
-            return;
-          }
-          const cell = e.target instanceof HTMLElement ? e.target.closest('.network-manage__cell') : null;
-          if (cell instanceof HTMLElement) {
-            const colKey = cell.dataset.colKey;
-            const col = colKey ? colByKey(colKey) : null;
-            if (canFillColumn(col)) {
-              // Handled on the cell itself.
-              return;
-            }
-          }
-          opts.onSelectContact(c.id);
-        });
 
         const tdCheck = document.createElement('td');
         tdCheck.className = 'network-manage__td network-manage__td--check';
@@ -1707,7 +2865,7 @@ export function mountNetworkManageTable(root, opts) {
           if (cb.checked) next.add(c.id);
           else next.delete(c.id);
           opts.setSelectedIds(next);
-          render();
+          syncSelectionUi();
         });
         tdCheck.append(cb);
         tr.append(tdCheck);
@@ -1718,6 +2876,7 @@ export function mountNetworkManageTable(root, opts) {
           td.dataset.colKey = col.key;
           td.dataset.rowIdx = String(rowIdx);
           const val = col.get(c);
+          const editable = canInlineEditColumn(col);
           if (col.key === 'displayName') {
             const name = document.createElement('span');
             name.className = 'network-manage__name';
@@ -1729,19 +2888,25 @@ export function mountNetworkManageTable(root, opts) {
           }
 
           const canFill = canFillColumn(col);
+          if (editable) {
+            td.classList.add('network-manage__cell--editable');
+          }
           if (canFill) {
             td.classList.add('network-manage__cell--fillable');
             td.title = val
-              ? `${val}\nDouble-click to fill selection`
-              : 'Double-click to fill selection';
+              ? `${val}\nDouble-click to edit · drag corner to fill`
+              : 'Double-click to edit · drag corner to fill';
             const handle = document.createElement('span');
             handle.className = 'network-manage__fill-handle';
-            handle.title = `Drag to copy ${col.label} onto rows below`;
-            handle.setAttribute('aria-label', `Fill ${col.label} down`);
+            handle.title = isAppendableColumn(col)
+              ? `Drag to copy ${col.label} onto rows above or below (overwrite or append)`
+              : `Drag to copy ${col.label} onto rows above or below`;
+            handle.setAttribute('aria-label', `Fill ${col.label} onto other rows`);
             handle.addEventListener('mousedown', (e) => {
               if (e.button !== 0) return;
               e.preventDefault();
               e.stopPropagation();
+              if (cellEdit) void commitCellEdit();
               selectDrag = null;
               fillDrag = {
                 colKey: col.key,
@@ -1752,11 +2917,50 @@ export function mountNetworkManageTable(root, opts) {
               td.classList.add('network-manage__cell--fill');
             });
             td.append(handle);
+          } else if (opensDetailsOnActivate(col)) {
+            td.title = val
+              ? `${val}\nDouble-click to open details`
+              : 'Double-click to open details';
+          } else if (editable) {
+            td.title = val
+              ? `${val}\nDouble-click to edit · right-click for details`
+              : 'Double-click to edit · right-click for details';
+          } else {
+            td.title = val
+              ? `${val}\nRight-click → Open details`
+              : 'Right-click → Open details';
           }
+
+          td.addEventListener('dblclick', (e) => {
+            if (
+              e.target instanceof HTMLElement &&
+              e.target.closest(
+                'input, textarea, select, .network-manage__cell-multi, .network-manage__fill-handle, .network-manage__filter-btn, .network-manage__fill-editor',
+              )
+            ) {
+              return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            if (opensDetailsOnActivate(col) || !editable) {
+              opts.onSelectContact(c.id);
+            } else {
+              startCellEdit(col.key, rowIdx);
+            }
+          });
 
           td.addEventListener('mousedown', (e) => {
             if (e.button !== 0) return;
-            if (e.target instanceof HTMLElement && e.target.closest('.network-manage__fill-handle, input')) {
+            if (e.target instanceof HTMLElement && e.target.closest('.network-manage__fill-handle, input, textarea, select, .network-manage__cell-multi')) {
+              return;
+            }
+            if (cellEdit) {
+              const same = cellEdit.colKey === col.key && cellEdit.rowIdx === rowIdx;
+              if (same) return;
+              e.preventDefault();
+              void commitCellEdit().then(() => {
+                selectSingleCell(col.key, rowIdx);
+              });
               return;
             }
             e.preventDefault();
@@ -1777,8 +2981,8 @@ export function mountNetworkManageTable(root, opts) {
               return;
             }
 
-            // Keep a multi-cell selection when clicking inside it so double-click
-            // can open the fill editor without collapsing the range.
+            // Keep a multi-cell selection when clicking inside it so right-click
+            // Fill… can target the range without collapsing it.
             if (isCellSelected(col.key, rowIdx) && (selectionInfo()?.count || 0) > 1) {
               selectDrag = null;
               // Move focus to the clicked cell within the selection.
@@ -1794,16 +2998,7 @@ export function mountNetworkManageTable(root, opts) {
           td.addEventListener('mouseenter', () => {
             if (fillDrag && fillDrag.colKey === col.key) {
               fillDrag.endRow = rowIdx;
-              const lo = Math.min(fillDrag.startRow, fillDrag.endRow);
-              const hi = Math.max(fillDrag.startRow, fillDrag.endRow);
-              table.querySelectorAll('.network-manage__cell').forEach((el) => {
-                const r = Number(el.dataset.rowIdx);
-                const k = el.dataset.colKey;
-                el.classList.toggle(
-                  'network-manage__cell--fill',
-                  k === fillDrag.colKey && r >= lo && r <= hi,
-                );
-              });
+              paintFillRange(fillDrag.colKey, fillDrag.startRow, fillDrag.endRow);
               return;
             }
             if (selectDrag && selectDrag.colKey === col.key) {
@@ -1813,16 +3008,14 @@ export function mountNetworkManageTable(root, opts) {
 
           td.addEventListener('contextmenu', (e) => {
             e.preventDefault();
+            if (cellEdit) {
+              void commitCellEdit().then(() => {
+                openContextMenu(e.clientX, e.clientY, { colKey: col.key, rowIdx });
+              });
+              return;
+            }
             openContextMenu(e.clientX, e.clientY, { colKey: col.key, rowIdx });
           });
-
-          if (canFill) {
-            td.addEventListener('dblclick', (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              openFillEditor(e.clientX, e.clientY, { colKey: col.key, rowIdx });
-            });
-          }
 
           tr.append(td);
         }
@@ -1831,16 +3024,33 @@ export function mountNetworkManageTable(root, opts) {
     }
     table.append(tbody);
     paintSelection();
+    syncScrollerToViewport();
   }
 
-  window.addEventListener('mouseup', () => {
-    if (fillDrag) void applyFill();
+  window.addEventListener('mousemove', (e) => {
+    if (!fillDrag) return;
+    syncFillEndFromPointer(e.clientX, e.clientY);
+  });
+
+  window.addEventListener('mouseup', (e) => {
+    if (fillDrag) void applyFill(e.clientX, e.clientY);
     selectDrag = null;
   });
+
+  scroller.addEventListener(
+    'scroll',
+    () => {
+      if (cellEdit?.floating) void commitCellEdit();
+    },
+    { passive: true },
+  );
 
   document.addEventListener('click', (e) => {
     const t = e.target;
     if (!(t instanceof Node)) return;
+    if (cellEdit && !cellEdit.el.contains(t) && !cellEditorFloat.contains(t)) {
+      void commitCellEdit();
+    }
     if (!colsPanel.hidden && !colsPanel.contains(t) && !colsBtn.contains(t)) {
       setColsPanelOpen(false);
     }
@@ -1849,11 +3059,18 @@ export function mountNetworkManageTable(root, opts) {
       if (!filterBtn) closeFilterMenu();
     }
     if (!ctxMenu.hidden && !ctxMenu.contains(t)) closeContextMenu();
-    if (!fillEditor.hidden && !fillEditor.contains(t)) closeFillEditor();
+    if (!fillEditor.hidden && !fillEditor.contains(t)) {
+      if (ignoreFillEditorOutsideClick) return;
+      closeFillEditor();
+    }
   });
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (cellEdit) {
+        cancelCellEdit();
+        return;
+      }
       if (!fillEditor.hidden) {
         closeFillEditor();
         return;
@@ -1876,6 +3093,40 @@ export function mountNetworkManageTable(root, opts) {
     if (!root.isConnected) return;
     if (!cellSel && !(e.target instanceof Node && root.contains(e.target))) return;
 
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.altKey && cellSel) {
+      const key = e.key.toLowerCase();
+      if (key === 'c') {
+        e.preventDefault();
+        void copySelectedCells();
+        return;
+      }
+      if (key === 'v') {
+        e.preventDefault();
+        void pasteIntoSelectedCells();
+        return;
+      }
+    }
+
+    if ((e.key === 'Enter' || e.key === 'F2') && cellSel) {
+      e.preventDefault();
+      const col = colByKey(cellSel.colKey);
+      const focusRow = cellSel.focus;
+      if (opensDetailsOnActivate(col) || !canInlineEditColumn(col)) {
+        const c = contactAt(focusRow);
+        if (c) opts.onSelectContact(c.id);
+      } else {
+        startCellEdit(cellSel.colKey, focusRow);
+      }
+      return;
+    }
+
+    if ((e.key === 'Delete' || e.key === 'Backspace') && cellSel && !mod) {
+      e.preventDefault();
+      void clearSelectedCells();
+      return;
+    }
+
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault();
       const delta = e.key === 'ArrowUp' ? -1 : 1;
@@ -1894,9 +3145,17 @@ export function mountNetworkManageTable(root, opts) {
 
   syncUndoBtn();
 
+  syncScrollerToViewport();
+
   return {
     render,
+    syncSelectionUi,
     destroy() {
+      window.removeEventListener('resize', onViewportChange);
+      window.visualViewport?.removeEventListener('resize', onViewportChange);
+      scrollFitObs.disconnect();
+      closeCellEditorFloat();
+      cellEditorFloat.remove();
       root.replaceChildren();
       root.classList.remove('network-manage');
     },

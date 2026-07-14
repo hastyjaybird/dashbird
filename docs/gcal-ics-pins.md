@@ -17,11 +17,18 @@ webcal://calendars.partiful.com/getCalendar?id=…
 
 1. Open [Google Calendar](https://calendar.google.com) as the account that syncs invites.
 2. Calendar ⋮ → **Settings and sharing** → **Integrate calendar**.
-3. Copy **Secret address in iCal format**.
+3. Copy **Secret address in iCal format** (for the Pins list below) and/or **Calendar ID**
+   (for the Dashboard Calendar panel embed).
 
 ```
 https://calendar.google.com/calendar/ical/.../private-.../basic.ics | Random Events
 ```
+
+Pinned ICS feeds (Partiful, Random Events, …) merge into **Next on calendar**.
+To also show them in the week **Calendar** iframe, set Calendar IDs in `.env`:
+
+- `EVENTS_FINDER_GOOGLE_CALENDAR_SRC` = Random Events Calendar ID  
+- `CALENDAR_EMBED_EXTRA_SRCS` = Partiful’s Google Calendar ID (and any others)
 
 On **Skip** in the Events bar, Dashbird keeps the event out of the feed.
 Deleting the matching Google Calendar row still needs Calendar edit access

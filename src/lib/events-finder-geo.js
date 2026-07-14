@@ -60,9 +60,6 @@ export const BAY_AREA_CITY_COORDS = Object.freeze([
   { name: 'Napa', lat: 38.2975, lon: -122.2869 },
 ]);
 
-/** Extra place names that still count as “in the Bay” for activating the metro set. */
-const BAY_AREA_TRIGGER_CITIES = BAY_AREA_CITY_COORDS.map((c) => c.name);
-
 /**
  * Normalize a city/place string for comparison.
  * @param {string | null | undefined} s
@@ -86,8 +83,8 @@ export function normalizeCityName(s) {
 export function isBayAreaCity(city) {
   const n = normalizeCityName(city);
   if (!n) return false;
-  return BAY_AREA_TRIGGER_CITIES.some((c) => {
-    const h = normalizeCityName(c);
+  return BAY_AREA_CITY_COORDS.some((c) => {
+    const h = normalizeCityName(c.name);
     return n === h || n.includes(h) || h.includes(n);
   });
 }
@@ -350,11 +347,40 @@ export function bayAreaCityCoords(cityName) {
  * @returns {number | null}
  */
 export function eventDistanceMilesWithCityFallback(event, home) {
-  const direct = eventDistanceMiles(event, home);
-  if (direct != null) return direct;
   const label = eventCityLabel(event);
-  if (!label || label === 'Unknown') return null;
-  const centroid = bayAreaCityCoords(label);
+  const centroid =
+    label && label !== 'Unknown' ? bayAreaCityCoords(label) : null;
+  const elat = coordOrNull(event?.lat);
+  const elon = coordOrNull(event?.lon);
+  const direct = eventDistanceMiles(event, home);
+
+  // Prefer city centroid when stored lat/lon clearly disagree with the city label
+  // (common bad geocodes: Petaluma/Sacramento events pinned to Oakland/SF).
+  if (direct != null && centroid && elat != null && elon != null) {
+    const coordToCity = haversineMiles(elat, elon, centroid.lat, centroid.lon);
+    if (Number.isFinite(coordToCity) && coordToCity > 12) {
+      return eventDistanceMiles({ lat: centroid.lat, lon: centroid.lon }, home);
+    }
+  }
+
+  // No catalog centroid for this label — still reject coords that sit inside the
+  // Bay catalog next to a *different* city than the event claims.
+  if (direct != null && label && label !== 'Unknown' && !centroid && elat != null && elon != null) {
+    const near = citiesWithinRadius(elat, elon, 15);
+    if (near.length) {
+      const labelNorm = normalizeCityName(label);
+      const matchesNear = near.some((c) => {
+        const n = normalizeCityName(c.name);
+        return n === labelNorm || n.includes(labelNorm) || labelNorm.includes(n);
+      });
+      if (!matchesNear) {
+        // Coords are for somewhere else; don't let them pass the radius gate.
+        return null;
+      }
+    }
+  }
+
+  if (direct != null) return direct;
   if (!centroid) return null;
   return eventDistanceMiles({ lat: centroid.lat, lon: centroid.lon }, home);
 }

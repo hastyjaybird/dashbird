@@ -1,0 +1,61 @@
+{
+  "currency": "USD",
+  "items": [
+    {
+      "id": "apify",
+      "label": "Apify (Facebook Events)",
+      "category": "Events",
+      "cadence": "usage",
+      "weeklyUsd": 1.25,
+      "monthlyBudgetUsd": 5,
+      "notes": "Free plan $5/mo credits \u00b7 daily 4am scrape \u00b7 measured from billing log",
+      "measuredSource": "facebook-billing",
+      "active": true
+    },
+    {
+      "id": "openrouter",
+      "label": "OpenRouter (AI)",
+      "category": "AI",
+      "cadence": "usage",
+      "weeklyUsd": 0,
+      "notes": "Telegram classify/vision/Whisper, Network enrich, Tool Library \u00b7 free models when credits empty",
+      "active": true
+    },
+    {
+      "id": "cursor",
+      "label": "Cursor (IDE)",
+      "category": "Dev tools",
+      "cadence": "fixed_monthly",
+      "weeklyUsd": 4.62,
+      "notes": "Pro ~$20/mo \u00f7 4.33 \u00b7 edit to match your plan share for Dashbird",
+      "active": true
+    },
+    {
+      "id": "google-oauth",
+      "label": "Google Cloud (Gmail API)",
+      "category": "Events",
+      "cadence": "free_tier",
+      "weeklyUsd": 0,
+      "notes": "Intake Gmail OAuth \u00b7 personal free quota",
+      "active": true
+    },
+    {
+      "id": "falling-fruit",
+      "label": "Falling Fruit API",
+      "category": "Earth",
+      "cadence": "optional",
+      "weeklyUsd": 0,
+      "notes": "Optional wild-foraging key \u00b7 usually free",
+      "active": false
+    },
+    {
+      "id": "supabase",
+      "label": "Supabase (Web Catalog)",
+      "category": "Infra",
+      "cadence": "optional",
+      "weeklyUsd": 0,
+      "notes": "Optional cloud catalog \u00b7 local JSON is default",
+      "active": false
+    }
+  ]
+}

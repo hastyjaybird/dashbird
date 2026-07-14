@@ -7,7 +7,8 @@ const router = Router();
 /**
  * GET /api/events-finder-status
  *   ?manifest=1  — source list + strategies only (no outbound probes)
- *   (default)    — live reachability + status/output/ingestion test per Events bookmark
+ *   ?fresh=1     — bypass short TTL cache and re-probe now
+ *   (default)    — live reachability + status/output/ingestion test (cached ~90s)
  */
 router.get('/', async (req, res) => {
   try {
@@ -28,7 +29,12 @@ router.get('/', async (req, res) => {
       return;
     }
 
-    const payload = await buildEventsFinderStatus();
+    const fresh =
+      req.query.fresh === '1' ||
+      req.query.fresh === 'true' ||
+      String(req.query.fresh || '').toLowerCase() === 'yes';
+
+    const payload = await buildEventsFinderStatus({ fresh });
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({
       ...payload,

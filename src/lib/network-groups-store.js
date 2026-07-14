@@ -1,5 +1,9 @@
 /**
  * Network groups — SQLite (data/network.db).
+ *
+ * Two kinds:
+ * - community — membership syncs Scene (`networkCircles`) on contacts
+ * - event — friends-only grouping; optional `eventType` stays on the group only
  */
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -14,8 +18,20 @@ import {
   rowToGroup,
   upsertGroupRow,
 } from './network-db.js';
-import { addContact, findContactByNameOrAlias, updateContact } from './network-contacts-store.js';
-import { normalizeSceneGroupName } from './network-scene-normalize.js';
+import {
+  addContact,
+  findContactByNameOrAlias,
+  getContactById,
+  updateContact,
+} from './network-contacts-store.js';
+import {
+  addSceneToken,
+  isOutOfTownToken,
+  isPolidayToken,
+  normalizeSceneGroupName,
+  removeSceneToken,
+  replaceSceneToken,
+} from './network-scene-normalize.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
@@ -59,6 +75,17 @@ function cleanIdList(v) {
 
 /**
  * @param {unknown} raw
+ * @returns {'community' | 'event'}
+ */
+export function normalizeGroupKind(raw) {
+  const k = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  return k === 'event' ? 'event' : 'community';
+}
+
+/**
+ * @param {unknown} raw
  */
 export function normalizeGroup(raw) {
   if (!raw || typeof raw !== 'object') return null;
@@ -66,9 +93,19 @@ export function normalizeGroup(raw) {
   const now = new Date().toISOString();
   let source = cleanStr(raw.source, 40) || 'manual';
   if (source === 'seed') source = 'manual';
+  let kind = normalizeGroupKind(raw.kind);
+  let name =
+    kind === 'event' ? cleanStr(raw.name, 300) : normalizeSceneGroupName(raw.name, 300);
+  // Poliday is event-only — never a community Scene circle.
+  if (isPolidayToken(raw.name) || isPolidayToken(name)) {
+    kind = 'event';
+    name = 'Poliday';
+  }
   return {
     id,
-    name: normalizeSceneGroupName(raw.name, 300),
+    kind,
+    name,
+    eventType: kind === 'event' ? cleanStr(raw.eventType, 200) : '',
     description: cleanStr(raw.description, 4000),
     memberIds: cleanIdList(raw.memberIds),
     commonalities: Array.isArray(raw.commonalities) ? raw.commonalities.slice(0, 40) : [],
@@ -82,6 +119,99 @@ export function normalizeGroup(raw) {
 
 export function newGroupId() {
   return randomUUID();
+}
+
+/**
+ * Sync Scene / Out-of-town location for community group membership.
+ * Event groups never touch contact attributes.
+ * @param {object} group
+ * @param {string[]} contactIds
+ * @param {'add' | 'remove'} mode
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function syncCommunityMembership(group, contactIds, mode, env = process.env) {
+  if (!group || group.kind !== 'community') return;
+  const ids = cleanIdList(contactIds);
+  if (!ids.length) return;
+
+  const groupIsOutOfTown = isOutOfTownToken(group.name);
+  for (const id of ids) {
+    const contact = await getContactById(id, env);
+    if (!contact) continue;
+
+    if (groupIsOutOfTown) {
+      if (mode === 'add' && !String(contact.location || '').trim()) {
+        await updateContact(contact.id, { location: 'Out of town' }, env);
+      }
+      // Do not clear location on remove — it may be set for other reasons.
+      continue;
+    }
+
+    if (!group.name) continue;
+    const next =
+      mode === 'add'
+        ? addSceneToken(contact.networkCircles, group.name)
+        : removeSceneToken(contact.networkCircles, group.name);
+    if (next === String(contact.networkCircles || '')) continue;
+    await updateContact(contact.id, { networkCircles: next }, env);
+  }
+}
+
+/**
+ * After a community rename or kind flip, rewrite Scene tags on members.
+ * @param {object} prev
+ * @param {object} next
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function syncCommunityMetaChange(prev, next, env = process.env) {
+  const memberIds = cleanIdList(next?.memberIds || prev?.memberIds);
+  if (!memberIds.length) return;
+
+  const wasCommunity = prev?.kind === 'community';
+  const isCommunity = next?.kind === 'community';
+
+  if (wasCommunity && !isCommunity) {
+    // Demoted to event — strip the old community Scene token.
+    await syncCommunityMembership({ ...prev, kind: 'community' }, memberIds, 'remove', env);
+    return;
+  }
+
+  if (!wasCommunity && isCommunity) {
+    await syncCommunityMembership(next, memberIds, 'add', env);
+    return;
+  }
+
+  if (!isCommunity) return;
+
+  const oldName = String(prev?.name || '');
+  const newName = String(next?.name || '');
+  if (oldName.toLowerCase() === newName.toLowerCase()) return;
+
+  const oldOut = isOutOfTownToken(oldName);
+  const newOut = isOutOfTownToken(newName);
+
+  for (const id of memberIds) {
+    const contact = await getContactById(id, env);
+    if (!contact) continue;
+
+    if (oldOut || newOut) {
+      // Out-of-town is location, not Scene — only set location when becoming Out of town.
+      if (newOut && !String(contact.location || '').trim()) {
+        await updateContact(contact.id, { location: 'Out of town' }, env);
+      }
+      if (oldOut && !newOut && newName) {
+        const nextCircles = addSceneToken(contact.networkCircles, newName);
+        if (nextCircles !== String(contact.networkCircles || '')) {
+          await updateContact(contact.id, { networkCircles: nextCircles }, env);
+        }
+      }
+      continue;
+    }
+
+    const nextCircles = replaceSceneToken(contact.networkCircles, oldName, newName);
+    if (nextCircles === String(contact.networkCircles || '')) continue;
+    await updateContact(contact.id, { networkCircles: nextCircles }, env);
+  }
 }
 
 /**
@@ -135,6 +265,9 @@ export async function addGroup(group, env = process.env) {
     throw err;
   }
   upsertGroupRow(openNetworkDb(env), normalized);
+  if (normalized.kind === 'community' && (normalized.memberIds || []).length) {
+    await syncCommunityMembership(normalized, normalized.memberIds, 'add', env);
+  }
   return normalized;
 }
 
@@ -161,6 +294,12 @@ export async function updateGroup(id, patch, env = process.env) {
   if (patch && Object.prototype.hasOwnProperty.call(patch, 'suggestions')) {
     merged.suggestions = patch.suggestions;
   }
+  if (patch && Object.prototype.hasOwnProperty.call(patch, 'kind')) {
+    merged.kind = patch.kind;
+  }
+  if (patch && Object.prototype.hasOwnProperty.call(patch, 'eventType')) {
+    merged.eventType = patch.eventType;
+  }
   const normalized = normalizeGroup(merged);
   if (!normalized) {
     const err = new Error('invalid_group');
@@ -168,6 +307,13 @@ export async function updateGroup(id, patch, env = process.env) {
     throw err;
   }
   upsertGroupRow(openNetworkDb(env), normalized);
+
+  const kindChanged = prev.kind !== normalized.kind;
+  const nameChanged = String(prev.name || '').toLowerCase() !== String(normalized.name || '').toLowerCase();
+  if (kindChanged || nameChanged) {
+    await syncCommunityMetaChange(prev, normalized, env);
+  }
+
   return normalized;
 }
 
@@ -180,6 +326,14 @@ export async function deleteGroups(ids, env = process.env) {
     Boolean,
   );
   if (!want.length) return { deleted: 0 };
+
+  for (const id of want) {
+    const group = await getGroupById(id, env);
+    if (group?.kind === 'community' && (group.memberIds || []).length) {
+      await syncCommunityMembership(group, group.memberIds, 'remove', env);
+    }
+  }
+
   const db = openNetworkDb(env);
   const stmt = db.prepare('DELETE FROM groups WHERE id = ?');
   let deleted = 0;
@@ -208,12 +362,21 @@ export async function deleteGroups(ids, env = process.env) {
 export async function addMembersToGroup(groupId, contactIds, env = process.env) {
   const group = await getGroupById(groupId, env);
   if (!group) return null;
-  const set = new Set(group.memberIds || []);
+  const before = new Set(group.memberIds || []);
+  const set = new Set(before);
+  /** @type {string[]} */
+  const added = [];
   for (const id of contactIds || []) {
     const s = remapLegacyNetworkId(cleanStr(id, 80));
-    if (s) set.add(s);
+    if (!s || set.has(s)) continue;
+    set.add(s);
+    added.push(s);
   }
-  return updateGroup(groupId, { memberIds: [...set] }, env);
+  const updated = await updateGroup(groupId, { memberIds: [...set] }, env);
+  if (updated && added.length) {
+    await syncCommunityMembership(updated, added, 'add', env);
+  }
+  return updated;
 }
 
 /**
@@ -224,10 +387,15 @@ export async function addMembersToGroup(groupId, contactIds, env = process.env) 
 export async function removeMembersFromGroup(groupId, contactIds, env = process.env) {
   const group = await getGroupById(groupId, env);
   if (!group) return null;
-  const drop = new Set((contactIds || []).map((id) => remapLegacyNetworkId(String(id))));
+  const drop = cleanIdList(contactIds);
+  const dropSet = new Set(drop);
+  const removed = (group.memberIds || []).filter((id) => dropSet.has(id));
+  if (removed.length) {
+    await syncCommunityMembership(group, removed, 'remove', env);
+  }
   return updateGroup(
     groupId,
-    { memberIds: (group.memberIds || []).filter((id) => !drop.has(id)) },
+    { memberIds: (group.memberIds || []).filter((id) => !dropSet.has(id)) },
     env,
   );
 }
@@ -258,27 +426,36 @@ export async function ingestPeopleIntoGroup(groupId, names, env = process.env) {
 
   const created = [];
   const linked = [];
+  const isCommunity = group.kind === 'community';
+  const groupIsOutOfTown = isCommunity && isOutOfTownToken(group.name);
+
   for (const displayName of list) {
     let contact = await findContactByNameOrAlias(displayName, env);
     if (!contact) {
-      contact = await addContact(
-        {
-          displayName,
-          kinds: ['friend'],
-          networkCircles: group.name || '',
-          source: 'manual',
-        },
-        env,
-      );
+      /** @type {Record<string, unknown>} */
+      const seed = {
+        displayName,
+        kinds: ['friend'],
+        source: 'manual',
+      };
+      if (isCommunity) {
+        if (groupIsOutOfTown) seed.location = 'Out of town';
+        else if (group.name) seed.networkCircles = group.name;
+      }
+      contact = await addContact(seed, env);
       created.push(contact);
     } else {
-      const circles = String(contact.networkCircles || '');
-      if (group.name && !circles.toLowerCase().includes(String(group.name).toLowerCase())) {
-        await updateContact(
-          contact.id,
-          { networkCircles: [circles, group.name].filter(Boolean).join(', ') },
-          env,
-        );
+      if (isCommunity) {
+        if (groupIsOutOfTown) {
+          if (!String(contact.location || '').trim()) {
+            await updateContact(contact.id, { location: 'Out of town' }, env);
+          }
+        } else if (group.name) {
+          const next = addSceneToken(contact.networkCircles, group.name);
+          if (next !== String(contact.networkCircles || '')) {
+            await updateContact(contact.id, { networkCircles: next }, env);
+          }
+        }
       }
       linked.push(contact);
     }
@@ -287,6 +464,7 @@ export async function ingestPeopleIntoGroup(groupId, names, env = process.env) {
   const memberIds = [
     ...new Set([...(group.memberIds || []), ...created.map((c) => c.id), ...linked.map((c) => c.id)]),
   ];
+  // Members already got Scene via ingest above; updateGroup only stores memberIds.
   const updated = await updateGroup(groupId, { memberIds }, env);
   return { group: updated, created, linked };
 }

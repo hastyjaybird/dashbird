@@ -26,6 +26,12 @@ export const DASHBOARD_SETTING_VARIABLES = [
   { key: 'GOOGLE_CALENDAR_ICAL_URL', group: 'Calendar', label: 'Google Calendar iCal feed', source: '.env → /api/calendar/upcoming' },
   { key: 'CALENDAR_EMBED_URL', group: 'Calendar', label: 'Calendar iframe embed URL', source: '.env (optional override)' },
   {
+    key: 'CALENDAR_EMBED_EXTRA_SRCS',
+    group: 'Calendar',
+    label: 'Extra Calendar panel calendar IDs (Partiful, …)',
+    source: '.env → layered onto embed src=',
+  },
+  {
     key: 'EVENTS_FINDER_GOOGLE_CALENDAR_NAME',
     group: 'Calendar',
     label: 'Events finder add-to-calendar label',
@@ -40,8 +46,8 @@ export const DASHBOARD_SETTING_VARIABLES = [
   {
     key: 'EVENTS_FINDER_GOOGLE_CALENDAR_SRC',
     group: 'Calendar',
-    label: 'Events finder Google Calendar ID (src)',
-    source: '.env → Calendar Settings → Integrate calendar → Calendar ID',
+    label: 'Random Events Google Calendar ID (src)',
+    source: '.env → Add-to-calendar + Calendar panel embed',
   },
   { key: 'GOOGLE_OAUTH_CLIENT_ID', group: 'Events (Gmail intake)', label: 'Google OAuth client ID', source: '.env → Gmail Events OAuth' },
   { key: 'GOOGLE_OAUTH_CLIENT_SECRET', group: 'Events (Gmail intake)', label: 'Google OAuth client secret', source: '.env → Gmail Events OAuth', secret: true },
@@ -62,7 +68,8 @@ export const DASHBOARD_SETTING_VARIABLES = [
   { key: 'TELEGRAM_BOT_TOKEN', group: 'Telegram intake', label: 'Telegram bot token (BotFather)', source: '.env → events-finder-telegram', secret: true },
   { key: 'TELEGRAM_EVENTS_ENABLED', group: 'Telegram intake', label: 'Enable Telegram poller', source: '.env (1=on; auto-on when token set)' },
   { key: 'TELEGRAM_ALLOWED_CHAT_IDS', group: 'Telegram intake', label: 'Allowed Telegram chat ids', source: '.env (comma-separated; /start prints yours)' },
-  { key: 'TELEGRAM_CLASSIFIER_MODEL', group: 'Telegram intake', label: 'Classifier model (event/todo/note/contact)', source: '.env (default OPENROUTER_MODEL)' },
+  { key: 'TELEGRAM_CLASSIFIER_MODEL', group: 'Telegram intake', label: 'Text classifier model (event/todo/note/contact/company)', source: '.env (default OPENROUTER_MODEL)' },
+  { key: 'TELEGRAM_CLASSIFIER_VISION_MODEL', group: 'Telegram intake', label: 'Image classifier model (card/LinkedIn/logo/flyer)', source: '.env (default TELEGRAM_EVENTS_VISION_MODEL)' },
   { key: 'WEATHER_ZIP', group: 'Location & weather', label: 'Primary ZIP (overrides lat/lon)', source: '.env → Zippopotam geocode' },
   { key: 'WEATHER_LAT', group: 'Location & weather', label: 'Primary latitude', source: '.env (default Oakland 94608)' },
   { key: 'WEATHER_LON', group: 'Location & weather', label: 'Primary longitude', source: '.env' },
@@ -106,6 +113,24 @@ export const DASHBOARD_SETTING_VARIABLES = [
     source: '.env → completed todos move here',
   },
   { key: 'HASS_BASE_URL', group: 'v2 (unused)', label: 'Home Assistant URL', source: '.env (v2 stub)' },
+  {
+    key: 'DASHBOARD_COSTS_PATH',
+    group: 'Costs',
+    label: 'Costs ledger JSON path',
+    source: '.env (default data/dashboard-costs.json)',
+  },
+  {
+    key: 'FACEBOOK_EVENTS_MONTHLY_CREDITS_USD',
+    group: 'Costs',
+    label: 'Apify monthly credit budget (USD)',
+    source: '.env (default 5)',
+  },
+  {
+    key: 'FACEBOOK_EVENTS_BILLING_PATH',
+    group: 'Costs',
+    label: 'Apify Facebook billing log path',
+    source: '.env (default data/facebook-billing-log.json)',
+  },
 ];
 
 const SECRET_KEY_RE = /(API_KEY|TOKEN|SECRET|PASSWORD)/i;
