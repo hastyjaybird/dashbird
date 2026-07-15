@@ -1,6 +1,10 @@
 # TLS + reverse proxy for dashbird on Hetzner.
 # Env vars are injected by docker-compose.hetzner.yml (Caddy {$VAR} syntax).
 
+www.{$DASHBOARD_DOMAIN} {
+	redir https://{$DASHBOARD_DOMAIN}{uri} permanent
+}
+
 {$DASHBOARD_DOMAIN} {
 	encode zstd gzip
 	reverse_proxy dashboard:3000
