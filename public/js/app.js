@@ -4,7 +4,6 @@ import { mountCalendarUpcoming } from './panels/calendar-upcoming.js';
 import { mountPageTabs } from './panels/page-tabs.js';
 import { mountSettingsPage } from './panels/settings-page.js';
 import { mountSkySidebarToggle } from './panels/sky-sidebar-toggle.js';
-import { debugLog } from './lib/debugLog.js';
 import { readPanelCache, writePanelCache } from './lib/panel-cache.js';
 
 const CONFIG_CACHE_KEY = 'config';
@@ -207,13 +206,6 @@ async function mountDeferredPanels(config) {
   await Promise.allSettled(jobs);
 
   markDeferredReady();
-
-  debugLog({
-    location: 'app.js:mountDeferredPanels',
-    message: 'dashbird deferred panels mounted',
-    hypothesisId: 'H2',
-    data: { panels: 'deferred-complete' },
-  });
 }
 
 async function main() {
