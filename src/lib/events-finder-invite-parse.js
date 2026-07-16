@@ -44,15 +44,12 @@ Rules:
 
 /** Free-tier-safe defaults (paid gpt-4o-mini 402s when OpenRouter credits are empty). */
 const DEFAULT_VISION_MODEL = 'google/gemma-4-26b-a4b-it:free';
-const DEFAULT_TEXT_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
+const DEFAULT_TEXT_MODEL = 'google/gemma-4-31b-it:free';
 const VISION_FALLBACK_MODELS = [
-  'google/gemma-4-26b-a4b-it:free',
   'nvidia/nemotron-nano-12b-v2-vl:free',
-  'google/gemma-4-31b-it:free',
 ];
 const TEXT_FALLBACK_MODELS = [
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'google/gemma-4-31b-it:free',
+  'openai/gpt-oss-20b:free',
 ];
 
 /**
@@ -143,11 +140,14 @@ async function openRouterChatJson(args) {
     if (!r.ok) {
       lastDetail = await r.text().catch(() => '');
       lastError = `openrouter_http_${r.status}`;
-      // Retry next model on credit/payment/rate-limit errors; stop on auth failures.
+      // Retry next model on credit/payment errors; stop on auth failures.
       if (r.status === 401 || r.status === 403) break;
       if (r.status === 429) {
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-        continue;
+        // Shared free-model pools: waiting then trying another free model usually 429s again.
+        const ra = Number(r.headers.get('retry-after'));
+        const waitMs = Number.isFinite(ra) && ra > 0 ? Math.min(Math.max(ra, 2), 30) * 1000 : 2000;
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        break;
       }
       if (r.status === 402 || r.status >= 500) continue;
       break;
@@ -302,7 +302,8 @@ export function normalizeInviteParse(parsed, opts = {}) {
     source: platformSource === 'gmail' ? 'telegram' : platformSource,
     online: parsed.online === true,
     description: descriptionBits.join(' · ') || null,
-    imageUrl: opts.defaultImageUrl || TELEGRAM_EVENT_LOGO_PATH,
+    // Never default to the Telegram tile — null lets the UI show a source letter.
+    imageUrl: opts.defaultImageUrl || null,
     invitedBy,
   };
 
@@ -356,7 +357,7 @@ export async function parseInviteText(text, env = process.env, opts = {}) {
   const parsed = parseJsonObject(chat.content);
   return normalizeInviteParse(parsed, {
     textHint: blob,
-    defaultImageUrl: opts.defaultImageUrl ?? TELEGRAM_EVENT_LOGO_PATH,
+    defaultImageUrl: opts.defaultImageUrl ?? null,
   });
 }
 
@@ -431,7 +432,7 @@ export async function parseInviteImages(images, env = process.env, opts = {}) {
   const parsed = parseJsonObject(chat.content);
   return normalizeInviteParse(parsed, {
     textHint: captionBlob,
-    defaultImageUrl: opts.defaultImageUrl ?? TELEGRAM_EVENT_LOGO_PATH,
+    defaultImageUrl: opts.defaultImageUrl ?? null,
   });
 }
 

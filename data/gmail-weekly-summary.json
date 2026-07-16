@@ -1,0 +1,865 @@
+{
+  "summaryText": "Recent emails include updates on subscriptions, security alerts, and account notifications.",
+  "generatedAt": "2026-07-16T07:41:24.611Z",
+  "lastScanYmd": "2026-07-16",
+  "lastScanAt": "2026-07-16T07:41:24.611Z",
+  "windowDays": 10,
+  "items": [
+    {
+      "id": "742cd058-dcf2-45b1-ac93-746ad6f71180",
+      "title": "Review your USAA credit card statement",
+      "company": "USAA",
+      "detail": "Your USAA credit card statement for July is ready for review.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [],
+      "sources": [],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T07:41:24.611Z",
+      "updatedAt": "2026-07-16T07:41:24.611Z",
+      "fingerprint": "e8b405ead35fd922",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "b6c9e918-1e9c-44eb-8bfe-6c7463626204",
+      "title": "Review updated Squarespace subscription price",
+      "company": "Squarespace",
+      "detail": "Squarespace has updated your website subscription price. Review the changes to your billing.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152508",
+          "threadId": "19f69c754328b102",
+          "subject": "Update to Your Squarespace Website Subscription Price",
+          "date": "2026-07-16T07:14:57.000Z",
+          "gmailId": "19f69c754328b102",
+          "rfc822MessageId": "bb85cee6992246aeaac6addacf6acd89@squarespace.com"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T07:41:24.611Z",
+      "updatedAt": "2026-07-16T07:41:24.611Z",
+      "fingerprint": "faefddabdbbf77a2",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "585d6b9d-1575-4445-bc77-4ddc86c305fb",
+      "title": "Review your PayPal statement",
+      "company": "",
+      "detail": "Your June account statement is available for review. Log in to access it.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [],
+      "sources": [],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T05:02:43.414Z",
+      "updatedAt": "2026-07-16T05:04:30.991Z",
+      "fingerprint": "388e15676dfde518",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "bd5c6ec9-c620-4531-adf9-02cbd40075ad",
+      "title": "Check Experian account changes",
+      "company": "Experian",
+      "detail": "Your Experian account information has recently changed. Review the updates.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152507",
+          "threadId": "19f6945a1ba46fca",
+          "subject": "Julia, your Experian account info recently changed.",
+          "date": "2026-07-16T04:53:17.000Z",
+          "gmailId": "19f6945a1ba46fca",
+          "rfc822MessageId": "646fee94-1016-4942-aa02-5ff149107299@atl1s07mta0857.xt.local"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T07:41:24.611Z",
+      "updatedAt": "2026-07-16T07:41:24.611Z",
+      "fingerprint": "6f656dff4179e14c",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "119f6ff7-8529-44a1-8aaf-d224cf509ca9",
+      "title": "Secure your Google account",
+      "company": "Google",
+      "detail": "A passkey was removed from your Google account. If this was not you, secure your account immediately.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152505",
+          "threadId": "19f693f70eefdb38",
+          "subject": "Security alert",
+          "date": "2026-07-16T04:51:27.000Z",
+          "gmailId": "19f6943ef4cf9b96",
+          "rfc822MessageId": "1UPqK84MZhkyzUFZJHQrtQ@notifications.google.com"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T05:02:43.414Z",
+      "updatedAt": "2026-07-16T07:41:24.611Z",
+      "fingerprint": "16ce3d63ae9a23df",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "e1fe84dd-12b3-4ff6-a07f-25e757ce836b",
+      "title": "Reactivate your Nextdoor account",
+      "company": "Nextdoor",
+      "detail": "Your Nextdoor account has been deactivated. You can reactivate it if desired.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152504",
+          "threadId": "19f6940a02b8cbb2",
+          "subject": "Jay, your Nextdoor account is now deactivated",
+          "date": "2026-07-16T04:47:47.000Z",
+          "gmailId": "19f6940a02b8cbb2",
+          "rfc822MessageId": "JZfR-5aeQs29GXUqz3AAaQ@geopod-ismtpd-3"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T05:02:43.414Z",
+      "updatedAt": "2026-07-16T07:41:24.611Z",
+      "fingerprint": "bca11fbaba2bd017",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "1e6c9bfb-1be9-495c-b007-2d61de25ac37",
+      "title": "Check Julia's Experian credit alerts",
+      "company": "",
+      "detail": "Julia has received alerts on her Experian credit file; review them.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152495",
+          "threadId": "19f684c463d16252",
+          "subject": "Heads up Julia! You have new alerts on your Experian credit file",
+          "date": "2026-07-16T00:20:55.000Z",
+          "gmailId": "19f684c463d16252",
+          "rfc822MessageId": "2d063d0a-f8e3-4ffa-b390-8f33322dc214@atl1s07mta0859.xt.local"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T04:30:10.517Z",
+      "updatedAt": "2026-07-16T04:30:10.517Z",
+      "fingerprint": "271f434cd2d33c52",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "692dfcbc-a3b9-4e04-98f4-ba1786b90f0f",
+      "title": "Check your workspace deletion reminders",
+      "company": "",
+      "detail": "Your workspaces 'MarioJay' and 'Jaybird's Workspace' will be deleted in 7 days. Take action if you wish to keep them.",
+      "deadline": "2026-07-22T00:00:00.000Z",
+      "deadlineSource": "extracted",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152491",
+          "threadId": "19f674820ffcf60d",
+          "subject": "Reminder: Your workspace \"MarioJay\" will be deleted in 7 days",
+          "date": "2026-07-15T19:36:47.000Z",
+          "gmailId": "19f674820ffcf60d",
+          "rfc822MessageId": "4mD1tU1dTCmdq149UKNIMg@geopod-ismtpd-35"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T07:07:52.161Z",
+      "updatedAt": "2026-07-16T07:07:52.161Z",
+      "fingerprint": "e084d66f54b89638",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "c5ebe3d5-4f23-4517-9532-e9b3381bf447",
+      "title": "Confirm closure of USAA claim",
+      "company": "USAA",
+      "detail": "Your claim with USAA has been closed. Contact your adjuster if this was in error.",
+      "deadline": "2026-07-17T18:01:40.000Z",
+      "deadlineSource": "response_48h",
+      "needsReply": true,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152488",
+          "threadId": "19f66f11f6bf4a60",
+          "subject": "NEW 💫 Accessories in Rose, Iris, and Sage!",
+          "date": "2026-07-15T18:01:40.000Z",
+          "gmailId": "19f66f11f6bf4a60",
+          "rfc822MessageId": "37.7D.24753.40BC75A6@i-077e5056b21873bd4.mta1vrest.sd.prd.sparkpost"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T07:41:24.611Z",
+      "updatedAt": "2026-07-16T07:41:24.611Z",
+      "fingerprint": "b5bc9eb87835e6a4",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "d1150fbe-89d0-4253-a71b-71fde540f5b0",
+      "title": "Confirm Julia's Kaiser Permanente appointment",
+      "company": "",
+      "detail": "Julia has an appointment at Kaiser Permanente on July 17, 2026, at 10:20 AM.",
+      "deadline": "2026-07-17T10:20:00.000Z",
+      "deadlineSource": "extracted",
+      "needsReply": true,
+      "mailboxes": [
+        "jay.intake.box@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "jay.intake.box@gmail.com",
+          "messageId": "2296",
+          "threadId": "19f66cfa493a8cff",
+          "subject": "Kaiser Permanente Appointment Notification",
+          "date": "2026-07-15T17:25:11.000Z",
+          "gmailId": "19f66cfa493a8cff",
+          "rfc822MessageId": "W1h0mEP3QAWVRlc_ZwfFug@geopod-ismtpd-14"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T04:30:10.517Z",
+      "updatedAt": "2026-07-16T04:30:10.517Z",
+      "fingerprint": "79d75ae98af387b8",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "2e54e220-62fb-4bb1-8c6e-6d075f9d8b6e",
+      "title": "Update privacy settings",
+      "company": "Corvida Labs",
+      "detail": "Corvida Labs: Action required to update your privacy settings and account information.",
+      "deadline": "2026-07-17T15:12:06.000Z",
+      "deadlineSource": "response_48h",
+      "needsReply": true,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152486",
+          "threadId": "19f6655dfba8afe5",
+          "subject": "⚠️ Action required: Update your privacy settings and account info.",
+          "date": "2026-07-15T15:12:06.000Z",
+          "gmailId": "19f6655dfba8afe5",
+          "rfc822MessageId": "96b87034-9c34-4936-aafb-a3996a99aad0@atl1s11mta1189.xt.local"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T04:30:10.517Z",
+      "updatedAt": "2026-07-16T07:41:24.611Z",
+      "fingerprint": "71495ca8e19c78ef",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "3698dc5a-1393-4b31-bd93-5f7bc51a0d6a",
+      "title": "Check your Apify usage",
+      "company": "Apify",
+      "detail": "You've exceeded your free monthly usage on Apify. Consider subscribing to a paid plan.",
+      "deadline": "2026-07-17T11:05:28.000Z",
+      "deadlineSource": "response_48h",
+      "needsReply": true,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152482",
+          "threadId": "19f65740066641d7",
+          "subject": "Platform usage exceeded",
+          "date": "2026-07-15T11:05:28.000Z",
+          "gmailId": "19f65740066641d7",
+          "rfc822MessageId": "20260715110528.ed171be252e35e5f@apify.com"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-15T20:16:00.300Z",
+      "updatedAt": "2026-07-16T07:41:24.611Z",
+      "fingerprint": "5dbe466a72429f73",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "4a51bf83-f787-4201-8a60-1d567ed7316a",
+      "title": "Confirm your Vultr server activation",
+      "company": "",
+      "detail": "You have activated a cloud server with Vultr. Ensure you change the initial root password after logging in.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152481",
+          "threadId": "19f64cfb8e9cf3d2",
+          "subject": "Vultr.com: Cloud Server Activated",
+          "date": "2026-07-15T09:22:02.000Z",
+          "gmailId": "19f65154c4c32b4e",
+          "rfc822MessageId": "67be5d0c202d8f158cffa6062a410f7c@vultr.com"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T07:07:52.161Z",
+      "updatedAt": "2026-07-16T07:07:52.161Z",
+      "fingerprint": "abed91ae57bcd188",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "65ddb28f-4a66-4f5f-91b5-b6237b3fa483",
+      "title": "Unpause or upgrade Supabase project Corvidae-Studio",
+      "company": "",
+      "detail": "Your Supabase project has been paused due to inactivity. Unpause it within 90 days or upgrade to a Pro plan to avoid losing access.",
+      "deadline": "2026-10-14T00:00:00.000Z",
+      "deadlineSource": "extracted",
+      "needsReply": true,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152475",
+          "threadId": "19f645617fd36587",
+          "subject": "Your Supabase Project Corvidae-Studio has been paused.",
+          "date": "2026-07-15T05:53:10.000Z",
+          "gmailId": "19f645617fd36587",
+          "rfc822MessageId": "deda3ef2-efea-498b-ad2e-71ee7afacc07@mtasv.net"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-15T20:16:00.300Z",
+      "updatedAt": "2026-07-15T20:16:00.300Z",
+      "fingerprint": "a51219a2c1cfbca6",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "a965ffe6-a081-4251-bbc4-67f13b6e4814",
+      "title": "Review Julia's June account statement",
+      "company": "",
+      "detail": "Julia's June account statement is available for review.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152494",
+          "threadId": "19f6818fb32f61dc",
+          "subject": "Julia, your June account statement is available.",
+          "date": "2026-07-15T23:24:54.000Z",
+          "gmailId": "19f6818fb32f61dc",
+          "rfc822MessageId": "400f07b9-ece3-3108-a192-cc1a62e8ded4@service.paypal.com"
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T04:30:10.517Z",
+      "updatedAt": "2026-07-16T07:08:45.963Z",
+      "fingerprint": "757880fb5de1c930",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "bbb98004-2b7e-46b7-836c-0c14ebdda4b2",
+      "title": "Review Julia's USAA claim closure",
+      "company": "",
+      "detail": "Julia's USAA claim has been closed; check if any action is needed.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152490",
+          "threadId": "19f6747be37acb49",
+          "subject": "Reminder: Your workspace \"Jaybird's Workspace\" will be deleted in 7 days",
+          "date": "2026-07-15T19:36:21.000Z",
+          "gmailId": "19f6747be37acb49",
+          "rfc822MessageId": "2tng9Nd_QoyhLsXd1hLFOw@geopod-ismtpd-83"
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T04:30:10.517Z",
+      "updatedAt": "2026-07-16T07:10:42.797Z",
+      "fingerprint": "b686b297580041af",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "f0947c96-124d-45c6-b1cd-22dacf4a4cda",
+      "title": "Prepare for Kaiser appointment",
+      "company": "",
+      "detail": "Julia has an upcoming appointment at Kaiser Permanente on July 17, 2026. Ensure she has her membership card and identification.",
+      "deadline": "2026-07-17T10:20:00.000Z",
+      "deadlineSource": "extracted",
+      "needsReply": false,
+      "mailboxes": [
+        "jay.intake.box@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "jay.intake.box@gmail.com",
+          "messageId": "2296",
+          "threadId": "19f66cfa493a8cff",
+          "subject": "Kaiser Permanente Appointment Notification",
+          "date": "2026-07-15T17:25:11.000Z",
+          "gmailId": "19f66cfa493a8cff",
+          "rfc822MessageId": "W1h0mEP3QAWVRlc_ZwfFug@geopod-ismtpd-14"
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T05:02:43.414Z",
+      "updatedAt": "2026-07-16T07:10:38.904Z",
+      "fingerprint": "67fcbc35dccb8ca1",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "a840b8cf-0a35-4a47-9007-1055f6ad65fc",
+      "title": "Review USAA claim closure",
+      "company": "",
+      "detail": "Your USAA claim has been closed. If this was in error, contact your adjuster to reopen it.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152487",
+          "threadId": "19f66988bb513cc9",
+          "subject": "Closure of Your USAA Claim",
+          "date": "2026-07-15T16:25:00.000Z",
+          "gmailId": "19f66988bb513cc9",
+          "rfc822MessageId": "IDS-c568fc94-18e5-4e42-af94-ee44ba5c85b6@iris.usaa.com"
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T05:02:43.414Z",
+      "updatedAt": "2026-07-16T07:10:36.597Z",
+      "fingerprint": "4833fbdea3b3412e",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "87a9d224-2f96-4e78-9db2-4171f2d7b1f4",
+      "title": "Review your USAA claim status",
+      "company": "",
+      "detail": "Your USAA claim has been closed. If this was in error, contact your adjuster or USAA for further action.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152487",
+          "threadId": "19f66988bb513cc9",
+          "subject": "Closure of Your USAA Claim",
+          "date": "2026-07-15T16:25:00.000Z",
+          "gmailId": "19f66988bb513cc9",
+          "rfc822MessageId": "IDS-c568fc94-18e5-4e42-af94-ee44ba5c85b6@iris.usaa.com"
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-16T07:07:52.161Z",
+      "updatedAt": "2026-07-16T07:10:34.502Z",
+      "fingerprint": "374ac121ee3e2d9d",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "6592989e-2167-4fa1-a176-3d3360f5fe72",
+      "title": "Decide on workspace retention for MarioJay and Jaybird's Workspace",
+      "company": "",
+      "detail": "Both workspaces will be deleted in 7 days unless you take action. Choose to keep or delete the workspaces before the deadline.",
+      "deadline": "2026-07-22T00:00:00.000Z",
+      "deadlineSource": "extracted",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152491",
+          "threadId": "19f674820ffcf60d",
+          "subject": "Reminder: Your workspace \"MarioJay\" will be deleted in 7 days",
+          "date": "2026-07-15T19:36:47.000Z",
+          "gmailId": "19f674820ffcf60d",
+          "rfc822MessageId": "4mD1tU1dTCmdq149UKNIMg@geopod-ismtpd-35"
+        },
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152490",
+          "threadId": "19f6747be37acb49",
+          "subject": "Reminder: Your workspace \"Jaybird's Workspace\" will be deleted in 7 days",
+          "date": "2026-07-15T19:36:21.000Z",
+          "gmailId": "19f6747be37acb49",
+          "rfc822MessageId": "2tng9Nd_QoyhLsXd1hLFOw@geopod-ismtpd-83"
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-15T20:16:00.300Z",
+      "updatedAt": "2026-07-16T02:51:43.146Z",
+      "fingerprint": "f216b37649d3c4d3",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "2b5baa94-ab20-42a3-b622-dd2891574afd",
+      "title": "RSVP to Climatebase Fellowship Info Session",
+      "company": "",
+      "detail": "Register for the live info session on July 15 at 9 AM PT to learn about Cohort 10 of the Climatebase Fellowship.",
+      "deadline": "2026-07-15T16:00:00.000Z",
+      "deadlineSource": "extracted",
+      "needsReply": true,
+      "mailboxes": [
+        "jay.intake.box@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "jay.intake.box@gmail.com",
+          "messageId": "2291",
+          "threadId": "2291",
+          "subject": "Tomorrow: Cohort 10 Info Session — July 15, 9 AM PT",
+          "date": "2026-07-14T23:03:16.000Z",
+          "gmailId": null,
+          "rfc822MessageId": null
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-15T00:16:40.295Z",
+      "updatedAt": "2026-07-15T00:27:10.322Z",
+      "fingerprint": "c6703fdd159da64c",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "33085e58-92c6-48da-bfe8-a4670b2666a5",
+      "title": "Accept or Decline Ozempic to Dupixent Event",
+      "company": "",
+      "detail": "Decide whether to attend the pharmaceutical history talk on July 15 from 6 PM to 9 PM PT.",
+      "deadline": "2026-07-15T13:00:00.000Z",
+      "deadlineSource": "extracted",
+      "needsReply": true,
+      "mailboxes": [
+        "jay.intake.box@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "jay.intake.box@gmail.com",
+          "messageId": "2278",
+          "threadId": "2278",
+          "subject": "You are invited to From Ozempic to Dupixent: The History of Big Pharma Advertising",
+          "date": "2026-07-13T20:26:00.000Z",
+          "gmailId": null,
+          "rfc822MessageId": null
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-15T00:16:40.295Z",
+      "updatedAt": "2026-07-15T00:27:10.322Z",
+      "fingerprint": "4fbce8056cfd78a8",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "c489ea90-da54-4f8f-89ad-ea4ff347ba9e",
+      "title": "Verify Oracle Cloud Account",
+      "company": "",
+      "detail": "Click the verification link to activate your Oracle Cloud account.",
+      "deadline": "2026-07-16T00:49:58.000Z",
+      "deadlineSource": "response_48h",
+      "needsReply": true,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152454",
+          "threadId": "152454",
+          "subject": "Notification: Maxeta Meeting @ Mon Jul 13, 2026 6pm - 7pm (PDT) (Jay Hasty)",
+          "date": "2026-07-14T00:49:58.000Z",
+          "gmailId": null,
+          "rfc822MessageId": null
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-15T00:16:40.295Z",
+      "updatedAt": "2026-07-15T00:25:06.299Z",
+      "fingerprint": "bc1eda7549f84166",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "ee629f8c-1ad2-4315-90a0-af76313c8b7a",
+      "title": "Verify DigitalOcean Account",
+      "company": "",
+      "detail": "Complete the payment verification to activate your DigitalOcean account.",
+      "deadline": "2026-07-16T09:00:27.000Z",
+      "deadlineSource": "response_48h",
+      "needsReply": true,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152461",
+          "threadId": "152461",
+          "subject": "From Shark Tank to the Brink of Bankruptcy",
+          "date": "2026-07-14T09:00:27.000Z",
+          "gmailId": null,
+          "rfc822MessageId": null
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-15T00:16:40.295Z",
+      "updatedAt": "2026-07-15T00:25:08.355Z",
+      "fingerprint": "94968d03b6d502e3",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "221f8fa9-1e17-4992-b6a1-4fd63bcbe06b",
+      "title": "Verify OpenRouter Sign‑In (Link 1)",
+      "company": "",
+      "detail": "Use the provided link to verify your OpenRouter account.",
+      "deadline": "2026-07-16T06:26:49.000Z",
+      "deadlineSource": "response_48h",
+      "needsReply": true,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152460",
+          "threadId": "152460",
+          "subject": "Your sign in link",
+          "date": "2026-07-14T06:26:49.000Z",
+          "gmailId": null,
+          "rfc822MessageId": null
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-15T00:16:40.295Z",
+      "updatedAt": "2026-07-15T00:27:10.322Z",
+      "fingerprint": "ed72eb52e11d4b2e",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "733c9922-775e-4909-9a2e-7f4472b897cb",
+      "title": "Verify OpenRouter Sign‑In (Link 2)",
+      "company": "",
+      "detail": "Use the second provided link to verify your OpenRouter account.",
+      "deadline": "2026-07-16T06:12:18.000Z",
+      "deadlineSource": "response_48h",
+      "needsReply": true,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152459",
+          "threadId": "152459",
+          "subject": "Your sign in link",
+          "date": "2026-07-14T06:12:18.000Z",
+          "gmailId": null,
+          "rfc822MessageId": null
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-15T00:16:40.295Z",
+      "updatedAt": "2026-07-15T00:27:10.322Z",
+      "fingerprint": "ce4d96cf03104738",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "d6b9f390-e6b9-4be8-8b2b-33562f05edb0",
+      "title": "Review Supabase Project Pause Decision",
+      "company": "",
+      "detail": "Decide whether to pause or unpause the Corvidae‑Studio project based on recent activity.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152458",
+          "threadId": "152458",
+          "subject": "Your Supabase Project Corvidae-Studio is going to be paused.",
+          "date": "2026-07-14T05:18:27.000Z",
+          "gmailId": null,
+          "rfc822MessageId": null
+        }
+      ],
+      "status": "tasked",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-15T00:16:40.295Z",
+      "updatedAt": "2026-07-15T00:39:38.069Z",
+      "fingerprint": "f6b62fe12ff5ba3d",
+      "vikunjaTaskId": "14"
+    },
+    {
+      "id": "c33128f6-bfcc-42c2-a9e2-260328247b96",
+      "title": "Consider Attending Golden Gate Gamemakers Event Tonight",
+      "company": "",
+      "detail": "Optional board‑game play‑testing event at Peoples Coffee from 6 PM to 10 PM PST.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "jay.intake.box@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "jay.intake.box@gmail.com",
+          "messageId": "2289",
+          "threadId": "2289",
+          "subject": "Golden Gate Gamemakers: Santa Cruz Playtesting Event Tonight!",
+          "date": "2026-07-14T20:38:19.000Z",
+          "gmailId": null,
+          "rfc822MessageId": null
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-15T00:16:40.295Z",
+      "updatedAt": "2026-07-15T00:27:10.322Z",
+      "fingerprint": "43d7665036de4993",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "4f8771c0-2ebb-4a64-89be-364e05afbca9",
+      "title": "Consider Attending Claude Code Masterclass Tomorrow",
+      "company": "",
+      "detail": "Optional AI coding workshop starting tomorrow; decide if you want to join.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "jay.intake.box@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "jay.intake.box@gmail.com",
+          "messageId": "2280",
+          "threadId": "2280",
+          "subject": "Last Call : Claude Code Masterclass Starts Tomorrow — Learn AI with a Stanford Instructor",
+          "date": "2026-07-13T22:05:46.000Z",
+          "gmailId": null,
+          "rfc822MessageId": null
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-15T00:16:40.295Z",
+      "updatedAt": "2026-07-15T00:27:10.322Z",
+      "fingerprint": "060cb338e4afd8bd",
+      "vikunjaTaskId": null
+    }
+  ],
+  "lastError": null
+}

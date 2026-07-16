@@ -11,13 +11,18 @@ import {
   getFacebookBillingMonthSummary,
   getFacebookBillingWeekSummary,
 } from '../lib/events-finder-facebook-billing.js';
+import { fetchOpenRouterUsageSummary } from '../lib/openrouter-usage.js';
 
 const router = Router();
 router.use(express.json({ limit: '64kb' }));
 
 /**
  * @param {object} ledger
- * @param {{ week: object, month: object }} measured
+ * @param {{
+ *   week: object,
+ *   month: object,
+ *   openrouter: object,
+ * }} measured
  */
 function enrichPayload(ledger, measured) {
   const weekUsd = Number(measured.week?.totalUsd) || 0;
@@ -28,6 +33,10 @@ function enrichPayload(ledger, measured) {
       ? Number(measured.month.remainingCreditsUsd)
       : Math.max(0, monthCredits - monthUsd);
 
+  const or = measured.openrouter && measured.openrouter.ok ? measured.openrouter : null;
+  const orWeek = or ? Number(or.measuredWeeklyUsd) || 0 : 0;
+  const orMonth = or ? Number(or.measuredMonthlyUsd) || 0 : 0;
+
   const items = (ledger.items || []).map((item) => {
     const out = { ...item };
     if (item.measuredSource === 'facebook-billing') {
@@ -37,6 +46,13 @@ function enrichPayload(ledger, measured) {
       out.remainingCreditsUsd = Math.round(monthRemaining * 100) / 100;
       out.effectiveWeeklyUsd =
         weekUsd > 0 ? Math.round(weekUsd * 100) / 100 : Number(item.weeklyUsd) || 0;
+    } else if (item.measuredSource === 'openrouter-key') {
+      out.measuredWeeklyUsd = or ? Math.round(orWeek * 100) / 100 : null;
+      out.measuredMonthlyUsd = or ? Math.round(orMonth * 100) / 100 : null;
+      out.monthlyCreditsUsd = or?.limitUsd != null ? or.limitUsd : item.monthlyBudgetUsd;
+      out.remainingCreditsUsd = or?.remainingUsd != null ? or.remainingUsd : null;
+      out.effectiveWeeklyUsd =
+        or && orWeek > 0 ? Math.round(orWeek * 100) / 100 : Number(item.weeklyUsd) || 0;
     } else {
       out.measuredWeeklyUsd = null;
       out.measuredMonthlyUsd = null;
@@ -82,16 +98,18 @@ function enrichPayload(ledger, measured) {
         week: measured.week,
         month: measured.month,
       },
+      openrouter: measured.openrouter,
     },
   };
 }
 
 async function loadMeasured() {
-  const [week, month] = await Promise.all([
+  const [week, month, openrouter] = await Promise.all([
     getFacebookBillingWeekSummary(),
     getFacebookBillingMonthSummary(),
+    fetchOpenRouterUsageSummary(),
   ]);
-  return { week, month };
+  return { week, month, openrouter };
 }
 
 router.get('/', async (_req, res) => {

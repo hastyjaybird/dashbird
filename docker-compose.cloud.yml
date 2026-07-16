@@ -1,0 +1,69 @@
+# Production stack for Vultr (or any public VPS) — Silicon Valley / DuckDNS.
+# Usage:
+#   docker compose -f docker-compose.cloud.yml up -d --build
+#
+# Requires .env with DASHBOARD_DOMAIN, CADDY_EMAIL, basic auth hash.
+# See deploy/env.cloud.example and docs/deploy-vultr.md.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      # No 443/udp: HTTP/3 disabled; publishing QUIC lets Firefox Alt-Svc hang.
+    environment:
+      DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}
+      CADDY_EMAIL: ${CADDY_EMAIL:?Set CADDY_EMAIL in .env}
+      # In .env store bcrypt with doubled dollars ($$) so Compose does not interpolate.
+      DASHBOARD_BASIC_AUTH_USER: ${DASHBOARD_BASIC_AUTH_USER:?Set DASHBOARD_BASIC_AUTH_USER in .env}
+      DASHBOARD_BASIC_AUTH_HASH: ${DASHBOARD_BASIC_AUTH_HASH:?Set DASHBOARD_BASIC_AUTH_HASH in .env}
+    volumes:
+      - ./deploy/Caddyfile.cloud:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      dashboard:
+        condition: service_started
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.cloud
+    restart: unless-stopped
+    env_file:
+      - .env
+    expose:
+      - '3000'
+    environment:
+      PORT: '3000'
+      NODE_ENV: production
+      TOOL_LIBRARY_SCREENSHOT: ${TOOL_LIBRARY_SCREENSHOT:-0}
+      VIKUNJA_BASE_URL: ${VIKUNJA_BASE_URL:-http://vikunja:3456}
+    volumes:
+      # Bind mounts so rsync can update code + personal data without named-volume friction.
+      - ./public:/app/public
+      - ./src:/app/src
+      - ./data:/app/data
+    depends_on:
+      vikunja:
+        condition: service_started
+
+  vikunja:
+    image: vikunja/vikunja:latest
+    restart: unless-stopped
+    expose:
+      - '3456'
+    environment:
+      VIKUNJA_SERVICE_PUBLICURL: ${VIKUNJA_SERVICE_PUBLICURL:-https://dashbird.duckdns.org/}
+      VIKUNJA_SERVICE_JWTSECRET: ${VIKUNJA_SERVICE_SECRET:-changeme-set-in-env}
+      VIKUNJA_SERVICE_SECRET: ${VIKUNJA_SERVICE_SECRET:-changeme-set-in-env}
+      VIKUNJA_SERVICE_ENABLEREGISTRATION: ${VIKUNJA_SERVICE_ENABLEREGISTRATION:-false}
+    volumes:
+      - ./data/vikunja/files:/app/vikunja/files
+      - ./data/vikunja/db:/db
+
+volumes:
+  caddy_data:
+  caddy_config:

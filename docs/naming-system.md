@@ -86,9 +86,9 @@ Map each project to a tier before deployment.
 
 ## 7) Dashbird defaults
 
-Dashbird is a personal private tool, **local LAN only** for this project:
+Dashbird is a personal private tool with **LAN** and **public cloud** deploy modes:
 - Folder root: `projects/personal` (or current workspace path)
 - Repo name: `dashbird`
-- Deployment: Docker Compose on home network — **no public VPS / Hetzner** in active scope
-- Access control: trusted LAN boundary; **no dashboard login** in the current model (do not port-forward to the internet)
+- Deployment: Docker Compose on home network **and/or** Vultr + DuckDNS ([`deploy-vultr.md`](deploy-vultr.md))
+- Access control: trusted LAN boundary locally; **HTTP basic auth** + TLS on the public host
 

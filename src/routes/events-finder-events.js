@@ -12,6 +12,7 @@ import {
   compareEventsByGeo,
   eventCityLabel,
   eventPassesFeedFilters,
+  resolveEventLatLon,
   resolveEventsFinderGeo,
   uniqueEventCities,
 } from '../lib/events-finder-geo.js';
@@ -454,10 +455,13 @@ router.get('/', async (req, res) => {
       // Skipped events never enter the main feed — regardless of filter/taste changes.
       const skipMatch = findSkippedEventMatch(event, skippedIndex);
       if (skipMatch) {
+        const mapCoords = resolveEventLatLon(event);
         skippedFeed.push(
           withEventPrice({
             ...event,
             city: eventCityLabel(event),
+            lat: mapCoords?.lat ?? null,
+            lon: mapCoords?.lon ?? null,
             distanceMiles: null,
             cityMatch: null,
             tasteScore: 0,
@@ -477,24 +481,74 @@ router.get('/', async (req, res) => {
         continue;
       }
       const gate = eventPassesFeedFilters(event, filtersBase, home, { timeZone });
+      // #region agent log
+      {
+        const t = `${event?.title || ''} ${event?.url || ''}`.toLowerCase();
+        if (/climatebase|cohort 10|fellowship info|iug6lflp/.test(t)) {
+          const tasteProbe = scoreEventTaste(event, criteria);
+          const payload = {
+            sessionId: 'ab357a',
+            runId: 'pre-fix',
+            hypothesisId: 'H1-H3',
+            location: 'events-finder-events.js:feed-gate',
+            message: 'Climatebase/fellowship candidate feed gate',
+            data: {
+              id: eventId || null,
+              title: event?.title || null,
+              start: event?.start || null,
+              url: event?.url || null,
+              online: event?.online ?? null,
+              city: eventCityLabel(event),
+              gateOk: gate.ok,
+              gateReason: gate.reason || null,
+              tasteOk: tasteProbe.ok,
+              tasteReason: tasteProbe.reason || null,
+              filterDates: filtersBase.dates || null,
+              earliestLocalTime: filtersBase.earliestLocalTime || null,
+              attendance: filtersBase.attendance || null,
+              citiesCount: Array.isArray(filtersBase.cities) ? filtersBase.cities.length : 0,
+            },
+            timestamp: Date.now(),
+          };
+          fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'ab357a' },
+            body: JSON.stringify(payload),
+          }).catch(() => {});
+          import('node:fs').then((fs) => {
+            try {
+              fs.appendFileSync('/home/jaybird/jayprograms/dashbird/.cursor/debug-ab357a.log', `${JSON.stringify(payload)}\n`);
+              fs.appendFileSync('/app/data/debug-ab357a.ndjson', `${JSON.stringify(payload)}\n`);
+            } catch {
+              /* ignore */
+            }
+          }).catch(() => {});
+        }
+      }
+      // #endregion
       if (!gate.ok) continue;
       const taste = scoreEventTaste(event, criteria);
       if (!taste.ok) {
         tasteSkipped += 1;
         continue;
       }
-      filtered.push(
-        withEventPrice({
-          ...event,
-          city: eventCityLabel(event),
-          distanceMiles: gate.distanceMiles,
-          cityMatch: gate.cityMatch,
-          tasteScore: taste.score,
-          matchedLookFor: taste.matchedLookFor,
-          skipped: false,
-          skippedAt: null,
-        }),
-      );
+      {
+        const mapCoords = resolveEventLatLon(event);
+        filtered.push(
+          withEventPrice({
+            ...event,
+            city: eventCityLabel(event),
+            lat: mapCoords?.lat ?? null,
+            lon: mapCoords?.lon ?? null,
+            distanceMiles: gate.distanceMiles,
+            cityMatch: gate.cityMatch,
+            tasteScore: taste.score,
+            matchedLookFor: taste.matchedLookFor,
+            skipped: false,
+            skippedAt: null,
+          }),
+        );
+      }
     }
 
     // Also surface skip records that are no longer in the catalog (for Unskip recovery).
@@ -543,6 +597,90 @@ router.get('/', async (req, res) => {
     };
     filtered.sort(byClosest);
     skippedFeed.sort(bySkippedAtDesc);
+
+    // #region agent log
+    {
+      const debugEids = ['2179524519500835', '1005106102497320'];
+      /** @type {Record<string, object>} */
+      const debugEvents = {};
+      for (const debugEid of debugEids) {
+        const debugId = `facebook:${debugEid}`;
+        const inRaw = raw.find((e) => String(e?.id || '').includes(debugEid) || String(e?.url || '').includes(debugEid));
+        const inDeduped = deduped.find((e) => String(e?.id || '').includes(debugEid) || String(e?.url || '').includes(debugEid));
+        const inFeed = filtered.find((e) => String(e?.id || '').includes(debugEid) || String(e?.url || '').includes(debugEid));
+        const inSkipped = skippedFeed.find((e) => String(e?.id || '').includes(debugEid) || String(e?.url || '').includes(debugEid));
+        let gateReason = null;
+        if (inDeduped) {
+          const gate = eventPassesFeedFilters(inDeduped, filtersBase, home, { timeZone });
+          const taste = scoreEventTaste(inDeduped, criteria);
+          gateReason = {
+            gateOk: gate.ok,
+            reason: gate.reason || null,
+            distanceMiles: gate.distanceMiles,
+            tasteOk: taste.ok,
+            cityLabel: eventCityLabel(inDeduped),
+            start: inDeduped.start || null,
+          };
+        }
+        debugEvents[debugEid] = {
+          debugId,
+          inCatalog: Boolean(inRaw),
+          inDeduped: Boolean(inDeduped),
+          inFeed: Boolean(inFeed),
+          inSkippedFeed: Boolean(inSkipped),
+          catalogTitle: inRaw?.title || null,
+          gateReason,
+        };
+      }
+      const potluckInQueries = (facebook.searchQueries || []).some((q) =>
+        String(q || '').toLowerCase().includes('potluck'),
+      );
+      const payload = {
+        sessionId: '02a20c',
+        runId: 'tiny-garage-pre',
+        hypothesisId: 'A-E',
+        location: 'events-finder-events.js:feed',
+        message: 'debug target event presence',
+        data: {
+          debugEvents,
+          filters: {
+            cities: filtersBase.cities || null,
+            dates: filtersBase.dates || null,
+            maxMiles: filtersBase.maxMiles ?? null,
+            earliestLocalTime: filtersBase.earliestLocalTime || null,
+          },
+          facebook: {
+            fromCache: facebook.fromCache === true,
+            cachedAt: facebook.cachedAt || null,
+            scanned: facebook.scanned ?? null,
+            count: Array.isArray(facebook.events) ? facebook.events.length : null,
+            potluckInQueries,
+            searchQueries: facebook.searchQueries || [],
+          },
+          feedTotal: filtered.length,
+          totalRaw: raw.length,
+        },
+        timestamp: Date.now(),
+      };
+      fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '02a20c' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+      fetch('http://172.17.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '02a20c' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+      import('node:fs').then((fs) => {
+        try {
+          fs.appendFileSync('/app/data/debug-02a20c.ndjson', `${JSON.stringify(payload)}\n`);
+        } catch {
+          /* ignore */
+        }
+      }).catch(() => {});
+    }
+    // #endregion
 
     let store = null;
     try {

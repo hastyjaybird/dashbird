@@ -99,7 +99,7 @@ export const DASHBOARD_MONITORING_SOURCES = [
     group: 'Sky & space',
     label: 'Sky strip — aircraft nearby (ADS-B)',
     source:
-      'adsb.fi opendata lat/lon/dist · rain-alert address geocode · oakland-aircraft-registry.json',
+      'adsb.fi opendata lat/lon/dist · rain-alert address geocode · oakland-aircraft-registry.json · aircraft-tail-cache.json (adsbdb/hexdb when unknown)',
   },
   {
     id: 'sky_moonbow',
@@ -155,6 +155,13 @@ export const DASHBOARD_MONITORING_SOURCES = [
     group: 'Earth',
     label: 'Largest nearby earthquake (week)',
     source: 'USGS earthquake feed — strongest M>3 within 30 mi of dashboard point',
+  },
+  {
+    id: 'earth_kilauea',
+    group: 'Earth',
+    label: 'Kīlauea volcano (Hawaiʻi) + summit livestream',
+    source:
+      'USGS HANS alerts + HVO volcano messages · nearby M>3 quakes · V1/V2/V3 YouTube cams via url.usgs.gov',
   },
   {
     id: 'earth_glm',

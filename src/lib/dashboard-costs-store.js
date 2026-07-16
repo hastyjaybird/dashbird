@@ -133,7 +133,50 @@ export async function loadDashboardCosts() {
     ledgerPromise = (async () => {
       const live = await ensureLedgerFile();
       const raw = JSON.parse(await fs.readFile(live, 'utf8'));
-      return normalizeDashboardCosts(raw).ledger;
+      const ledger = normalizeDashboardCosts(raw).ledger;
+      // Merge any new seed items (by id) so Settings picks up catalog additions.
+      try {
+        const seedRaw = JSON.parse(await fs.readFile(SEED_PATH, 'utf8'));
+        const seed = normalizeDashboardCosts(seedRaw).ledger;
+        const have = new Set(ledger.items.map((i) => i.id));
+        let changed = false;
+        for (const item of seed.items) {
+          if (have.has(item.id)) continue;
+          ledger.items.push(item);
+          have.add(item.id);
+          changed = true;
+        }
+        // Refresh measuredSource / notes on known seed rows without wiping edits.
+        for (const seedItem of seed.items) {
+          const idx = ledger.items.findIndex((i) => i.id === seedItem.id);
+          if (idx < 0) continue;
+          const cur = ledger.items[idx];
+          if (seedItem.measuredSource && cur.measuredSource !== seedItem.measuredSource) {
+            ledger.items[idx] = {
+              ...cur,
+              measuredSource: seedItem.measuredSource,
+              monthlyBudgetUsd: cur.monthlyBudgetUsd ?? seedItem.monthlyBudgetUsd,
+              notes: cur.notes || seedItem.notes,
+              label: cur.label || seedItem.label,
+            };
+            changed = true;
+          }
+        }
+        if (changed) {
+          const payload = {
+            currency: ledger.currency,
+            items: ledger.items,
+            updatedAt: ledger.updatedAt || new Date().toISOString(),
+          };
+          const tmp = `${live}.${process.pid}.${Date.now()}.tmp`;
+          await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+          await fs.rename(tmp, live);
+          return payload;
+        }
+      } catch {
+        // Seed missing or unreadable — keep live ledger as-is.
+      }
+      return ledger;
     })();
   }
   return ledgerPromise;

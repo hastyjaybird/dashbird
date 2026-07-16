@@ -148,9 +148,38 @@ export async function vikunjaFetch(pathAndQuery, opts = {}) {
 }
 
 /**
- * @param {NodeJS.ProcessEnv} [env]
+ * Display title for Tasks panel: strip leading slashes, capitalize first letter.
+ * @param {unknown} title
+ * @param {number} [fallbackId]
  */
-export async function listPanelTodos(env = process.env) {
+export function normalizeProjectDisplayTitle(title, fallbackId) {
+  let t = String(title || '').trim().replace(/^\/+/, '').trim();
+  if (!t) return fallbackId != null ? `Project ${fallbackId}` : 'Project';
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (/[A-Za-z]/.test(ch)) {
+      return t.slice(0, i) + ch.toUpperCase() + t.slice(i + 1);
+    }
+  }
+  return t;
+}
+
+/**
+ * @param {unknown} title
+ * @returns {string | null}
+ */
+export function normalizeProjectTitle(title) {
+  const t = normalizeProjectDisplayTitle(title);
+  if (!t || t === 'Project' || t.length > 120) return null;
+  return t;
+}
+
+/**
+ * Top-level Vikunja projects for the Dashbird Tasks panel (excludes Archive).
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<Array<{ id: number, title: string }>>}
+ */
+export async function listPanelProjects(env = process.env) {
   const cfg = resolveVikunjaConfig(env);
   if (!cfg.configured) {
     const err = new Error('vikunja_not_configured');
@@ -158,7 +187,274 @@ export async function listPanelTodos(env = process.env) {
     err.status = 503;
     throw err;
   }
-  if (cfg.projectId == null) {
+
+  const res = await vikunjaFetch('projects?per_page=100', { env });
+  if (!res.ok || !Array.isArray(res.json)) {
+    const err = new Error(safeUpstreamMessage(res) || 'vikunja_projects_failed');
+    err.code = 'vikunja_upstream';
+    err.status = res.status >= 400 && res.status < 600 ? res.status : 502;
+    throw err;
+  }
+
+  return res.json
+    .filter((p) => p && Number(p.id) > 0 && !p.parent_project_id)
+    .filter((p) => !Boolean(p.is_archived))
+    .filter(
+      (p) =>
+        String(p.title || '').trim().toLowerCase() !== ARCHIVE_PROJECT_TITLE.toLowerCase(),
+    )
+    .map((p) => ({
+      id: Number(p.id),
+      title: normalizeProjectDisplayTitle(p.title, Number(p.id)),
+      position: Number.isFinite(Number(p.position)) ? Number(p.position) : Number(p.id),
+    }))
+    .sort((a, b) => a.position - b.position || a.title.localeCompare(b.title));
+}
+
+/**
+ * @param {string} title
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<{ id: number, title: string }>}
+ */
+export async function createPanelProject(title, env = process.env) {
+  const cfg = resolveVikunjaConfig(env);
+  if (!cfg.configured) {
+    const err = new Error('vikunja_not_configured');
+    err.code = 'vikunja_not_configured';
+    err.status = 503;
+    throw err;
+  }
+  const name = normalizeProjectTitle(title);
+  if (!name) {
+    const err = new Error('invalid_title');
+    err.code = 'invalid_title';
+    err.status = 400;
+    throw err;
+  }
+
+  const res = await vikunjaFetch('projects', {
+    method: 'PUT',
+    body: { title: name, parent_project_id: 0 },
+    env,
+  });
+  if (!res.ok || !res.json?.id) {
+    const err = new Error(safeUpstreamMessage(res) || 'vikunja_project_create_failed');
+    err.code = 'vikunja_upstream';
+    err.status = res.status >= 400 && res.status < 600 ? res.status : 502;
+    throw err;
+  }
+  return {
+    id: Number(res.json.id),
+    title: normalizeProjectDisplayTitle(res.json.title, Number(res.json.id)),
+    position: Number.isFinite(Number(res.json.position))
+      ? Number(res.json.position)
+      : Number(res.json.id),
+  };
+}
+
+/**
+ * Update project title and/or position.
+ * @param {number} projectId
+ * @param {{ title?: string, position?: number }} patch
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<{ id: number, title: string, position: number }>}
+ */
+export async function updatePanelProject(projectId, patch, env = process.env) {
+  const cfg = resolveVikunjaConfig(env);
+  if (!cfg.configured) {
+    const err = new Error('vikunja_not_configured');
+    err.code = 'vikunja_not_configured';
+    err.status = 503;
+    throw err;
+  }
+  if (!Number.isFinite(projectId) || projectId <= 0) {
+    const err = new Error('invalid_id');
+    err.code = 'invalid_id';
+    err.status = 400;
+    throw err;
+  }
+
+  const getRes = await vikunjaFetch(`projects/${projectId}`, { env });
+  if (getRes.status === 404) {
+    const err = new Error('not_found');
+    err.code = 'not_found';
+    err.status = 404;
+    throw err;
+  }
+  if (!getRes.ok || !getRes.json || typeof getRes.json !== 'object') {
+    const err = new Error(safeUpstreamMessage(getRes) || 'vikunja_project_get_failed');
+    err.code = 'vikunja_upstream';
+    err.status = getRes.status >= 400 && getRes.status < 600 ? getRes.status : 502;
+    throw err;
+  }
+
+  /** @type {Record<string, unknown>} */
+  const body = { ...getRes.json };
+  if (patch.title != null) {
+    const name = normalizeProjectTitle(patch.title);
+    if (!name) {
+      const err = new Error('invalid_title');
+      err.code = 'invalid_title';
+      err.status = 400;
+      throw err;
+    }
+    body.title = name;
+  }
+  if (patch.position != null && Number.isFinite(Number(patch.position))) {
+    body.position = Number(patch.position);
+  }
+
+  const postRes = await vikunjaFetch(`projects/${projectId}`, {
+    method: 'POST',
+    body,
+    env,
+  });
+  if (!postRes.ok) {
+    const err = new Error(safeUpstreamMessage(postRes) || 'vikunja_project_update_failed');
+    err.code = 'vikunja_upstream';
+    err.status = postRes.status >= 400 && postRes.status < 600 ? postRes.status : 502;
+    throw err;
+  }
+
+  return {
+    id: projectId,
+    title: normalizeProjectDisplayTitle(postRes.json?.title ?? body.title, projectId),
+    position: Number.isFinite(Number(postRes.json?.position ?? body.position))
+      ? Number(postRes.json?.position ?? body.position)
+      : projectId,
+  };
+}
+
+/**
+ * @param {number} projectId
+ * @param {string} title
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<{ id: number, title: string, position: number }>}
+ */
+export async function renamePanelProject(projectId, title, env = process.env) {
+  return updatePanelProject(projectId, { title }, env);
+}
+
+/**
+ * Persist a custom project order via Vikunja `position` (parallel writes).
+ * @param {unknown} idsRaw
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<Array<{ id: number, title: string, position: number }>>}
+ */
+export async function reorderPanelProjects(idsRaw, env = process.env) {
+  const cfg = resolveVikunjaConfig(env);
+  if (!cfg.configured) {
+    const err = new Error('vikunja_not_configured');
+    err.code = 'vikunja_not_configured';
+    err.status = 503;
+    throw err;
+  }
+
+  const ids = Array.isArray(idsRaw)
+    ? idsRaw.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0)
+    : [];
+  if (!ids.length) {
+    const err = new Error('invalid_order');
+    err.code = 'invalid_order';
+    err.status = 400;
+    throw err;
+  }
+
+  const unique = [...new Set(ids)];
+  if (unique.length !== ids.length) {
+    const err = new Error('invalid_order');
+    err.code = 'invalid_order';
+    err.status = 400;
+    throw err;
+  }
+
+  await Promise.all(
+    ids.map((projectId, i) => updatePanelProject(projectId, { position: (i + 1) * 65536 }, env)),
+  );
+
+  return listPanelProjects(env);
+}
+
+/**
+ * Move a task to another project (keeps open/done state).
+ * @param {string} id
+ * @param {number} projectId
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function movePanelTodo(id, projectId, env = process.env) {
+  const cfg = resolveVikunjaConfig(env);
+  if (!cfg.configured) {
+    const err = new Error('vikunja_not_configured');
+    err.code = 'vikunja_not_configured';
+    err.status = 503;
+    throw err;
+  }
+  const taskId = String(id || '').trim();
+  if (!/^\d+$/.test(taskId)) {
+    const err = new Error('invalid_id');
+    err.code = 'invalid_id';
+    err.status = 400;
+    throw err;
+  }
+  if (!Number.isFinite(projectId) || projectId <= 0) {
+    const err = new Error('invalid_project');
+    err.code = 'invalid_project';
+    err.status = 400;
+    throw err;
+  }
+
+  const getRes = await vikunjaFetch(`tasks/${taskId}`, { env });
+  if (getRes.status === 404) {
+    const err = new Error('not_found');
+    err.code = 'not_found';
+    err.status = 404;
+    throw err;
+  }
+  if (!getRes.ok || !getRes.json || typeof getRes.json !== 'object') {
+    const err = new Error(safeUpstreamMessage(getRes) || 'vikunja_get_failed');
+    err.code = 'vikunja_upstream';
+    err.status = getRes.status >= 400 && getRes.status < 600 ? getRes.status : 502;
+    throw err;
+  }
+
+  const body = { ...getRes.json, project_id: projectId };
+  const postRes = await vikunjaFetch(`tasks/${taskId}`, {
+    method: 'POST',
+    body,
+    env,
+  });
+  if (!postRes.ok) {
+    const err = new Error(safeUpstreamMessage(postRes) || 'vikunja_move_failed');
+    err.code = 'vikunja_upstream';
+    err.status = postRes.status >= 400 && postRes.status < 600 ? postRes.status : 502;
+    throw err;
+  }
+
+  return mapVikunjaTask(postRes.json) || {
+    id: taskId,
+    text: String(getRes.json.title || '').trim(),
+    done: Boolean(getRes.json.done),
+    projectId,
+  };
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ projectId?: number | null }} [opts]
+ */
+export async function listPanelTodos(env = process.env, opts = {}) {
+  const cfg = resolveVikunjaConfig(env);
+  if (!cfg.configured) {
+    const err = new Error('vikunja_not_configured');
+    err.code = 'vikunja_not_configured';
+    err.status = 503;
+    throw err;
+  }
+  const projectId =
+    opts.projectId != null && Number.isFinite(Number(opts.projectId))
+      ? Number(opts.projectId)
+      : cfg.projectId;
+  if (projectId == null) {
     const err = new Error('vikunja_project_required');
     err.code = 'vikunja_project_required';
     err.status = 503;
@@ -166,10 +462,10 @@ export async function listPanelTodos(env = process.env) {
   }
 
   const qs = new URLSearchParams({
-    per_page: '50',
+    per_page: '100',
     sort_by: 'id',
     order_by: 'desc',
-    filter: `done = false && project_id = ${cfg.projectId}`,
+    filter: `done = false && project_id = ${projectId}`,
   });
 
   const res = await vikunjaFetch(`tasks?${qs}`, { env });
@@ -185,10 +481,25 @@ export async function listPanelTodos(env = process.env) {
 }
 
 /**
+ * Normalize optional due date for Vikunja (`due_date` RFC3339).
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+export function normalizeTodoDueDate(value) {
+  if (value == null || value === '') return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  const ms = Date.parse(s);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString();
+}
+
+/**
  * @param {string} title
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ dueDate?: string | null, projectId?: number | null }} [opts]
  */
-export async function createPanelTodo(title, env = process.env) {
+export async function createPanelTodo(title, env = process.env, opts = {}) {
   const cfg = resolveVikunjaConfig(env);
   if (!cfg.configured) {
     const err = new Error('vikunja_not_configured');
@@ -196,7 +507,11 @@ export async function createPanelTodo(title, env = process.env) {
     err.status = 503;
     throw err;
   }
-  if (cfg.projectId == null) {
+  const projectId =
+    opts.projectId != null && Number.isFinite(Number(opts.projectId))
+      ? Number(opts.projectId)
+      : cfg.projectId;
+  if (projectId == null) {
     const err = new Error('vikunja_project_required');
     err.code = 'vikunja_project_required';
     err.status = 503;
@@ -211,9 +526,14 @@ export async function createPanelTodo(title, env = process.env) {
     throw err;
   }
 
-  const res = await vikunjaFetch(`projects/${cfg.projectId}/tasks`, {
+  /** @type {{ title: string, due_date?: string }} */
+  const body = { title: text };
+  const dueDate = normalizeTodoDueDate(opts?.dueDate);
+  if (dueDate) body.due_date = dueDate;
+
+  const res = await vikunjaFetch(`projects/${projectId}/tasks`, {
     method: 'PUT',
-    body: { title: text },
+    body,
     env,
   });
   if (!res.ok) {
@@ -282,12 +602,14 @@ export async function resolveArchiveProjectId(env = process.env) {
 }
 
 /**
- * Mark done (and move into Archive) or undo (restore to the active project).
+ * Mark done or undo.
+ * Today’s To Do archives on complete; the Tasks panel marks done in place.
  * @param {string} id
  * @param {boolean} done
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ moveToArchive?: boolean, restoreProjectId?: number | null }} [opts]
  */
-export async function setPanelTodoDone(id, done, env = process.env) {
+export async function setPanelTodoDone(id, done, env = process.env, opts = {}) {
   const cfg = resolveVikunjaConfig(env);
   const taskId = String(id || '').trim();
   if (!/^\d+$/.test(taskId)) {
@@ -312,6 +634,7 @@ export async function setPanelTodoDone(id, done, env = process.env) {
   }
 
   const markDone = Boolean(done);
+  const moveToArchive = opts.moveToArchive !== false;
   /** @type {Record<string, unknown>} */
   const body = {
     ...getRes.json,
@@ -319,10 +642,14 @@ export async function setPanelTodoDone(id, done, env = process.env) {
     percent_done: markDone ? 1 : 0,
   };
 
-  if (markDone) {
+  if (markDone && moveToArchive) {
     body.project_id = await resolveArchiveProjectId(env);
-  } else if (cfg.projectId != null) {
-    body.project_id = cfg.projectId;
+  } else if (!markDone) {
+    const restoreId =
+      opts.restoreProjectId != null && Number.isFinite(Number(opts.restoreProjectId))
+        ? Number(opts.restoreProjectId)
+        : cfg.projectId;
+    if (restoreId != null) body.project_id = restoreId;
   }
 
   const postRes = await vikunjaFetch(`tasks/${taskId}`, {

@@ -1,4 +1,5 @@
 import { collectSceneOptions, joinSceneTokens } from '../lib/network-scenes.js';
+import { formatContactBirthday } from '../lib/network-birthday.js';
 
 /**
  * Manage contacts — spreadsheet table with column filters, cell selection,
@@ -15,16 +16,39 @@ import { collectSceneOptions, joinSceneTokens } from '../lib/network-scenes.js';
  * Toolbar Undo restores the previous values.
  */
 
-const STORAGE_KEY = 'dashbird-network-manage-columns-v1';
+const STORAGE_KEY = 'dashbird-network-manage-columns-v3';
 /** Manage column filters + sort — localStorage so they survive browser restarts. */
 const FILTER_SORT_KEY = 'dashbird-network-manage-filters-v1';
+
+/** Preferred adjacent order for the birthday / status attribute cluster. */
+const ATTR_CLUSTER_KEYS = [
+  'memoryJog',
+  'location',
+  'birthday',
+  'relationshipStatus',
+  'rating',
+  'sensitivity',
+];
+
+/**
+ * Keep the attribute cluster consecutive in the requested order.
+ * @param {string[]} keys
+ */
+function applyAttrClusterOrder(keys) {
+  const want = ATTR_CLUSTER_KEYS.filter((k) => keys.includes(k));
+  if (want.length < 2) return keys;
+  const first = Math.min(...want.map((k) => keys.indexOf(k)));
+  const rest = keys.filter((k) => !ATTR_CLUSTER_KEYS.includes(k));
+  rest.splice(Math.min(first, rest.length), 0, ...want);
+  return rest;
+}
 
 /** Columns that must not be bulk-copied via drag-fill / clear / fill-down. */
 const NO_FILL_KEYS = new Set(['displayName', 'id', 'createdAt', 'updatedAt', 'orgId', 'avatarUrl']);
 
 /** Known pick-list values for columns that use a fixed vocabulary. */
 const FILL_OPTIONS = {
-  kinds: ['friend', 'organizer', 'business'],
+  kinds: ['friend', 'organizer', 'business', 'family'],
   hasKids: ['Yes', 'No'],
   hasTask: ['Yes', 'No'],
   rating: ['Fan', 'Hot', 'Warm', 'Cold'],
@@ -40,7 +64,7 @@ const FILL_OPTIONS = {
     'Paused',
     'Former',
   ],
-  preferredContactMethods: ['phone', 'office_phone', 'email', 'signal', 'whatsapp', 'linkedin', 'other'],
+  preferredContactMethods: ['phone', 'office_phone', 'email', 'signal', 'whatsapp', 'messenger', 'linkedin', 'other'],
 };
 
 /**
@@ -73,7 +97,7 @@ const YES_NO_KEYS = new Set(['hasKids', 'hasTask']);
 /** Pick-list columns that allow choosing more than one value. */
 const MULTI_SELECT_KEYS = new Set(['kinds', 'preferredContactMethods', 'networkCircles']);
 
-const KIND_VALUES = new Set(['friend', 'organizer', 'business']);
+const KIND_VALUES = new Set(['friend', 'organizer', 'business', 'family']);
 
 /**
  * @param {string} colKey
@@ -269,10 +293,31 @@ function channelCol(channelKey, label, opts = {}) {
 /** @type {{ key: string, label: string, default?: boolean, get: (c: object) => string, set?: (c: object, v: string) => object, filterSplit?: boolean | RegExp }[]} */
 const COLUMNS = [
   strCol('displayName', 'Name', { default: true }),
-  strCol('firstName', 'First name', { default: false }),
-  strCol('lastName', 'Last name', { default: false }),
   strCol('nickname', 'Nickname', { default: true }),
   strCol('memoryJog', 'Memory jog', { default: true }),
+  strCol('location', 'Location', { default: true }),
+  {
+    key: 'birthday',
+    label: 'Birthday',
+    default: true,
+    get: (c) => formatContactBirthday(c),
+    set: (_c, v) => ({ birthday: String(v || '').trim() }),
+  },
+  {
+    key: 'relationshipStatus',
+    label: 'Relationship',
+    default: true,
+    get: (c) => c.relationshipStatus || '',
+    set: (_c, v) => ({ relationshipStatus: v }),
+  },
+  strCol('rating', 'Status', { default: true }),
+  {
+    key: 'sensitivity',
+    label: 'Sensitivity',
+    default: true,
+    get: (c) => c.sensitivity || '',
+    set: (_c, v) => ({ sensitivity: v }),
+  },
   {
     key: 'aliases',
     label: 'Aliases',
@@ -289,7 +334,7 @@ const COLUMNS = [
     set: (_c, v) => ({
       kinds: listSplit(v)
         .map((s) => s.toLowerCase())
-        .filter((k) => k === 'friend' || k === 'organizer' || k === 'business'),
+        .filter((k) => k === 'friend' || k === 'organizer' || k === 'business' || k === 'family'),
     }),
     filterSplit: true,
   },
@@ -306,23 +351,7 @@ const COLUMNS = [
     },
   },
   strCol('networkCircles', 'Scene', { default: true, filterSplit: true }),
-  strCol('location', 'Location', { default: true }),
   strCol('address', 'Address', { default: false }),
-  strCol('rating', 'Status', { default: true }),
-  {
-    key: 'sensitivity',
-    label: 'Sensitivity',
-    default: true,
-    get: (c) => c.sensitivity || '',
-    set: (_c, v) => ({ sensitivity: v }),
-  },
-  {
-    key: 'relationshipStatus',
-    label: 'Relationship',
-    default: false,
-    get: (c) => c.relationshipStatus || '',
-    set: (_c, v) => ({ relationshipStatus: v }),
-  },
   {
     key: 'hasTask',
     label: 'Has task',
@@ -403,6 +432,7 @@ const COLUMNS = [
   channelCol('sms', 'SMS'),
   channelCol('signal', 'Signal'),
   channelCol('whatsapp', 'WhatsApp'),
+  channelCol('messenger', 'FB Messenger'),
   channelCol('linkedin', 'LinkedIn'),
   channelCol('other', 'Other contact'),
   channelCol('urls', 'URLs'),
@@ -447,19 +477,38 @@ const COLUMNS = [
 
 function loadVisibleKeys() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    let raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      // Migrate older column prefs once into v3 (Name only — no first/last cols).
+      raw =
+        localStorage.getItem('dashbird-network-manage-columns-v2')
+        || localStorage.getItem('dashbird-network-manage-columns-v1');
+    }
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length) {
         const known = new Set(COLUMNS.map((c) => c.key));
-        const keys = parsed.map(String).filter((k) => known.has(k));
-        if (keys.length) return keys;
+        let keys = parsed
+          .map(String)
+          .filter((k) => k !== 'firstName' && k !== 'lastName' && known.has(k));
+        if (!keys.includes('displayName')) keys = ['displayName', ...keys];
+        // Ensure new defaults join existing layouts.
+        for (const k of ['birthday', 'relationshipStatus']) {
+          if (!keys.includes(k) && COLUMNS.some((c) => c.key === k && c.default !== false)) {
+            keys.push(k);
+          }
+        }
+        keys = applyAttrClusterOrder(keys);
+        if (keys.length) {
+          persistVisibleKeys(keys);
+          return keys;
+        }
       }
     }
   } catch {
     /* ignore */
   }
-  return COLUMNS.filter((c) => c.default !== false).map((c) => c.key);
+  return applyAttrClusterOrder(COLUMNS.filter((c) => c.default !== false).map((c) => c.key));
 }
 
 /**
@@ -608,17 +657,29 @@ function matchesCondition(cell, condition) {
  * @param {HTMLElement} root
  * @param {{
  *   getContacts: () => object[],
+ *   getAllContacts?: () => object[],
  *   getSelectedIds: () => Set<string>,
  *   setSelectedIds: (ids: Set<string>) => void,
  *   onSelectContact: (id: string) => void,
  *   onContactsUpdated: (contacts: object[]) => void,
  *   showStatus: (msg: string, isErr?: boolean) => void,
  *   isLoading?: () => boolean,
+ *   toolbarHost?: HTMLElement | null,
  * }} opts
  */
 export function mountNetworkManageTable(root, opts) {
   root.replaceChildren();
   root.classList.add('network-manage');
+  const toolbarHost = opts.toolbarHost || null;
+
+  /** Full CRM list (unfiltered) — multi-select pick lists must not shrink with filters. */
+  function allContacts() {
+    if (typeof opts.getAllContacts === 'function') {
+      const list = opts.getAllContacts();
+      if (Array.isArray(list)) return list;
+    }
+    return opts.getContacts();
+  }
 
   /** @type {string[]} */
   let visibleKeys = loadVisibleKeys();
@@ -735,6 +796,16 @@ export function mountNetworkManageTable(root, opts) {
     void undoLastBulk();
   });
 
+  const exportCsvBtn = document.createElement('button');
+  exportCsvBtn.type = 'button';
+  exportCsvBtn.className = 'network-crm__btn network-crm__btn--tiny';
+  exportCsvBtn.textContent = 'Export CSV';
+  exportCsvBtn.title =
+    'Download a CSV of the rows matching current filters, using only checked columns';
+  exportCsvBtn.addEventListener('click', () => {
+    exportVisibleCsv();
+  });
+
   function syncUndoBtn() {
     const n = lastBulkUndo?.entries?.length || 0;
     undoBtn.disabled = n === 0;
@@ -744,14 +815,21 @@ export function mountNetworkManageTable(root, opts) {
       : 'Undo the last bulk fill / clear';
   }
 
-  bar.append(colsBtn, clearFiltersBtn, undoBtn, colsPanel);
+  const toolbar = toolbarHost || bar;
+  toolbar.append(colsBtn, clearFiltersBtn, undoBtn, exportCsvBtn, colsPanel);
 
   const scroller = document.createElement('div');
   scroller.className = 'network-manage__scroll';
+  scroller.tabIndex = -1;
+  scroller.setAttribute('aria-label', 'Contacts table');
   const table = document.createElement('table');
   table.className = 'network-manage__table';
   scroller.append(table);
-  root.append(bar, scroller);
+  if (toolbarHost) {
+    root.append(scroller);
+  } else {
+    root.append(bar, scroller);
+  }
 
   /** Cap the table scroller just above the browser bottom (room for rounded corners). */
   function syncScrollerToViewport() {
@@ -817,23 +895,32 @@ export function mountNetworkManageTable(root, opts) {
     cellEditorFloat.replaceChildren(editorEl);
     cellEditorFloat.hidden = false;
     const tdRect = td.getBoundingClientRect();
-    const minW = Math.max(Math.ceil(tdRect.width), 140);
-    const maxW = Math.min(288, Math.floor(window.innerWidth - 16));
+    const isMulti = editorEl.classList.contains('network-manage__cell-multi');
+    const minW = Math.max(Math.ceil(tdRect.width), isMulti ? 180 : 140);
+    const maxW = Math.min(isMulti ? 352 : 288, Math.floor(window.innerWidth - 16));
     cellEditorFloat.style.minWidth = `${Math.min(minW, maxW)}px`;
     cellEditorFloat.style.maxWidth = `${maxW}px`;
     cellEditorFloat.style.width = 'max-content';
+    cellEditorFloat.style.maxHeight = '';
+    cellEditorFloat.style.overflow = '';
     cellEditorFloat.style.left = '0px';
     cellEditorFloat.style.top = '0px';
     const w = Math.min(Math.max(cellEditorFloat.offsetWidth, minW), maxW);
     const h = cellEditorFloat.offsetHeight;
+    const viewH = window.innerHeight;
     let x = tdRect.left;
     let y = tdRect.top;
     // Prefer opening down from the cell; flip up if needed.
-    if (y + h > window.innerHeight - 8 && tdRect.bottom - h >= 8) {
+    if (y + h > viewH - 8 && tdRect.bottom - h >= 8) {
       y = tdRect.bottom - h;
     }
+    // Tall multi-select (e.g. all Scene options): pin near the top so the full list fits.
+    if (isMulti && h > viewH - 16) {
+      y = 8;
+    } else {
+      y = Math.max(8, Math.min(y, viewH - h - 8));
+    }
     x = Math.max(8, Math.min(x, window.innerWidth - w - 8));
-    y = Math.max(8, Math.min(y, window.innerHeight - h - 8));
     cellEditorFloat.style.left = `${x}px`;
     cellEditorFloat.style.top = `${y}px`;
   }
@@ -916,21 +1003,62 @@ export function mountNetworkManageTable(root, opts) {
 
   function buildViewRows() {
     let rows = opts.getContacts().filter((c) => contactPassesFilters(c));
-    if (sort) {
-      const col = colByKey(sort.key);
-      if (col) {
-        const dir = sort.dir === 'desc' ? -1 : 1;
-        rows = [...rows].sort((a, b) => {
-          const av = col.get(a).toLowerCase();
-          const bv = col.get(b).toLowerCase();
-          if (av < bv) return -1 * dir;
-          if (av > bv) return 1 * dir;
-          return 0;
+    const effectiveSort = sort || { key: 'displayName', dir: 'asc' };
+    const col = colByKey(effectiveSort.key);
+    if (col) {
+      const dir = effectiveSort.dir === 'desc' ? -1 : 1;
+      rows = [...rows].sort((a, b) => {
+        const av = col.get(a).toLowerCase();
+        const bv = col.get(b).toLowerCase();
+        if (av < bv) return -1 * dir;
+        if (av > bv) return 1 * dir;
+        return String(a.displayName || '').localeCompare(String(b.displayName || ''), undefined, {
+          sensitivity: 'base',
         });
-      }
+      });
     }
     viewRows = rows;
     return rows;
+  }
+
+  /** Escape a single CSV field (RFC 4180). */
+  function csvEscape(value) {
+    const s = String(value ?? '');
+    if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
+
+  /**
+   * Download CSV of currently filtered rows × checked (visible) columns only.
+   */
+  function exportVisibleCsv() {
+    const cols = visibleCols();
+    if (!cols.length) {
+      opts.showStatus?.('No columns selected', true);
+      return;
+    }
+    const rows = buildViewRows();
+    const lines = [cols.map((c) => csvEscape(c.label)).join(',')];
+    for (const contact of rows) {
+      lines.push(cols.map((c) => csvEscape(c.get(contact))).join(','));
+    }
+    // BOM so Excel opens UTF-8 correctly.
+    const blob = new Blob(['\uFEFF' + lines.join('\r\n') + '\r\n'], {
+      type: 'text/csv;charset=utf-8',
+    });
+    const stamp = new Date().toISOString().slice(0, 10);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `network-contacts-${stamp}.csv`;
+    a.rel = 'noopener';
+    document.body.append(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    opts.showStatus?.(
+      `Exported ${rows.length} contact${rows.length === 1 ? '' : 's'} (${cols.length} column${cols.length === 1 ? '' : 's'})`,
+    );
   }
 
   function contactAt(rowIdx) {
@@ -989,6 +1117,23 @@ export function mountNetworkManageTable(root, opts) {
       focus: Math.max(0, Math.min(focus, max)),
     };
     paintSelection();
+    // Keep keyboard focus on the grid so arrow keys move the highlight
+    // even after clicking a cell while a search/filter input was focused.
+    if (document.activeElement instanceof HTMLElement) {
+      const ae = document.activeElement;
+      if (
+        ae.matches('input, textarea, select') ||
+        ae.isContentEditable ||
+        ae.closest('input, textarea, select, [contenteditable="true"]')
+      ) {
+        // Leave inline cell editors alone; they own focus while open.
+        if (!cellEdit) scroller.focus({ preventScroll: true });
+      } else if (!scroller.contains(ae)) {
+        scroller.focus({ preventScroll: true });
+      }
+    } else {
+      scroller.focus({ preventScroll: true });
+    }
   }
 
   /**
@@ -1475,7 +1620,9 @@ export function mountNetworkManageTable(root, opts) {
     if (!c) return;
 
     const initial = col.get(c);
-    const pickOpts = pickOptionsForCol(col, opts, opts.getContacts());
+    // Multi-select / pick lists always use the full contact set so people/search
+    // filters do not hide choices that exist outside the current view.
+    const pickOpts = pickOptionsForCol(col, opts, allContacts());
     const multi = isMultiSelectCol(col);
     const pickList = isPickListCol(col, opts);
 
@@ -1513,7 +1660,7 @@ export function mountNetworkManageTable(root, opts) {
         }
       }
       if (col.key === 'networkCircles') {
-        optionList = collectSceneOptions(opts.getContacts(), [...selected]);
+        optionList = collectSceneOptions(allContacts(), [...selected]);
       }
 
       const optsWrap = document.createElement('div');
@@ -2072,7 +2219,7 @@ export function mountNetworkManageTable(root, opts) {
   function fillSuggestionsForColumn(colKey) {
     const presets =
       colKey === 'networkCircles'
-        ? collectSceneOptions(opts.getContacts())
+        ? collectSceneOptions(allContacts())
         : resolveFillOptions({ key: colKey }, opts) || [];
     const seen = new Set(presets.map((v) => v.toLowerCase()));
     const fromData = [];
@@ -2294,6 +2441,8 @@ export function mountNetworkManageTable(root, opts) {
 
   /**
    * Unique values for a column among rows matching other filters.
+   * Multi-select columns always seed the full choice list (not only values
+   * present in the current filtered view).
    * @param {string} colKey
    */
   function uniqueValuesForColumn(colKey) {
@@ -2301,6 +2450,12 @@ export function mountNetworkManageTable(root, opts) {
     if (!col) return [];
     /** @type {Map<string, number>} */
     const counts = new Map();
+    if (isMultiSelectCol(col)) {
+      const presets = resolveFillOptions(col, opts, allContacts()) || [];
+      for (const p of presets) {
+        if (!counts.has(p)) counts.set(p, 0);
+      }
+    }
     for (const c of opts.getContacts()) {
       if (!contactPassesFilters(c, colKey)) continue;
       for (const key of filterKeysForCell(col, col.get(c))) {
@@ -3116,11 +3271,18 @@ export function mountNetworkManageTable(root, opts) {
       return;
     }
 
+    const isArrow =
+      e.key === 'ArrowUp' ||
+      e.key === 'ArrowDown' ||
+      e.key === 'ArrowLeft' ||
+      e.key === 'ArrowRight';
     const typingTarget =
       e.target instanceof HTMLElement &&
       (e.target.closest('input, textarea, select, [contenteditable="true"]') ||
         e.target.isContentEditable);
-    if (typingTarget) return;
+    // Spreadsheet-style: arrows move the highlighted cell even if a search
+    // box still has focus. Inline cell editors keep their own caret/keys.
+    if (typingTarget && !(isArrow && cellSel && !cellEdit)) return;
     if (!root.isConnected) return;
     if (!cellSel && !(e.target instanceof Node && root.contains(e.target))) return;
 
@@ -3177,6 +3339,41 @@ export function mountNetworkManageTable(root, opts) {
   syncUndoBtn();
 
   syncScrollerToViewport();
+
+  // #region agent log
+  (() => {
+    const payload = {
+      sessionId: 'e55622',
+      runId: 'post-fix',
+      hypothesisId: 'F',
+      location: 'network-manage-table.js:mount',
+      message: 'manage column order probe',
+      data: {
+        buildTag: 'birthday-row-2',
+        storageKey: STORAGE_KEY,
+        visibleKeys: [...visibleKeys],
+        clusterSlice: (() => {
+          const idxs = ATTR_CLUSTER_KEYS.map((k) => visibleKeys.indexOf(k)).filter((i) => i >= 0);
+          if (!idxs.length) return [];
+          const a = Math.min(...idxs);
+          const b = Math.max(...idxs);
+          return visibleKeys.slice(a, b + 1);
+        })(),
+      },
+      timestamp: Date.now(),
+    };
+    fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'e55622' },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+    fetch('/api/dev-agent-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  })();
+  // #endregion
 
   return {
     render,

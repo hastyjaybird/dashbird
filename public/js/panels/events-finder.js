@@ -704,6 +704,8 @@ export function mountEventsFinder(root) {
     const lon = Number(ev?.lon);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
     if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    // Null Island (0,0) = missing geo from APIs — do not pin the map in the Atlantic.
+    if (Math.abs(lat) < 0.01 && Math.abs(lon) < 0.01) return null;
     return { lat, lon };
   }
 
@@ -783,7 +785,7 @@ export function mountEventsFinder(root) {
             attribution: '',
             subdomains: 'abcd',
             maxZoom: 18,
-            minZoom: 8,
+            minZoom: 3,
           }).addTo(mapInstance);
           markersLayer = L.layerGroup().addTo(mapInstance);
           // After a pin popup closes, return to the zoom/center from before the pin was opened.
@@ -1123,18 +1125,26 @@ export function mountEventsFinder(root) {
       const lookFor = patch.lookFor ?? taste?.lookFor ?? '';
       const skip = patch.skip ?? taste?.skip ?? '';
       const blacklist = patch.blacklist ?? taste?.blacklist ?? '';
-      const favoriteEventIds = patch.favoriteEventIds ?? taste?.favoriteEventIds ?? [];
-      const calendarAddedEventIds =
-        patch.calendarAddedEventIds ?? taste?.calendarAddedEventIds ?? [];
       /** @type {Record<string, unknown>} */
       const body = {
         lookFor,
         skip,
         blacklist,
-        favoriteEventIds,
-        calendarAddedEventIds,
         scrape: taste?.scrape,
       };
+      // Only write favorites / calendar-added when this patch intends to change them
+      // (or on explicit non-silent Save). Silent filter autosave must omit these so it
+      // cannot clobber a concurrent heart / Add-to-Cal tap (lost-update race).
+      if (patch.favoriteEventIds !== undefined) {
+        body.favoriteEventIds = patch.favoriteEventIds;
+      } else if (!patch.silent) {
+        body.favoriteEventIds = taste?.favoriteEventIds ?? [];
+      }
+      if (patch.calendarAddedEventIds !== undefined) {
+        body.calendarAddedEventIds = patch.calendarAddedEventIds;
+      } else if (!patch.silent) {
+        body.calendarAddedEventIds = taste?.calendarAddedEventIds ?? [];
+      }
       // Silent taste/skip saves omit filters so they don't clobber ZIP/radius/dates.
       // Autosave and explicit Save pass includeFilters (or non-silent) to persist browse state.
       const writeFilters = !patch.silent || patch.includeFilters === true;
@@ -1200,10 +1210,14 @@ export function mountEventsFinder(root) {
           : (taste?.skippedEvents || []),
         favoriteEventIds: Array.isArray(data.favoriteEventIds)
           ? data.favoriteEventIds.map(String)
-          : favoriteEventIds,
+          : (patch.favoriteEventIds !== undefined
+            ? patch.favoriteEventIds.map(String)
+            : (taste?.favoriteEventIds || [])),
         calendarAddedEventIds: Array.isArray(data.calendarAddedEventIds)
           ? data.calendarAddedEventIds.map(String)
-          : calendarAddedEventIds,
+          : (patch.calendarAddedEventIds !== undefined
+            ? patch.calendarAddedEventIds.map(String)
+            : (taste?.calendarAddedEventIds || [])),
       };
       writePanelCache(CRITERIA_CACHE_KEY, {
         lookFor: taste.lookFor,
@@ -1694,11 +1708,17 @@ export function mountEventsFinder(root) {
     if (taste) taste = { ...taste, favoriteEventIds: nextFavs };
     paintFavButton(favBtn, nextOn);
 
-    const ok = await saveCriteria({
-      favoriteEventIds: nextFavs,
-      silent: true,
-      waitForIdle: true,
-    });
+    let ok = false;
+    for (let attempt = 0; attempt < 3 && !ok; attempt += 1) {
+      ok = await saveCriteria({
+        favoriteEventIds: nextFavs,
+        silent: true,
+        waitForIdle: true,
+      });
+      if (!ok && attempt < 2) {
+        await new Promise((r) => setTimeout(r, 120 * (attempt + 1)));
+      }
+    }
     if (!ok) {
       if (taste) taste = { ...taste, favoriteEventIds: prev };
       paintFavButton(favBtn, prev.includes(id));

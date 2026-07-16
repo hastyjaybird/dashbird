@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { upsertEventsFinderEvents } from './events-finder-store.js';
+import { getEventsFinderEventById, upsertEventsFinderEvents } from './events-finder-store.js';
 import {
   TELEGRAM_EVENT_LOGO_PATH,
   INVITE_VISION_MAX_IMAGES,
@@ -36,12 +36,14 @@ import {
 } from './telegram-message-classify.js';
 import { createPanelTodo } from './vikunja-client.js';
 import { addNetworkNote } from './network-notes-store.js';
-import { saveContactAvatar, upsertFromTelegram } from './network-contacts-store.js';
+import { upsertFromTelegram, getContactById, updateContact } from './network-contacts-store.js';
 import {
   saveOrganizationLogo,
   upsertOrganizationFromTelegram,
 } from './network-organizations-store.js';
 import { enrichContact, enrichContactFromFile, enrichOrganization } from './network-enrich.js';
+import { decodeContactQrFromImage } from './network-qr-decode.js';
+import { applyContactAvatarFromImage, looksLikeSocialProfileScreenshot } from './network-avatar-crop.js';
 import {
   attachIntakeMediaToMessage,
   deleteTelegramAlbumBuffer,
@@ -59,6 +61,13 @@ import {
   telegramIntakeQueueStats,
   upsertTelegramAlbumBuffer,
 } from './telegram-intake-queue.js';
+import {
+  consumeHowWeMetPrompt,
+  createHowWeMetPrompt,
+  eventHappeningAt,
+  matchByGps,
+} from './calendar-presence-index.js';
+import { extractImageGps } from './image-exif-gps.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 const TG_API = 'https://api.telegram.org';
@@ -70,6 +79,12 @@ let pollAbort = null;
 let pollInFlight = false;
 /** @type {number | null} */
 let updateOffset = null;
+/** Consecutive getUpdates Conflict errors (another poller sharing the bot token). */
+let telegramConflictStreak = 0;
+/** @type {string | null} */
+let telegramLastConflictAt = null;
+/** @type {string | null} */
+let telegramLastConflictMessage = null;
 
 /**
  * In-memory album debounce timers (state itself lives in SQLite).
@@ -207,17 +222,48 @@ async function tgApi(method, body, env = process.env) {
  * @param {number|string} chatId
  * @param {string} text
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ reply_markup?: object }} [extra]
  */
-export async function telegramSendMessage(chatId, text, env = process.env) {
+export async function telegramSendMessage(chatId, text, env = process.env, extra = {}) {
+  /** @type {Record<string, unknown>} */
+  const body = {
+    chat_id: chatId,
+    text: String(text || '').slice(0, 3900),
+    disable_web_page_preview: true,
+  };
+  if (extra?.reply_markup) body.reply_markup = extra.reply_markup;
+  return tgApi('sendMessage', body, env);
+}
+
+/**
+ * @param {number|string} chatId
+ * @param {number|string} messageId
+ * @param {string} text
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function telegramEditMessageText(chatId, messageId, text, env = process.env) {
   return tgApi(
-    'sendMessage',
+    'editMessageText',
     {
       chat_id: chatId,
+      message_id: messageId,
       text: String(text || '').slice(0, 3900),
       disable_web_page_preview: true,
     },
     env,
   );
+}
+
+/**
+ * @param {string} callbackQueryId
+ * @param {string} [text]
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function telegramAnswerCallbackQuery(callbackQueryId, text = '', env = process.env) {
+  /** @type {Record<string, unknown>} */
+  const body = { callback_query_id: callbackQueryId };
+  if (text) body.text = String(text).slice(0, 200);
+  return tgApi('answerCallbackQuery', body, env);
 }
 
 /**
@@ -355,7 +401,7 @@ async function saveCroppedFlyerPublic(buf, publicPath, env = process.env) {
   const crop = await cropFlyerRegion(buf);
   if (!crop.cropped) {
     return {
-      imageUrl: publicPath || TELEGRAM_EVENT_LOGO_PATH,
+      imageUrl: publicPath || null,
       cropped: false,
       score: crop.score || 0,
     };
@@ -363,6 +409,14 @@ async function saveCroppedFlyerPublic(buf, publicPath, env = process.env) {
   const base = path.basename(String(publicPath || 'flyer.jpg')).replace(/\.[^.]+$/, '');
   const croppedPath = saveMediaPublic(crop.buffer, `${base}-flyer.jpg`, env);
   return { imageUrl: croppedPath, cropped: true, score: crop.score || 0 };
+}
+
+/**
+ * True when imageUrl is the banned Telegram tile (must never be event card art).
+ * @param {unknown} url
+ */
+function isTelegramTileImage(url) {
+  return String(url || '').trim() === TELEGRAM_EVENT_LOGO_PATH;
 }
 
 /**
@@ -435,7 +489,11 @@ function eventIdForMessage(message, opts = {}) {
  */
 function finalizeEvent(partial, message, meta) {
   const id = eventIdForMessage(message, { mediaGroupId: meta.mediaGroupId });
-  const imageUrl = meta.imageUrl || TELEGRAM_EVENT_LOGO_PATH;
+  // Prefer an explicit media path; never fall back to /assets/tile-telegram.svg.
+  const fromPartial = clean(/** @type {{ imageUrl?: unknown }} */ (partial).imageUrl);
+  const fromMeta = clean(meta.imageUrl);
+  let imageUrl = fromMeta || fromPartial || null;
+  if (isTelegramTileImage(imageUrl)) imageUrl = null;
   const from = message?.from || {};
   const invitedBy =
     clean(/** @type {{ invitedBy?: unknown }} */ (partial).invitedBy)
@@ -443,6 +501,9 @@ function finalizeEvent(partial, message, meta) {
   const messageIds = Array.isArray(meta.messageIds) && meta.messageIds.length
     ? meta.messageIds
     : [message?.message_id].filter((v) => v != null);
+  const imageUrls = (Array.isArray(meta.imageUrls) ? meta.imageUrls : [imageUrl])
+    .map((u) => clean(u))
+    .filter((u) => u && !isTelegramTileImage(u));
 
   return {
     ...partial,
@@ -458,13 +519,13 @@ function finalizeEvent(partial, message, meta) {
       messageId: message?.message_id ?? null,
       messageIds,
       mediaGroupId: meta.mediaGroupId || message?.media_group_id || null,
-      imageUrls: Array.isArray(meta.imageUrls) ? meta.imageUrls : [imageUrl],
+      imageUrls,
       fromId: from.id ?? null,
       fromUsername: from.username ?? null,
       parseVia: meta.parseVia,
       transcript: meta.transcript || null,
       invitedBy,
-      telegramLogoFallback: imageUrl === TELEGRAM_EVENT_LOGO_PATH,
+      telegramLogoFallback: false,
     },
   };
 }
@@ -501,6 +562,218 @@ function formatIngestReply(event) {
   if (invited) bits.push(`Invited by: ${invited}`);
   if (clean(event.venue)) bits.push(`Where: ${clean(event.venue)}`);
   return bits.join('\n');
+}
+
+/**
+ * @param {object} contact
+ * @param {{ photoSet?: boolean }} [opts]
+ */
+/**
+ * Where Network UI should be opened for Telegram-saved contacts.
+ * Cloud is the sole getUpdates consumer — LAN Network DB will not see new rows
+ * until synced.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function telegramNetworkViewHint(env = process.env) {
+  const origin = String(env.DASHBOARD_LAN_ORIGIN || '').trim().replace(/\/$/, '');
+  if (origin) return `${origin}/`;
+  const domain = String(env.DASHBOARD_DOMAIN || '').trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
+  if (domain) return `https://${domain}/`;
+  return null;
+}
+
+function formatContactSavedReply(contact, opts = {}, env = process.env) {
+  const name = clean(contact?.displayName) || 'Contact';
+  const org = clean(contact?.org);
+  const pending = Array.isArray(contact?.mergeSuggestions)
+    ? contact.mergeSuggestions.filter((s) => s && s.status === 'pending')
+    : [];
+  const suggestName =
+    clean(contact?._telegramSuggestMergeWithName)
+    || clean(pending[0]?.otherDisplayName)
+    || null;
+  const viewAt = telegramNetworkViewHint(env);
+  if (suggestName) {
+    let line = `Intake saved: ${name}${org ? ` (${org})` : ''}`;
+    if (opts.photoSet) line += ' · photo set';
+    if (opts.howWeMetTitle) line += `\nHow we met: ${opts.howWeMetTitle}`;
+    line += `\nMatched existing: ${suggestName}`;
+    line += '\nConfirm merge in Network (open task) to fold this info in.';
+    if (viewAt) line += `\nOpen: ${viewAt}`;
+    return line;
+  }
+  let line = `Contact saved: ${name}${org ? ` (${org})` : ''}`;
+  if (opts.photoSet) line += ' · photo set';
+  if (opts.howWeMetTitle) line += `\nHow we met: ${opts.howWeMetTitle}`;
+  if (viewAt) line += `\nOpen Network: ${viewAt}`;
+  return line;
+}
+
+/**
+ * After Telegram contact save(s): EXIF GPS → autofill howWeMet, else Yes/No if during an event.
+ * @param {{
+ *   chatId: number | string,
+ *   contactIds: Array<number | string>,
+ *   message?: object | null,
+ *   imageBuffer?: Buffer | null,
+ *   atMs?: number,
+ *   notifyUser?: boolean,
+ * }} opts
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<{
+ *   applied: boolean,
+ *   asked: boolean,
+ *   howWeMetTitle?: string,
+ *   howWeMet?: string,
+ * }>}
+ */
+async function maybeApplyHowWeMetFromPresence(opts, env = process.env) {
+  const chatId = opts.chatId;
+  const contactIds = (opts.contactIds || []).map((id) => String(id)).filter(Boolean);
+  if (!contactIds.length || chatId == null) {
+    return { applied: false, asked: false };
+  }
+
+  const messageAtMs = Number(opts.message?.date) * 1000;
+  const fallbackAt =
+    Number.isFinite(Number(opts.atMs))
+      ? Number(opts.atMs)
+      : Number.isFinite(messageAtMs) && messageAtMs > 0
+        ? messageAtMs
+        : Date.now();
+
+  let gps = null;
+  if (opts.imageBuffer && Buffer.isBuffer(opts.imageBuffer)) {
+    try {
+      gps = await extractImageGps(opts.imageBuffer);
+    } catch {
+      gps = null;
+    }
+  }
+
+  if (gps) {
+    const atMs = Number.isFinite(gps.capturedAtMs) ? gps.capturedAtMs : fallbackAt;
+    const hit = matchByGps(
+      {
+        lat: gps.lat,
+        lon: gps.lon,
+        accuracyMeters: gps.accuracyMeters,
+        atMs,
+      },
+      env,
+    );
+    if (hit?.howWeMet) {
+      for (const id of contactIds) {
+        try {
+          await updateContact(id, { howWeMet: hit.howWeMet }, env);
+        } catch (e) {
+          console.warn('[telegram-events] howWeMet autofill failed', id, e?.message || e);
+        }
+      }
+      const title = String(hit.event?.title || '').trim() || 'event';
+      console.log('[telegram-events] howWeMet autofill', title, contactIds.length);
+      return {
+        applied: true,
+        asked: false,
+        howWeMetTitle: title,
+        howWeMet: hit.howWeMet,
+      };
+    }
+  }
+
+  // No usable GPS match — ask if upload time falls in an indexed event.
+  const happening = eventHappeningAt(fallbackAt, env);
+  if (!happening?.howWeMet || opts.notifyUser === false) {
+    return { applied: false, asked: false };
+  }
+
+  const prompt = createHowWeMetPrompt(
+    {
+      chatId,
+      contactIds,
+      howWeMet: happening.howWeMet,
+      eventTitle: String(happening.event?.title || '').trim() || 'this event',
+      eventId: happening.event?.id,
+    },
+    env,
+  );
+  const title = prompt.eventTitle;
+  try {
+    await telegramSendMessage(
+      chatId,
+      `Did you meet them at ${title}?`,
+      env,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: 'Yes', callback_data: `hwm:y:${prompt.promptId}` },
+              { text: 'No', callback_data: `hwm:n:${prompt.promptId}` },
+            ],
+          ],
+        },
+      },
+    );
+    return { asked: true, applied: false, howWeMetTitle: title, howWeMet: happening.howWeMet };
+  } catch (e) {
+    console.warn('[telegram-events] howWeMet prompt failed', e?.message || e);
+    return { applied: false, asked: false };
+  }
+}
+
+/**
+ * @param {any} callbackQuery
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function handleHowWeMetCallback(callbackQuery, env = process.env) {
+  const data = String(callbackQuery?.data || '').trim();
+  const m = data.match(/^hwm:([yn]):([A-Za-z0-9_-]+)$/);
+  const cqId = String(callbackQuery?.id || '');
+  if (!m) {
+    if (cqId) await telegramAnswerCallbackQuery(cqId, '', env).catch(() => {});
+    return { ok: true, skipped: true, reason: 'not_how_we_met' };
+  }
+  const yes = m[1] === 'y';
+  const promptId = m[2];
+  const prompt = consumeHowWeMetPrompt(promptId, env);
+  const chatId = callbackQuery?.message?.chat?.id ?? callbackQuery?.from?.id;
+  const messageId = callbackQuery?.message?.message_id;
+
+  if (!prompt) {
+    if (cqId) await telegramAnswerCallbackQuery(cqId, 'Expired', env).catch(() => {});
+    if (chatId != null && messageId != null) {
+      await telegramEditMessageText(chatId, messageId, 'How we met prompt expired.', env).catch(
+        () => {},
+      );
+    }
+    return { ok: true, type: 'how_we_met', expired: true };
+  }
+
+  if (yes) {
+    for (const id of prompt.contactIds || []) {
+      try {
+        await updateContact(id, { howWeMet: prompt.howWeMet }, env);
+      } catch (e) {
+        console.warn('[telegram-events] howWeMet Yes patch failed', id, e?.message || e);
+      }
+    }
+    if (cqId) await telegramAnswerCallbackQuery(cqId, 'Saved', env).catch(() => {});
+    if (chatId != null && messageId != null) {
+      await telegramEditMessageText(
+        chatId,
+        messageId,
+        `Marked as met at ${prompt.eventTitle}.`,
+        env,
+      ).catch(() => {});
+    }
+    return { ok: true, type: 'how_we_met', applied: true, eventTitle: prompt.eventTitle };
+  }
+
+  if (cqId) await telegramAnswerCallbackQuery(cqId, 'Skipped', env).catch(() => {});
+  if (chatId != null && messageId != null) {
+    await telegramEditMessageText(chatId, messageId, 'Skipped how we met.', env).catch(() => {});
+  }
+  return { ok: true, type: 'how_we_met', applied: false };
 }
 
 /**
@@ -603,10 +876,9 @@ export async function processTelegramAlbum(messages, env = process.env) {
       const base = path.basename(String(bestFlyer.publicPath || downloaded[bestFlyer.index].publicPath || 'album'))
         .replace(/\.[^.]+$/, '');
       imageUrl = saveMediaPublic(bestFlyer.buffer, `${base}-flyer.jpg`, env);
-    } else if (bestFlyer.score >= 35) {
-      imageUrl = bestFlyer.publicPath || downloaded[bestFlyer.index].publicPath;
     } else {
-      imageUrl = TELEGRAM_EVENT_LOGO_PATH;
+      // Keep the real photo even when flyer-crop confidence is low — never the Telegram tile.
+      imageUrl = bestFlyer.publicPath || downloaded[bestFlyer.index].publicPath || imageUrl;
     }
   }
   let parsed;
@@ -650,13 +922,14 @@ export async function processTelegramAlbum(messages, env = process.env) {
   }
 
   const upsert = upsertEventsFinderEvents([event], env);
-  const reply = formatIngestReply(event);
+  const verified = requirePersistedEvent(event, env);
+  const reply = formatIngestReply(verified);
   const albumNote = downloaded.length > 1 ? `\n(${downloaded.length} screenshots → one event)` : '';
   await telegramSendMessage(chatId, `${reply}${albumNote}`, env);
 
   return {
     ok: true,
-    event,
+    event: verified,
     upserted: upsert?.upserted ?? 1,
     parseVia: downloaded.length > 1 ? 'photo_album' : 'photo',
     albumSize: downloaded.length,
@@ -1321,12 +1594,22 @@ async function routeNonEventType(type, text, chatId, env, meta = {}) {
       } catch {
         // ignore
       }
-      await telegramSendMessage(
-        chatId,
-        `Contact saved: ${enriched.displayName}${enriched.org ? ` (${enriched.org})` : ''}`,
+      const verified = await requirePersistedContact(enriched, env);
+      const hwm = await maybeApplyHowWeMetFromPresence(
+        {
+          chatId,
+          contactIds: [verified.id],
+          atMs: Date.now(),
+          notifyUser: true,
+        },
         env,
       );
-      return { ok: true, type: 'contact', contact: enriched };
+      await telegramSendMessage(
+        chatId,
+        formatContactSavedReply(verified, { howWeMetTitle: hwm.applied ? hwm.howWeMetTitle : undefined }, env),
+        env,
+      );
+      return { ok: true, type: 'contact', contact: verified, howWeMet: hwm };
     } catch (e) {
       await telegramSendMessage(chatId, `Contact failed: ${String(e?.message || e).slice(0, 200)}`, env);
       return { ok: false, error: String(e?.message || e), type: 'contact' };
@@ -1459,14 +1742,25 @@ async function ingestTelegramGuestListFromImage(message, file, env, meta = {}) {
         env,
       );
 
-      if ((person.hasHeadshot || person.headshotCrop) && !contact.avatarUrl && person.headshotCrop) {
+      if ((person.hasHeadshot || person.headshotCrop) && !contact.avatarUrl) {
         try {
-          const avatarBuf = await cropImageRegion(file.buffer, person.headshotCrop);
-          if (avatarBuf) {
-            contact = await saveContactAvatar(
-              contact.id,
-              { base64: avatarBuf.toString('base64'), mimeType: 'image/jpeg' },
-              env,
+          const applied = await applyContactAvatarFromImage(
+            contact.id,
+            file.buffer,
+            {
+              kind: 'guest_list',
+              headshotCrop: person.headshotCrop || null,
+              mimeType: file.mimeType || 'image/jpeg',
+            },
+            env,
+          );
+          if (applied.ok && applied.contact) {
+            contact = applied.contact;
+            console.log(
+              '[telegram-events] guest avatar crop',
+              displayName,
+              applied.source,
+              JSON.stringify(applied.crop),
             );
           }
         } catch (e) {
@@ -1474,7 +1768,7 @@ async function ingestTelegramGuestListFromImage(message, file, env, meta = {}) {
         }
       }
 
-      saved.push(contact);
+      saved.push(await requirePersistedContact(contact, env));
     } catch (e) {
       failed.push(displayName);
       console.warn('[telegram-events] guest upsert failed', displayName, e?.message || e);
@@ -1494,11 +1788,25 @@ async function ingestTelegramGuestListFromImage(message, file, env, meta = {}) {
     .join(', ');
   const more = saved.length > 8 ? ` (+${saved.length - 8} more)` : '';
   const failBit = failed.length ? `\nSkipped ${failed.length}: ${failed.slice(0, 5).join(', ')}` : '';
+  const hwm = await maybeApplyHowWeMetFromPresence(
+    {
+      chatId,
+      contactIds: saved.map((c) => c.id),
+      message,
+      imageBuffer: file?.buffer || null,
+      notifyUser,
+    },
+    env,
+  );
+
+  const hwmBit = hwm.applied
+    ? `\nHow we met: ${hwm.howWeMetTitle}`
+    : '';
   await notifyIntake(
     chatId,
     `Guest list → ${saved.length} contact${saved.length === 1 ? '' : 's'}${
       eventName ? ` · ${eventName}` : ''
-    }:\n${preview}${more}${failBit}`,
+    }:\n${preview}${more}${failBit}${hwmBit}`,
     env,
     { notifyUser },
   );
@@ -1511,6 +1819,7 @@ async function ingestTelegramGuestListFromImage(message, file, env, meta = {}) {
     contacts: saved,
     saved: saved.length,
     failed: failed.length,
+    howWeMet: hwm,
     // Keep single-contact shape for older status tooling.
     contact: saved[0],
   };
@@ -1557,6 +1866,21 @@ async function ingestTelegramContactFromImage(message, file, env, meta = {}) {
   // Physical/digital business cards are always Type = business only (not friend).
   const kinds = imageKind === 'business_card' ? ['business'] : c.kind === 'business' ? ['business'] : ['friend'];
 
+  /** Decode QR before create so the first write already has the card URL. */
+  let qr = { urls: [], emails: [], phones: [], linkedin: null };
+  try {
+    qr = await decodeContactQrFromImage(file.buffer);
+    if (qr.urls.length || qr.linkedin) {
+      console.log(
+        '[telegram-events] business-card QR',
+        displayName,
+        JSON.stringify({ urls: qr.urls, linkedin: qr.linkedin }),
+      );
+    }
+  } catch (e) {
+    console.warn('[telegram-events] QR decode failed', e?.message || e);
+  }
+
   try {
     let contact = await upsertFromTelegram(
       {
@@ -1568,14 +1892,14 @@ async function ingestTelegramContactFromImage(message, file, env, meta = {}) {
         title: c.title || '',
         location: c.location || co.location || '',
         address: c.address || '',
-        website: c.website || co.website || hints.website || '',
+        website: c.website || co.website || hints.website || qr.urls[0] || '',
         channels: {
-          email: c.email || hints.email || null,
-          phone: c.phone || hints.phone || null,
+          email: c.email || hints.email || qr.emails?.[0] || null,
+          phone: c.phone || hints.phone || qr.phones?.[0] || null,
           officePhone: c.officePhone || hints.officePhone || null,
           telegram: c.telegram || hints.telegram || null,
-          linkedin: c.linkedin || hints.linkedin || null,
-          urls: [c.website, co.website, hints.website].filter(Boolean),
+          linkedin: c.linkedin || hints.linkedin || qr.linkedin || null,
+          urls: [c.website, co.website, hints.website, ...qr.urls].filter(Boolean),
         },
       },
       env,
@@ -1583,26 +1907,43 @@ async function ingestTelegramContactFromImage(message, file, env, meta = {}) {
 
     const mime = file.mimeType || 'image/jpeg';
     const dataUrl = bufferToDataUrl(file.buffer, mime);
-    const wantAvatar = Boolean(classified.hasHeadshot) || imageKind === 'headshot';
+    const profileShot =
+      imageKind === 'social_screenshot'
+      || imageKind === 'linkedin_screenshot'
+      || (await looksLikeSocialProfileScreenshot(file.buffer));
+    // Always crop avatars for profile screenshots (even if VLM forgot hasHeadshot).
+    const wantAvatar =
+      profileShot
+      || Boolean(classified.hasHeadshot)
+      || imageKind === 'headshot'
+      || imageKind === 'business_card';
 
-    // Prefer a cropped face region; only use the full frame for pure headshots.
     if (wantAvatar && !contact.avatarUrl) {
       try {
-        let avatarBuf = null;
-        if (classified.headshotCrop) {
-          avatarBuf = await cropImageRegion(file.buffer, classified.headshotCrop);
-        }
-        if (!avatarBuf && imageKind === 'headshot') {
-          avatarBuf = file.buffer;
-        }
-        if (avatarBuf) {
-          contact = await saveContactAvatar(
-            contact.id,
-            {
-              base64: avatarBuf.toString('base64'),
-              mimeType: avatarBuf === file.buffer ? mime : 'image/jpeg',
-            },
-            env,
+        const applied = await applyContactAvatarFromImage(
+          contact.id,
+          file.buffer,
+          {
+            kind: imageKind || (profileShot ? 'social_screenshot' : ''),
+            headshotCrop: classified.headshotCrop || null,
+            mimeType: mime,
+            allowFullFrame: true,
+          },
+          env,
+        );
+        if (applied.ok && applied.contact) {
+          contact = applied.contact;
+          console.log(
+            '[telegram-events] avatar crop',
+            displayName,
+            applied.source,
+            JSON.stringify(applied.crop),
+          );
+        } else {
+          console.warn(
+            '[telegram-events] avatar crop skipped',
+            displayName,
+            applied.error || applied.source,
           );
         }
       } catch (e) {
@@ -1618,7 +1959,9 @@ async function ingestTelegramContactFromImage(message, file, env, meta = {}) {
           filename: path.basename(file.filePath || 'telegram-contact.jpg'),
           mimeType: mime,
           force: true,
-          useImageAsAvatar: imageKind === 'headshot' && !contact.avatarUrl,
+          // Never overwrite a carefully cropped avatar with the full screenshot.
+          preserveAvatar: Boolean(contact.avatarUrl) || profileShot,
+          useImageAsAvatar: imageKind === 'headshot' && !contact.avatarUrl && !profileShot,
         },
         env,
       );
@@ -1684,7 +2027,6 @@ async function ingestTelegramContactFromImage(message, file, env, meta = {}) {
         }
         // Link contact → org if still missing orgId.
         if (!contact.orgId || contact.org !== org.name) {
-          const { updateContact } = await import('./network-contacts-store.js');
           contact = await updateContact(contact.id, { org: org.name, orgId: org.id }, env);
         }
       } catch (e) {
@@ -1692,20 +2034,33 @@ async function ingestTelegramContactFromImage(message, file, env, meta = {}) {
       }
     }
 
+    const verified = await requirePersistedContact(contact, env);
+    const hwm = await maybeApplyHowWeMetFromPresence(
+      {
+        chatId,
+        contactIds: [verified.id],
+        message,
+        imageBuffer: file?.buffer || null,
+        notifyUser,
+      },
+      env,
+    );
     await notifyIntake(
       chatId,
-      `Contact saved: ${contact.displayName}${contact.org ? ` (${contact.org})` : ''}${
-        contact.avatarUrl ? ' · photo set' : ''
-      }`,
+      formatContactSavedReply(verified, {
+        photoSet: Boolean(verified.avatarUrl),
+        howWeMetTitle: hwm.applied ? hwm.howWeMetTitle : undefined,
+      }, env),
       env,
       { notifyUser },
     );
     return {
       ok: true,
       type: 'contact',
-      contact,
+      contact: verified,
       imageKind,
       hasHeadshot: Boolean(classified.hasHeadshot),
+      howWeMet: hwm,
     };
   } catch (e) {
     await notifyIntake(chatId, `Contact failed: ${String(e?.message || e).slice(0, 200)}`, env, {
@@ -1810,7 +2165,7 @@ async function ingestTelegramCompanyFromImage(message, file, env, meta = {}) {
 async function ingestTelegramEventFromText(text, message, env, meta = {}) {
   const chatId = message?.chat?.id;
   const notifyUser = meta.notifyUser !== false;
-  let parsed = await parseInviteText(text, env, { defaultImageUrl: TELEGRAM_EVENT_LOGO_PATH });
+  let parsed = await parseInviteText(text, env, { defaultImageUrl: null });
   // Bare platform URLs should still ingest when the LLM is rate/credit limited.
   if ((!parsed.ok || !parsed.event) && looksLikeEventPlatformUrl(text)) {
     const fromUrl = await parseInviteFromEventUrl(text, env);
@@ -1824,16 +2179,22 @@ async function ingestTelegramEventFromText(text, message, env, meta = {}) {
   const event = finalizeEvent(parsed.event, message, {
     parseVia: meta.parseVia || 'text',
     transcript: meta.transcript || null,
-    imageUrl: TELEGRAM_EVENT_LOGO_PATH,
+    imageUrl: clean(parsed.event.imageUrl) || null,
   });
   if (parsed.event.invitedBy) event.invitedBy = parsed.event.invitedBy;
   await enrichEventPublicUrl(event, { textHint: text });
+  if (!event.imageUrl || isTelegramTileImage(event.imageUrl)) {
+    const og = await fetchOgImageForEventUrl(event.url);
+    if (og) event.imageUrl = og;
+    else event.imageUrl = null;
+  }
   const upsert = upsertEventsFinderEvents([event], env);
-  await telegramSendMessage(chatId, formatIngestReply(event), env);
+  const verified = requirePersistedEvent(event, env);
+  await telegramSendMessage(chatId, formatIngestReply(verified), env);
   return {
     ok: true,
     type: 'event',
-    event,
+    event: verified,
     upserted: upsert?.upserted ?? 1,
     parseVia: meta.parseVia || 'text',
     transcript: meta.transcript || null,
@@ -1866,6 +2227,7 @@ async function parseInviteFromEventUrl(text, env = process.env) {
 
   let title = null;
   let description = null;
+  let imageUrl = null;
   try {
     const r = await fetch(url, {
       redirect: 'follow',
@@ -1883,6 +2245,17 @@ async function parseInviteFromEventUrl(text, env = process.env) {
         (html.match(/property=["']og:description["']\s+content=["']([^"']+)["']/i)
           || html.match(/content=["']([^"']+)["']\s+property=["']og:description["']/i)
           || [])[1] || null;
+      const ogImage =
+        (html.match(/property=["']og:image["']\s+content=["']([^"']+)["']/i)
+          || html.match(/content=["']([^"']+)["']\s+property=["']og:image["']/i)
+          || [])[1] || null;
+      if (ogImage) {
+        try {
+          imageUrl = new URL(ogImage, url).href;
+        } catch {
+          imageUrl = ogImage;
+        }
+      }
       if (title) {
         title = title
           .replace(/\s*[·|].*Luma\s*$/i, '')
@@ -1945,10 +2318,37 @@ async function parseInviteFromEventUrl(text, env = process.env) {
       source: 'telegram',
       online: false,
       description,
-      imageUrl: TELEGRAM_EVENT_LOGO_PATH,
+      imageUrl,
       invitedBy: null,
     },
   };
+}
+
+/**
+ * Best-effort og:image from a public event page (text-only intake).
+ * @param {unknown} url
+ * @returns {Promise<string | null>}
+ */
+async function fetchOgImageForEventUrl(url) {
+  const href = clean(url);
+  if (!href || isTelegramPlaceholderUrl(href)) return null;
+  try {
+    const r = await fetch(href, {
+      redirect: 'follow',
+      headers: { 'User-Agent': 'Mozilla/5.0 DashbirdTelegramIntake/1.0', Accept: 'text/html' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!r.ok) return null;
+    const html = await r.text();
+    const ogImage =
+      (html.match(/property=["']og:image["']\s+content=["']([^"']+)["']/i)
+        || html.match(/content=["']([^"']+)["']\s+property=["']og:image["']/i)
+        || [])[1] || null;
+    if (!ogImage) return null;
+    return new URL(ogImage, href).href;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1962,7 +2362,7 @@ async function ingestTelegramEventFromMessage(message, env, media) {
   /** @type {{ ok: boolean, error?: string | null, event?: Record<string, unknown> | null }} */
   let parsed = { ok: false, error: 'unsupported_message', event: null };
   /** @type {string | null} */
-  let imageUrl = TELEGRAM_EVENT_LOGO_PATH;
+  let imageUrl = null;
   const parseVia = 'photo';
 
   try {
@@ -1988,11 +2388,8 @@ async function ingestTelegramEventFromMessage(message, env, media) {
     const cropped = await saveCroppedFlyerPublic(file.buffer, publicPath, env);
     if (cropped.cropped) {
       imageUrl = cropped.imageUrl;
-    } else if (cropped.score < 35) {
-      // Text/UI screenshot with no flyer graphic — keep for vision parse, but
-      // prefer the Telegram tile until a better flyer lands.
-      imageUrl = TELEGRAM_EVENT_LOGO_PATH;
     }
+    // Low flyer-crop score still keeps the real photo — never /assets/tile-telegram.svg.
   } catch (e) {
     await notifyIntake(chatId, `Ingest error: ${String(e?.message || e).slice(0, 200)}`, env, { notifyUser });
     return { ok: false, error: String(e?.message || e), type: 'event' };
@@ -2010,11 +2407,12 @@ async function ingestTelegramEventFromMessage(message, env, media) {
     textHint: [media.caption, media.text].filter(Boolean).join('\n'),
   });
   const upsert = upsertEventsFinderEvents([event], env);
-  await telegramSendMessage(chatId, formatIngestReply(event), env);
+  const verified = requirePersistedEvent(event, env);
+  await telegramSendMessage(chatId, formatIngestReply(verified), env);
   return {
     ok: true,
     type: 'event',
-    event,
+    event: verified,
     upserted: upsert?.upserted ?? 1,
     parseVia,
   };
@@ -2028,6 +2426,9 @@ async function ingestTelegramEventFromMessage(message, env, media) {
  * @param {{ notifyUser?: boolean }} [opts]
  */
 export async function handleTelegramUpdate(update, env = process.env, media = null, opts = {}) {
+  if (update?.callback_query) {
+    return handleHowWeMetCallback(update.callback_query, env);
+  }
   const message = update?.message || update?.edited_message;
   if (!message) return { ok: true, skipped: true, reason: 'no_message' };
   if (media?.length) attachIntakeMediaToMessage(message, media);
@@ -2049,6 +2450,59 @@ function isPermanentIntakeFailure(result) {
     // User already got the /event|/todo prompt — retrying the same text just spams chat.
     || err === 'low_confidence'
   );
+}
+
+/**
+ * Only confirm after a fresh SQLite read — never trust an in-memory upsert result alone.
+ * @param {object | null | undefined} contact
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {Promise<object>}
+ */
+async function requirePersistedContact(contact, env) {
+  const id = String(contact?.id || '').trim();
+  if (!id) {
+    const err = new Error('contact_not_persisted');
+    err.code = 'contact_not_persisted';
+    throw err;
+  }
+  const fresh = await getContactById(id, env);
+  if (!fresh?.id) {
+    const err = new Error('contact_not_persisted');
+    err.code = 'contact_not_persisted';
+    throw err;
+  }
+  return fresh;
+}
+
+/**
+ * Only confirm events after a fresh catalog read.
+ * @param {object | null | undefined} event
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {object}
+ */
+function requirePersistedEvent(event, env) {
+  const id = String(event?.id || '').trim();
+  if (!id) {
+    const err = new Error('event_not_persisted');
+    err.code = 'event_not_persisted';
+    throw err;
+  }
+  const fresh = getEventsFinderEventById(id, env);
+  if (!fresh?.id) {
+    const err = new Error('event_not_persisted');
+    err.code = 'event_not_persisted';
+    throw err;
+  }
+  return fresh;
+}
+
+/**
+ * @param {unknown} err
+ * @returns {boolean}
+ */
+function isTelegramGetUpdatesConflict(err) {
+  const msg = String(/** @type {{ message?: unknown }} */ (err)?.message || err || '');
+  return /conflict/i.test(msg) && /getupdates/i.test(msg);
 }
 
 /**
@@ -2123,11 +2577,16 @@ export async function pollTelegramEventsOnce(env = process.env) {
   /** @type {Record<string, unknown>} */
   const params = {
     timeout: 25,
-    allowed_updates: ['message', 'edited_message'],
+    allowed_updates: ['message', 'edited_message', 'callback_query'],
   };
   if (offset != null) params.offset = offset;
 
   const updates = await tgApi('getUpdates', params, env);
+  if (telegramConflictStreak > 0) {
+    telegramConflictStreak = 0;
+    telegramLastConflictMessage = null;
+    console.log('[telegram-events] getUpdates recovered after Conflict streak');
+  }
   const list = Array.isArray(updates) ? updates : [];
   let enqueued = 0;
   let ackFailed = 0;
@@ -2181,13 +2640,24 @@ export async function probeTelegramEventsIntake(env = process.env) {
   if (!enabled || !token) {
     return {
       active: false,
-      value: 'Off — set TELEGRAM_BOT_TOKEN (+ TELEGRAM_EVENTS_ENABLED=1)',
-      output: 'Telegram Events intake disabled.',
+      value: !token
+        ? 'Off — set TELEGRAM_BOT_TOKEN (+ TELEGRAM_EVENTS_ENABLED=1)'
+        : 'Off — TELEGRAM_EVENTS_ENABLED=0 (poller disabled on this host)',
+      output: !token
+        ? 'Telegram Events intake disabled.'
+        : 'Token present but poller disabled here. Cloud should be the sole getUpdates consumer.',
       ingestOk: null,
-      ingestTest: 'Not wired — bot token missing',
+      ingestTest: !token
+        ? 'Not wired — bot token missing'
+        : 'Off — poller disabled (expected on LAN)',
       allowedChatIds: allowed,
       openRouter,
       queue: telegramIntakeQueueStats(env),
+      conflict: {
+        streak: telegramConflictStreak,
+        lastAt: telegramLastConflictAt,
+        lastMessage: telegramLastConflictMessage,
+      },
     };
   }
 
@@ -2220,16 +2690,28 @@ export async function probeTelegramEventsIntake(env = process.env) {
         queue: telegramIntakeQueueStats(env),
       };
     }
+    const conflict = telegramConflictStreak > 0;
     return {
       active: true,
-      value: `Bot ${username} · polling`,
-      output: `Allowlist ${allowed.length} chat(s). Text/voice/photos → event, todo, note, contact, or company. Durable intake queue survives Bot API 24h retention.`,
-      ingestOk: true,
-      ingestTest: `Pass — ${username} ready (${allowed.length} chat id(s))`,
+      value: conflict
+        ? `Bot ${username} · CONFLICT (another getUpdates poller)`
+        : `Bot ${username} · polling`,
+      output: conflict
+        ? `getUpdates Conflict ×${telegramConflictStreak}. Only one Dashbird instance may poll this bot token (keep cloud on; LAN must set TELEGRAM_EVENTS_ENABLED=0). Last: ${telegramLastConflictAt || 'n/a'}`
+        : `Allowlist ${allowed.length} chat(s). Text/voice/photos → event, todo, note, contact, or company. Durable intake queue survives Bot API 24h retention.`,
+      ingestOk: !conflict,
+      ingestTest: conflict
+        ? `Fail — duplicate getUpdates poller (Conflict ×${telegramConflictStreak})`
+        : `Pass — ${username} ready (${allowed.length} chat id(s))`,
       bot: me,
       allowedChatIds: allowed,
       openRouter,
       queue: telegramIntakeQueueStats(env),
+      conflict: {
+        streak: telegramConflictStreak,
+        lastAt: telegramLastConflictAt,
+        lastMessage: telegramLastConflictMessage,
+      },
     };
   } catch (e) {
     return {
@@ -2274,7 +2756,18 @@ export function startTelegramEventsPoller(env = process.env) {
     try {
       await pollTelegramEventsOnce(env);
     } catch (e) {
-      console.warn('[telegram-events] poll failed', e?.message || e);
+      if (isTelegramGetUpdatesConflict(e)) {
+        telegramConflictStreak += 1;
+        telegramLastConflictAt = new Date().toISOString();
+        telegramLastConflictMessage = String(e?.message || e).slice(0, 240);
+        console.warn(
+          '[telegram-events] poll failed',
+          e?.message || e,
+          `(Conflict streak ${telegramConflictStreak} — another instance is polling this bot token)`,
+        );
+      } else {
+        console.warn('[telegram-events] poll failed', e?.message || e);
+      }
       // Still try to drain leftover durable rows even if getUpdates failed.
       try {
         await drainTelegramIntakeQueue(env);

@@ -1,0 +1,35 @@
+# TLS + basic auth + reverse proxy for public dashbird (Vultr / DuckDNS).
+# Env vars injected by docker-compose.cloud.yml (Caddy {$VAR} syntax).
+#
+# Generate hash:
+#   docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
+#
+# HTTP/3 (QUIC) is disabled: Firefox (esp. mobile) can stall for tens of seconds
+# or hang on h3 to this host; Chrome works on h2. Keep h1+h2 only.
+# Alt-Svc: clear drops cached h3 advertisements from earlier Caddy configs.
+
+{
+	email {$CADDY_EMAIL}
+	servers {
+		protocols h1 h2
+	}
+}
+
+{$DASHBOARD_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Alt-Svc "clear"
+	}
+
+	log {
+		output file /data/access.log
+		format json
+	}
+
+	basic_auth {
+		{$DASHBOARD_BASIC_AUTH_USER} {$DASHBOARD_BASIC_AUTH_HASH}
+	}
+
+	reverse_proxy dashboard:3000
+}

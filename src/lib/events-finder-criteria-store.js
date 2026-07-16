@@ -472,7 +472,8 @@ export function normalizeSearchQueries(raw) {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(line);
-    if (out.length >= 12) break;
+    // Match buildFacebookSearchQueries / maxQueries hard cap (24).
+    if (out.length >= 24) break;
   }
   return out;
 }

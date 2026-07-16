@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "start": "node src/server.js",
@@ -12,6 +12,7 @@
     "lan-url": "node scripts/print-lan-url.mjs",
     "lan-url:write": "node scripts/print-lan-url.mjs --write",
     "smoke:core": "node scripts/smoke-core.mjs",
+    "smoke:avatar-crop": "node scripts/smoke-avatar-crop.mjs",
     "smoke:calendar": "node scripts/smoke-calendar.mjs",
     "smoke:earth": "node scripts/smoke-earth.mjs",
     "smoke:weather-radar": "node scripts/smoke-weather-radar.mjs",
@@ -26,6 +27,7 @@
     "express": "^4.21.0",
     "imapflow": "^1.4.6",
     "jsfive": "^0.4.0",
+    "jsqr": "^1.4.0",
     "leaflet": "^1.9.4",
     "playwright": "1.52.0",
     "postal-mime": "^2.4.3",

@@ -12,6 +12,7 @@ export const BAY_AREA_HOME_CITIES = [
   'Oakland',
   'Emeryville',
   'Berkeley',
+  'Alameda',
 ];
 
 /**
@@ -250,19 +251,189 @@ export function eventMatchesHomeCity(event, home) {
 }
 
 /**
- * Display / filter label for an event's city (missing → Unknown).
+ * Landmark / host cues used only when no explicit city field is present.
+ * Keep these high-confidence — false SF/Oakland labels poison city filters.
+ * @type {ReadonlyArray<{ city: string, re: RegExp }>}
+ */
+const BAY_AREA_LANDMARK_HINTS = Object.freeze([
+  // SF Mission / Valencia corridor (e.g. Sunday Streets)
+  {
+    city: 'San Francisco',
+    re: /\bvalencia\s+(?:st|street)\b/i,
+  },
+  {
+    city: 'San Francisco',
+    re: /\bmission\s+(?:st|street|district|dolores)\b/i,
+  },
+  {
+    city: 'San Francisco',
+    re: /\b(?:castro|soma|so\s*ma|tenderloin|north\s*beach|haight|marina|financial\s+district|dogpatch|potrero|richmond\s+district|sunset\s+district|excelsior|bernal|noe\s*valley|hayes\s+valley|japantown|chinatown)\b/i,
+  },
+  {
+    city: 'San Francisco',
+    re: /\b(?:golden\s+gate\s+park|dolores\s+park|mission\s+bay|fisherman'?s\s+wharf|oracle\s+park|chase\s+center)\b/i,
+  },
+  {
+    city: 'Oakland',
+    re: /\b(?:lake\s+merritt|uptown\s+oakland|jack\s+london\s+square|temescal|rockridge|fruitvale|chinatown\s+oakland|oaklandish)\b/i,
+  },
+  {
+    city: 'Berkeley',
+    re: /\b(?:telegraph\s+ave|uc\s+berkeley|sather\s+gate|downtown\s+berkeley)\b/i,
+  },
+  {
+    city: 'Emeryville',
+    re: /\b(?:public\s+market\s+emeryville|emeryville\s+public\s+market|pixar\s+pier)\b/i,
+  },
+]);
+
+/**
+ * @param {string} host
+ * @returns {string | null}
+ */
+function cityFromHostname(host) {
+  const h = String(host || '')
+    .replace(/^www\./i, '')
+    .toLowerCase();
+  if (!h) return null;
+  if (/san[\s.-]?francisco|sfgov|sfba|\.sf\.ca/.test(h)) return 'San Francisco';
+  // Labels that end with "sf" (sundaystreetssf.com) or contain -sf- / .sf.
+  const labels = h.split('.');
+  for (const label of labels.slice(0, -1)) {
+    if (!label || label === 'com' || label === 'org' || label === 'net') continue;
+    if (/(?:^|[^a-z])sf$/.test(label) || label.endsWith('sf')) return 'San Francisco';
+    if (/(?:^|-)sf(?:-|$)/.test(label)) return 'San Francisco';
+  }
+  if (/\boakland\b/.test(h)) return 'Oakland';
+  if (/\bberkeley\b/.test(h)) return 'Berkeley';
+  if (/\bemeryville\b/.test(h)) return 'Emeryville';
+  if (/\balameda\b/.test(h)) return 'Alameda';
+  return null;
+}
+
+/**
+ * Deduce a Bay Area city when the structured city field is empty.
+ * Uses venue/location/title/description text + URL host/path cues.
+ * @param {{
+ *   city?: string | null,
+ *   venueCity?: string | null,
+ *   listingCity?: string | null,
+ *   venue?: string | null,
+ *   location?: string | null,
+ *   title?: string | null,
+ *   description?: string | null,
+ *   url?: string | null,
+ * }} event
+ * @returns {string | null} Canonical city name, or null if unknown
+ */
+export function inferEventCity(event) {
+  const explicit = [event?.city, event?.venueCity, event?.listingCity]
+    .map((c) => String(c || '').trim().replace(/\s+/g, ' '))
+    .find(Boolean);
+  if (explicit) {
+    // Prefer a catalog spelling when the explicit value is a Bay city.
+    const want = normalizeCityName(explicit);
+    for (const c of BAY_AREA_CITY_COORDS) {
+      const n = normalizeCityName(c.name);
+      if (want === n || want.includes(n) || n.includes(want)) return c.name;
+    }
+    return explicit;
+  }
+
+  const textBlob = [event?.venue, event?.location, event?.title, event?.description]
+    .map((s) => String(s || ''))
+    .join(' \n ');
+  const url = String(event?.url || '').trim();
+
+  // 1) URL host / path
+  if (url) {
+    try {
+      const u = new URL(url);
+      const fromHost = cityFromHostname(u.hostname);
+      if (fromHost) return fromHost;
+      const pathNorm = normalizeCityName(`${u.hostname} ${u.pathname}`);
+      // Longest Bay city name first so "south san francisco" wins over "san francisco".
+      const cities = [...BAY_AREA_CITY_COORDS].sort(
+        (a, b) => b.name.length - a.name.length,
+      );
+      for (const c of cities) {
+        const n = normalizeCityName(c.name);
+        if (!n) continue;
+        if (pathNorm.includes(n)) return c.name;
+      }
+      if (/\bsf\b/.test(pathNorm)) return 'San Francisco';
+    } catch {
+      /* ignore bad url */
+    }
+  }
+
+  // 2) High-confidence street / neighborhood landmarks (before bare city tokens,
+  //    so "Richmond District" → SF, not East Bay Richmond).
+  for (const hint of BAY_AREA_LANDMARK_HINTS) {
+    if (hint.re.test(textBlob)) return hint.city;
+  }
+
+  // 3) Explicit Bay city names in venue/title/description
+  const textNorm = normalizeCityName(textBlob);
+  if (textNorm) {
+    const cities = [...BAY_AREA_CITY_COORDS].sort(
+      (a, b) => b.name.length - a.name.length,
+    );
+    for (const c of cities) {
+      const n = normalizeCityName(c.name);
+      if (!n) continue;
+      // Avoid "richmond" matching inside "richmond district" (handled above).
+      if (n === 'richmond' && /\brichmond\s+district\b/.test(textNorm)) continue;
+      const re = new RegExp(`(?:^|\\s)${n.replace(/\s+/g, '\\s+')}(?:\\s|$)`);
+      if (re.test(textNorm)) return c.name;
+    }
+    if (/(?:^|\s)sf(?:\s|$)/.test(textNorm)) return 'San Francisco';
+  }
+
+  return null;
+}
+
+/**
+ * Display / filter label for an event's city (missing → infer → Unknown).
  * @param {{
  *   venueCity?: string | null,
  *   listingCity?: string | null,
  *   city?: string | null,
+ *   venue?: string | null,
+ *   location?: string | null,
+ *   title?: string | null,
+ *   description?: string | null,
+ *   url?: string | null,
  * }} event
  * @returns {string}
  */
 export function eventCityLabel(event) {
-  const raw = [event?.city, event?.venueCity, event?.listingCity]
-    .map((c) => String(c || '').trim().replace(/\s+/g, ' '))
-    .find(Boolean);
-  return raw || 'Unknown';
+  const inferred = inferEventCity(event);
+  return inferred || 'Unknown';
+}
+
+/**
+ * Cities pinned to the front of Events filter checklists.
+ * Match is case-insensitive; remaining cities stay A–Z (Unknown last).
+ */
+const PRIORITY_CITIES = ['oakland', 'san francisco', 'emeryville', 'alameda'];
+
+/**
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+function compareCityLabels(a, b) {
+  if (a === 'Unknown') return 1;
+  if (b === 'Unknown') return -1;
+  const ai = PRIORITY_CITIES.indexOf(a.toLowerCase());
+  const bi = PRIORITY_CITIES.indexOf(b.toLowerCase());
+  if (ai !== bi) {
+    if (ai < 0) return 1;
+    if (bi < 0) return -1;
+    return ai - bi;
+  }
+  return a.localeCompare(b, undefined, { sensitivity: 'base' });
 }
 
 /**
@@ -281,11 +452,7 @@ export function uniqueEventCities(events) {
     seen.add(key);
     out.push(label);
   }
-  out.sort((a, b) => {
-    if (a === 'Unknown') return 1;
-    if (b === 'Unknown') return -1;
-    return a.localeCompare(b, undefined, { sensitivity: 'base' });
-  });
+  out.sort(compareCityLabels);
   return out;
 }
 
@@ -298,12 +465,11 @@ export function uniqueEventCities(events) {
  * @returns {number | null}
  */
 export function eventDistanceMiles(event, home) {
-  const elat = coordOrNull(event?.lat);
-  const elon = coordOrNull(event?.lon);
+  const pair = eventLatLonOrNull(event);
   const hlat = coordOrNull(home?.lat);
   const hlon = coordOrNull(home?.lon);
-  if (elat == null || elon == null || hlat == null || hlon == null) return null;
-  const d = haversineMiles(hlat, hlon, elat, elon);
+  if (!pair || hlat == null || hlon == null) return null;
+  const d = haversineMiles(hlat, hlon, pair.lat, pair.lon);
   return Number.isFinite(d) ? Math.round(d * 10) / 10 : null;
 }
 
@@ -315,6 +481,29 @@ function coordOrNull(value) {
   if (value == null || value === '') return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * True for (0,0) / Null Island — common when APIs send missing coords as zeros.
+ * @param {number} lat
+ * @param {number} lon
+ */
+export function isNullIsland(lat, lon) {
+  return Math.abs(lat) < 0.01 && Math.abs(lon) < 0.01;
+}
+
+/**
+ * Finite lat/lon pair, or null when missing / Null Island.
+ * @param {{ lat?: unknown, lon?: unknown } | null | undefined} event
+ * @returns {{ lat: number, lon: number } | null}
+ */
+export function eventLatLonOrNull(event) {
+  const lat = coordOrNull(event?.lat);
+  const lon = coordOrNull(event?.lon);
+  if (lat == null || lon == null) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  if (isNullIsland(lat, lon)) return null;
+  return { lat, lon };
 }
 
 /**
@@ -335,6 +524,39 @@ export function bayAreaCityCoords(cityName) {
 }
 
 /**
+ * Map / display coords: real lat/lon when sane, else Bay Area city centroid.
+ * Prefer the city pin when stored coords disagree with the city label by >12 mi
+ * (same rule as distance ranking — avoids Null Island and far-off bad geocodes).
+ * @param {{
+ *   lat?: number | null,
+ *   lon?: number | null,
+ *   city?: string | null,
+ *   venueCity?: string | null,
+ *   listingCity?: string | null,
+ *   venue?: string | null,
+ *   location?: string | null,
+ * }} event
+ * @returns {{ lat: number, lon: number } | null}
+ */
+export function resolveEventLatLon(event) {
+  const label = eventCityLabel(event);
+  const centroid =
+    label && label !== 'Unknown' ? bayAreaCityCoords(label) : null;
+  const pair = eventLatLonOrNull(event);
+
+  if (pair && centroid) {
+    const coordToCity = haversineMiles(pair.lat, pair.lon, centroid.lat, centroid.lon);
+    if (Number.isFinite(coordToCity) && coordToCity > 12) {
+      return { lat: centroid.lat, lon: centroid.lon };
+    }
+  }
+
+  if (pair) return pair;
+  if (centroid) return { lat: centroid.lat, lon: centroid.lon };
+  return null;
+}
+
+/**
  * Distance using event coords, else Bay Area city centroid when city is known.
  * @param {{
  *   lat?: number | null,
@@ -350,14 +572,13 @@ export function eventDistanceMilesWithCityFallback(event, home) {
   const label = eventCityLabel(event);
   const centroid =
     label && label !== 'Unknown' ? bayAreaCityCoords(label) : null;
-  const elat = coordOrNull(event?.lat);
-  const elon = coordOrNull(event?.lon);
+  const pair = eventLatLonOrNull(event);
   const direct = eventDistanceMiles(event, home);
 
   // Prefer city centroid when stored lat/lon clearly disagree with the city label
   // (common bad geocodes: Petaluma/Sacramento events pinned to Oakland/SF).
-  if (direct != null && centroid && elat != null && elon != null) {
-    const coordToCity = haversineMiles(elat, elon, centroid.lat, centroid.lon);
+  if (direct != null && centroid && pair) {
+    const coordToCity = haversineMiles(pair.lat, pair.lon, centroid.lat, centroid.lon);
     if (Number.isFinite(coordToCity) && coordToCity > 12) {
       return eventDistanceMiles({ lat: centroid.lat, lon: centroid.lon }, home);
     }
@@ -365,8 +586,8 @@ export function eventDistanceMilesWithCityFallback(event, home) {
 
   // No catalog centroid for this label — still reject coords that sit inside the
   // Bay catalog next to a *different* city than the event claims.
-  if (direct != null && label && label !== 'Unknown' && !centroid && elat != null && elon != null) {
-    const near = citiesWithinRadius(elat, elon, 15);
+  if (direct != null && label && label !== 'Unknown' && !centroid && pair) {
+    const near = citiesWithinRadius(pair.lat, pair.lon, 15);
     if (near.length) {
       const labelNorm = normalizeCityName(label);
       const matchesNear = near.some((c) => {

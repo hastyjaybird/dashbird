@@ -1,6 +1,9 @@
 # Dashbird cybersecurity plan
 
-Lightweight security plan for **local LAN-only** dashbird. No dashboard login is required for the current deployment model: access control is **network boundary** (trusted home Wi‑Fi, no port-forwarding). A password on the app itself would add friction without meaningful protection while the service remains LAN-reachable without auth.
+Dashbird runs in two modes:
+
+1. **LAN** ([`docker-compose.yml`](../docker-compose.yml)) — trusted home Wi‑Fi; no public port-forward of 8787.
+2. **Public cloud** (Vultr + DuckDNS — [`deploy-vultr.md`](deploy-vultr.md)) — HTTPS via Caddy with **HTTP basic auth** required; personal `data/` never in git.
 
 ## 1) Ownership and review cadence
 
@@ -9,7 +12,9 @@ Lightweight security plan for **local LAN-only** dashbird. No dashboard login is
 - **Monthly:** secrets checklist + run core smoke (`npm run smoke:core`).
 - **Per meaningful release:** security review pass on changed routes and env handling.
 
-## 2) Threat model (local LAN)
+## 2) Threat model
+
+### Local LAN
 
 | Risk | Mitigation |
 |------|------------|
@@ -18,6 +23,16 @@ Lightweight security plan for **local LAN-only** dashbird. No dashboard login is
 | Dependency vulnerabilities | Regular SCA + triage |
 | Upstream fetch abuse / SSRF-style bugs | Validate URLs, timeouts, allowlists where applicable |
 | Secrets in logs/telemetry | Never log keys; ratings telemetry is non-PII |
+
+### Public cloud (`dashbird.duckdns.org` / later `jayhasty.com`)
+
+| Risk | Mitigation |
+|------|------------|
+| Open internet reachability | Caddy TLS + **HTTP basic auth** (`DASHBOARD_BASIC_AUTH_*` in `.env`) |
+| Brute-force / credential stuffing | Strong unique password; optional Vultr firewall lock SSH to your IP |
+| Personal CRM / events / tools on disk | Bind-mounted `data/` only; never commit; nightly `scripts/cloud-backup.sh` |
+| OAuth redirect misuse | Set Gmail (and other) redirect URIs to the public HTTPS origin only |
+| Oversized attack surface | Slim `Dockerfile.cloud` (no Playwright/Chromium on 2 GB VPS) |
 
 ## 3) Secrets handling
 

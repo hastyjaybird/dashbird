@@ -481,6 +481,30 @@ export function createAttendanceChecks(opts = {}) {
 }
 
 /**
+ * Cities pinned to the front of Events filter checklists.
+ * Match is case-insensitive; remaining cities stay A–Z (Unknown last).
+ */
+const PRIORITY_CITIES = ['oakland', 'san francisco', 'emeryville', 'alameda'];
+
+/**
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+function compareCityLabels(a, b) {
+  if (a === 'Unknown') return 1;
+  if (b === 'Unknown') return -1;
+  const ai = PRIORITY_CITIES.indexOf(a.toLowerCase());
+  const bi = PRIORITY_CITIES.indexOf(b.toLowerCase());
+  if (ai !== bi) {
+    if (ai < 0) return 1;
+    if (bi < 0) return -1;
+    return ai - bi;
+  }
+  return a.localeCompare(b, undefined, { sensitivity: 'base' });
+}
+
+/**
  * Dynamic city checkboxes from the current feed.
  * @param {{
  *   idPrefix?: string,
@@ -519,11 +543,7 @@ export function createCityChecks(opts = {}) {
     const list = Array.isArray(cities)
       ? [...new Set(cities.map((c) => String(c || '').trim()).filter(Boolean))]
       : [];
-    list.sort((a, b) => {
-      if (a === 'Unknown') return 1;
-      if (b === 'Unknown') return -1;
-      return a.localeCompare(b, undefined, { sensitivity: 'base' });
-    });
+    list.sort(compareCityLabels);
 
     /** @type {Set<string> | null} */
     let selectedSet = null;

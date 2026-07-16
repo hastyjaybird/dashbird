@@ -70,7 +70,7 @@ function buildCostsBlock(root) {
   const intro = document.createElement('p');
   intro.className = 'settings-page__intro';
   intro.textContent =
-    'Everything Dashbird spends money on — weekly budgets you can edit, plus measured Apify charges from the Facebook scrape log. Inactive rows stay listed but are excluded from totals.';
+    'Everything Dashbird spends money on — weekly budgets you can edit, plus measured Apify (Facebook) and OpenRouter (AI) charges. Inactive rows stay listed but are excluded from totals.';
   body.append(intro);
 
   const kpi = document.createElement('div');
@@ -87,6 +87,16 @@ function buildCostsBlock(root) {
   apifyBar.className = 'settings-page__costs-apify';
   apifyBar.hidden = true;
   body.append(apifyBar);
+
+  const openrouterBar = document.createElement('div');
+  openrouterBar.className = 'settings-page__costs-openrouter';
+  openrouterBar.hidden = true;
+  body.append(openrouterBar);
+
+  const openrouterPrograms = document.createElement('div');
+  openrouterPrograms.className = 'settings-page__costs-or-programs';
+  openrouterPrograms.hidden = true;
+  body.append(openrouterPrograms);
 
   const loadStatus = document.createElement('p');
   loadStatus.className = 'settings-page__load-status';
@@ -176,7 +186,7 @@ function buildCostsBlock(root) {
       {
         label: 'Measured / wk',
         value: formatCostUsd(summary.measuredWeeklyUsd, currency),
-        hint: 'Apify last 7 days',
+        hint: 'Apify + OpenRouter',
         tone: 'amber',
       },
       {
@@ -289,6 +299,149 @@ function buildCostsBlock(root) {
       data.currency,
     )} used · ${formatCostUsd(remaining, data.currency)} left${weekBit}`;
     apifyBar.append(caption);
+  }
+
+  /**
+   * @param {object} data
+   */
+  function renderOpenRouterMeter(data) {
+    const or = data.measured?.openrouter;
+    openrouterBar.replaceChildren();
+    if (!or || or.configured === false) {
+      openrouterBar.hidden = true;
+      return;
+    }
+    if (!or.ok) {
+      openrouterBar.hidden = false;
+      const title = document.createElement('p');
+      title.className = 'settings-page__costs-section-label';
+      title.textContent = 'OpenRouter';
+      const caption = document.createElement('p');
+      caption.className = 'settings-page__costs-meter-caption';
+      caption.textContent = or.error
+        ? `Could not load key usage (${or.error})`
+        : 'OpenRouter key not readable';
+      openrouterBar.append(title, caption);
+      return;
+    }
+
+    openrouterBar.hidden = false;
+    const used = Number(or.usageMonthlyUsd) || Number(or.totalUsageUsd) || 0;
+    const limit = or.limitUsd != null ? Number(or.limitUsd) : 5;
+    const remaining =
+      or.remainingUsd != null ? Number(or.remainingUsd) : Math.max(0, limit - used);
+    const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+
+    const title = document.createElement('p');
+    title.className = 'settings-page__costs-section-label';
+    title.textContent = `OpenRouter · ${or.isFreeTier ? 'free tier' : 'paid'} key`;
+    openrouterBar.append(title);
+
+    const meter = document.createElement('div');
+    meter.className = 'settings-page__costs-meter';
+    meter.setAttribute('role', 'progressbar');
+    meter.setAttribute('aria-valuemin', '0');
+    meter.setAttribute('aria-valuemax', String(limit));
+    meter.setAttribute('aria-valuenow', String(used));
+    const fill = document.createElement('div');
+    fill.className = 'settings-page__costs-meter-fill';
+    if (pct >= 90) fill.classList.add('settings-page__costs-meter-fill--hot');
+    else if (pct >= 70) fill.classList.add('settings-page__costs-meter-fill--warn');
+    fill.style.width = `${pct}%`;
+    meter.append(fill);
+    openrouterBar.append(meter);
+
+    const caption = document.createElement('p');
+    caption.className = 'settings-page__costs-meter-caption';
+    const weekBit =
+      Number(or.usageWeeklyUsd) > 0
+        ? ` · this week ${formatCostUsd(or.usageWeeklyUsd, data.currency)}`
+        : Number(or.measuredWeeklyUsd) > 0
+          ? ` · ~${formatCostUsd(or.measuredWeeklyUsd, data.currency)}/wk (from month)`
+          : '';
+    const dayBit =
+      Number(or.usageDailyUsd) > 0
+        ? ` · today ${formatCostUsd(or.usageDailyUsd, data.currency)}`
+        : '';
+    caption.textContent = `${formatCostUsd(used, data.currency)} of ${formatCostUsd(
+      limit,
+      data.currency,
+    )} used · ${formatCostUsd(remaining, data.currency)} left${weekBit}${dayBit}`;
+    openrouterBar.append(caption);
+  }
+
+  /**
+   * @param {object} data
+   */
+  function renderOpenRouterPrograms(data) {
+    const or = data.measured?.openrouter;
+    openrouterPrograms.replaceChildren();
+    const programs = Array.isArray(or?.programs) ? or.programs : [];
+    if (!programs.length) {
+      openrouterPrograms.hidden = true;
+      return;
+    }
+    openrouterPrograms.hidden = false;
+
+    const title = document.createElement('p');
+    title.className = 'settings-page__costs-section-label';
+    title.textContent = 'OpenRouter programs (Dashbird)';
+    openrouterPrograms.append(title);
+
+    const hint = document.createElement('p');
+    hint.className = 'settings-page__costs-meter-caption';
+    hint.textContent =
+      or?.perProgramNote ||
+      'Account spend is measured above. OpenRouter does not break cost down by Dashbird feature on this key.';
+    openrouterPrograms.append(hint);
+
+    const table = document.createElement('table');
+    table.className = 'settings-page__table settings-page__table--costs-or';
+    const thead = document.createElement('thead');
+    const hr = document.createElement('tr');
+    for (const label of ['Program', 'Area', 'Cost mode', 'When it runs', 'Notes']) {
+      const th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = label;
+      hr.append(th);
+    }
+    thead.append(hr);
+    table.append(thead);
+    const tbody = document.createElement('tbody');
+
+    const modeLabel = {
+      'free-first': 'Free-first',
+      'paid-default': 'Paid default',
+      'paid-always': 'Paid always',
+    };
+
+    for (const p of programs) {
+      const tr = document.createElement('tr');
+      const tdName = document.createElement('td');
+      tdName.className = 'settings-page__type-label';
+      tdName.textContent = p.label || p.id;
+      const tdArea = document.createElement('td');
+      tdArea.textContent = p.area || '—';
+      const tdMode = document.createElement('td');
+      tdMode.className = 'settings-page__costs-or-mode';
+      const mode = String(p.costMode || '');
+      tdMode.textContent = modeLabel[mode] || mode || '—';
+      if (mode === 'paid-always' || mode === 'paid-default') {
+        tdMode.classList.add('settings-page__costs-or-mode--paid');
+      } else if (mode === 'free-first') {
+        tdMode.classList.add('settings-page__costs-or-mode--free');
+      }
+      const tdWhen = document.createElement('td');
+      tdWhen.textContent = p.triggers || '—';
+      const tdNotes = document.createElement('td');
+      tdNotes.className = 'settings-page__costs-notes';
+      const bits = [p.notes, p.envOverride].filter(Boolean);
+      tdNotes.textContent = bits.join(' · ') || '—';
+      tr.append(tdName, tdArea, tdMode, tdWhen, tdNotes);
+      tbody.append(tr);
+    }
+    table.append(tbody);
+    openrouterPrograms.append(table);
   }
 
   function readRowsFromDom() {
@@ -464,6 +617,8 @@ function buildCostsBlock(root) {
     renderKpi(data);
     renderCategories(data);
     renderApifyMeter(data);
+    renderOpenRouterMeter(data);
+    renderOpenRouterPrograms(data);
     populateRows(state.items, state.currency);
     tableWrap.hidden = false;
     actions.hidden = false;
@@ -2291,6 +2446,133 @@ function buildEventsFinderSourcesBlock(root) {
 }
 
 /**
+ * Daily Summary topic rubrics (Look for / Grey / Black).
+ * @param {HTMLElement} root
+ */
+function buildGmailWeeklySummaryBlock(root) {
+  const { details: block, body } = createCollapsibleSection({
+    title: 'Daily Summary',
+    headingId: 'settings-daily-summary-heading',
+    className: 'settings-page__daily-summary-block',
+  });
+
+  const intro = document.createElement('p');
+  intro.className = 'settings-page__intro';
+  intro.textContent =
+    'Topic/circumstance rubrics for the main-page Daily Summary (jay.intake.box + julia.hasty). Scans every 30 minutes (plus one-time bootstrap). Rolling 10-day window — older items are deleted unless pinned; unpin waits 30s then deletes if past the window. Newest always on top. Look-for topics are preferred; grey soft-excludes; black always excludes. One topic or circumstance per line.';
+  body.append(intro);
+
+  const lookLabel = document.createElement('label');
+  lookLabel.className = 'settings-page__modal-field-label';
+  lookLabel.htmlFor = 'settings-daily-summary-look';
+  lookLabel.textContent = 'Look for (whitelist topics)';
+  const lookArea = document.createElement('textarea');
+  lookArea.id = 'settings-daily-summary-look';
+  lookArea.className = 'settings-page__modal-textarea';
+  lookArea.rows = 5;
+  lookArea.spellcheck = true;
+
+  const skipLabel = document.createElement('label');
+  skipLabel.className = 'settings-page__modal-field-label';
+  skipLabel.htmlFor = 'settings-daily-summary-skip';
+  skipLabel.textContent = 'Grey list (soft exclude)';
+  const skipHint = document.createElement('p');
+  skipHint.className = 'settings-page__modal-field-hint';
+  skipHint.textContent = 'Down-rank or skip when not also Look-for relevant.';
+  const skipArea = document.createElement('textarea');
+  skipArea.id = 'settings-daily-summary-skip';
+  skipArea.className = 'settings-page__modal-textarea';
+  skipArea.rows = 4;
+  skipArea.spellcheck = true;
+
+  const blackLabel = document.createElement('label');
+  blackLabel.className = 'settings-page__modal-field-label';
+  blackLabel.htmlFor = 'settings-daily-summary-blacklist';
+  blackLabel.textContent = 'Black list (always exclude)';
+  const blackArea = document.createElement('textarea');
+  blackArea.id = 'settings-daily-summary-blacklist';
+  blackArea.className = 'settings-page__modal-textarea';
+  blackArea.rows = 4;
+  blackArea.spellcheck = true;
+
+  const actions = document.createElement('div');
+  actions.className = 'settings-page__events-toolbar';
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.className = 'settings-page__rain-save';
+  saveBtn.textContent = 'Save rubrics';
+  const status = document.createElement('p');
+  status.className = 'settings-page__load-status';
+  status.setAttribute('aria-live', 'polite');
+  status.textContent = 'Loading…';
+
+  actions.append(saveBtn);
+  body.append(
+    lookLabel,
+    lookArea,
+    skipLabel,
+    skipHint,
+    skipArea,
+    blackLabel,
+    blackArea,
+    actions,
+    status,
+  );
+  root.append(block);
+
+  async function load() {
+    status.className = 'settings-page__load-status';
+    status.textContent = 'Loading…';
+    try {
+      const r = await fetch('/api/gmail-daily-summary/criteria', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      lookArea.value = String(j.criteria?.lookFor || '');
+      skipArea.value = String(j.criteria?.skip || '');
+      blackArea.value = String(j.criteria?.blacklist || '');
+      status.textContent = '';
+      status.hidden = true;
+    } catch (e) {
+      status.hidden = false;
+      status.className = 'settings-page__err';
+      status.textContent = String(e?.message || e);
+    }
+  }
+
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    status.hidden = false;
+    status.className = 'settings-page__load-status';
+    status.textContent = 'Saving…';
+    try {
+      const r = await fetch('/api/gmail-daily-summary/criteria', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lookFor: lookArea.value,
+          skip: skipArea.value,
+          blacklist: blackArea.value,
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      lookArea.value = String(j.criteria?.lookFor || lookArea.value);
+      skipArea.value = String(j.criteria?.skip || skipArea.value);
+      blackArea.value = String(j.criteria?.blacklist || blackArea.value);
+      status.className = 'settings-page__load-status';
+      status.textContent = 'Saved.';
+    } catch (e) {
+      status.className = 'settings-page__err';
+      status.textContent = String(e?.message || e);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  void load();
+}
+
+/**
  * @param {HTMLElement | null} mount
  */
 export async function mountSettingsPage(mount) {
@@ -2299,6 +2581,7 @@ export async function mountSettingsPage(mount) {
   const { tbodyByGroup, status, meta } = buildSettingsShell(mount, WINDOW_HOURS);
   buildSecondaryWatchBlock(mount);
   buildEventsFinderSourcesBlock(mount);
+  buildGmailWeeklySummaryBlock(mount);
   buildCostsBlock(mount);
   mount.setAttribute('aria-busy', 'true');
 

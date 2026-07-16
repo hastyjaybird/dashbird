@@ -29,8 +29,9 @@ import {
   addSceneToken,
   canonicalizeSceneToken,
   isDroppedSceneToken,
-  isOutOfTownToken,
+  isMisplacedLocationSceneToken,
   isPolidayToken,
+  locationLabelForMisplacedScene,
   normalizeSceneGroupName,
   removeSceneToken,
   replaceSceneToken,
@@ -183,7 +184,7 @@ export async function syncContactToCommunityGroups(contactId, env = process.env)
   for (const g of groups) {
     if (g.kind !== 'community') continue;
     const name = normalizeSceneGroupName(g.name, 300);
-    if (!name || isOutOfTownToken(name) || isPolidayToken(name) || isDroppedSceneToken(name)) continue;
+    if (!name || isMisplacedLocationSceneToken(name) || isPolidayToken(name) || isDroppedSceneToken(name)) continue;
     const key = name.toLowerCase();
     coveredKeys.add(key);
     const isMember = (g.memberIds || []).includes(id);
@@ -204,7 +205,7 @@ export async function syncContactToCommunityGroups(contactId, env = process.env)
   for (const name of sceneNames) {
     const key = name.toLowerCase();
     if (coveredKeys.has(key)) continue;
-    if (isOutOfTownToken(name) || isPolidayToken(name) || isDroppedSceneToken(name)) continue;
+    if (isMisplacedLocationSceneToken(name) || isPolidayToken(name) || isDroppedSceneToken(name)) continue;
     const groupId = key === 'runway house' ? RUNWAY_HOUSE_GROUP_ID : newGroupId();
     const now = new Date().toISOString();
     const createdGroup = normalizeGroup({
@@ -245,7 +246,7 @@ export async function rebuildCommunityGroupsFromScenes(env = process.env) {
   for (const c of contacts) {
     if (!c?.id) continue;
     for (const name of sceneTokensFromCircles(c.networkCircles)) {
-      if (isOutOfTownToken(name) || isPolidayToken(name) || isDroppedSceneToken(name)) continue;
+      if (isMisplacedLocationSceneToken(name) || isPolidayToken(name) || isDroppedSceneToken(name)) continue;
       const key = name.toLowerCase();
       let entry = byScene.get(key);
       if (!entry) {
@@ -318,7 +319,7 @@ export async function rebuildCommunityGroupsFromScenes(env = process.env) {
 }
 
 /**
- * Sync Scene / Out-of-town location for community group membership.
+ * Sync Scene / misplaced location tags for community group membership.
  * Event groups never touch contact attributes.
  * @param {object} group
  * @param {string[]} contactIds
@@ -330,14 +331,14 @@ async function syncCommunityMembership(group, contactIds, mode, env = process.en
   const ids = cleanIdList(contactIds);
   if (!ids.length) return;
 
-  const groupIsOutOfTown = isOutOfTownToken(group.name);
+  const locationLabel = locationLabelForMisplacedScene(group.name);
   for (const id of ids) {
     const contact = await getContactById(id, env);
     if (!contact) continue;
 
-    if (groupIsOutOfTown) {
+    if (locationLabel) {
       if (mode === 'add' && !String(contact.location || '').trim()) {
-        await updateContact(contact.id, { location: 'Out of town' }, env, { skipGroupSync: true });
+        await updateContact(contact.id, { location: locationLabel }, env, { skipGroupSync: true });
       }
       // Do not clear location on remove — it may be set for other reasons.
       continue;
@@ -383,19 +384,19 @@ async function syncCommunityMetaChange(prev, next, env = process.env) {
   const newName = String(next?.name || '');
   if (oldName.toLowerCase() === newName.toLowerCase()) return;
 
-  const oldOut = isOutOfTownToken(oldName);
-  const newOut = isOutOfTownToken(newName);
+  const oldLoc = locationLabelForMisplacedScene(oldName);
+  const newLoc = locationLabelForMisplacedScene(newName);
 
   for (const id of memberIds) {
     const contact = await getContactById(id, env);
     if (!contact) continue;
 
-    if (oldOut || newOut) {
-      // Out-of-town is location, not Scene — only set location when becoming Out of town.
-      if (newOut && !String(contact.location || '').trim()) {
-        await updateContact(contact.id, { location: 'Out of town' }, env, { skipGroupSync: true });
+    if (oldLoc || newLoc) {
+      // Location-as-scene tags are not Scene — only set location when becoming one.
+      if (newLoc && !String(contact.location || '').trim()) {
+        await updateContact(contact.id, { location: newLoc }, env, { skipGroupSync: true });
       }
-      if (oldOut && !newOut && newName) {
+      if (oldLoc && !newLoc && newName) {
         const nextCircles = addSceneToken(contact.networkCircles, newName);
         if (nextCircles !== String(contact.networkCircles || '')) {
           await updateContact(contact.id, { networkCircles: nextCircles }, env, { skipGroupSync: true });
@@ -628,7 +629,7 @@ export async function ingestPeopleIntoGroup(groupId, names, env = process.env) {
   const created = [];
   const linked = [];
   const isCommunity = group.kind === 'community';
-  const groupIsOutOfTown = isCommunity && isOutOfTownToken(group.name);
+  const groupLocationLabel = isCommunity ? locationLabelForMisplacedScene(group.name) : '';
 
   for (const displayName of list) {
     let contact = await findContactByNameOrAlias(displayName, env);
@@ -640,16 +641,16 @@ export async function ingestPeopleIntoGroup(groupId, names, env = process.env) {
         source: 'manual',
       };
       if (isCommunity) {
-        if (groupIsOutOfTown) seed.location = 'Out of town';
+        if (groupLocationLabel) seed.location = groupLocationLabel;
         else if (group.name) seed.networkCircles = group.name;
       }
       contact = await addContact(seed, env);
       created.push(contact);
     } else {
       if (isCommunity) {
-        if (groupIsOutOfTown) {
+        if (groupLocationLabel) {
           if (!String(contact.location || '').trim()) {
-            await updateContact(contact.id, { location: 'Out of town' }, env, { skipGroupSync: true });
+            await updateContact(contact.id, { location: groupLocationLabel }, env, { skipGroupSync: true });
           }
         } else if (group.name) {
           const next = addSceneToken(contact.networkCircles, group.name);

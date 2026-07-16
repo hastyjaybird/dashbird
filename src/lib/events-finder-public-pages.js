@@ -263,9 +263,9 @@ export function parsePublicEventHtml(html, source, pageUrl = '') {
 /**
  * @param {string} url
  * @param {number} [timeoutMs]
- * @returns {Promise<{ ok: boolean, status: number, html: string, err?: string }>}
+ * @returns {Promise<{ ok: boolean, status: number, html: string, finalUrl?: string, err?: string }>}
  */
-async function fetchHtml(url, timeoutMs = 12000) {
+export async function fetchHtml(url, timeoutMs = 12000) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -278,12 +278,36 @@ async function fetchHtml(url, timeoutMs = 12000) {
       },
     });
     const html = await res.text();
-    return { ok: res.ok, status: res.status, html };
+    return { ok: res.ok, status: res.status, html, finalUrl: res.url || url };
   } catch (e) {
-    return { ok: false, status: 0, html: '', err: String(e?.message || e) };
+    return { ok: false, status: 0, html: '', finalUrl: url, err: String(e?.message || e) };
   } finally {
     clearTimeout(t);
   }
+}
+
+/**
+ * Fetch one public event page and return the best JSON-LD / title normalized event.
+ * Used by Gmail intake to fill venue/city/start when mail only has a thin link.
+ * @param {string} url
+ * @param {string} [source]
+ * @param {number} [timeoutMs]
+ * @returns {Promise<object | null>}
+ */
+export async function fetchNormalizedEventFromUrl(url, source = 'eventbrite', timeoutMs = 12000) {
+  const href = String(url || '').trim();
+  if (!/^https?:\/\//i.test(href)) return null;
+  const page = await fetchHtml(href, timeoutMs);
+  if (!page.ok || !page.html) return null;
+  const pageUrl = page.finalUrl || href;
+  const events = parsePublicEventHtml(page.html, source, pageUrl);
+  if (!events.length) return null;
+  const withStart = events.find((e) => e?.start);
+  const best = withStart || events[0];
+  if (best && pageUrl && (!best.url || /eventbrite\.com\/?$/i.test(String(best.url)))) {
+    best.url = pageUrl.split('#')[0];
+  }
+  return best || null;
 }
 
 /**

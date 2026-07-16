@@ -25,6 +25,9 @@ function formatCallsign(ac) {
  * @param {object} ac
  */
 function titleFor(ac) {
+  if (ac.anonymousOrTisb || String(ac.label || '') === 'Unidentified') {
+    return 'Unidentified aircraft';
+  }
   const id = formatCallsign(ac) || ac.icao24;
   return `Aircraft ${id}`;
 }
@@ -75,6 +78,7 @@ export async function mergeAircraftNearby(active, now = new Date()) {
       aircraftHelicopter: Boolean(ac.helicopter),
       callsign: formatCallsign(ac),
       icao24: ac.icao24,
+      anonymousOrTisb: Boolean(ac.anonymousOrTisb),
     });
   }
 

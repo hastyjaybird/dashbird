@@ -1,10 +1,16 @@
 import { Router } from 'express';
 import express from 'express';
 import {
+  createPanelProject,
   createPanelTodo,
+  listPanelProjects,
   listPanelTodos,
+  movePanelTodo,
+  renamePanelProject,
+  reorderPanelProjects,
   resolveVikunjaConfig,
   setPanelTodoDone,
+  updatePanelProject,
   vikunjaFetch,
 } from '../lib/vikunja-client.js';
 
@@ -29,6 +35,16 @@ function sendErr(e, res) {
     error: code,
     detail: safe === code ? undefined : safe,
   });
+}
+
+/**
+ * @param {unknown} raw
+ * @returns {number | null}
+ */
+function parseProjectId(raw) {
+  if (raw == null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
 }
 
 router.get('/health', async (_req, res) => {
@@ -62,15 +78,82 @@ router.get('/health', async (_req, res) => {
   }
 });
 
-/** Panel-shaped list (open tasks only). Prefer this from the Today Todo UI. */
-router.get('/todos', async (_req, res) => {
+/** Top-level projects for the main Tasks panel. */
+router.get('/projects', async (_req, res) => {
   try {
-    const items = await listPanelTodos();
+    const projects = await listPanelProjects();
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({
       ok: true,
       configured: true,
-      projectId: resolveVikunjaConfig().projectId,
+      defaultProjectId: resolveVikunjaConfig().projectId,
+      projects,
+    });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.post('/projects', async (req, res) => {
+  try {
+    const project = await createPanelProject(req.body?.title ?? req.body?.name);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.status(201).json({ ok: true, project });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.post('/projects/reorder', async (req, res) => {
+  try {
+    const projects = await reorderPanelProjects(req.body?.ids ?? req.body?.order);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, projects });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.patch('/projects/:id', async (req, res) => {
+  try {
+    const id = parseProjectId(req.params.id);
+    if (id == null) {
+      res.status(400).json({ ok: false, error: 'invalid_id' });
+      return;
+    }
+    /** @type {{ title?: string, position?: number }} */
+    const patch = {};
+    if (req.body?.title != null || req.body?.name != null) {
+      patch.title = req.body?.title ?? req.body?.name;
+    }
+    if (req.body?.position != null && Number.isFinite(Number(req.body.position))) {
+      patch.position = Number(req.body.position);
+    }
+    if (patch.title == null && patch.position == null) {
+      res.status(400).json({ ok: false, error: 'invalid_patch' });
+      return;
+    }
+    const project =
+      patch.title != null && patch.position == null
+        ? await renamePanelProject(id, patch.title)
+        : await updatePanelProject(id, patch);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, project });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+/** Panel-shaped list (open tasks only). Prefer this from the Tasks UI. */
+router.get('/todos', async (req, res) => {
+  try {
+    const projectId = parseProjectId(req.query.projectId ?? req.query.project_id);
+    const items = await listPanelTodos(process.env, { projectId });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({
+      ok: true,
+      configured: true,
+      projectId: projectId ?? resolveVikunjaConfig().projectId,
       items,
     });
   } catch (e) {
@@ -80,7 +163,12 @@ router.get('/todos', async (_req, res) => {
 
 router.post('/todos', async (req, res) => {
   try {
-    const item = await createPanelTodo(req.body?.text ?? req.body?.title);
+    const dueDate = req.body?.dueDate ?? req.body?.due_date ?? null;
+    const projectId = parseProjectId(req.body?.projectId ?? req.body?.project_id);
+    const item = await createPanelTodo(req.body?.text ?? req.body?.title, process.env, {
+      dueDate,
+      projectId,
+    });
     res.setHeader('Cache-Control', 'private, no-store');
     res.status(201).json({ ok: true, item });
   } catch (e) {
@@ -90,7 +178,10 @@ router.post('/todos', async (req, res) => {
 
 router.patch('/todos/:id/done', async (req, res) => {
   try {
-    const item = await setPanelTodoDone(req.params.id, true);
+    const moveToArchive = req.body?.archive !== false && req.query.archive !== '0';
+    const item = await setPanelTodoDone(req.params.id, true, process.env, {
+      moveToArchive,
+    });
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, item });
   } catch (e) {
@@ -100,7 +191,25 @@ router.patch('/todos/:id/done', async (req, res) => {
 
 router.patch('/todos/:id/undo', async (req, res) => {
   try {
-    const item = await setPanelTodoDone(req.params.id, false);
+    const restoreProjectId = parseProjectId(req.body?.projectId ?? req.body?.project_id);
+    const item = await setPanelTodoDone(req.params.id, false, process.env, {
+      restoreProjectId,
+    });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, item });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.patch('/todos/:id/move', async (req, res) => {
+  try {
+    const projectId = parseProjectId(req.body?.projectId ?? req.body?.project_id);
+    if (projectId == null) {
+      res.status(400).json({ ok: false, error: 'invalid_project' });
+      return;
+    }
+    const item = await movePanelTodo(req.params.id, projectId);
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, item });
   } catch (e) {

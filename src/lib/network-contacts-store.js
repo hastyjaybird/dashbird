@@ -7,24 +7,30 @@ import { fileURLToPath } from 'node:url';
 import {
   JULIA_CONTACT_ID,
   JULIA_SEED_ID,
+  SAM_CONTACT_ID,
   allocateNextContactId,
+  markFoundationContactOptedOut,
   openNetworkDb,
   remapLegacyNetworkId,
   removeContactRefs,
   rowToContact,
   upsertContactRow,
 } from './network-db.js';
+import { deleteOrganizations } from './network-organizations-store.js';
 import { normalizeLastContactFields } from './network-last-contact.js';
+import { normalizeBirthdayFields } from './network-birthday.js';
 import {
   normalizeContactDisplayName,
   relocateOutOfTownFromScenes,
+  kindsFromMisplacedScenes,
+  mergeKinds,
 } from './network-scene-normalize.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
 export { JULIA_CONTACT_ID, JULIA_SEED_ID };
 
-export const CONTACT_KINDS = ['friend', 'organizer', 'business'];
+export const CONTACT_KINDS = ['friend', 'organizer', 'business', 'family'];
 
 export const CONTACT_RATINGS = ['Fan', 'Hot', 'Warm', 'Cold'];
 
@@ -52,6 +58,7 @@ export const PREFERRED_CONTACT_METHODS = [
   'email',
   'signal',
   'whatsapp',
+  'messenger',
   'linkedin',
   'other',
 ];
@@ -91,9 +98,9 @@ function cleanStr(v, max = 2000) {
 function titleCaseWord(word) {
   if (!word) return '';
   return word
-    .split(/(['’])/)
+    .split(/(['’-])/)
     .map((seg) => {
-      if (seg === "'" || seg === '’') return seg;
+      if (seg === "'" || seg === '’' || seg === '-') return seg;
       if (!seg) return seg;
       return seg.charAt(0).toUpperCase() + seg.slice(1).toLowerCase();
     })
@@ -168,14 +175,34 @@ export function splitPersonName(displayName) {
 }
 
 /**
+ * Join given + family name without duplicating a last name already present
+ * in the first-name field (e.g. "Amanda Ravenhill" + "Ravenhill").
  * @param {unknown} firstName
  * @param {unknown} lastName
  */
 export function composeDisplayName(firstName, lastName) {
-  return [String(firstName ?? '').replace(/\s+/g, ' ').trim(), String(lastName ?? '').replace(/\s+/g, ' ').trim()]
-    .filter(Boolean)
-    .join(' ')
-    .slice(0, 200);
+  const first = String(firstName ?? '').replace(/\s+/g, ' ').trim();
+  const last = String(lastName ?? '').replace(/\s+/g, ' ').trim();
+  if (!first) return last.slice(0, 200);
+  if (!last) return first.slice(0, 200);
+  const firstLower = first.toLowerCase();
+  const lastLower = last.toLowerCase();
+  if (firstLower === lastLower) return first.slice(0, 200);
+  // Whole last name already at end of first ("Amanda Ravenhill" + "Ravenhill")
+  if (firstLower.endsWith(` ${lastLower}`)) {
+    return first.slice(0, 200);
+  }
+  // Multi-token last name fully covered by trailing tokens of first
+  const lastParts = lastLower.split(' ').filter(Boolean);
+  const firstParts = firstLower.split(' ').filter(Boolean);
+  if (
+    lastParts.length
+    && firstParts.length >= lastParts.length
+    && firstParts.slice(-lastParts.length).join(' ') === lastParts.join(' ')
+  ) {
+    return first.slice(0, 200);
+  }
+  return `${first} ${last}`.slice(0, 200);
 }
 
 /**
@@ -220,14 +247,24 @@ export function normalizeKinds(raw) {
       // Legacy: "kids" was briefly a contact kind — migrated to hasKids.
       if (s === 'kids' || s === 'kid') continue;
       if (s === 'community' || s === 'scene' || s === 'orgainzer') s = 'organizer';
-      if ((s === 'friend' || s === 'organizer' || s === 'business') && !out.includes(s)) {
+      if (
+        (s === 'friend' || s === 'organizer' || s === 'business' || s === 'family')
+        && !out.includes(s)
+      ) {
         out.push(s);
       }
     }
-    return out.length ? out : ['friend'];
+    // Stable order for UI checkboxes / labels.
+    const order = ['friend', 'organizer', 'business', 'family'];
+    const ordered = order.filter((k) => out.includes(k));
+    for (const k of out) {
+      if (!ordered.includes(k)) ordered.push(k);
+    }
+    return ordered.length ? ordered : ['friend'];
   }
   const legacy = cleanStr(raw?.kind ?? raw, 40).toLowerCase();
   if (legacy === 'business') return ['business'];
+  if (legacy === 'family') return ['family'];
   if (legacy === 'kids' || legacy === 'kid') return ['friend'];
   if (legacy === 'community' || legacy === 'scene' || legacy === 'organizer' || legacy === 'orgainzer') {
     return ['organizer'];
@@ -248,6 +285,53 @@ export function newContactTaskId() {
     /* ignore */
   }
   return `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * @returns {string}
+ */
+function newMergeSuggestionId() {
+  return newContactTaskId().replace(/^task_/, 'merge_');
+}
+
+/**
+ * Pending / resolved near-duplicate merge suggestions (Telegram soft matches, etc.).
+ * @param {unknown} raw
+ * @returns {{ id: string, otherContactId: string, otherDisplayName: string, score: number, reasons: string[], status: string, source: string, createdAt: string, taskId: string }[]}
+ */
+export function normalizeMergeSuggestions(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const id = cleanStr(item.id, 80) || newMergeSuggestionId();
+    const otherContactId = remapLegacyNetworkId(cleanStr(item.otherContactId, 80));
+    if (!otherContactId) continue;
+    const key = `${otherContactId}:${cleanStr(item.status, 40) || 'pending'}`;
+    if (seen.has(key) && cleanStr(item.status, 40) === 'pending') continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (cleanStr(item.status, 40) === 'pending') seen.add(key);
+    let status = cleanStr(item.status, 40) || 'pending';
+    if (!['pending', 'confirmed', 'dismissed'].includes(status)) status = 'pending';
+    const reasons = Array.isArray(item.reasons)
+      ? item.reasons.map((r) => cleanStr(r, 80)).filter(Boolean).slice(0, 12)
+      : [];
+    out.push({
+      id,
+      otherContactId,
+      otherDisplayName: cleanStr(item.otherDisplayName, 200),
+      score: Number.isFinite(Number(item.score)) ? Number(item.score) : 0,
+      reasons,
+      status,
+      source: cleanStr(item.source, 40) || 'manual',
+      createdAt: cleanStr(item.createdAt, 64) || new Date().toISOString(),
+      taskId: cleanStr(item.taskId, 80),
+    });
+    if (out.length >= 20) break;
+  }
+  return out;
 }
 
 /**
@@ -376,6 +460,7 @@ function normalizeChannels(channels) {
     signal: cleanStr(c.signal, 120) || null,
     whatsapp: cleanStr(c.whatsapp, 120) || null,
     telegram: cleanStr(c.telegram, 120) || null,
+    messenger: cleanStr(c.messenger, 320) || null,
     linkedin: cleanStr(c.linkedin, 500) || null,
     other: cleanStr(c.other, 320) || null,
     urls,
@@ -471,7 +556,6 @@ export function normalizeContact(raw) {
     firstName = parts.firstName;
     lastName = parts.lastName;
   }
-  const kinds = normalizeKinds(raw);
   const hasKids = normalizeHasKids(raw);
   let summary = cleanStr(raw.summary, 8000);
   if (!summary && Array.isArray(raw.tags) && raw.tags.length) {
@@ -483,13 +567,17 @@ export function normalizeContact(raw) {
   // Prefer location; fold legacy region into empty location, then drop region.
   let locationSeed = cleanStr(raw.location, 300);
   if (!locationSeed) locationSeed = cleanStr(raw.region, 300);
+  // Read Type-as-Scene tags (Family) from the raw string before Scene normalize strips them.
+  const kindsFromScene = kindsFromMisplacedScenes(raw.networkCircles);
   const { networkCircles, location } = relocateOutOfTownFromScenes(
     raw.networkCircles,
     locationSeed,
     4000,
     300,
   );
+  const kinds = mergeKinds(normalizeKinds(raw), kindsFromScene);
   const tasks = normalizeTasks(raw);
+  const mergeSuggestions = normalizeMergeSuggestions(raw.mergeSuggestions);
   return {
     id,
     displayName,
@@ -504,6 +592,7 @@ export function normalizeContact(raw) {
     notes: cleanStr(raw.notes, 8000),
     bio: cleanStr(raw.bio, 8000),
     howWeMet: cleanStr(raw.howWeMet, 4000),
+    relationshipSummary: cleanStr(raw.relationshipSummary, 8000),
     networkCircles,
     alignedActivities: cleanStrList(raw.alignedActivities, 60, 400),
     org: cleanStr(raw.org, 300),
@@ -520,13 +609,16 @@ export function normalizeContact(raw) {
     sensitivity: cleanEnum(raw.sensitivity, CONTACT_SENSITIVITIES),
     relationshipStatus: normalizeRelationshipStatus(raw),
     tasks,
+    mergeSuggestions,
     // Derived from open tasks for search / older callers; not a primary edit field.
     nextStep: openTasksSummary(tasks),
     preferredContactMethods: normalizePreferredMethods(raw.preferredContactMethods),
     channels: normalizeChannels(raw.channels),
     avatarUrl: cleanStr(raw.avatarUrl, 500) || null,
+    avatarSourceUrl: cleanStr(raw.avatarSourceUrl, 500) || null,
     ...normalizeLastContactFields(raw.lastContactAt, raw.lastContactPrecision),
     lastContactChannel: cleanStr(raw.lastContactChannel, 80) || null,
+    ...normalizeBirthdayFields(raw),
     enrichment: normalizeEnrichment(raw.enrichment),
     createdAt: cleanStr(raw.createdAt, 64) || now,
     updatedAt: cleanStr(raw.updatedAt, 64) || now,
@@ -548,7 +640,9 @@ export function newContactId(env = process.env) {
 export async function loadNetworkContacts(env = process.env) {
   const db = openNetworkDb(env);
   const rows = db
-    .prepare('SELECT id, display_name, org, payload, created_at, updated_at FROM contacts ORDER BY created_at ASC, id ASC')
+    .prepare(
+      'SELECT id, display_name, org, payload, created_at, updated_at FROM contacts ORDER BY display_name COLLATE NOCASE ASC, id ASC',
+    )
     .all();
   const contacts = rows.map((r) => normalizeContact(rowToContact(r))).filter(Boolean);
   return { version: 1, contacts };
@@ -578,7 +672,7 @@ export async function getContactById(id, env = process.env) {
 /**
  * @param {object} contact
  * @param {NodeJS.ProcessEnv} [env]
- * @param {{ skipGroupSync?: boolean }} [opts]
+ * @param {{ skipGroupSync?: boolean, skipAbsorb?: boolean }} [opts]
  */
 export async function addContact(contact, env = process.env, opts = {}) {
   let payload = { ...contact };
@@ -607,22 +701,24 @@ export async function addContact(contact, env = process.env, opts = {}) {
     throw err;
   }
 
-  try {
-    const { absorbContactIfDuplicate } = await import('./network-dedup.js');
-    const absorbed = await absorbContactIfDuplicate(normalized, env);
-    if (absorbed?.contact) {
-      if (!opts.skipGroupSync && String(absorbed.contact.networkCircles || '').trim()) {
-        try {
-          const { syncContactToCommunityGroups } = await import('./network-groups-store.js');
-          await syncContactToCommunityGroups(absorbed.contact.id, env);
-        } catch {
-          /* best-effort */
+  if (!opts.skipAbsorb) {
+    try {
+      const { absorbContactIfDuplicate } = await import('./network-dedup.js');
+      const absorbed = await absorbContactIfDuplicate(normalized, env);
+      if (absorbed?.contact) {
+        if (!opts.skipGroupSync && String(absorbed.contact.networkCircles || '').trim()) {
+          try {
+            const { syncContactToCommunityGroups } = await import('./network-groups-store.js');
+            await syncContactToCommunityGroups(absorbed.contact.id, env);
+          } catch {
+            /* best-effort */
+          }
         }
+        return absorbed.contact;
       }
-      return absorbed.contact;
+    } catch {
+      // Dedup is best-effort — still create the contact.
     }
-  } catch {
-    // Dedup is best-effort — still create the contact.
   }
 
   const db = openNetworkDb(env);
@@ -670,6 +766,7 @@ export async function addContactsBulk(names, defaults = {}, env = process.env) {
   const kinds = normalizeKinds({ kinds: defaults.kinds || ['friend'] });
   const hasKids = Boolean(defaults.hasKids);
   const preferredContactMethods = normalizePreferredMethods(defaults.preferredContactMethods || []);
+  const howWeMet = cleanStr(defaults.howWeMet, 4000);
   const db = openNetworkDb(env);
   const { contacts } = await loadNetworkContacts(env);
   const existingNames = new Set(
@@ -692,6 +789,7 @@ export async function addContactsBulk(names, defaults = {}, env = process.env) {
         kinds,
         hasKids,
         preferredContactMethods,
+        howWeMet: howWeMet || undefined,
         source: 'manual',
       });
       if (!normalized) continue;
@@ -762,11 +860,17 @@ export async function updateContact(id, patch, env = process.env, opts = {}) {
       delete merged.nextStep;
     }
   }
+  if (patch && Object.prototype.hasOwnProperty.call(patch, 'mergeSuggestions')) {
+    merged.mergeSuggestions = patch.mergeSuggestions;
+  }
   if (patch && Object.prototype.hasOwnProperty.call(patch, 'summary')) {
     merged.summary = patch.summary;
   }
   if (patch && Object.prototype.hasOwnProperty.call(patch, 'howWeMet')) {
     merged.howWeMet = patch.howWeMet;
+  }
+  if (patch && Object.prototype.hasOwnProperty.call(patch, 'relationshipSummary')) {
+    merged.relationshipSummary = patch.relationshipSummary;
   }
   if (patch && Object.prototype.hasOwnProperty.call(patch, 'networkCircles')) {
     merged.networkCircles = patch.networkCircles;
@@ -802,6 +906,29 @@ export async function updateContact(id, patch, env = process.env, opts = {}) {
           merged.lastContactAt = prev.lastContactAt;
           merged.lastContactPrecision = prev.lastContactPrecision;
         }
+      }
+    }
+  }
+
+  if (patch && Object.prototype.hasOwnProperty.call(patch, 'birthday')) {
+    const raw = String(patch.birthday ?? '').trim();
+    delete merged.birthday;
+    if (!raw) {
+      merged.birthdayMonth = null;
+      merged.birthdayDay = null;
+      merged.birthdayYear = null;
+    } else {
+      const { parseBirthdayInput } = await import('./network-birthday.js');
+      const parsed = parseBirthdayInput(raw);
+      if (parsed) {
+        merged.birthdayMonth = parsed.month;
+        merged.birthdayDay = parsed.day;
+        merged.birthdayYear = parsed.year;
+      } else {
+        // Mid-typing / unrecognized — keep prior so autosave doesn't wipe it.
+        merged.birthdayMonth = prev.birthdayMonth;
+        merged.birthdayDay = prev.birthdayDay;
+        merged.birthdayYear = prev.birthdayYear;
       }
     }
   }
@@ -887,14 +1014,42 @@ export async function deleteContacts(ids, env = process.env) {
   );
   if (!want.length) return { deleted: 0 };
   const db = openNetworkDb(env);
+  const foundationIds = new Set([JULIA_CONTACT_ID, SAM_CONTACT_ID]);
+  // #region agent log
+  const preRows = want.map((id) => {
+    const row = db.prepare('SELECT id, display_name, org, payload FROM contacts WHERE id = ?').get(id);
+    if (!row) return { id, found: false };
+    let payload = {};
+    try {
+      payload = JSON.parse(row.payload || '{}');
+    } catch {
+      payload = {};
+    }
+    return {
+      id,
+      found: true,
+      displayName: row.display_name || null,
+      org: row.org || payload.org || null,
+      orgId: payload.orgId || null,
+      avatarUrl: payload.avatarUrl || null,
+    };
+  });
+  // #endregion
   const stmt = db.prepare('DELETE FROM contacts WHERE id = ?');
   let deleted = 0;
+  /** @type {string[]} */
+  const foundationOptedOut = [];
   db.exec('BEGIN IMMEDIATE');
   try {
     removeContactRefs(db, want);
     for (const id of want) {
       const info = stmt.run(id);
-      deleted += Number(info.changes) || 0;
+      const n = Number(info.changes) || 0;
+      deleted += n;
+      if (n > 0 && foundationIds.has(id)) {
+        markFoundationContactOptedOut(db, id);
+        foundationOptedOut.push(id);
+      }
     }
     db.exec('COMMIT');
   } catch (e) {
@@ -905,8 +1060,129 @@ export async function deleteContacts(ids, env = process.env) {
     }
     throw e;
   }
-  return { deleted };
+
+  // Remove local avatar files referenced by deleted contacts.
+  const assetsDir = networkAssetsDir(env);
+  for (const pre of preRows) {
+    if (!pre.found) continue;
+    await removeContactLocalAssets(pre.id, pre.avatarUrl, assetsDir);
+  }
+
+  // Cascade: delete orgs that no longer have any contacts.
+  /** @type {string[]} */
+  const orphanOrgIds = [
+    ...new Set(preRows.filter((p) => p.found && p.orgId).map((p) => String(p.orgId))),
+  ];
+  let orgsDeleted = 0;
+  if (orphanOrgIds.length) {
+    try {
+      const orgResult = await deleteOrganizations(orphanOrgIds, env);
+      orgsDeleted = Number(orgResult?.deleted) || 0;
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  // #region agent log
+  const postStillThere = want.map((id) => ({
+    id,
+    stillPresent: Boolean(db.prepare('SELECT 1 AS ok FROM contacts WHERE id = ?').get(id)),
+  }));
+  const orphanOrgs = [];
+  for (const pre of preRows) {
+    if (!pre.found || !pre.orgId) continue;
+    const remaining = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM contacts WHERE json_extract(payload, '$.orgId') = ? OR lower(trim(org)) = lower(trim(?))`,
+      )
+      .get(pre.orgId, pre.org || '');
+    orphanOrgs.push({
+      orgId: pre.orgId,
+      orgName: pre.org,
+      remainingContacts: Number(remaining?.n) || 0,
+      orgRowExists: Boolean(db.prepare('SELECT 1 AS ok FROM organizations WHERE id = ?').get(pre.orgId)),
+    });
+  }
+  void dbgDeleteContact({
+    hypothesisId: 'H1-H3-H5',
+    location: 'network-contacts-store.js:deleteContacts',
+    message: 'contact delete result',
+    data: {
+      want,
+      deleted,
+      foundationOptedOut,
+      orgsDeleted,
+      preRows,
+      postStillThere,
+      orphanOrgs,
+    },
+  });
+  // #endregion
+  return { deleted, orgsDeleted, foundationOptedOut };
 }
+
+/**
+ * Delete on-disk avatar (and contact-prefixed assets) for a removed contact.
+ * @param {string} contactId
+ * @param {string | null | undefined} avatarUrl
+ * @param {string} assetsDir
+ */
+async function removeContactLocalAssets(contactId, avatarUrl, assetsDir) {
+  const id = remapLegacyNetworkId(String(contactId || ''));
+  /** @type {Set<string>} */
+  const names = new Set();
+  const url = String(avatarUrl || '');
+  const m = url.match(/\/api\/network\/assets\/([^/?#]+)/i);
+  if (m?.[1]) names.add(decodeURIComponent(m[1]));
+  if (id === JULIA_CONTACT_ID) names.add('julia-hasty.jpg');
+  if (id) {
+    try {
+      const entries = await fs.readdir(assetsDir);
+      for (const name of entries) {
+        if (name === `${id}-avatar` || name.startsWith(`${id}-avatar.`)) names.add(name);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  for (const name of names) {
+    const safe = path.basename(String(name || ''));
+    if (!safe || safe === '.' || safe === '..') continue;
+    try {
+      await fs.unlink(path.join(assetsDir, safe));
+    } catch {
+      /* ignore missing */
+    }
+  }
+}
+
+// #region agent log
+async function dbgDeleteContact(payload) {
+  const body = {
+    sessionId: '7b26c0',
+    runId: 'post-fix',
+    timestamp: Date.now(),
+    ...payload,
+  };
+  try {
+    const p = path.join(PKG_ROOT, '.cursor/debug-7b26c0.log');
+    await fs.mkdir(path.dirname(p), { recursive: true });
+    await fs.appendFile(p, `${JSON.stringify(body)}\n`, 'utf8');
+  } catch {
+    /* ignore */
+  }
+  for (const url of [
+    'http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22',
+    'http://172.17.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22',
+  ]) {
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7b26c0' },
+      body: JSON.stringify(body),
+    }).catch(() => {});
+  }
+}
+// #endregion
 
 /**
  * @param {string} name
@@ -928,6 +1204,64 @@ export async function findContactByNameOrAlias(name, env = process.env) {
  * @param {{ displayName: string, aliases?: string[], notes?: string, kinds?: string[], kind?: string, org?: string, title?: string, channels?: object, summary?: string, alignedActivities?: string[] }} payload
  * @param {NodeJS.ProcessEnv} [env]
  */
+/**
+ * Find an existing Network contact this Telegram intake should suggest-merge into.
+ * Prefers exact name/alias, then soft near-dupe. Skips other pending telegram intakes.
+ * @param {object} draft
+ * @param {object[]} contacts
+ * @returns {Promise<{ contact: object, score: number, reasons: string[] } | null>}
+ */
+async function findTelegramMergeTarget(draft, contacts) {
+  const name = cleanStr(draft?.displayName, 200);
+  if (!name) return null;
+  const needle = name.toLowerCase();
+  const pool = (Array.isArray(contacts) ? contacts : []).filter((c) => c?.id);
+
+  for (const c of pool) {
+    if (String(c.displayName || '').toLowerCase() === needle) {
+      return { contact: c, score: 1, reasons: ['name_exact'] };
+    }
+    if (String(c.nickname || '').toLowerCase() === needle) {
+      return { contact: c, score: 0.95, reasons: ['nickname_exact'] };
+    }
+    if ((c.aliases || []).some((a) => String(a).toLowerCase() === needle)) {
+      return { contact: c, score: 0.95, reasons: ['alias_exact'] };
+    }
+  }
+
+  const { findBestContactSuggestMatch } = await import('./network-dedup.js');
+  // Prefer merging into established contacts, not other telegram intake stubs.
+  const established = pool.filter((c) => String(c.source || '') !== 'telegram');
+  const soft = findBestContactSuggestMatch(draft, established.length ? established : pool);
+  if (!soft?.candidate?.id) return null;
+  return {
+    contact: soft.candidate,
+    score: Number(soft.verdict?.score) || 0,
+    reasons: Array.isArray(soft.verdict?.reasons) ? soft.verdict.reasons : ['name_similar'],
+  };
+}
+
+/**
+ * If an open telegram intake already suggests merge with targetId, return it.
+ * @param {object[]} contacts
+ * @param {string} targetId
+ */
+function findOpenTelegramIntakeForTarget(contacts, targetId) {
+  const tid = String(targetId || '');
+  if (!tid) return null;
+  /** @type {object | null} */
+  let best = null;
+  for (const c of contacts || []) {
+    if (String(c.source || '') !== 'telegram') continue;
+    const pending = normalizeMergeSuggestions(c.mergeSuggestions).find(
+      (s) => s.status === 'pending' && String(s.otherContactId) === tid,
+    );
+    if (!pending) continue;
+    if (!best || String(c.updatedAt || '') > String(best.updatedAt || '')) best = c;
+  }
+  return best;
+}
+
 export async function upsertFromTelegram(payload, env = process.env) {
   const name = cleanStr(payload?.displayName, 200);
   if (!name) {
@@ -935,7 +1269,17 @@ export async function upsertFromTelegram(payload, env = process.env) {
     err.code = 'displayName_required';
     throw err;
   }
-  const existing = await findContactByNameOrAlias(name, env);
+  // #region agent log
+  const nameLc = name.toLowerCase();
+  if (nameLc.includes('julia') || nameLc.includes('hasty') || nameLc.includes('jaybird')) {
+    void dbgDeleteContact({
+      hypothesisId: 'H4',
+      location: 'network-contacts-store.js:upsertFromTelegram',
+      message: 'telegram upsert touching julia/hasty name',
+      data: { name },
+    });
+  }
+  // #endregion
   const noteLine = cleanStr(payload?.notes, 2000);
   const kinds = normalizeKinds(payload);
   const summaryBits = [payload?.summary, 'telegram'].filter(Boolean).map((s) => cleanStr(s, 200));
@@ -952,58 +1296,320 @@ export async function upsertFromTelegram(payload, env = process.env) {
       : payload.channels?.urls,
   };
   const preferredFromChannels = preferredMethodsForFilledChannels(
-    { ...(existing?.channels || {}), ...channelsIn },
-    existing?.preferredContactMethods,
+    channelsIn,
+    null,
   );
 
-  if (existing) {
-    const notes = [existing.notes, noteLine].filter(Boolean).join('\n\n').slice(0, 8000);
-    const aliases = [...new Set([...(existing.aliases || []), ...(payload.aliases || [])])];
-    const summary = [existing.summary, ...summaryBits].filter(Boolean).join(' ').slice(0, 8000);
-    return updateContact(
-      existing.id,
+  const draft = {
+    displayName: name,
+    aliases: payload.aliases || [],
+    notes: noteLine,
+    summary: summaryBits.join(' '),
+    kinds,
+    org: payload.org || '',
+    title: payload.title || '',
+    location: location || '',
+    address: address || '',
+    channels: channelsIn,
+    source: 'telegram',
+  };
+
+  const { contacts: beforeContacts } = await loadNetworkContacts(env);
+  const match = await findTelegramMergeTarget(draft, beforeContacts);
+  /** @type {string | null} */
+  let suggestWithId = match?.contact?.id ? String(match.contact.id) : null;
+
+  let saved;
+  // Day-to-day: name someone you already have + add info → stage on an intake
+  // row and keep a suggest-merge task until you Confirm merge in Network.
+  // Never silent-update the established contact from Telegram.
+  const openIntake =
+    suggestWithId ? findOpenTelegramIntakeForTarget(beforeContacts, suggestWithId) : null;
+
+  if (openIntake?.id) {
+    const notes = [openIntake.notes, noteLine].filter(Boolean).join('\n\n').slice(0, 8000);
+    const aliases = [...new Set([...(openIntake.aliases || []), ...(payload.aliases || [])])];
+    const summary = [openIntake.summary, ...summaryBits].filter(Boolean).join(' ').slice(0, 8000);
+    saved = await updateContact(
+      openIntake.id,
       {
         notes,
         aliases,
         summary,
-        kinds: kinds.length ? kinds : existing.kinds,
-        org: cleanStr(payload.org, 300) || existing.org,
-        title: cleanStr(payload.title, 300) || existing.title,
-        location: location || existing.location,
-        address: address || existing.address,
-        // Default Telegram intakes to Lead when relationship is still blank.
-        ...(!String(existing.relationshipStatus || '').trim()
-          ? { relationshipStatus: 'Lead' }
-          : {}),
-        channels: { ...existing.channels, ...channelsIn },
-        preferredContactMethods: preferredFromChannels,
-        lastContactAt: new Date().toISOString(),
-        lastContactChannel: 'telegram',
+        kinds: kinds.length ? kinds : openIntake.kinds,
+        org: cleanStr(payload.org, 300) || openIntake.org,
+        title: cleanStr(payload.title, 300) || openIntake.title,
+        location: location || openIntake.location,
+        address: address || openIntake.address,
+        channels: { ...openIntake.channels, ...channelsIn },
+        preferredContactMethods: preferredMethodsForFilledChannels(
+          { ...(openIntake.channels || {}), ...channelsIn },
+          openIntake.preferredContactMethods,
+        ),
         source: 'telegram',
       },
       env,
+      { skipGroupSync: true },
     );
+    // Keep suggest-merge + open task alive if somehow cleared.
+    if (suggestWithId) {
+      await attachPendingMergeSuggestion(openIntake.id, suggestWithId, {
+        score: match?.score,
+        reasons: match?.reasons,
+        source: 'telegram',
+      }, env);
+    }
+  } else {
+    saved = await addContact(
+      {
+        ...draft,
+        relationshipStatus: 'Lead',
+        preferredContactMethods: preferredFromChannels,
+      },
+      env,
+      { skipAbsorb: true },
+    );
+    if (suggestWithId && saved?.id) {
+      await attachPendingMergeSuggestion(saved.id, suggestWithId, {
+        score: match?.score,
+        reasons: match?.reasons,
+        source: 'telegram',
+      }, env);
+    }
   }
-  return addContact(
-    {
-      displayName: name,
-      aliases: payload.aliases || [],
-      notes: noteLine,
-      summary: summaryBits.join(' '),
-      kinds,
-      org: payload.org || '',
-      title: payload.title || '',
-      location: location || '',
-      address: address || '',
-      relationshipStatus: 'Lead',
-      channels: channelsIn,
-      preferredContactMethods: preferredFromChannels,
-      lastContactAt: new Date().toISOString(),
-      lastContactChannel: 'telegram',
-      source: 'telegram',
-    },
-    env,
+
+  const verified = await getContactById(saved?.id, env);
+  if (!verified?.id) {
+    const err = new Error('contact_not_persisted');
+    err.code = 'contact_not_persisted';
+    throw err;
+  }
+  if (suggestWithId) {
+    verified._telegramSuggestMergeWithId = suggestWithId;
+    const pending = normalizeMergeSuggestions(verified.mergeSuggestions).find(
+      (s) => s.status === 'pending' && String(s.otherContactId) === suggestWithId,
+    );
+    if (pending?.otherDisplayName) {
+      verified._telegramSuggestMergeWithName = pending.otherDisplayName;
+    } else if (match?.contact?.displayName) {
+      verified._telegramSuggestMergeWithName = match.contact.displayName;
+    }
+  }
+  return verified;
+}
+
+/**
+ * @param {object} contact
+ * @param {string} otherId
+ * @param {string} otherName
+ * @param {string} suggestionId
+ * @param {string} taskId
+ * @param {{ score?: number, reasons?: string[], source?: string }} meta
+ */
+function buildMergeSuggestionSide(contact, otherId, otherName, suggestionId, taskId, meta) {
+  const list = normalizeMergeSuggestions(contact?.mergeSuggestions);
+  const pendingSame = list.find(
+    (s) => s.status === 'pending' && String(s.otherContactId) === String(otherId),
   );
+  if (pendingSame) {
+    return { suggestions: list, taskId: pendingSame.taskId || taskId, suggestionId: pendingSame.id, created: false };
+  }
+  const suggestion = {
+    id: suggestionId,
+    otherContactId: String(otherId),
+    otherDisplayName: cleanStr(otherName, 200),
+    score: Number.isFinite(Number(meta.score)) ? Number(meta.score) : 0,
+    reasons: Array.isArray(meta.reasons) ? meta.reasons.map((r) => cleanStr(r, 80)).filter(Boolean) : [],
+    status: 'pending',
+    source: cleanStr(meta.source, 40) || 'manual',
+    createdAt: new Date().toISOString(),
+    taskId,
+  };
+  return { suggestions: [...list, suggestion], taskId, suggestionId, created: true };
+}
+
+/**
+ * Ensure an open CRM task for a suggest-merge (persists until confirm/dismiss).
+ * @param {object} contact
+ * @param {string} otherName
+ * @param {string} taskId
+ */
+function withMergeSuggestionTask(contact, otherName, taskId) {
+  const tasks = normalizeTasks(contact);
+  const needle = `suggested merge with ${cleanStr(otherName, 200).toLowerCase()}`;
+  const existing = tasks.find((t) => !t.done && String(t.text || '').toLowerCase().includes(needle));
+  if (existing) return { tasks, taskId: existing.id };
+  const text = `Suggested merge with ${cleanStr(otherName, 200) || 'contact'}`;
+  return {
+    tasks: [...tasks, { id: taskId, text, done: false }],
+    taskId,
+  };
+}
+
+/**
+ * Link two soft near-duplicates with a pending suggest-merge + open task on both.
+ * @param {string} aId
+ * @param {string} bId
+ * @param {{ score?: number, reasons?: string[], source?: string }} [meta]
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function attachPendingMergeSuggestion(aId, bId, meta = {}, env = process.env) {
+  const a = await getContactById(aId, env);
+  const b = await getContactById(bId, env);
+  if (!a?.id || !b?.id || a.id === b.id) {
+    const err = new Error('merge_suggestion_contacts_required');
+    err.code = 'merge_suggestion_contacts_required';
+    throw err;
+  }
+  const suggestionId = newMergeSuggestionId();
+  const taskIdA = newContactTaskId();
+  const taskIdB = newContactTaskId();
+
+  const sideA = buildMergeSuggestionSide(a, b.id, b.displayName, suggestionId, taskIdA, meta);
+  const sideB = buildMergeSuggestionSide(b, a.id, a.displayName, suggestionId, taskIdB, meta);
+  // Keep a shared suggestion id when reusing an existing pending pair.
+  const sharedId = sideA.created === false ? sideA.suggestionId : sideB.created === false ? sideB.suggestionId : suggestionId;
+  const finalA = sideA.created
+    ? buildMergeSuggestionSide(a, b.id, b.displayName, sharedId, taskIdA, meta)
+    : sideA;
+  const finalB = sideB.created
+    ? buildMergeSuggestionSide(b, a.id, a.displayName, sharedId, taskIdB, meta)
+    : sideB;
+
+  const tasksA = withMergeSuggestionTask(a, b.displayName, finalA.taskId);
+  const tasksB = withMergeSuggestionTask(b, a.displayName, finalB.taskId);
+
+  // Patch suggestion taskIds to match ensured tasks.
+  const suggestionsA = finalA.suggestions.map((s) =>
+    s.id === sharedId && s.status === 'pending' ? { ...s, taskId: tasksA.taskId, otherDisplayName: b.displayName } : s,
+  );
+  const suggestionsB = finalB.suggestions.map((s) =>
+    s.id === sharedId && s.status === 'pending' ? { ...s, taskId: tasksB.taskId, otherDisplayName: a.displayName } : s,
+  );
+
+  await updateContact(a.id, { mergeSuggestions: suggestionsA, tasks: tasksA.tasks }, env, {
+    skipGroupSync: true,
+  });
+  await updateContact(b.id, { mergeSuggestions: suggestionsB, tasks: tasksB.tasks }, env, {
+    skipGroupSync: true,
+  });
+  return {
+    ok: true,
+    suggestionId: sharedId,
+    contacts: [await getContactById(a.id, env), await getContactById(b.id, env)],
+  };
+}
+
+/**
+ * @param {object} contact
+ * @param {string} suggestionId
+ * @param {'confirmed' | 'dismissed'} status
+ * @param {string} [otherId]
+ */
+function resolveMergeSuggestionLocal(contact, suggestionId, status, otherId) {
+  const list = normalizeMergeSuggestions(contact?.mergeSuggestions);
+  let changed = false;
+  const next = list.map((s) => {
+    const hit =
+      s.id === suggestionId
+      || (s.status === 'pending' && otherId && String(s.otherContactId) === String(otherId));
+    if (!hit || s.status !== 'pending') return s;
+    changed = true;
+    return { ...s, status };
+  });
+  const tasks = normalizeTasks(contact).map((t) => {
+    const linked = next.some(
+      (s) => (s.id === suggestionId || (otherId && String(s.otherContactId) === String(otherId))) && s.taskId && s.taskId === t.id,
+    );
+    const textHit = /^suggested merge with /i.test(String(t.text || ''));
+    if ((linked || textHit) && !t.done && status !== 'pending') {
+      changed = true;
+      return { ...t, done: true };
+    }
+    return t;
+  });
+  return { mergeSuggestions: next, tasks, changed };
+}
+
+/**
+ * Confirm a pending suggest-merge (runs real merge; task closes).
+ * @param {string} contactId
+ * @param {string} suggestionId
+ * @param {{ displayName?: string }} [opts]
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function confirmMergeSuggestion(contactId, suggestionId, opts = {}, env = process.env) {
+  const contact = await getContactById(contactId, env);
+  if (!contact) {
+    const err = new Error('not_found');
+    err.code = 'not_found';
+    throw err;
+  }
+  const suggestion = normalizeMergeSuggestions(contact.mergeSuggestions).find(
+    (s) => s.id === suggestionId && s.status === 'pending',
+  );
+  if (!suggestion) {
+    const err = new Error('merge_suggestion_not_found');
+    err.code = 'merge_suggestion_not_found';
+    throw err;
+  }
+  const other = await getContactById(suggestion.otherContactId, env);
+  if (!other) {
+    await dismissMergeSuggestion(contactId, suggestionId, env);
+    const err = new Error('merge_suggestion_other_missing');
+    err.code = 'merge_suggestion_other_missing';
+    throw err;
+  }
+  const { mergeContacts } = await import('./network-dedup.js');
+  const result = await mergeContacts(contact, other, env, {
+    displayName: typeof opts.displayName === 'string' ? opts.displayName.trim() : undefined,
+  });
+  const survivor = result.contact;
+  const resolved = resolveMergeSuggestionLocal(survivor, suggestionId, 'confirmed', other.id);
+  // Drop pending suggestions that pointed at either merged id.
+  const cleaned = {
+    mergeSuggestions: resolved.mergeSuggestions
+      .filter((s) => s.status !== 'pending' || (s.otherContactId !== contact.id && s.otherContactId !== other.id))
+      .map((s) => (s.id === suggestionId ? { ...s, status: 'confirmed' } : s)),
+    tasks: resolved.tasks,
+  };
+  const saved = await updateContact(survivor.id, cleaned, env);
+  return { ok: true, contact: saved || survivor, mergedFromId: result.mergedFromId };
+}
+
+/**
+ * Dismiss a pending suggest-merge (keep both contacts; close task).
+ * @param {string} contactId
+ * @param {string} suggestionId
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function dismissMergeSuggestion(contactId, suggestionId, env = process.env) {
+  const contact = await getContactById(contactId, env);
+  if (!contact) {
+    const err = new Error('not_found');
+    err.code = 'not_found';
+    throw err;
+  }
+  const suggestion = normalizeMergeSuggestions(contact.mergeSuggestions).find(
+    (s) => s.id === suggestionId && s.status === 'pending',
+  );
+  const otherId = suggestion?.otherContactId || null;
+  const local = resolveMergeSuggestionLocal(contact, suggestionId, 'dismissed', otherId || undefined);
+  const saved = await updateContact(contact.id, {
+    mergeSuggestions: local.mergeSuggestions,
+    tasks: local.tasks,
+  }, env);
+  if (otherId) {
+    const other = await getContactById(otherId, env);
+    if (other) {
+      const otherLocal = resolveMergeSuggestionLocal(other, suggestionId, 'dismissed', contact.id);
+      await updateContact(other.id, {
+        mergeSuggestions: otherLocal.mergeSuggestions,
+        tasks: otherLocal.tasks,
+      }, env);
+    }
+  }
+  return { ok: true, contact: saved || (await getContactById(contactId, env)) };
 }
 
 /**
@@ -1020,6 +1626,7 @@ function preferredMethodsForFilledChannels(channels, existingPrefs) {
     email: 'email',
     signal: 'signal',
     whatsapp: 'whatsapp',
+    messenger: 'messenger',
     linkedin: 'linkedin',
     other: 'other',
   };
@@ -1096,5 +1703,6 @@ export async function saveContactAvatar(contactId, payload, env = process.env) {
   else if (mime.includes('gif')) ext = '.gif';
 
   const avatarUrl = await saveNetworkAsset(buf, `${contactId}-avatar${ext}`, env);
-  return updateContact(contactId, { avatarUrl }, env);
+  // Uploaded file has no hosting page — clear any prior photo-page association.
+  return updateContact(contactId, { avatarUrl, avatarSourceUrl: null }, env);
 }

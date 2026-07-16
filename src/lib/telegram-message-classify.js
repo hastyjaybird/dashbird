@@ -4,15 +4,13 @@
  */
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
-const DEFAULT_TEXT_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
+const DEFAULT_TEXT_MODEL = 'google/gemma-4-31b-it:free';
 const TEXT_FALLBACK_MODELS = [
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'google/gemma-4-31b-it:free',
+  'openai/gpt-oss-20b:free',
 ];
 
 const DEFAULT_VISION_MODEL = 'google/gemma-4-26b-a4b-it:free';
 const VISION_FALLBACK_MODELS = [
-  'google/gemma-4-26b-a4b-it:free',
   'nvidia/nemotron-nano-12b-v2-vl:free',
 ];
 
@@ -147,12 +145,14 @@ Rules:
 - other: anything else (receipts, random photos) — prefer other over guessing event_flyer.
 - hasHeadshot: true when a clear photo of the person's face is visible (card photo, LinkedIn avatar, portrait). For guest_list, set per-row hasHeadshot/headshotCrop on contacts[]; top-level hasHeadshot only if a single dominant face.
 - headshotCrop / logoCrop: normalized 0-1 fractions of the full image (x,y = top-left; w,h = size). Prefer a tight square-ish crop around the face or logo, but keep each edge at least ~0.06 of the image so small marks still crop. Null when not visible.
+- For social_screenshot / linkedin_screenshot: headshotCrop MUST be only the circular or square profile photo (the avatar bubble), not the cover banner and not the white chrome with name / friends / headline text. Match the platform's avatar framing even if the face is off-center inside that circle.
 - For business_card / linkedin / social: fill contact fields from visible text. Set company when an organization name is visible. contacts may be empty.
 - For business_card: always set contact.kind to "business".
 - phone: mobile/cell when the card labels Cell/Mobile/C; otherwise the primary personal number.
 - officePhone: office / work / desk / O: line when labeled separately. On cards with both Office and Cell, put each in the matching field.
 - location: city / metro freeform (e.g. "Livermore, CA").
 - address: full mailing / street / P.O. Box line(s) when visible (keep separate from location).
+- If a QR code has a URL printed beside it (or the destination is otherwise readable as text), put it in contact.website or contact.linkedin. Do not invent URLs from unread QR pixels.
 - For company_logo: fill company.name (required). contact may be null.
 - Prefer null over inventing emails/phones/URLs not visible in the image or caption.
 - confidence: 0-1.`;
@@ -660,7 +660,14 @@ export async function classifyTelegramMessage(text, env = process.env) {
     if (!r.ok) {
       lastError = `openrouter_http_${r.status}`;
       if (r.status === 401 || r.status === 403) break;
-      if (r.status === 402 || r.status === 429 || r.status >= 500) continue;
+      if (r.status === 429) {
+        // Shared free-model pools: do not cascade to more free models after a 429.
+        const ra = Number(r.headers.get('retry-after'));
+        const waitMs = Number.isFinite(ra) && ra > 0 ? Math.min(Math.max(ra, 2), 30) * 1000 : 2000;
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        break;
+      }
+      if (r.status === 402 || r.status >= 500) continue;
       break;
     }
     const j = await r.json();
@@ -757,7 +764,14 @@ export async function classifyTelegramImage(dataUrl, caption = '', env = process
     if (!r.ok) {
       lastError = `openrouter_http_${r.status}`;
       if (r.status === 401 || r.status === 403) break;
-      if (r.status === 402 || r.status === 429 || r.status >= 500) continue;
+      if (r.status === 429) {
+        // Shared free-model pools: do not cascade to more free models after a 429.
+        const ra = Number(r.headers.get('retry-after'));
+        const waitMs = Number.isFinite(ra) && ra > 0 ? Math.min(Math.max(ra, 2), 30) * 1000 : 2000;
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        break;
+      }
+      if (r.status === 402 || r.status >= 500) continue;
       break;
     }
 

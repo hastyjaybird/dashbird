@@ -9,6 +9,7 @@ import { nativeEdiblePlantEventsNear } from './native-edible-plants-near.js';
 import { salmonRunEventsNear } from './salmon-runs-near.js';
 import { buildUsaNpnSpringEarthItems } from './usanpn-spring-context.js';
 import { buildUsgsEarthquakeWeekItem } from './usgs-earthquake-week.js';
+import { buildKilaueaDashboardPayload } from './kilauea-status.js';
 import { buildGoesGlmLightningStripItem } from './goes-glm-lightning-strip.js';
 import {
   loadDiabloTarantulaSeasonConfig,
@@ -482,8 +483,9 @@ export async function buildEarthAndMoonbowEventTypes(options = {}) {
  */
 export async function buildEarthEventTypesSlow() {
   const { lat, lon } = await resolveDashboardWeatherLatLon();
-  const [quakeBuilt, glmBuilt] = await Promise.all([
+  const [quakeBuilt, kilaueaBuilt, glmBuilt] = await Promise.all([
     buildUsgsEarthquakeWeekItem({ lat, lon }),
+    buildKilaueaDashboardPayload(),
     buildGoesGlmLightningStripItem({ lat, lon }),
   ]);
 
@@ -509,6 +511,35 @@ export async function buildEarthEventTypesSlow() {
         ? 'No M>3 earthquake within 30 mi in the past 7 days'
         : `Unavailable (${quakeBuilt.error || 'fetch failed'})`,
       dataSource: 'USGS FDSNWS · strongest M>3 within 30 mi (7 days)',
+    });
+  }
+
+  if (kilaueaBuilt.ok && Array.isArray(kilaueaBuilt.items) && kilaueaBuilt.items.length) {
+    const volcano = kilaueaBuilt.items.find((it) => it.earthType === 'kilauea_volcano');
+    const kQuake = kilaueaBuilt.items.find((it) => it.earthType === 'kilauea_quake');
+    const bits = [];
+    if (volcano) bits.push(`${volcano.label} — ${volcano.detailLine}`);
+    if (kQuake) bits.push(`${kQuake.label} — ${kQuake.detailLine}`);
+    rows.push({
+      id: 'kilauea_volcano',
+      label: 'Kīlauea (Hawaiʻi)',
+      category: 'Earth',
+      active: true,
+      value: bits.join(' · ') || 'Active',
+      dataSource: 'USGS HANS + HVO messages · eruption stats; nearby M>3 quake same format as local row',
+    });
+  } else {
+    rows.push({
+      id: 'kilauea_volcano',
+      label: 'Kīlauea (Hawaiʻi)',
+      category: 'Earth',
+      active: false,
+      value: kilaueaBuilt.ok
+        ? kilaueaBuilt.disabled
+          ? 'Disabled (EARTH_KILAUEA=0)'
+          : 'No elevated alert / M>3 summit quake right now'
+        : `Unavailable (${kilaueaBuilt.error || 'fetch failed'})`,
+      dataSource: 'USGS HANS + HVO messages · eruption stats; nearby M>3 quake same format as local row',
     });
   }
 

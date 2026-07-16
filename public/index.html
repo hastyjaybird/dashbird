@@ -4,23 +4,116 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>dashbird</title>
-    <link rel="stylesheet" href="/styles.css?v=hide-paused-former-1" />
-    <link rel="preload" href="/api/config" as="fetch" crossorigin />
-    <link rel="preload" href="/data/bookmarks-personal.json" as="fetch" crossorigin />
-    <link rel="preload" href="/data/bookmarks-work.json" as="fetch" crossorigin />
-    <link rel="preload" href="/api/calendar/upcoming" as="fetch" crossorigin />
-    <link rel="preload" href="/assets/search-brave.png" as="image" />
-    <link rel="preload" href="/assets/search-duckduckgo.png" as="image" />
-    <!-- Persist sky-sidebar hide before paint to avoid a flash of the rail. -->
+    <!--
+      View gate MUST run before any link[rel=preload]. Firefox stalls for ~20s+ on
+      credential-less crossorigin preloads of basic-auth APIs (/api/config).
+    -->
     <script>
       (function () {
+        function dbg(hypothesisId, location, message, data) {
+          var payload = {
+            sessionId: '7a319b',
+            runId: 'phone-stall-6',
+            hypothesisId: hypothesisId,
+            location: location,
+            message: message,
+            data: data || {},
+            timestamp: Date.now(),
+          };
+          try {
+            fetch('/api/dev-agent-log', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7a319b' },
+              body: JSON.stringify(payload),
+            }).catch(function () {});
+          } catch (e) {}
+          // #region agent log
+          /* Image beacon survives when fetch is delayed/blocked (Firefox ETP quirks). */
+          try {
+            var img = new Image();
+            img.src =
+              '/api/dev-agent-log?beacon=1&sid=7a319b&hid=' +
+              encodeURIComponent(hypothesisId) +
+              '&loc=' +
+              encodeURIComponent(location) +
+              '&msg=' +
+              encodeURIComponent(String(message || '').slice(0, 80)) +
+              '&t=' +
+              Date.now();
+          } catch (e2) {}
+          // #endregion
+        }
+        // #region agent log
+        dbg('H1', 'index.html:inline-first', 'inline script started', {
+          ua: String(navigator.userAgent || '').slice(0, 160),
+          href: String(location.href || '').slice(0, 80),
+          proto: String(location.protocol || ''),
+        });
+        // #endregion
         try {
           if (localStorage.getItem('dashbird-sky-sidebar-hidden') === '1') {
             document.documentElement.classList.add('sky-sidebar-hidden');
           }
-        } catch (e) {}
+          var stored = localStorage.getItem('dashbirdView');
+          var view = stored;
+          var phone = false;
+          if (view !== 'mobile' && view !== 'desktop') {
+            var ua = String(navigator.userAgent || '');
+            phone = /Android|iPhone|iPod|iPad|Mobile|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+            if (!phone && window.matchMedia) {
+              phone = window.matchMedia('(max-width: 820px)').matches;
+            }
+            view = phone ? 'mobile' : 'desktop';
+          }
+          if (view === 'mobile') {
+            document.documentElement.classList.add('dashbird-view-mobile');
+            document.addEventListener('DOMContentLoaded', function () {
+              var pm = document.getElementById('page-mobile');
+              if (!pm) return;
+              pm.hidden = false;
+              var net = document.getElementById('mount-mobile-network');
+              if (net) {
+                net.hidden = false;
+                if (!net.childElementCount) {
+                  net.innerHTML = '<p class="mobile-shell__status">Loading…</p>';
+                }
+              }
+            });
+          } else {
+            /* Desktop-only preloads — never /api/* (basic auth breaks Firefox). */
+            var desktopPreloads = [
+              ['/data/bookmarks-personal.json', 'fetch'],
+              ['/data/bookmarks-work.json', 'fetch'],
+              ['/assets/search-brave.png', 'image'],
+              ['/assets/search-duckduckgo.png', 'image'],
+            ];
+            for (var i = 0; i < desktopPreloads.length; i++) {
+              var link = document.createElement('link');
+              link.rel = 'preload';
+              link.href = desktopPreloads[i][0];
+              link.as = desktopPreloads[i][1];
+              if (desktopPreloads[i][1] === 'fetch') link.crossOrigin = 'anonymous';
+              document.head.appendChild(link);
+            }
+          }
+          // #region agent log
+          dbg('A', 'index.html:view-gate', 'view gate decided', {
+            stored: stored,
+            view: view,
+            phoneDetect: phone,
+            hasMobileClass: document.documentElement.classList.contains('dashbird-view-mobile'),
+            ua: String(navigator.userAgent || '').slice(0, 140),
+            isFirefox: /Firefox\//i.test(String(navigator.userAgent || '')),
+          });
+          // #endregion
+        } catch (e) {
+          // #region agent log
+          dbg('E', 'index.html:view-gate', 'view gate error', { error: String(e && e.message || e) });
+          // #endregion
+        }
       })();
     </script>
+    <link rel="stylesheet" href="/styles.css?v=ff-h2-2" />
     <!-- Instant search: no modules — Enter opens a new tab before app.js loads. -->
     <script>
       window.__dashbirdSearch = (function () {
@@ -107,12 +200,29 @@
         <span class="brand">dashbird</span>
         <nav id="mount-page-tabs" class="topbar__tabs-mount" aria-label="Dashboard pages"></nav>
       </div>
-      <div
-        id="mount-topbar-context"
-        class="topbar__context"
-        aria-label="Current location (live GPS when allowed, else server default)"
-      ></div>
+      <div class="topbar__end">
+        <div
+          id="mount-topbar-context"
+          class="topbar__context"
+          aria-label="Current location (live GPS when allowed, else server default)"
+        ></div>
+        <div
+          id="mount-view-mode"
+          class="topbar__view-mode"
+          aria-label="Desktop or mobile view"
+        ></div>
+      </div>
     </header>
+
+    <div id="page-mobile" class="page-view page-view--mobile" hidden>
+      <main class="mobile-shell" aria-label="Mobile">
+        <nav id="mount-mobile-tabs" class="mobile-shell__tabs" aria-label="Mobile pages"></nav>
+        <div id="mount-mobile-network" class="mobile-shell__pane" hidden></div>
+        <div id="mount-mobile-events" class="mobile-shell__pane" hidden></div>
+        <div id="mount-mobile-groups" class="mobile-shell__pane" hidden></div>
+        <div id="mount-mobile-tasks" class="mobile-shell__pane" hidden></div>
+      </main>
+    </div>
 
     <div id="page-settings" class="page-view page-view--settings" hidden>
       <main class="settings-page" aria-label="Settings">
@@ -334,13 +444,13 @@
           </div>
 
           <div class="row row--stack">
+            <section class="panel panel--glass panel--tasks" aria-labelledby="h-tasks">
+              <h2 id="h-tasks">Tasks</h2>
+              <div id="mount-tasks" class="panel__body tasks-body"></div>
+            </section>
             <section class="panel panel--glass panel--calendar" aria-labelledby="h-calendar">
               <h2 id="h-calendar">Calendar</h2>
               <div id="mount-calendar" class="panel__body panel__body--calendar"></div>
-            </section>
-            <section class="panel panel--glass panel--notes" aria-labelledby="h-notes">
-              <h2 id="h-notes">Notes</h2>
-              <div id="mount-notes" class="panel__body notes-body"></div>
             </section>
           </div>
         </main>
@@ -369,15 +479,37 @@
       <aside id="sky-sidebar" class="sky-sidebar boot-deferred" aria-label="Side widgets" aria-busy="true">
         <div class="sky-sidebar__stack">
           <section
-            class="sky-sidebar__card sky-sidebar__card--todo panel panel--glass"
-            aria-labelledby="h-today-todo"
+            class="sky-sidebar__card sky-sidebar__card--daily-summary panel panel--glass"
+            aria-labelledby="h-daily-summary"
           >
-            <h2 id="h-today-todo" class="sky-sidebar__card-heading">Today's To Do</h2>
+            <div class="sky-sidebar__card-bar sky-sidebar__card-bar--daily-summary">
+              <h2 id="h-daily-summary" class="sky-sidebar__card-heading">Daily Summary</h2>
+              <button
+                type="button"
+                class="sky-sidebar__card-collapse"
+                id="daily-summary-collapse"
+                aria-label="Collapse Daily Summary"
+                title="Collapse Daily Summary"
+                aria-expanded="true"
+                aria-controls="mount-daily-summary"
+              >
+                <svg class="sky-sidebar__card-collapse-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                  <path
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M4 6.5L8 10.5L12 6.5"
+                  />
+                </svg>
+              </button>
+            </div>
             <div
-              id="mount-today-todo"
-              class="sky-sidebar__card-body sky-sidebar__card-body--todo"
+              id="mount-daily-summary"
+              class="sky-sidebar__card-body sky-sidebar__card-body--daily-summary"
               role="region"
-              aria-labelledby="h-today-todo"
+              aria-labelledby="h-daily-summary"
             >
               <div class="boot-skeleton-stack" aria-hidden="true">
                 <div class="boot-skeleton-line"></div>
@@ -415,6 +547,20 @@
               class="sky-sidebar__card-body sky-sidebar__card-body--earth"
               role="region"
               aria-labelledby="h-earth-sidebar"
+            ></div>
+          </section>
+          <section
+            id="kilauea-live-card"
+            class="sky-sidebar__card sky-sidebar__card--kilauea-live panel panel--glass"
+            aria-labelledby="h-kilauea-live"
+            hidden
+          >
+            <h2 id="h-kilauea-live" class="sky-sidebar__card-heading">Kīlauea Live</h2>
+            <div
+              id="mount-kilauea-live"
+              class="sky-sidebar__card-body sky-sidebar__card-body--kilauea-live"
+              role="region"
+              aria-labelledby="h-kilauea-live"
             ></div>
           </section>
           <section
@@ -501,6 +647,6 @@
       </section>
     </div>
     </div>
-    <script type="module" src="/js/app.js?v=cols-persist-1"></script>
+    <script type="module" src="/js/app.js?v=ff-h2-2"></script>
   </body>
 </html>

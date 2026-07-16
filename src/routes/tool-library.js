@@ -420,6 +420,8 @@ router.get('/assets/:file', async (req, res) => {
     return;
   }
   const fp = path.join(toolLibraryAssetsDir(), file);
+  // Snapshot-once assets: cache for fast remote loads (immutable content per filename).
+  res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
   res.sendFile(fp, (err) => {
     if (err) res.status(404).end();
   });

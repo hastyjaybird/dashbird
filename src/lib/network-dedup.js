@@ -20,6 +20,7 @@ import {
   upsertGroupRow,
   upsertOrgRow,
 } from './network-db.js';
+import { birthdayCompleteness } from './network-birthday.js';
 
 /** @type {Set<string>} */
 const PROTECTED_CONTACT_IDS = new Set([JULIA_CONTACT_ID, SAM_CONTACT_ID]);
@@ -29,6 +30,12 @@ const PROTECTED_ORG_IDS = new Set([CORVIDAE_ORG_ID, ALL_POWER_LABS_ORG_ID, STARS
 /** Auto-merge when likelihood reaches this (0–1). */
 export const CONTACT_MERGE_THRESHOLD = 0.72;
 export const ORG_MERGE_THRESHOLD = 0.78;
+
+/**
+ * Soft near-duplicates (e.g. same name, different org/notes) land here instead of
+ * auto-merge — Network keeps a pending suggest-merge task until Jay confirms.
+ */
+export const CONTACT_SUGGEST_MERGE_THRESHOLD = 0.35;
 
 /** People need at least this name/alias similarity unless a hard identifier matches. */
 const CONTACT_NAME_GATE = 0.55;
@@ -752,9 +759,22 @@ export function buildMergedContact(keep, drop, opts = {}) {
     channels,
     tasks: mergeContactTasks(keep, drop),
     avatarUrl: keep.avatarUrl || drop.avatarUrl || null,
+    avatarSourceUrl: keep.avatarUrl
+      ? keep.avatarSourceUrl || null
+      : drop.avatarSourceUrl || keep.avatarSourceUrl || null,
     lastContactAt: useDropLast ? drop.lastContactAt : keep.lastContactAt,
     lastContactPrecision: useDropLast ? drop.lastContactPrecision : keep.lastContactPrecision,
     lastContactChannel: useDropLast ? drop.lastContactChannel : keep.lastContactChannel,
+    ...(() => {
+      // Prefer the richer birthday (day > month-only; year when present).
+      const useDropBday = birthdayCompleteness(drop) > birthdayCompleteness(keep);
+      const src = useDropBday ? drop : keep;
+      return {
+        birthdayMonth: src.birthdayMonth ?? null,
+        birthdayDay: src.birthdayDay ?? null,
+        birthdayYear: src.birthdayYear ?? null,
+      };
+    })(),
     enrichment: {
       sources: unionStrList(keep.enrichment?.sources, drop.enrichment?.sources, 30),
       enrichedAt: preferStr(keep.enrichment?.enrichedAt, drop.enrichment?.enrichedAt) || null,
@@ -900,6 +920,38 @@ export function findBestContactMatch(contact, candidates, threshold = CONTACT_ME
     if (!other || other.id === contact.id) continue;
     const verdict = scoreContactPair(contact, other);
     if (!shouldMerge(verdict, threshold)) continue;
+    if (!best || verdict.score > best.verdict.score) {
+      best = { candidate: other, verdict };
+    }
+  }
+  return best;
+}
+
+/**
+ * True when a soft pair should surface a suggest-merge (not auto-merge).
+ * Hard ID matches still go through auto-absorb instead.
+ * @param {{ score?: number, hardMatch?: boolean, nameScore?: number } | null | undefined} verdict
+ */
+export function shouldSuggestContactMerge(verdict) {
+  if (!verdict || verdict.hardMatch) return false;
+  const score = Number(verdict.score) || 0;
+  const nameScore = Number(verdict.nameScore) || 0;
+  if (score >= CONTACT_MERGE_THRESHOLD) return false;
+  if (nameScore >= 0.85 && score >= 0.28) return true;
+  return score >= CONTACT_SUGGEST_MERGE_THRESHOLD;
+}
+
+/**
+ * Best soft near-duplicate for a suggest-merge task (below auto-merge threshold).
+ * @param {object} contact
+ * @param {object[]} candidates
+ */
+export function findBestContactSuggestMatch(contact, candidates) {
+  let best = null;
+  for (const other of candidates || []) {
+    if (!other || other.id === contact.id) continue;
+    const verdict = scoreContactPair(contact, other);
+    if (!shouldSuggestContactMerge(verdict)) continue;
     if (!best || verdict.score > best.verdict.score) {
       best = { candidate: other, verdict };
     }

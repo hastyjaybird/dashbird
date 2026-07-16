@@ -1,0 +1,238 @@
+{
+  "feeds": [
+    {
+      "id": "hacker-news",
+      "title": "Hacker News (Front Page)",
+      "url": "https://hnrss.org/frontpage",
+      "siteUrl": "https://news.ycombinator.com/",
+      "category": "tech",
+      "tags": ["tech", "startups", "programming", "science"],
+      "popularity": 98
+    },
+    {
+      "id": "ars-technica",
+      "title": "Ars Technica",
+      "url": "https://feeds.arstechnica.com/arstechnica/index",
+      "siteUrl": "https://arstechnica.com/",
+      "category": "tech",
+      "tags": ["tech", "science", "gadgets", "policy"],
+      "popularity": 88
+    },
+    {
+      "id": "the-verge",
+      "title": "The Verge",
+      "url": "https://www.theverge.com/rss/index.xml",
+      "siteUrl": "https://www.theverge.com/",
+      "category": "tech",
+      "tags": ["tech", "gadgets", "culture"],
+      "popularity": 90
+    },
+    {
+      "id": "techcrunch",
+      "title": "TechCrunch",
+      "url": "https://techcrunch.com/feed/",
+      "siteUrl": "https://techcrunch.com/",
+      "category": "tech",
+      "tags": ["tech", "startups", "business"],
+      "popularity": 87
+    },
+    {
+      "id": "wired",
+      "title": "Wired",
+      "url": "https://www.wired.com/feed/rss",
+      "siteUrl": "https://www.wired.com/",
+      "category": "tech",
+      "tags": ["tech", "culture", "science", "security"],
+      "popularity": 84
+    },
+    {
+      "id": "npr-news",
+      "title": "NPR News",
+      "url": "https://feeds.npr.org/1001/rss.xml",
+      "siteUrl": "https://www.npr.org/",
+      "category": "world",
+      "tags": ["world", "us", "politics", "general"],
+      "popularity": 92
+    },
+    {
+      "id": "bbc-world",
+      "title": "BBC News — World",
+      "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+      "siteUrl": "https://www.bbc.com/news/world",
+      "category": "world",
+      "tags": ["world", "international", "general"],
+      "popularity": 93
+    },
+    {
+      "id": "reuters-world",
+      "title": "Reuters — World News",
+      "url": "https://feeds.reuters.com/Reuters/worldNews",
+      "siteUrl": "https://www.reuters.com/world/",
+      "category": "world",
+      "tags": ["world", "business", "general"],
+      "popularity": 85
+    },
+    {
+      "id": "ap-top-news",
+      "title": "AP Top News",
+      "url": "https://rsshub.app/apnews/topics/ap-top-news",
+      "siteUrl": "https://apnews.com/",
+      "category": "world",
+      "tags": ["world", "us", "general"],
+      "popularity": 80
+    },
+    {
+      "id": "sfgate",
+      "title": "SFGATE — Bay Area News",
+      "url": "https://www.sfgate.com/bayarea/feed/Bay-Area-News-829.php",
+      "siteUrl": "https://www.sfgate.com/bayarea/",
+      "category": "local",
+      "tags": ["local", "bay-area", "california"],
+      "popularity": 70
+    },
+    {
+      "id": "sf-chronicle-local",
+      "title": "San Francisco Chronicle — Bay Area",
+      "url": "https://www.sfchronicle.com/bayarea/feed/",
+      "siteUrl": "https://www.sfchronicle.com/bayarea/",
+      "category": "local",
+      "tags": ["local", "bay-area", "california"],
+      "popularity": 68
+    },
+    {
+      "id": "oaklandside",
+      "title": "The Oaklandside",
+      "url": "https://oaklandside.org/feed/",
+      "siteUrl": "https://oaklandside.org/",
+      "category": "local",
+      "tags": ["local", "oakland", "bay-area", "community"],
+      "popularity": 65
+    },
+    {
+      "id": "berkeleyside",
+      "title": "Berkeleyside",
+      "url": "https://www.berkeleyside.org/feed",
+      "siteUrl": "https://www.berkeleyside.org/",
+      "category": "local",
+      "tags": ["local", "berkeley", "bay-area", "community"],
+      "popularity": 60
+    },
+    {
+      "id": "science-daily",
+      "title": "ScienceDaily",
+      "url": "https://www.sciencedaily.com/rss/all.xml",
+      "siteUrl": "https://www.sciencedaily.com/",
+      "category": "science",
+      "tags": ["science", "research", "environment"],
+      "popularity": 74
+    },
+    {
+      "id": "nasa-news",
+      "title": "NASA News",
+      "url": "https://www.nasa.gov/feed/",
+      "siteUrl": "https://www.nasa.gov/",
+      "category": "science",
+      "tags": ["science", "space", "astronomy"],
+      "popularity": 78
+    },
+    {
+      "id": "space-news",
+      "title": "SpaceNews",
+      "url": "https://spacenews.com/feed/",
+      "siteUrl": "https://spacenews.com/",
+      "category": "science",
+      "tags": ["science", "space", "astronomy", "business"],
+      "popularity": 62
+    },
+    {
+      "id": "the-atlantic",
+      "title": "The Atlantic",
+      "url": "https://www.theatlantic.com/feed/all/",
+      "siteUrl": "https://www.theatlantic.com/",
+      "category": "culture",
+      "tags": ["culture", "politics", "world", "essays"],
+      "popularity": 76
+    },
+    {
+      "id": "longreads",
+      "title": "Longreads",
+      "url": "https://longreads.com/feed/",
+      "siteUrl": "https://longreads.com/",
+      "category": "culture",
+      "tags": ["culture", "essays", "narrative"],
+      "popularity": 55
+    },
+    {
+      "id": "bloomberg-markets",
+      "title": "Bloomberg — Markets",
+      "url": "https://feeds.bloomberg.com/markets/news.rss",
+      "siteUrl": "https://www.bloomberg.com/markets",
+      "category": "business",
+      "tags": ["business", "finance", "markets", "economy"],
+      "popularity": 79
+    },
+    {
+      "id": "nyt-business",
+      "title": "New York Times — Business",
+      "url": "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
+      "siteUrl": "https://www.nytimes.com/section/business",
+      "category": "business",
+      "tags": ["business", "economy", "finance", "world"],
+      "popularity": 82
+    },
+    {
+      "id": "weather-gov-alerts",
+      "title": "NOAA / NWS — National Weather Alerts",
+      "url": "https://alerts.weather.gov/cap/us.php?x=1",
+      "siteUrl": "https://www.weather.gov/",
+      "category": "local",
+      "tags": ["local", "weather", "safety", "environment"],
+      "popularity": 58
+    },
+    {
+      "id": "kqed-news",
+      "title": "KQED News",
+      "url": "https://ww2.kqed.org/news/feed/",
+      "siteUrl": "https://www.kqed.org/news",
+      "category": "local",
+      "tags": ["local", "bay-area", "california", "community"],
+      "popularity": 66
+    },
+    {
+      "id": "grist",
+      "title": "Grist",
+      "url": "https://grist.org/feed/",
+      "siteUrl": "https://grist.org/",
+      "category": "environment",
+      "tags": ["environment", "climate", "sustainability", "science"],
+      "popularity": 63
+    },
+    {
+      "id": "yale-e360",
+      "title": "Yale Environment 360",
+      "url": "https://e360.yale.edu/feed.xml",
+      "siteUrl": "https://e360.yale.edu/",
+      "category": "environment",
+      "tags": ["environment", "climate", "science", "research"],
+      "popularity": 57
+    },
+    {
+      "id": "futurity",
+      "title": "Futurity — University Research News",
+      "url": "https://www.futurity.org/feed/",
+      "siteUrl": "https://www.futurity.org/",
+      "category": "university",
+      "tags": ["university", "research", "science", "academia"],
+      "popularity": 59
+    },
+    {
+      "id": "eurekalert",
+      "title": "EurekAlert! — University & Research News",
+      "url": "https://www.eurekalert.org/rss/all.xml",
+      "siteUrl": "https://www.eurekalert.org/",
+      "category": "university",
+      "tags": ["university", "research", "science", "academia"],
+      "popularity": 56
+    }
+  ]
+}

@@ -15,8 +15,43 @@ import {
   getOrganizationById,
   updateOrganization,
 } from './network-organizations-store.js';
+import { fetchOrgFirmographics } from './network-firmographics.js';
+import {
+  applyQrFactsToContactPatch,
+  decodeContactQrFromImage,
+} from './network-qr-decode.js';
+import { appendFile, mkdir } from 'node:fs/promises';
+import path from 'node:path';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
+
+// #region agent log
+async function agentDbgEnrich(payload) {
+  const body = {
+    sessionId: '951c32',
+    runId: 'post-fix',
+    timestamp: Date.now(),
+    ...payload,
+  };
+  try {
+    const p = path.resolve(process.cwd(), 'data/debug-951c32.ndjson');
+    await mkdir(path.dirname(p), { recursive: true });
+    await appendFile(p, `${JSON.stringify(body)}\n`, 'utf8');
+  } catch {
+    /* ignore */
+  }
+  for (const url of [
+    'http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22',
+    'http://172.17.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22',
+  ]) {
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '951c32' },
+      body: JSON.stringify(body),
+    }).catch(() => {});
+  }
+}
+// #endregion
 
 const CONTACT_ENRICH_SYSTEM = `You extract profile facts for a personal CRM contact from the provided source material.
 Return JSON only:
@@ -57,6 +92,8 @@ Rules:
 - address: full mailing / street / P.O. Box address when explicitly present; keep separate from location.
 - rating / relationshipStatus: only when clearly implied; else null. Prefer null over guessing "Hot" or "Fan". Fan is higher than Hot (closest / strongest fans).
 - avatarImageUrl: direct image URL of a headshot if present; else null.
+- urls: public profile / personal site links only. Never include Telegram / t.me / telegram.org links.
+- If the image is a business card with a QR code and the URL is printed next to it (or otherwise readable as text), include that URL in urls or linkedin. Do not invent a URL from an unread QR.
 - confidence: 0-1.`;
 
 const ORG_ENRICH_SYSTEM = `You extract public facts about an organization for a personal CRM.
@@ -67,7 +104,7 @@ Return JSON only:
   "website": string | null,
   "location": string | null,
   "region": string | null,
-  "type": "Prospect" | "Customer" | "Partner" | "Competitor" | "Other" | null,
+  "type": "Prospect" | "Customer" | "Partner" | "Subcontractor" | "Vendor" | "Supplier" | "Competitor" | "Other" | null,
   "industry": string | null,
   "ownership": string | null,
   "accountSource": string | null,
@@ -103,8 +140,9 @@ Rules:
 - region: geographic market / territory / HQ region when known.
 - location: city/HQ freeform when known.
 - industry, ownership, phone, email, linkedin: only when clearly public.
-- annualRevenue / employeeCount: only when publicly stated; leave null if unknown — do not invent.
-- socialUrls: other public social profile URLs (not LinkedIn).
+- annualRevenue / employeeCount: only when publicly stated on the pages; leave null if unknown — do not invent (structured Wikidata/SEC data is merged separately).
+- socialUrls: other public social profile URLs (not LinkedIn, not Telegram / t.me).
+- urls: public site links only — never Telegram / t.me / telegram.org.
 - people: notable public people clearly associated with this organization (founders, executives, team page names). Prefer real full names; include title/role when stated. Cap at 20. Omit if none found.
 - logoImageUrl: direct image URL of the company logo / brand mark if present among page images; prefer a square icon / symbol mark over full wordmarks that include company-name text, photos, or banners; else null.
 - Do not invent private internal details or people not supported by the excerpts.
@@ -233,8 +271,11 @@ async function openRouterChatJson(args) {
       if (r.status === 401 || r.status === 403) break;
       if (r.status === 404) continue;
       if (r.status === 429) {
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-        continue;
+        // Shared free pools: one short wait, then stop the chain (do not fan out).
+        const ra = Number(r.headers.get('retry-after'));
+        const waitMs = Number.isFinite(ra) && ra > 0 ? Math.min(Math.max(ra, 2), 30) * 1000 : 2000;
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        break;
       }
       if (r.status === 402 || r.status >= 500) continue;
       break;
@@ -422,13 +463,31 @@ async function fetchPageText(url) {
 }
 
 /**
- * DuckDuckGo image search (unofficial i.js) — same results path as browser Images.
+ * Image search for enrich / avatar picker — Chrome (Brave/Bing Images) first, DuckDuckGo fallback.
  * @param {string} query
  * @param {number} [limit]
  * @param {{ preferSquare?: boolean }} [opts]
- * @returns {Promise<{ url: string, thumbUrl: string | null }[]>}
+ * @returns {Promise<{ url: string, thumbUrl: string | null, pageUrl: string | null }[]>}
  */
 export async function searchDuckDuckGoImageResults(query, limit = 10, opts = {}) {
+  try {
+    const { searchGoogleImageResults } = await import('./chrome-web-search.js');
+    const chromeHits = await searchGoogleImageResults(query, limit, opts);
+    if (chromeHits.length) return chromeHits;
+  } catch (e) {
+    console.warn('[network-enrich] chrome image search failed', String(e?.message || e).slice(0, 120));
+  }
+  return searchDuckDuckGoImageResultsLegacy(query, limit, opts);
+}
+
+/**
+ * DuckDuckGo image search (unofficial i.js) — fallback when Chrome search returns nothing.
+ * @param {string} query
+ * @param {number} [limit]
+ * @param {{ preferSquare?: boolean }} [opts]
+ * @returns {Promise<{ url: string, thumbUrl: string | null, pageUrl: string | null }[]>}
+ */
+async function searchDuckDuckGoImageResultsLegacy(query, limit = 10, opts = {}) {
   const q = String(query || '').trim();
   if (!q) return [];
   const preferSquare = Boolean(opts.preferSquare);
@@ -472,10 +531,11 @@ export async function searchDuckDuckGoImageResults(query, limit = 10, opts = {})
     if (!imgRes.ok) return [];
     const data = await imgRes.json();
     const results = Array.isArray(data?.results) ? data.results : [];
-    /** @type {{ url: string, thumbUrl: string | null, score: number }[]} */
+    /** @type {{ url: string, thumbUrl: string | null, pageUrl: string | null, score: number }[]} */
     const out = [];
     for (const row of results) {
-      const image = String(row?.image || row?.url || '').trim();
+      const image = String(row?.image || '').trim() || String(row?.url || '').trim();
+      const pageRaw = String(row?.url || '').trim();
       const thumb = String(row?.thumbnail || '').trim();
       const w = Number(row?.width) || 0;
       const h = Number(row?.height) || 0;
@@ -487,6 +547,14 @@ export async function searchDuckDuckGoImageResults(query, limit = 10, opts = {})
       }
       if (!image || !/^https?:\/\//i.test(image)) continue;
       if (out.some((x) => x.url === image)) continue;
+      // DDG `url` is the hosting page when `image` is the direct asset URL.
+      const pageUrl =
+        pageRaw &&
+        /^https?:\/\//i.test(pageRaw) &&
+        pageRaw !== image &&
+        !/duckduckgo\.com/i.test(pageRaw)
+          ? pageRaw
+          : null;
       let score = scoreLogoUrl(image);
       if (preferSquare && w && h) {
         const ratio = w / h;
@@ -496,12 +564,13 @@ export async function searchDuckDuckGoImageResults(query, limit = 10, opts = {})
       out.push({
         url: image,
         thumbUrl: thumb && /^https?:\/\//i.test(thumb) ? thumb : null,
+        pageUrl,
         score,
       });
       if (out.length >= Math.max(limit * 2, limit)) break;
     }
     if (preferSquare) out.sort((a, b) => b.score - a.score);
-    return out.slice(0, limit).map(({ url, thumbUrl }) => ({ url, thumbUrl }));
+    return out.slice(0, limit).map(({ url, thumbUrl, pageUrl }) => ({ url, thumbUrl, pageUrl }));
   } catch {
     return [];
   }
@@ -544,21 +613,98 @@ async function fetchPages(urls) {
 }
 
 /**
+ * Scene tokens that can disambiguate web search. Everything else is local/private
+ * and must not be sent to DuckDuckGo.
+ * @type {Readonly<Record<string, string>>} compact key → query phrase
+ */
+const ENRICH_SEARCHABLE_SCENES = Object.freeze({
+  burningman: 'Burning Man',
+  climate: 'climate',
+  makerfarm: 'Maker Farm',
+});
+
+/**
+ * Map a scene/circle token to an enrich-searchable key, or null if it must be ignored.
+ * @param {string} token
+ * @returns {keyof typeof ENRICH_SEARCHABLE_SCENES | null}
+ */
+export function enrichSearchableSceneKey(token) {
+  const raw = String(token || '').trim().toLowerCase();
+  if (!raw) return null;
+  const compact = raw.replace(/[^a-z0-9]+/g, '');
+  if (!compact) return null;
+  if (compact === 'burningman' || compact.startsWith('burningman')) return 'burningman';
+  if (compact === 'climate' || compact.startsWith('climate')) return 'climate';
+  if (
+    compact === 'makerfarm' ||
+    compact === 'makerfare' ||
+    compact === 'makerfaire' ||
+    compact.startsWith('makerfarm') ||
+    compact.startsWith('makerfare') ||
+    compact.startsWith('makerfaire')
+  ) {
+    return 'makerfarm';
+  }
+  return null;
+}
+
+/**
+ * Search phrases derived from networkCircles — only Burning Man / climate / Maker Farm.
+ * @param {unknown} networkCircles
+ * @returns {string[]}
+ */
+export function enrichSearchableSceneQueries(networkCircles) {
+  /** @type {string[]} */
+  const out = [];
+  const parts = String(networkCircles || '')
+    .split(/[,;|/]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const part of parts) {
+    const key = enrichSearchableSceneKey(part);
+    if (!key) continue;
+    const phrase = ENRICH_SEARCHABLE_SCENES[key];
+    if (phrase && !out.includes(phrase)) out.push(phrase);
+  }
+  return out.slice(0, 3);
+}
+
+/**
  * Build progressive web-search queries from the newest card fields.
  * Each enrich click should use whatever is currently on the contact.
  * @param {object} contact
  * @returns {string[]}
  */
+/**
+ * Aligned-activity phrases safe to use in web search (from the contact card).
+ * @param {unknown} alignedActivities
+ * @returns {string[]}
+ */
+export function enrichActivitySearchPhrases(alignedActivities) {
+  const raw = Array.isArray(alignedActivities) ? alignedActivities : [];
+  /** @type {string[]} */
+  const out = [];
+  for (const item of raw) {
+    const s = String(item || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 120);
+    if (!s || s.length < 2) continue;
+    if (/\btelegram\b|t\.me\b|telegram\.(?:me|org|dog)/i.test(s)) continue;
+    if (!out.includes(s)) out.push(s);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
 export function contactSearchQueries(contact) {
   const name = String(contact?.displayName || '').trim();
   const org = String(contact?.org || '').trim();
   const title = String(contact?.title || '').trim();
   const location = String(contact?.location || '').trim();
-  const circles = String(contact?.networkCircles || '')
-    .split(/[,;|/]+/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .slice(0, 3);
+  // Only Burning Man / climate / Maker Farm scenes are worth searching; skip APL, houses, etc.
+  const circleBits = enrichSearchableSceneQueries(contact?.networkCircles);
+  const activityBits = enrichActivitySearchPhrases(contact?.alignedActivities);
   const aliases = (contact?.aliases || [])
     .map((a) => String(a || '').trim())
     .filter(Boolean)
@@ -567,34 +713,55 @@ export function contactSearchQueries(contact) {
     .replace(/[^\p{L}\p{N}\s\-']/gu, ' ')
     .split(/\s+/)
     .map((s) => s.trim())
-    .filter((w) => w.length >= 4)
+    .filter((w) => w.length >= 4 && !/^(telegram|t\.me)$/i.test(w))
     .slice(0, 8);
   const place = location;
+  const nameTokens = name.split(/\s+/).filter(Boolean);
+  const shortName = nameTokens.length === 1;
 
   /** @type {string[]} */
   const queries = [];
   const pushQ = (q) => {
     const s = String(q || '').replace(/\s+/g, ' ').trim();
     if (!s || s.length < 2) return;
+    // Never run Telegram-targeted searches.
+    if (/\btelegram\b|t\.me\b|telegram\.(?:me|org|dog)/i.test(s)) return;
     if (!queries.includes(s)) queries.push(s);
   };
-
-  if (name) pushQ(`"${name}"`);
-  if (name && org) pushQ(`"${name}" ${org}`);
-  if (name && title) pushQ(`"${name}" ${title}`);
-  if (name && place) pushQ(`"${name}" ${place}`);
-  if (name && circles[0]) pushQ(`"${name}" ${circles[0]}`);
+  // Short nicknames ("Bear") match animals/restaurants in DDG — prioritize person profiles first.
+  // discoverUrlsFromQueries only runs the first few queries, so LinkedIn must be early.
+  if (name && shortName) {
+    pushQ(`site:linkedin.com/in "${name}"`);
+    if (org) pushQ(`"${name}" ${org}`);
+    if (circleBits[0]) pushQ(`"${name}" ${circleBits[0]}`);
+    if (circleBits[1]) pushQ(`"${name}" ${circleBits[1]}`);
+    for (const act of activityBits.slice(0, 3)) pushQ(`"${name}" ${act}`);
+    pushQ(`"${name}" person`);
+    if (place) pushQ(`"${name}" ${place}`);
+    pushQ(`site:facebook.com "${name}"`);
+    if (title) pushQ(`"${name}" ${title}`);
+  } else if (name) {
+    pushQ(`"${name}"`);
+    if (org) pushQ(`"${name}" ${org}`);
+    pushQ(`site:linkedin.com/in "${name}"`);
+    if (title) pushQ(`"${name}" ${title}`);
+    if (place) pushQ(`"${name}" ${place}`);
+    if (circleBits[0]) pushQ(`"${name}" ${circleBits[0]}`);
+    for (const act of activityBits.slice(0, 4)) pushQ(`"${name}" ${act}`);
+    pushQ(`site:facebook.com "${name}"`);
+  }
   if (name && bioBits.length) pushQ(`"${name}" ${bioBits.slice(0, 4).join(' ')}`);
   for (const a of aliases) {
     pushQ(`"${a}"`);
     if (org) pushQ(`"${a}" ${org}`);
-  }
-  if (name) {
-    pushQ(`site:linkedin.com/in "${name}"`);
-    pushQ(`site:facebook.com "${name}"`);
+    if (shortName) pushQ(`site:linkedin.com/in "${a}"`);
   }
   if (name && org) pushQ(`"${name}" "${org}" linkedin`);
-  return queries.slice(0, 10);
+  // Remaining activities after the early slots (preview can still uncheck them).
+  if (name) {
+    for (const act of activityBits) pushQ(`"${name}" ${act}`);
+  }
+  return queries.slice(0, 16);
 }
 
 /**
@@ -609,13 +776,14 @@ export function orgSearchQueries(org) {
     .replace(/[^\p{L}\p{N}\s\-']/gu, ' ')
     .split(/\s+/)
     .map((s) => s.trim())
-    .filter((w) => w.length >= 4)
+    .filter((w) => w.length >= 4 && !/^(telegram|t\.me)$/i.test(w))
     .slice(0, 6);
   /** @type {string[]} */
   const queries = [];
   const pushQ = (q) => {
     const s = String(q || '').replace(/\s+/g, ' ').trim();
     if (!s || s.length < 2) return;
+    if (/\btelegram\b|t\.me\b|telegram\.(?:me|org|dog)/i.test(s)) return;
     if (!queries.includes(s)) queries.push(s);
   };
   if (name) pushQ(`"${name}" company`);
@@ -624,6 +792,25 @@ export function orgSearchQueries(org) {
   if (name && summaryBits.length) pushQ(`"${name}" ${summaryBits.slice(0, 4).join(' ')}`);
   if (name) pushQ(`site:linkedin.com/company "${name}"`);
   return queries.slice(0, 8);
+}
+
+/**
+ * Pull outbound result URLs — Chrome (Brave Search) first, DuckDuckGo HTML fallback.
+ * @param {string} query
+ * @param {number} [limit]
+ * @returns {Promise<string[]>}
+ */
+async function searchWebResultUrls(query, limit = 6) {
+  try {
+    const { searchGoogleResultUrls } = await import('./chrome-web-search.js');
+    const chromeHits = await searchGoogleResultUrls(query, limit);
+    if (chromeHits.length) {
+      return chromeHits.filter((u) => !isLikelyNonPersonEnrichUrl(u)).slice(0, limit);
+    }
+  } catch (e) {
+    console.warn('[network-enrich] chrome web search failed', String(e?.message || e).slice(0, 120));
+  }
+  return searchDuckDuckGoResultUrls(query, limit);
 }
 
 /**
@@ -652,6 +839,7 @@ async function searchDuckDuckGoResultUrls(query, limit = 6) {
       const s = String(u || '').trim();
       if (!s || !/^https?:\/\//i.test(s)) return;
       if (/duckduckgo\.com/i.test(s)) return;
+      if (isLikelyNonPersonEnrichUrl(s)) return;
       if (urls.includes(s)) return;
       urls.push(s);
     };
@@ -683,15 +871,162 @@ async function searchDuckDuckGoResultUrls(query, limit = 6) {
 async function discoverUrlsFromQueries(queries, maxUrls = 10) {
   /** @type {string[]} */
   const urls = [];
-  const list = (queries || []).slice(0, 3);
-  const batches = await Promise.all(list.map((q) => searchDuckDuckGoResultUrls(q, 4)));
-  for (const hits of batches) {
-    for (const u of hits) {
-      if (!urls.includes(u)) urls.push(u);
-      if (urls.length >= maxUrls) return urls;
+  // Prefer the caller’s curated list (e.g. unchecked terms removed in the preview dialog).
+  // Chrome searches are heavier — run a few in parallel, not all eight at once.
+  const list = (queries || []).slice(0, 8);
+  const concurrency = 2;
+  for (let i = 0; i < list.length; i += concurrency) {
+    const chunk = list.slice(i, i + concurrency);
+    const batches = await Promise.all(chunk.map((q) => searchWebResultUrls(q, 4)));
+    for (const hits of batches) {
+      for (const u of hits) {
+        if (isLikelyNonPersonEnrichUrl(u)) continue;
+        if (!urls.includes(u)) urls.push(u);
+        if (urls.length >= maxUrls) return urls;
+      }
     }
   }
   return urls;
+}
+
+/**
+ * Sanitize optional client-selected page URLs from the enrich preview dialog.
+ * Honors Jay’s checks: only drop clearly invalid / Telegram / DuckDuckGo URLs.
+ * @param {unknown} raw
+ * @returns {string[] | null} null when the client did not send a list
+ */
+export function sanitizeEnrichFetchUrls(raw) {
+  if (!Array.isArray(raw)) return null;
+  /** @type {string[]} */
+  const out = [];
+  for (const item of raw) {
+    const s = String(item || '').trim();
+    if (!s || !/^https?:\/\//i.test(s)) continue;
+    if (/duckduckgo\.com/i.test(s)) continue;
+    if (isTelegramEnrichUrl(s)) continue;
+    if (!out.includes(s)) out.push(s);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
+/**
+ * Sanitize optional client-selected search queries from the enrich preview dialog.
+ * @param {unknown} raw
+ * @returns {string[] | null} null when the client did not send a list
+ */
+export function sanitizeEnrichSearchQueries(raw) {
+  if (!Array.isArray(raw)) return null;
+  /** @type {string[]} */
+  const out = [];
+  for (const item of raw) {
+    const s = String(item || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 200);
+    if (!s || s.length < 2) continue;
+    if (/\btelegram\b|t\.me\b|telegram\.(?:me|org|dog)/i.test(s)) continue;
+    if (!out.includes(s)) out.push(s);
+    if (out.length >= 16) break;
+  }
+  return out;
+}
+
+/**
+ * Telegram hosts — never fetch or promote as enrichment sources.
+ * @param {string} url
+ */
+export function isTelegramEnrichUrl(url) {
+  const s = String(url || '').trim();
+  if (!s) return false;
+  let host = '';
+  try {
+    host = new URL(s).hostname.replace(/^www\./i, '').toLowerCase();
+  } catch {
+    return /(?:^|[/.])(?:t\.me|telegram\.(?:me|org|dog)|web\.telegram\.org)\b/i.test(s);
+  }
+  return (
+    host === 't.me' ||
+    host.endsWith('.t.me') ||
+    host === 'telegram.me' ||
+    host.endsWith('.telegram.me') ||
+    host === 'telegram.org' ||
+    host.endsWith('.telegram.org') ||
+    host === 'telegram.dog' ||
+    host.endsWith('.telegram.dog') ||
+    host === 'web.telegram.org'
+  );
+}
+
+/**
+ * URLs that must not be used as enrichment sources (junk encyclopedia / diner hits,
+ * Telegram, etc.).
+ * @param {string} url
+ */
+export function isLikelyNonPersonEnrichUrl(url) {
+  const s = String(url || '').trim();
+  if (!s || !/^https?:\/\//i.test(s)) return true;
+  if (isTelegramEnrichUrl(s)) return true;
+  let host = '';
+  let path = '';
+  try {
+    const u = new URL(s);
+    host = u.hostname.replace(/^www\./i, '').toLowerCase();
+    path = u.pathname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (/^(merriam-webster|dictionary|wiktionary)\./.test(host) || host.endsWith('.merriam-webster.com')) {
+    return true;
+  }
+  if (host === 'britannica.com' || host.endsWith('.britannica.com')) {
+    if (/\/animal\b|\/topic\/.*bear/.test(path)) return true;
+  }
+  if (/^(yelp|tripadvisor|restaurantji|birdeye|opentable)\./.test(host) || /\.yelp\.com$/.test(host)) {
+    return true;
+  }
+  if (/blackbeardiner\.com/.test(host)) return true;
+  if (host === 'wikipedia.org' || host.endsWith('.wikipedia.org')) {
+    const title = decodeURIComponent((path.replace(/^\/wiki\//, '').split('/')[0] || '')).toLowerCase();
+    if (!title) return false;
+    // Common animal / species pages that drown person nicknames.
+    if (
+      /^(bear|american_black_bear|brown_bear|polar_bear|grizzly_bear|black_bear)(_\(|$)/.test(title) ||
+      /_(black|brown|polar|grizzly|sloth|sun)_bear$/.test(title) ||
+      title === 'american_black_bear'
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Higher = fetch sooner. Profiles and name-in-path beat stale encyclopedia hits.
+ * @param {string} url
+ * @param {object} contact
+ */
+function scoreContactEnrichUrl(url, contact) {
+  const s = String(url || '').trim();
+  if (!s) return -1000;
+  if (isLikelyNonPersonEnrichUrl(s)) return -500;
+  let score = 0;
+  if (isPublicProfileUrl(s)) score += 100;
+  if (/linkedin\.com\/in\//i.test(s)) score += 80;
+  if (/\/(staff|people|team|about-us|apl-staff)\b/i.test(s)) score += 40;
+  const nameTokens = String(contact?.displayName || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s'-]+/g, ' ')
+    .split(/\s+/)
+    .map((t) => t.replace(/[^a-z0-9]/g, ''))
+    .filter((t) => t.length >= 3);
+  try {
+    const path = new URL(s).pathname.toLowerCase();
+    if (nameTokens.some((t) => path.includes(t))) score += 30;
+  } catch {
+    /* ignore */
+  }
+  return score;
 }
 
 /**
@@ -703,14 +1038,20 @@ function contactCandidateUrls(contact) {
   const push = (u) => {
     const s = String(u || '').trim();
     if (!s || !/^https?:\/\//i.test(s)) return;
+    if (isLikelyNonPersonEnrichUrl(s)) return;
     if (!urls.includes(s)) urls.push(s);
   };
+  // Page the selected avatar photo came from — strong signal for the right person.
+  push(contact?.avatarSourceUrl);
+  // Prefer explicit profile links. Do NOT re-queue historical enrichment.sources —
+  // a bad first pass (wiki animals / diners) otherwise fills fetchPages' first 6 slots.
   push(contact?.channels?.linkedin);
-  for (const u of contact?.channels?.urls || []) push(u);
-  for (const s of contact?.enrichment?.sources || []) push(s);
-  // Morning path: one simple name web search page, not the expanded enrich query set.
-  const name = encodeURIComponent(String(contact?.displayName || '').trim());
-  if (name) push(`https://duckduckgo.com/html/?q=${name}`);
+  for (const u of contact?.channels?.urls || []) {
+    if (isPublicProfileUrl(u) || scoreContactEnrichUrl(u, contact) >= 0) push(u);
+  }
+  for (const s of contact?.enrichment?.sources || []) {
+    if (isPublicProfileUrl(s) || scoreContactEnrichUrl(s, contact) >= 40) push(s);
+  }
   return urls;
 }
 
@@ -761,6 +1102,7 @@ function applyContactCardHints(contact, card) {
   return {
     ...contact,
     displayName: String(card.displayName || contact.displayName || '').trim() || contact.displayName,
+    nickname: card.nickname != null ? String(card.nickname) : contact.nickname,
     aliases: Array.isArray(card.aliases) ? card.aliases : contact.aliases,
     org: card.org != null ? String(card.org) : contact.org,
     title: card.title != null ? String(card.title) : contact.title,
@@ -772,6 +1114,11 @@ function applyContactCardHints(contact, card) {
     notes: card.notes != null ? String(card.notes) : contact.notes,
     networkCircles: card.networkCircles != null ? String(card.networkCircles) : contact.networkCircles,
     howWeMet: card.howWeMet != null ? String(card.howWeMet) : contact.howWeMet,
+    relationshipSummary:
+      card.relationshipSummary != null ? String(card.relationshipSummary) : contact.relationshipSummary,
+    alignedActivities: Array.isArray(card.alignedActivities)
+      ? card.alignedActivities
+      : contact.alignedActivities,
     channels,
   };
 }
@@ -924,24 +1271,37 @@ async function tryDownloadImageFromUrls(urls, id, kind, env = process.env) {
 }
 
 /**
- * @param {{ url: string, thumbUrl?: string | null }[]} list
+ * @param {{ url: string, thumbUrl?: string | null, pageUrl?: string | null }[]} list
  * @param {string} url
  * @param {string | null} [thumbUrl]
+ * @param {string | null} [pageUrl]
  */
-function pushCandidate(list, url, thumbUrl = null) {
+function pushCandidate(list, url, thumbUrl = null, pageUrl = null) {
   const s = String(url || '').trim();
   if (!s || !/^https?:\/\//i.test(s)) return;
   if (/\.svg(\?|$)/i.test(s)) return;
-  if (list.some((x) => x.url === s)) return;
+  const page =
+    pageUrl && /^https?:\/\//i.test(pageUrl) && pageUrl !== s && !/duckduckgo\.com/i.test(pageUrl)
+      ? String(pageUrl).trim()
+      : null;
+  const existing = list.find((x) => x.url === s);
+  if (existing) {
+    if (thumbUrl && !existing.thumbUrl && /^https?:\/\//i.test(thumbUrl)) {
+      existing.thumbUrl = thumbUrl;
+    }
+    if (page && !existing.pageUrl) existing.pageUrl = page;
+    return;
+  }
   list.push({
     url: s,
     thumbUrl: thumbUrl && /^https?:\/\//i.test(thumbUrl) ? thumbUrl : null,
+    pageUrl: page,
   });
 }
 
 /**
  * Re-run image search for a contact; return a page of candidates without saving.
- * Default path: scrape known pages, then DuckDuckGo Images for `"Name" linkedin` first, then org/name.
+ * Default path: scrape known pages, then Google Images (Chrome) for `"Name" linkedin` first, then org/name.
  * When `opts.query` is set (picker text box), skip page scrapes and search with that hint.
  * @param {string} contactId
  * @param {{ offset?: number, limit?: number, query?: string }} [opts]
@@ -959,7 +1319,7 @@ export async function findContactAvatarCandidates(contactId, opts = {}, env = pr
     .trim()
     .slice(0, 160);
 
-  /** @type {{ url: string, thumbUrl: string | null }[]} */
+  /** @type {{ url: string, thumbUrl: string | null, pageUrl: string | null }[]} */
   const candidates = [];
 
   const name = String(contact.displayName || '').trim();
@@ -991,8 +1351,11 @@ export async function findContactAvatarCandidates(contactId, opts = {}, env = pr
   if (!hint) {
     const pageUrls = contactCandidateUrls(contact);
     const pages = await fetchPages(pageUrls);
-    for (const img of pages.flatMap((p) => p.imageUrls || [])) {
-      pushCandidate(candidates, img);
+    for (const p of pages) {
+      for (const img of p.imageUrls || []) {
+        pushCandidate(candidates, img, null, p.url);
+        if (candidates.length >= poolTarget) break;
+      }
       if (candidates.length >= poolTarget) break;
     }
   }
@@ -1001,7 +1364,7 @@ export async function findContactAvatarCandidates(contactId, opts = {}, env = pr
     for (const q of queries) {
       const hits = await searchDuckDuckGoImageResults(q, 15);
       for (const hit of hits) {
-        pushCandidate(candidates, hit.url, hit.thumbUrl);
+        pushCandidate(candidates, hit.url, hit.thumbUrl, hit.pageUrl);
         if (candidates.length >= poolTarget) break;
       }
       if (candidates.length >= poolTarget) break;
@@ -1020,7 +1383,7 @@ export async function findContactAvatarCandidates(contactId, opts = {}, env = pr
 
 /**
  * Collect ranked logo image candidates for an organization (page icons/og/logo
- * imgs → Clearbit-style host logo → DuckDuckGo `"Name" logo` queries).
+ * imgs → Clearbit-style host logo → Google Images `"Name" logo` queries).
  * Shared by enrichOrganization and the image-picker UI.
  *
  * @param {object} org
@@ -1155,10 +1518,12 @@ export async function findOrganizationLogoCandidates(orgId, opts = {}, env = pro
 
 /**
  * Download a remote image URL and set it as the contact avatar.
+ * When the picker had a hosting page URL for the image, store it as avatarSourceUrl
+ * so the next Enrich can fetch that page as a source.
  * @param {string} contactId
  * @param {string} imageUrl
  * @param {NodeJS.ProcessEnv} [env]
- * @param {{ thumbUrl?: string | null, dataUrl?: string | null }} [opts]
+ * @param {{ thumbUrl?: string | null, dataUrl?: string | null, pageUrl?: string | null }} [opts]
  */
 export async function applyContactAvatarFromUrl(contactId, imageUrl, env = process.env, opts = {}) {
   const contact = await getContactById(contactId, env);
@@ -1177,7 +1542,12 @@ export async function applyContactAvatarFromUrl(contactId, imageUrl, env = proce
   if (!url || !/^https?:\/\//i.test(url)) return { ok: false, error: 'invalid_url' };
   const avatarUrl = await tryDownloadImageFromUrls([url, thumb], contact.id, 'avatar', env);
   if (!avatarUrl) return { ok: false, error: 'download_failed' };
-  const updated = await updateContact(contactId, { avatarUrl }, env);
+  const pageRaw = String(opts.pageUrl || '').trim();
+  const avatarSourceUrl =
+    pageRaw && /^https?:\/\//i.test(pageRaw) && pageRaw !== url && !/duckduckgo\.com/i.test(pageRaw)
+      ? pageRaw.slice(0, 500)
+      : null;
+  const updated = await updateContact(contactId, { avatarUrl, avatarSourceUrl }, env);
   return { ok: true, contact: updated };
 }
 
@@ -1329,10 +1699,35 @@ export async function enrichContact(contactId, opts = {}, env = process.env) {
 
   // Prefer the live card snapshot (newest UI fields) so each Enrich deepens from what you see.
   const contact = applyContactCardHints(stored, opts.card);
-  const searchQueries = contactSearchQueries(contact);
-  const knownUrls = contactCandidateUrls(contact).filter((u) => !/duckduckgo\.com/i.test(u));
-  const discovered = await discoverUrlsFromQueries(searchQueries, 8);
-  const urls = [...new Set([...knownUrls, ...discovered])].slice(0, 10);
+  const selectedQueries = sanitizeEnrichSearchQueries(opts.searchQueries);
+  const searchQueries =
+    selectedQueries != null ? selectedQueries : contactSearchQueries(contact);
+  const selectedFetchUrls = sanitizeEnrichFetchUrls(opts.fetchUrls);
+  const knownUrls =
+    selectedFetchUrls != null
+      ? selectedFetchUrls
+      : contactCandidateUrls(contact).filter((u) => !/duckduckgo\.com/i.test(u));
+  const discovered = await discoverUrlsFromQueries(searchQueries, 10);
+  // Prefer freshly discovered + profile URLs; never let stale animal/diner sources crowd the fetch slot.
+  const urls = [...new Set([...discovered, ...knownUrls])]
+    .filter((u) => u && !/duckduckgo\.com/i.test(u) && !isLikelyNonPersonEnrichUrl(u))
+    .sort((a, b) => scoreContactEnrichUrl(b, contact) - scoreContactEnrichUrl(a, contact))
+    .slice(0, 10);
+  // Pin the page associated with the selected photo — but only if Jay left it checked
+  // (or there was no page-picker list).
+  const avatarPage = String(contact.avatarSourceUrl || '').trim();
+  const pinAvatar =
+    avatarPage &&
+    /^https?:\/\//i.test(avatarPage) &&
+    !/duckduckgo\.com/i.test(avatarPage) &&
+    !isLikelyNonPersonEnrichUrl(avatarPage) &&
+    (selectedFetchUrls == null || selectedFetchUrls.includes(avatarPage));
+  if (pinAvatar) {
+    const idx = urls.indexOf(avatarPage);
+    if (idx >= 0) urls.splice(idx, 1);
+    urls.unshift(avatarPage);
+    if (urls.length > 10) urls.length = 10;
+  }
   const pages = await fetchPages(urls);
   const pageImageUrls = [...new Set(pages.flatMap((p) => p.imageUrls || []))].slice(0, 16);
   const excerpt = pages
@@ -1343,7 +1738,35 @@ export async function enrichContact(contactId, opts = {}, env = process.env) {
     .join('\n\n---\n\n')
     .slice(0, 24_000);
 
+  // #region agent log
+  void agentDbgEnrich({
+    hypothesisId: 'A',
+    location: 'network-enrich.js:enrichContact:search',
+    message: 'web enrich search context',
+    data: {
+      contactId: String(contactId),
+      displayName: contact.displayName || null,
+      location: contact.location || null,
+      networkCircles: contact.networkCircles || null,
+      org: contact.org || null,
+      searchQueries,
+      discoveredUrls: discovered.slice(0, 12),
+      urlsUsed: urls,
+      pagesFetched: pages.map((p) => p.url),
+      excerptChars: excerpt.length,
+    },
+  });
+  // #endregion
+
   if (Date.now() >= deadlineAt) {
+    // #region agent log
+    void agentDbgEnrich({
+      hypothesisId: 'B',
+      location: 'network-enrich.js:enrichContact:timeout-pre-llm',
+      message: 'enrich timeout before LLM',
+      data: { contactId: String(contactId), elapsedMs: Date.now() - startedAt },
+    });
+    // #endregion
     return { ok: false, error: 'enrich_timeout', contact: stored };
   }
 
@@ -1380,9 +1803,37 @@ ${excerpt || '(no pages fetched — only high-confidence public facts; else null
     ],
   });
 
-  if (!chat.ok) return { ok: false, error: chat.error || 'openrouter_failed', contact };
+  if (!chat.ok) {
+    // #region agent log
+    void agentDbgEnrich({
+      hypothesisId: 'B',
+      location: 'network-enrich.js:enrichContact:llm-fail',
+      message: 'openrouter enrich failed',
+      data: {
+        contactId: String(contactId),
+        error: chat.error || 'openrouter_failed',
+        detail: String(chat.detail || '').slice(0, 200),
+        elapsedMs: Date.now() - startedAt,
+      },
+    });
+    // #endregion
+    return { ok: false, error: chat.error || 'openrouter_failed', contact };
+  }
   const parsed = extractJsonObject(chat.content);
-  if (!parsed || typeof parsed !== 'object') return { ok: false, error: 'parse_failed', contact };
+  if (!parsed || typeof parsed !== 'object') {
+    // #region agent log
+    void agentDbgEnrich({
+      hypothesisId: 'B',
+      location: 'network-enrich.js:enrichContact:parse-fail',
+      message: 'enrich JSON parse failed',
+      data: {
+        contactId: String(contactId),
+        contentPreview: String(chat.content || '').slice(0, 240),
+      },
+    });
+    // #endregion
+    return { ok: false, error: 'parse_failed', contact };
+  }
 
   let confidence = null;
   if (typeof parsed.confidence === 'number' && Number.isFinite(parsed.confidence)) {
@@ -1394,9 +1845,11 @@ ${excerpt || '(no pages fetched — only high-confidence public facts; else null
     enrichment: {
       sources: [
         ...new Set([
-          ...(contact.enrichment?.sources || []),
-          ...pages.map((p) => p.url),
-          ...((Array.isArray(parsed.urls) ? parsed.urls : []).filter((u) => /^https?:\/\//i.test(String(u)))),
+          ...(contact.enrichment?.sources || []).filter((u) => !isLikelyNonPersonEnrichUrl(u)),
+          ...pages.map((p) => p.url).filter((u) => !isLikelyNonPersonEnrichUrl(u)),
+          ...((Array.isArray(parsed.urls) ? parsed.urls : [])
+            .map((u) => String(u).trim())
+            .filter((u) => /^https?:\/\//i.test(u) && !isLikelyNonPersonEnrichUrl(u))),
         ]),
       ].slice(0, 30),
       enrichedAt: new Date().toISOString(),
@@ -1450,6 +1903,10 @@ ${excerpt || '(no pages fetched — only high-confidence public facts; else null
     channels[key] = s;
     channelsChanged = true;
   };
+  const linkedinCandidate = String(parsed.linkedin || '').trim();
+  const linkedinRejected =
+    Boolean(linkedinCandidate) &&
+    !profileUrlPlausiblyMatchesName(linkedinCandidate, contact.displayName, contact.aliases);
   setChannel('linkedin', parsed.linkedin);
   setChannel('email', parsed.email);
   setChannel('phone', parsed.phone);
@@ -1465,13 +1922,42 @@ ${excerpt || '(no pages fetched — only high-confidence public facts; else null
         isPublicProfileUrl(u) &&
         profileUrlPlausiblyMatchesName(u, contact.displayName, contact.aliases),
     );
-    const urlsMerged = [...new Set([...(channels.urls || []), ...profileUrls])].slice(0, 20);
-    if (force || emptyField(channels.urls) || urlsMerged.length > (channels.urls || []).length) {
+    // Drop dictionary / animal / restaurant junk left on the card from earlier bad enriches.
+    const priorUrls = (channels.urls || []).filter(
+      (u) => isPublicProfileUrl(u) || (!isLikelyNonPersonEnrichUrl(u) && scoreContactEnrichUrl(u, contact) >= 0),
+    );
+    const urlsMerged = [...new Set([...priorUrls, ...profileUrls])].slice(0, 20);
+    if (
+      force ||
+      emptyField(channels.urls) ||
+      urlsMerged.length !== (channels.urls || []).length ||
+      urlsMerged.some((u, i) => u !== (channels.urls || [])[i])
+    ) {
       channels.urls = urlsMerged;
       channelsChanged = true;
     }
   }
   if (channelsChanged) patch.channels = channels;
+
+  // #region agent log
+  void agentDbgEnrich({
+    hypothesisId: 'A',
+    location: 'network-enrich.js:enrichContact:parsed',
+    message: 'LLM enrich parse + guard outcomes',
+    data: {
+      contactId: String(contactId),
+      confidence,
+      parsedKeys: Object.keys(parsed).filter((k) => parsed[k] != null && parsed[k] !== ''),
+      parsedBio: parsed.bio ? String(parsed.bio).slice(0, 120) : null,
+      parsedOrg: parsed.org || null,
+      parsedTitle: parsed.title || null,
+      parsedLinkedin: linkedinCandidate || null,
+      linkedinRejected,
+      patchFieldKeys: Object.keys(patch).filter((k) => k !== 'enrichment' && k !== 'source'),
+      sources: (patch.enrichment?.sources || []).slice(0, 8),
+    },
+  });
+  // #endregion
 
   if ((force || emptyField(contact.avatarUrl)) && parsed.avatarImageUrl) {
     const avatarUrl = await tryDownloadImage(String(parsed.avatarImageUrl), contact.id, 'avatar', env);
@@ -1484,7 +1970,7 @@ ${excerpt || '(no pages fetched — only high-confidence public facts; else null
     if (avatarUrl) patch.avatarUrl = avatarUrl;
   }
 
-  // Same path you see in the browser: DuckDuckGo Images for name + LinkedIn first, then org/name.
+  // Same path you see in Chrome: Google Images for name + LinkedIn first, then org/name.
   if ((force || emptyField(contact.avatarUrl)) && !patch.avatarUrl && Date.now() < deadlineAt - 8_000) {
     const name = String(contact.displayName || '').trim();
     const org = String(patch.org || contact.org || '').trim();
@@ -1536,6 +2022,21 @@ ${excerpt || '(no pages fetched — only high-confidence public facts; else null
 
   const filled = markContactEnrichNeedsReview(patch);
   const updated = await updateContact(contactId, patch, env);
+  // #region agent log
+  void agentDbgEnrich({
+    hypothesisId: 'C',
+    location: 'network-enrich.js:enrichContact:done',
+    message: 'web enrich completed',
+    data: {
+      contactId: String(contactId),
+      filled,
+      filledCount: filled.length,
+      confidence: updated?.enrichment?.confidence ?? confidence,
+      elapsedMs: Date.now() - startedAt,
+      emptySuccess: filled.length === 0,
+    },
+  });
+  // #endregion
   return { ok: true, contact: updated, filled };
 }
 
@@ -1754,6 +2255,7 @@ ${sourceText.slice(0, 28_000)}`,
  *   dataUrl?: string,
  *   force?: boolean,
  *   useImageAsAvatar?: boolean,
+ *   preserveAvatar?: boolean,
  *   card?: object,
  * }} opts
  * @param {NodeJS.ProcessEnv} [env]
@@ -1797,6 +2299,13 @@ export async function enrichContactFromFile(contactId, opts = {}, env = process.
   if (isImage) {
     const contact = applyContactCardHints(stored, opts.card);
     const dataUrlOut = `data:${mime.startsWith('image/') ? mime : 'image/jpeg'};base64,${b64}`;
+    /** QR decode is deterministic — run before vision so card URLs are never missed. */
+    let qr = { payloads: [], urls: [], emails: [], phones: [], linkedin: null };
+    try {
+      qr = await decodeContactQrFromImage(buf);
+    } catch (e) {
+      console.warn('[network-enrich] QR decode failed', e?.message || e);
+    }
     const chat = await openRouterChatJson({
       env,
       models: modelChain(visionModel(env), VISION_FALLBACK_MODELS),
@@ -1810,7 +2319,11 @@ export async function enrichContactFromFile(contactId, opts = {}, env = process.
           content: [
             {
               type: 'text',
-              text: `Extract CRM fields for contact "${contact.displayName}" from this uploaded image/document scan (resume, bio card, flyer, screenshot). Current email: ${contact.channels?.email || '(none)'}.`,
+              text: `Extract CRM fields for contact "${contact.displayName}" from this uploaded image/document scan (resume, bio card, flyer, screenshot). Current email: ${contact.channels?.email || '(none)'}.${
+                qr.urls.length || qr.linkedin
+                  ? ` A QR code on the image decoded to: ${[qr.linkedin, ...qr.urls].filter(Boolean).join(', ')} — include these on the card.`
+                  : ''
+              }`,
             },
             { type: 'image_url', image_url: { url: dataUrlOut } },
           ],
@@ -1821,16 +2334,24 @@ export async function enrichContactFromFile(contactId, opts = {}, env = process.
     const parsed = extractJsonObject(chat.content);
     if (!parsed || typeof parsed !== 'object') return { ok: false, error: 'parse_failed', contact: stored };
     const force = Boolean(opts.force);
+    const preserveAvatar = Boolean(opts.preserveAvatar);
     const patch = buildContactEnrichPatch(contact, parsed, {
       force,
       sourceLabel: `file:${filename}`,
+      sourceUrls: [...(qr.linkedin ? [qr.linkedin] : []), ...qr.urls],
     });
+    applyQrFactsToContactPatch(contact, patch, qr);
 
-    if ((force || emptyField(contact.avatarUrl)) && parsed.avatarImageUrl) {
+    if (!preserveAvatar && (force || emptyField(contact.avatarUrl)) && parsed.avatarImageUrl) {
       const avatarUrl = await tryDownloadImage(String(parsed.avatarImageUrl), contact.id, 'avatar', env);
       if (avatarUrl) patch.avatarUrl = avatarUrl;
     }
-    if ((force || emptyField(contact.avatarUrl)) && !patch.avatarUrl && opts.useImageAsAvatar) {
+    if (
+      !preserveAvatar
+      && (force || emptyField(contact.avatarUrl))
+      && !patch.avatarUrl
+      && opts.useImageAsAvatar
+    ) {
       try {
         const updatedAvatar = await saveContactAvatar(
           contactId,
@@ -1858,7 +2379,15 @@ export async function enrichContactFromFile(contactId, opts = {}, env = process.
 
     const filled = markContactEnrichNeedsReview(patch);
     const updated = await updateContact(contactId, patch, env);
-    return { ok: true, contact: updated, mode: 'file', filename, filled };
+    return {
+      ok: true,
+      contact: updated,
+      mode: 'file',
+      filename,
+      filled,
+      qrUrls: qr.urls,
+      qrLinkedin: qr.linkedin,
+    };
   }
 
   if (!isTextish) {
@@ -1891,6 +2420,180 @@ export async function enrichContactFromFile(contactId, opts = {}, env = process.
     },
     env,
   );
+}
+
+/**
+ * List shared Gmail messages with a contact (newest first), with offset/limit paging.
+ * @param {string} contactId
+ * @param {{ offset?: number, limit?: number, card?: object }} [opts]
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function listSharedEmailsForContact(contactId, opts = {}, env = process.env) {
+  const stored = await getContactById(contactId, env);
+  if (!stored) return { ok: false, error: 'not_found' };
+  const contact = applyContactCardHints(stored, opts.card);
+
+  const offset = Math.max(0, Math.floor(Number(opts.offset) || 0));
+  const limit = Math.min(Math.max(Math.floor(Number(opts.limit) || 10), 1), 20);
+  // Oversample so calendar notifications can be stripped without short pages.
+  const need = Math.min(Math.max(offset + limit + 1, 40), 100);
+
+  const {
+    fetchSharedEmailsWithContact,
+    gmailExactMessageUrl,
+    isCalendarNotificationEmail,
+  } = await import('./events-finder-gmail.js');
+  const found = await fetchSharedEmailsWithContact(
+    {
+      email: contact.channels?.email,
+      displayName: contact.displayName,
+      nickname: contact.nickname,
+      aliases: contact.aliases,
+    },
+    env,
+    { maxMessages: need, mode: 'list' },
+  );
+  if (!found.ok) {
+    return {
+      ok: false,
+      error: found.error || 'no_shared_emails',
+      detail: found.detail,
+      contact: stored,
+      messages: [],
+      offset,
+      limit,
+      hasMore: false,
+    };
+  }
+
+  const all = (Array.isArray(found.messages) ? found.messages : []).filter(
+    (m) => !isCalendarNotificationEmail(m),
+  );
+  const page = all.slice(offset, offset + limit).map((m) => {
+    const url = gmailExactMessageUrl({
+      mailbox: m.mailbox,
+      id: m.id,
+      gmailId: m.gmailId,
+      rfc822MessageId: m.rfc822MessageId,
+    });
+    return {
+      id: m.id,
+      mailbox: m.mailbox,
+      subject: m.subject,
+      from: m.from,
+      to: m.to,
+      date: m.date,
+      snippet: m.snippet,
+      url: url || null,
+    };
+  });
+
+  return {
+    ok: true,
+    query: found.query,
+    messages: page,
+    offset,
+    limit,
+    hasMore: all.length > offset + limit,
+    fetched: all.length,
+  };
+}
+
+const RELATIONSHIP_SUMMARY_SYSTEM = `You summarize the relationship between Jay (the mailbox owner) and a CRM contact from their shared email history and card facts.
+Return JSON only:
+{
+  "summary": string
+}
+Rules:
+- Write 2–5 short paragraphs (or tight bullets) in plain language.
+- Cover: how they know each other, topics they discuss, tone/closeness, notable collaborations or plans, and anything useful for follow-up.
+- Stick to evidence in the emails and card; say when the record is thin.
+- Do not invent private facts. Prefer "unclear" over guessing.
+- Second person for Jay is fine ("you"), or neutral third person — stay consistent.`;
+
+/**
+ * Generate and save a relationship summary from shared emails + contact card.
+ * @param {string} contactId
+ * @param {{ card?: object, maxMessages?: number, force?: boolean }} [opts]
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function summarizeContactRelationship(contactId, opts = {}, env = process.env) {
+  const stored = await getContactById(contactId, env);
+  if (!stored) return { ok: false, error: 'not_found' };
+  if (!openRouterKey(env)) return { ok: false, error: 'openrouter_not_configured', contact: stored };
+  const contact = applyContactCardHints(stored, opts.card);
+
+  const { fetchSharedEmailsWithContact } = await import('./events-finder-gmail.js');
+  const found = await fetchSharedEmailsWithContact(
+    {
+      email: contact.channels?.email,
+      displayName: contact.displayName,
+      nickname: contact.nickname,
+      aliases: contact.aliases,
+    },
+    env,
+    { maxMessages: Math.min(Math.max(Number(opts.maxMessages) || 30, 1), 100) },
+  );
+  if (!found.ok) {
+    return {
+      ok: false,
+      error: found.error || 'no_shared_emails',
+      detail: found.detail,
+      contact: stored,
+    };
+  }
+
+  const deadlineAt = Date.now() + ENRICH_WALL_MS;
+  const chat = await openRouterChatJson({
+    env,
+    models: modelChain(textModel(env), TEXT_FALLBACK_MODELS),
+    temperature: 0.3,
+    maxTokens: 2048,
+    deadlineAt,
+    messages: [
+      { role: 'system', content: RELATIONSHIP_SUMMARY_SYSTEM },
+      {
+        role: 'user',
+        content: `Contact card:
+name: ${contact.displayName || '(unknown)'}
+nickname: ${contact.nickname || '(none)'}
+email: ${contact.channels?.email || '(none)'}
+org / title: ${[contact.org, contact.title].filter(Boolean).join(' · ') || '(none)'}
+relationshipStatus: ${contact.relationshipStatus || '(none)'}
+howWeMet: ${contact.howWeMet || '(none)'}
+bio: ${contact.bio || '(none)'}
+notes: ${contact.notes || '(none)'}
+existing relationshipSummary: ${
+          contact.relationshipSummary ||
+          (opts.card && opts.card.relationshipSummary != null
+            ? String(opts.card.relationshipSummary)
+            : '') ||
+          '(none)'
+        }
+
+Shared emails (${Array.isArray(found.messages) ? found.messages.length : 0}, newest first):
+${found.combinedText || '(none)'}`,
+      },
+    ],
+  });
+
+  if (!chat.ok) return { ok: false, error: chat.error || 'openrouter_failed', contact: stored, detail: chat.detail };
+  const parsed = extractJsonObject(chat.content);
+  const summaryRich = String(parsed?.summary || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, 8000);
+  if (!summaryRich) return { ok: false, error: 'parse_failed', contact: stored };
+
+  return {
+    ok: true,
+    contact: stored,
+    relationshipSummary: summaryRich,
+    emailCount: Array.isArray(found.messages) ? found.messages.length : 0,
+    model: chat.model,
+  };
 }
 
 /**
@@ -2041,8 +2744,18 @@ export async function enrichOrganization(orgId, opts = {}, env = process.env) {
     };
   })();
 
-  const searchQueries = orgSearchQueries(org);
-  const knownUrls = orgCandidateUrls(org).filter((u) => !/duckduckgo\.com/i.test(u));
+  const firmographicsPromise = fetchOrgFirmographics(
+    { name: org.name, website: org.website, linkedin: org.linkedin },
+    env,
+  ).catch(() => ({ employeeCount: '', annualRevenue: '', sources: [], providers: [] }));
+
+  const selectedQueries = sanitizeEnrichSearchQueries(opts.searchQueries);
+  const searchQueries = selectedQueries != null ? selectedQueries : orgSearchQueries(org);
+  const selectedFetchUrls = sanitizeEnrichFetchUrls(opts.fetchUrls);
+  const knownUrls =
+    selectedFetchUrls != null
+      ? selectedFetchUrls
+      : orgCandidateUrls(org).filter((u) => !/duckduckgo\.com/i.test(u));
   const discovered = await discoverUrlsFromQueries(searchQueries, 8);
   const urls = [...new Set([...knownUrls, ...discovered])].slice(0, 10);
   const pages = await fetchPages(urls);
@@ -2135,6 +2848,21 @@ ${excerpt || '(no pages fetched — only high-confidence public facts; else null
   maybeSet('rating', parsed.rating);
   maybeSet('annualRevenue', parsed.annualRevenue);
   maybeSet('employeeCount', parsed.employeeCount);
+
+  // Structured firmographics beat LLM page-guesses when the card field was empty.
+  const firm = await firmographicsPromise;
+  if (firm.employeeCount && (force || emptyField(org.employeeCount))) {
+    patch.employeeCount = firm.employeeCount;
+  }
+  if (firm.annualRevenue && (force || emptyField(org.annualRevenue))) {
+    patch.annualRevenue = firm.annualRevenue;
+  }
+  if (firm.sources?.length) {
+    const enrichment = /** @type {{ sources?: string[] }} */ (patch.enrichment || {});
+    enrichment.sources = [...new Set([...(enrichment.sources || []), ...firm.sources])].slice(0, 30);
+    patch.enrichment = enrichment;
+  }
+
   maybeSet('fiscalYearEnd', parsed.fiscalYearEnd);
   maybeSet('competitiveNotes', parsed.competitiveNotes);
   maybeSet('phone', parsed.phone);

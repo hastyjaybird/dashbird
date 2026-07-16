@@ -1,0 +1,220 @@
+{
+  "generated_at": "2026-07-09T11:02:12.430Z",
+  "base": "http://127.0.0.1:8787",
+  "log": [
+    {
+      "t_s": 0,
+      "phase": "start",
+      "msg": "BASE=http://127.0.0.1:8787"
+    },
+    {
+      "t_s": 0.19,
+      "phase": "review_before",
+      "count": 0,
+      "titles": []
+    },
+    {
+      "t_s": 0.19,
+      "phase": "queue_request",
+      "msg": "POST /api/web-catalog/jobs/alternatives name=notion"
+    },
+    {
+      "t_s": 0.5,
+      "phase": "queue_ok",
+      "jobId": "08561fa4-4943-4d56-9ae0-d6125e9d6f2c",
+      "resourceId": "a2865aac-12f7-4e03-b1b0-c46f870420b9",
+      "jobStatus": "pending",
+      "hasQuery": false,
+      "query": null
+    },
+    {
+      "t_s": 0.6,
+      "phase": "status_change",
+      "status": "pending",
+      "started_at": null,
+      "finished_at": null,
+      "error": null
+    },
+    {
+      "t_s": 0.6,
+      "phase": "heartbeat",
+      "n": 1,
+      "status": "pending",
+      "progress": null,
+      "resultKeys": []
+    },
+    {
+      "t_s": 10.36,
+      "phase": "status_change",
+      "status": "running",
+      "started_at": "2026-07-09T11:02:07.833+00:00",
+      "finished_at": null,
+      "error": null
+    },
+    {
+      "t_s": 10.37,
+      "phase": "heartbeat",
+      "n": 2,
+      "status": "running",
+      "progress": null,
+      "resultKeys": []
+    },
+    {
+      "t_s": 11.44,
+      "phase": "heartbeat",
+      "n": 3,
+      "status": "running",
+      "progress": {
+        "at": "2026-07-09T11:02:09.069Z",
+        "found": 1,
+        "phase": "checking",
+        "total": 9,
+        "checked": 1
+      },
+      "resultKeys": [
+        "progress"
+      ]
+    },
+    {
+      "t_s": 12.53,
+      "phase": "heartbeat",
+      "n": 4,
+      "status": "running",
+      "progress": {
+        "at": "2026-07-09T11:02:09.474Z",
+        "found": 2,
+        "phase": "checking",
+        "total": 9,
+        "checked": 3
+      },
+      "resultKeys": [
+        "progress"
+      ]
+    },
+    {
+      "t_s": 13.59,
+      "phase": "heartbeat",
+      "n": 5,
+      "status": "running",
+      "progress": {
+        "at": "2026-07-09T11:02:11.099Z",
+        "found": 4,
+        "phase": "checking",
+        "total": 9,
+        "checked": 6
+      },
+      "resultKeys": [
+        "progress"
+      ]
+    },
+    {
+      "t_s": 14.65,
+      "phase": "status_change",
+      "status": "done",
+      "started_at": "2026-07-09T11:02:07.833+00:00",
+      "finished_at": "2026-07-09T11:02:12.034+00:00",
+      "error": null
+    },
+    {
+      "t_s": 14.65,
+      "phase": "heartbeat",
+      "n": 6,
+      "status": "done",
+      "progress": {
+        "at": "2026-07-09T11:02:11.951Z",
+        "found": 6,
+        "phase": "done",
+        "total": 9,
+        "checked": 7
+      },
+      "resultKeys": [
+        "queued",
+        "source",
+        "progress"
+      ]
+    },
+    {
+      "t_s": 14.72,
+      "phase": "review_after",
+      "totalPending": 0,
+      "newCount": 0,
+      "newItems": []
+    },
+    {
+      "t_s": 14.72,
+      "phase": "analysis",
+      "total_wall_s": 14.72,
+      "queue_to_start_s": 9.72,
+      "run_s": 4.2,
+      "queue_to_done_s": 13.93,
+      "heartbeats": 6,
+      "final_status": "done",
+      "final_error": null,
+      "queued_count": 0,
+      "source": "notion",
+      "progress_last": {
+        "at": "2026-07-09T11:02:11.951Z",
+        "found": 6,
+        "phase": "done",
+        "total": 9,
+        "checked": 7
+      },
+      "new_review_items": 0,
+      "duplicates_by_host": [],
+      "solidworks_present": false,
+      "notion_self_present": false,
+      "titles": [],
+      "statusTimeline": [
+        {
+          "t_s": 0.6,
+          "status": "pending"
+        },
+        {
+          "t_s": 10.36,
+          "status": "running"
+        },
+        {
+          "t_s": 14.65,
+          "status": "done"
+        }
+      ]
+    }
+  ],
+  "analysis": {
+    "total_wall_s": 14.72,
+    "queue_to_start_s": 9.72,
+    "run_s": 4.2,
+    "queue_to_done_s": 13.93,
+    "heartbeats": 6,
+    "final_status": "done",
+    "final_error": null,
+    "queued_count": 0,
+    "source": "notion",
+    "progress_last": {
+      "at": "2026-07-09T11:02:11.951Z",
+      "found": 6,
+      "phase": "done",
+      "total": 9,
+      "checked": 7
+    },
+    "new_review_items": 0,
+    "duplicates_by_host": [],
+    "solidworks_present": false,
+    "notion_self_present": false,
+    "titles": [],
+    "statusTimeline": [
+      {
+        "t_s": 0.6,
+        "status": "pending"
+      },
+      {
+        "t_s": 10.36,
+        "status": "running"
+      },
+      {
+        "t_s": 14.65,
+        "status": "done"
+      }
+    ]
+  }
+}

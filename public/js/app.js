@@ -1,10 +1,38 @@
-import { mountCalendar } from './panels/calendar.js';
-import { mountBookmarkGrid } from './panels/bookmarks.js';
-import { mountCalendarUpcoming } from './panels/calendar-upcoming.js';
-import { mountPageTabs } from './panels/page-tabs.js';
-import { mountSettingsPage } from './panels/settings-page.js';
-import { mountSkySidebarToggle } from './panels/sky-sidebar-toggle.js';
+/**
+ * Dashbird entry — keep static imports minimal so mobile mode does not download
+ * the desktop dashboard graph before painting Network/Events.
+ */
+import { isMobileView, readViewMode } from './lib/view-mode.js';
 import { readPanelCache, writePanelCache } from './lib/panel-cache.js';
+
+// #region agent log
+function agentDbg(hypothesisId, location, message, data = {}) {
+  const body = {
+    sessionId: '7a319b',
+    runId: 'phone-stall-6',
+    hypothesisId,
+    location,
+    message,
+    data,
+    timestamp: Date.now(),
+  };
+  fetch('/api/dev-agent-log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7a319b' },
+    body: JSON.stringify(body),
+  }).catch(() => {});
+  fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7a319b' },
+    body: JSON.stringify(body),
+  }).catch(() => {});
+}
+agentDbg('E', 'app.js:module-evaluated', 'app.js module evaluated (lean static imports)', {
+  view: readViewMode(),
+  href: typeof location !== 'undefined' ? location.pathname : '',
+  t: typeof performance !== 'undefined' ? Math.round(performance.now()) : null,
+});
+// #endregion
 
 const CONFIG_CACHE_KEY = 'config';
 const CONFIG_CACHE_MAX_MS = 7 * 24 * 60 * 60 * 1000;
@@ -65,13 +93,17 @@ function showPage(page) {
   const settings = document.getElementById('page-settings');
   const houseHunter = document.getElementById('page-house-hunter');
   const network = document.getElementById('page-network');
+  const mobile = document.getElementById('page-mobile');
   if (main) main.hidden = page !== 'main';
   if (settings) settings.hidden = page !== 'settings';
   if (houseHunter) houseHunter.hidden = page !== 'house-hunter';
   if (network) network.hidden = page !== 'network';
+  if (mobile) mobile.hidden = true;
   if (page === 'settings' && !settingsLoaded) {
     settingsLoaded = true;
-    mountSettingsPage(document.getElementById('mount-settings'));
+    void import('./panels/settings-page.js').then(({ mountSettingsPage }) => {
+      mountSettingsPage(document.getElementById('mount-settings'));
+    });
   }
   if (page === 'house-hunter' && !houseHunterLoaded) {
     houseHunterLoaded = true;
@@ -82,14 +114,13 @@ function showPage(page) {
       .catch((e) => console.error('House Hunter mount failed:', e));
   }
   if (page === 'network') {
-    // Start contacts + companies fetch immediately (parallel with Network UI chunk).
     import('./lib/network-prefetch.js')
       .then(({ beginNetworkPrefetch }) => beginNetworkPrefetch())
       .catch(() => {});
   }
   if (page === 'network' && !networkLoaded) {
     networkLoaded = true;
-    import('./panels/network.js?v=cols-persist-1')
+    import('./panels/network.js?v=scene-list-tall-1')
       .then(({ mountNetwork }) => {
         mountNetwork(document.getElementById('mount-network'));
       })
@@ -110,8 +141,6 @@ function markDeferredReady() {
 }
 
 /**
- * Import a panel module and run its mount as soon as that chunk arrives
- * (do not wait for every deferred panel to download).
  * @param {string} label
  * @param {() => Promise<unknown>} load
  */
@@ -126,10 +155,10 @@ function mountWhenReady(label, load) {
 }
 
 /**
- * Weather, sidebars, tool library — each panel mounts as its chunk loads.
  * @param {object} config
  */
 async function mountDeferredPanels(config) {
+  const { debugLog } = await import('./lib/debugLog.js');
   const jobs = [
     mountWhenReady('hero', () =>
       Promise.all([
@@ -150,6 +179,14 @@ async function mountDeferredPanels(config) {
     mountWhenReady('earth', () =>
       import('./panels/earth-events.js').then(({ mountEarthStrip }) => {
         mountEarthStrip(document.getElementById('mount-earth-strip'));
+      }),
+    ),
+    mountWhenReady('kilauea-live', () =>
+      import('./panels/kilauea-livestream.js').then(({ mountKilaueaLivestream }) => {
+        mountKilaueaLivestream(
+          document.getElementById('kilauea-live-card'),
+          document.getElementById('mount-kilauea-live'),
+        );
       }),
     ),
     mountWhenReady('weather-radar', () =>
@@ -181,9 +218,9 @@ async function mountDeferredPanels(config) {
         mountMarketWatch(document.getElementById('mount-market-watch'));
       }),
     ),
-    mountWhenReady('today-todo', () =>
-      import('./panels/today-todo.js').then(({ mountTodayTodo }) => {
-        mountTodayTodo(document.getElementById('mount-today-todo'));
+    mountWhenReady('daily-summary', () =>
+      import('./panels/daily-summary.js').then(({ mountDailySummary }) => {
+        mountDailySummary(document.getElementById('mount-daily-summary'));
       }),
     ),
     mountWhenReady('tool-library', () =>
@@ -206,9 +243,116 @@ async function mountDeferredPanels(config) {
   await Promise.allSettled(jobs);
 
   markDeferredReady();
+
+  debugLog({
+    location: 'app.js:mountDeferredPanels',
+    message: 'dashbird deferred panels mounted',
+    hypothesisId: 'H2',
+    data: { panels: 'deferred-complete' },
+  });
 }
 
-async function main() {
+/** Lean phone boot: view toggle + Network/Events shell only. */
+async function mainMobile() {
+  // #region agent log
+  const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  agentDbg('B', 'app.js:mainMobile:start', 'mainMobile start', {
+    pageMobileHidden: document.getElementById('page-mobile')?.hidden ?? null,
+    hasMobileClass: document.documentElement.classList.contains('dashbird-view-mobile'),
+    t: Math.round(t0),
+  });
+  // #endregion
+  document.body.classList.add('dashy--view-mobile');
+
+  const [{ mountViewModeToggle }, { mountMobileShell }] = await Promise.all([
+    import('./panels/view-mode-toggle.js'),
+    import('./panels/mobile-shell.js'),
+  ]);
+  // #region agent log
+  agentDbg('E', 'app.js:mainMobile:chunks', 'mobile chunks imported', {
+    ms: Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0),
+  });
+  // #endregion
+
+  mountViewModeToggle(document.getElementById('mount-view-mode'));
+  mountMobileShell({
+    tabsRoot: document.getElementById('mount-mobile-tabs'),
+    networkRoot: document.getElementById('mount-mobile-network'),
+    eventsRoot: document.getElementById('mount-mobile-events'),
+    groupsRoot: document.getElementById('mount-mobile-groups'),
+    tasksRoot: document.getElementById('mount-mobile-tasks'),
+  });
+  // #region agent log
+  agentDbg('B', 'app.js:mainMobile:after-shell', 'mobile shell mounted', {
+    pageMobileHidden: document.getElementById('page-mobile')?.hidden ?? null,
+    tabsKids: document.getElementById('mount-mobile-tabs')?.childElementCount ?? -1,
+    networkKids: document.getElementById('mount-mobile-network')?.childElementCount ?? -1,
+    ms: Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0),
+  });
+  const pageMobile = document.getElementById('page-mobile');
+  agentDbg('G', 'app.js:mainMobile:layout', 'mobile layout metrics after shell', {
+    winH: window.innerHeight,
+    winW: window.innerWidth,
+    pageH: pageMobile?.clientHeight ?? -1,
+    pageScrollH: pageMobile?.scrollHeight ?? -1,
+    bodyH: document.body.clientHeight,
+    htmlH: document.documentElement.clientHeight,
+    ua: String(navigator.userAgent || '').slice(0, 140),
+    conn: navigator.connection
+      ? {
+          effectiveType: navigator.connection.effectiveType,
+          downlink: navigator.connection.downlink,
+          saveData: navigator.connection.saveData,
+        }
+      : null,
+  });
+  // #endregion
+
+  /* Still paint zip / TZ when config is available (next to the view icons). */
+  void loadConfigPreferLive()
+    .then(async (config) => {
+      try {
+        const { startDeviceLocation, subscribeDevicePlace } = await import('./lib/device-location.js');
+        const topbarEl = document.getElementById('mount-topbar-context');
+        startDeviceLocation(config).then((place) => {
+          if (place) renderTopbarContext(topbarEl, place);
+        });
+        subscribeDevicePlace((place) => renderTopbarContext(topbarEl, place));
+      } catch (e) {
+        console.error('Mobile location context failed:', e);
+      }
+    })
+    .catch(() => {});
+
+  markPriorityReady();
+  markDeferredReady();
+}
+
+async function mainDesktop() {
+  // #region agent log
+  agentDbg('A', 'app.js:mainDesktop:start', 'mainDesktop start', {
+    view: readViewMode(),
+    ua: String(navigator.userAgent || '').slice(0, 120),
+  });
+  // #endregion
+
+  const [
+    { mountViewModeToggle },
+    { mountPageTabs },
+    { mountSkySidebarToggle },
+    { mountBookmarkGrid },
+    { mountCalendarUpcoming },
+    { mountCalendar },
+  ] = await Promise.all([
+    import('./panels/view-mode-toggle.js'),
+    import('./panels/page-tabs.js'),
+    import('./panels/sky-sidebar-toggle.js'),
+    import('./panels/bookmarks.js'),
+    import('./panels/calendar-upcoming.js'),
+    import('./panels/calendar.js'),
+  ]);
+
+  mountViewModeToggle(document.getElementById('mount-view-mode'));
   mountPageTabs(document.getElementById('mount-page-tabs'), { onChange: showPage });
   mountSkySidebarToggle(document.getElementById('sky-sidebar-toggle'));
 
@@ -237,11 +381,11 @@ async function main() {
 
   mountCalendar(document.getElementById('mount-calendar'), config);
 
-  void import('./panels/notes.js')
-    .then(({ mountNotes }) => {
-      mountNotes(document.getElementById('mount-notes'), config);
+  void import('./panels/tasks.js?v=tasks-grip-1')
+    .then(({ mountTasks }) => {
+      mountTasks(document.getElementById('mount-tasks'), config);
     })
-    .catch((e) => console.error('Notes mount failed:', e));
+    .catch((e) => console.error('Tasks mount failed:', e));
 
   void import('./panels/dev-sticky-note.js')
     .then(({ mountDevStickyNote }) => {
@@ -249,13 +393,12 @@ async function main() {
     })
     .catch((e) => console.error('Dev sticky mount failed:', e));
 
-  /* Refresh notes link if config was painted from cache and live fetch differs. */
   void configPromise.then((fresh) => {
     if (!fresh || typeof fresh !== 'object') return;
     if (fresh.vikunjaPublicUrl === config.vikunjaPublicUrl) return;
-    import('./panels/notes.js')
-      .then(({ mountNotes }) => {
-        mountNotes(document.getElementById('mount-notes'), fresh);
+    import('./panels/tasks.js?v=tasks-grip-1')
+      .then(({ mountTasks }) => {
+        mountTasks(document.getElementById('mount-tasks'), fresh);
       })
       .catch(() => {});
   });
@@ -264,7 +407,6 @@ async function main() {
 
   void Promise.allSettled([bookmarksPersonalPromise, bookmarksWorkPromise]);
 
-  /* Start deferred panels right after priority paint — do not wait for idle. */
   const scheduleDeferred =
     typeof requestIdleCallback === 'function'
       ? (fn) => requestIdleCallback(() => fn(), { timeout: 200 })
@@ -276,13 +418,32 @@ async function main() {
     });
   });
 
-  /* Keep config cache warm even when we painted from last session. */
   void configPromise.then((fresh) => {
     if (fresh && typeof fresh === 'object') config = fresh;
   });
 }
 
+async function main() {
+  // #region agent log
+  agentDbg('A', 'app.js:main', 'main() entered', {
+    isMobile: isMobileView(),
+    view: readViewMode(),
+  });
+  // #endregion
+  if (isMobileView()) {
+    await mainMobile();
+    return;
+  }
+  await mainDesktop();
+}
+
 main().catch((e) => {
+  // #region agent log
+  agentDbg('E', 'app.js:main:catch', 'main() failed', {
+    error: String(e?.message || e),
+    stack: String(e?.stack || '').slice(0, 400),
+  });
+  // #endregion
   console.error(e);
   document.body.insertAdjacentHTML(
     'afterbegin',

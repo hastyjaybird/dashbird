@@ -385,6 +385,28 @@ export async function runDashboardChecks() {
     );
   }
 
+  const kilauea = await probeInternal('/api/dashboard-kilauea');
+  if (
+    kilauea.status === 200 &&
+    kilauea.json?.ok === true &&
+    Array.isArray(kilauea.json.items) &&
+    Array.isArray(kilauea.json.cameras)
+  ) {
+    push(
+      'dashboard_kilauea',
+      'Kīlauea (/api/dashboard-kilauea · HVO alert/eruption + summit livestream cams)',
+      true,
+    );
+  } else {
+    const msg = kilauea.json?.error || kilauea.err || `HTTP ${kilauea.status || 'error'}`;
+    push(
+      'dashboard_kilauea',
+      'Kīlauea (/api/dashboard-kilauea · HVO alert/eruption + summit livestream cams)',
+      false,
+      String(msg).slice(0, 240),
+    );
+  }
+
   const lightningGlm = await probeInternal('/api/dashboard-lightning-glm', 90_000);
   if (
     lightningGlm.status === 200 &&

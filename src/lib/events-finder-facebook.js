@@ -729,6 +729,58 @@ export async function fetchFacebookEvents(env = process.env, opts = {}) {
     const timeZone =
       String(env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim() || 'America/Los_Angeles';
     const events = filterEventsByIngestWindow(cache.events, scrape, timeZone);
+    // #region agent log
+    {
+      const debugEid = '2179524519500835';
+      const cacheHit = (cache.events || []).some(
+        (e) => String(e?.id || '').includes(debugEid) || String(e?.url || '').includes(debugEid),
+      );
+      const windowHit = events.some(
+        (e) => String(e?.id || '').includes(debugEid) || String(e?.url || '').includes(debugEid),
+      );
+      const hostUrls = (cache.startUrls || []).map((u) => String(u || '').toLowerCase());
+      const makerfarmPinned = hostUrls.some((u) => u.includes('makerfarm') || u.includes('maker-farm'));
+      const payload = {
+        sessionId: '02a20c',
+          runId: 'post-fix',
+          hypothesisId: 'A-B',
+          location: 'events-finder-facebook.js:cacheHit',
+          message: 'facebook cache vs debug event',
+        data: {
+          debugEid,
+          cacheHit,
+          windowHit,
+          cacheCount: cache.events?.length ?? 0,
+          windowCount: events.length,
+          cachedAt: cache.cachedAt || null,
+          chargeUsd: cache.chargeUsd ?? null,
+          makerfarmPinned,
+          potluckQueries: (cache.searchQueries || []).filter((q) =>
+            String(q || '').toLowerCase().includes('potluck'),
+          ),
+          sampleIds: (cache.events || []).slice(0, 5).map((e) => e?.id),
+        },
+        timestamp: Date.now(),
+      };
+      fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '02a20c' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+      fetch('http://172.17.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '02a20c' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+      import('node:fs').then((fs) => {
+        try {
+          fs.appendFileSync('/app/data/debug-02a20c.ndjson', `${JSON.stringify(payload)}\n`);
+        } catch {
+          /* ignore */
+        }
+      }).catch(() => {});
+    }
+    // #endregion
     return {
       ok: true,
       events,
@@ -779,6 +831,56 @@ export async function fetchFacebookEvents(env = process.env, opts = {}) {
 
   // Daily schedule owns paid runs — don't scrape on every sidebar open.
   if (facebookWeeklyEnabled(env) && cache?.events?.length) {
+    // #region agent log
+    {
+      const debugEids = ['2179524519500835', '1005106102497320'];
+      const hostUrls = (cache.startUrls || []).map((u) => String(u || '').toLowerCase());
+      /** @type {Record<string, boolean>} */
+      const cacheHits = {};
+      for (const debugEid of debugEids) {
+        cacheHits[debugEid] = (cache.events || []).some(
+          (e) => String(e?.id || '').includes(debugEid) || String(e?.url || '').includes(debugEid),
+        );
+      }
+      const payload = {
+        sessionId: '02a20c',
+        runId: 'tiny-garage-pre',
+        hypothesisId: 'A-B',
+        location: 'events-finder-facebook.js:staleDaily',
+        message: 'stale facebook cache vs debug event',
+        data: {
+          cacheHits,
+          cacheCount: cache.events?.length ?? 0,
+          cachedAt: cache.cachedAt || null,
+          chargeUsd: cache.chargeUsd ?? null,
+          townePinned: hostUrls.some((u) => u.includes('towne') || u.includes('the-towne-cycles')),
+          makerfarmPinned: hostUrls.some((u) => u.includes('makerfarm') || u.includes('maker-farm')),
+          potluckQueries: (cache.searchQueries || []).filter((q) =>
+            String(q || '').toLowerCase().includes('potluck'),
+          ),
+          sampleIds: (cache.events || []).slice(0, 5).map((e) => e?.id),
+        },
+        timestamp: Date.now(),
+      };
+      fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '02a20c' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+      fetch('http://172.17.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '02a20c' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+      import('node:fs').then((fs) => {
+        try {
+          fs.appendFileSync('/app/data/debug-02a20c.ndjson', `${JSON.stringify(payload)}\n`);
+        } catch {
+          /* ignore */
+        }
+      }).catch(() => {});
+    }
+    // #endregion
     return {
       ok: true,
       events: cache.events,

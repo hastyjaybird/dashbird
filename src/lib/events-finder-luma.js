@@ -256,7 +256,12 @@ export function lumaEventToNormalized(event, calendar = null, ticketInfo = null,
   if (coord && typeof coord === 'object') {
     const gLat = Number(coord.latitude);
     const gLon = Number(coord.longitude);
-    if (Number.isFinite(gLat) && Number.isFinite(gLon)) {
+    // Reject Null Island — Luma often sends 0,0 when geo is missing.
+    if (
+      Number.isFinite(gLat)
+      && Number.isFinite(gLon)
+      && !(Math.abs(gLat) < 0.01 && Math.abs(gLon) < 0.01)
+    ) {
       lat = gLat;
       lon = gLon;
     }

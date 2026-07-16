@@ -1,7 +1,14 @@
-# Hetzner / public VPS deployment — out of scope
+# Hetzner / legacy VPS notes
 
-**dashbird is local LAN only** for this project. Cloud VPS deployment (Hetzner, Caddy, basic auth, sync scripts) is no longer part of the plan.
+Active public deploy target is **Vultr Silicon Valley + DuckDNS** — see [`deploy-vultr.md`](deploy-vultr.md).
 
-Historical compose/deploy files may still exist in the repo but are **unsupported** and not documented for active use.
+Historical files (`docker-compose.hetzner.yml`, `deploy/env.hetzner.example`, `scripts/sync-to-hetzner.sh`) may still exist but are superseded by:
 
-For security on the current model, see [`security-plan.md`](security-plan.md) and [`v2-roadmap.md`](v2-roadmap.md).
+| Legacy | Current |
+|--------|---------|
+| `docker-compose.hetzner.yml` | `docker-compose.cloud.yml` |
+| `deploy/env.hetzner.example` | `deploy/env.cloud.example` |
+| `scripts/sync-to-hetzner.sh` | `scripts/sync-to-cloud.sh` |
+| `deploy/Caddyfile` | `deploy/Caddyfile.cloud` (basic auth required) |
+
+Hetzner US cheap CX tiers are **EU-only**; US Hillsboro CPX is above the project budget. Do not use Hetzner EU as primary (high RTT from Oakland).

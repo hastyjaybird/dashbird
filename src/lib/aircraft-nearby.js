@@ -3,6 +3,7 @@
  * Free community feed with registration + type; denser than anonymous OpenSky for Bay Area GA/LE.
  */
 import registry from '../data/oakland-aircraft-registry.json' with { type: 'json' };
+import { lookupAircraftTailOnline } from './aircraft-tail-lookup.js';
 import { geocodeAddress } from './geocode-address.js';
 import { loadRainAlertAddress } from './rain-alert-address-store.js';
 
@@ -228,6 +229,40 @@ export function isStripHelicopter(reg, adsbCategory, feed = {}) {
 const GENERIC_AIRCRAFT_LABELS = new Set(['Aircraft', 'Light aircraft', 'Rotorcraft']);
 
 /**
+ * TIS-B / anonymous Mode-S (`~xxxxxx`) has no public registration to look up.
+ * @param {string | null | undefined} icao24
+ * @param {string | null | undefined} msgType adsb.fi `type` (e.g. tisb_other)
+ */
+export function isAnonymousOrTisbTrack(icao24, msgType) {
+  const hex = String(icao24 || '')
+    .trim()
+    .toLowerCase();
+  if (hex.startsWith('~')) return true;
+  const t = String(msgType || '')
+    .trim()
+    .toLowerCase();
+  return t === 'tisb_other' || t === 'tisb_trackfile';
+}
+
+/**
+ * True when the strip would only show live kinematics (dist/alt/heading) — no
+ * curated label, owner, notes, or descriptive equipment. Tail lookup runs then.
+ * @param {{ label?: string, operator?: string, notes?: string, equipment?: string, anonymousOrTisb?: boolean }} ac
+ */
+export function lacksAdditionalAircraftInfo(ac) {
+  if (ac?.anonymousOrTisb) return false;
+  const label = String(ac?.label || '').trim();
+  if (label && !GENERIC_AIRCRAFT_LABELS.has(label)) return false;
+  if (String(ac?.notes || '').trim()) return false;
+  if (String(ac?.operator || '').trim()) return false;
+  const eq = String(ac?.equipment || '').trim();
+  if (!eq || /^ADS-B\b/i.test(eq)) return true;
+  // Bare ICAO type codes (C172, H500) are not "additional info" for the strip.
+  if (/^[A-Z0-9]{2,4}$/i.test(eq)) return true;
+  return false;
+}
+
+/**
  * @param {string} s
  */
 function subtitleNormalize(s) {
@@ -388,9 +423,11 @@ function parseAdsbFiRow(row) {
   const registration = typeof r.r === 'string' ? r.r.trim().toUpperCase() : '';
   const type = typeof r.t === 'string' ? r.t.trim().toUpperCase() : '';
   const desc = typeof r.desc === 'string' ? r.desc.trim() : '';
+  const msgType = typeof r.type === 'string' ? r.type.trim().toLowerCase() : '';
   const category = r.category != null ? String(r.category).trim() : '';
   const track = Number.isFinite(Number(r.track)) ? Math.round(Number(r.track)) : null;
   const ownOp = typeof r.ownOp === 'string' ? r.ownOp.trim() : '';
+  const anonymousOrTisb = isAnonymousOrTisbTrack(icao24, msgType);
 
   return {
     icao24,
@@ -404,6 +441,8 @@ function parseAdsbFiRow(row) {
     category,
     type,
     desc,
+    msgType,
+    anonymousOrTisb,
     trackDeg: track,
     ownOp,
   };
@@ -552,10 +591,18 @@ export async function fetchAircraftNearbyLive(now = new Date()) {
     const distMi = haversineMiles(geo.lat, geo.lon, st.lat, st.lon);
     if (distMi > radiusMi) continue;
 
-    const reg = lookupRegistry(st);
-    const nNum = st.nNumber || reg.nNumber || null;
+    const reg = st.anonymousOrTisb
+      ? {
+          label: 'Unidentified',
+          category: 'unknown',
+          operator: '',
+          equipment: '',
+          notes: 'TIS-B radar track — no public registration',
+        }
+      : lookupRegistry(st);
+    const nNum = st.anonymousOrTisb ? null : st.nNumber || reg.nNumber || null;
     const feed = { type: st.type, desc: st.desc };
-    const operator = reg.operator || st.ownOp || '';
+    const operator = reg.operator || (!st.anonymousOrTisb && st.ownOp) || '';
     const equipment = reg.equipment || st.desc || st.type || '';
 
     aircraft.push({
@@ -575,11 +622,30 @@ export async function fetchAircraftNearbyLive(now = new Date()) {
       equipment,
       notes: reg.notes || '',
       type: st.type || null,
+      msgType: st.msgType || null,
+      anonymousOrTisb: Boolean(st.anonymousOrTisb),
       fr24Url: nNum
         ? `https://www.flightradar24.com/data/aircraft/${encodeURIComponent(nNum.toLowerCase())}`
-        : `https://globe.adsbexchange.com/?icao=${encodeURIComponent(st.icao24)}`,
+        : `https://globe.adsbexchange.com/?icao=${encodeURIComponent(st.icao24.replace(/^~/, ''))}`,
     });
   }
+
+  // Only when the strip has no curated extras: simple online tail/hex registry lookup.
+  await Promise.all(
+    aircraft.map(async (ac) => {
+      if (!lacksAdditionalAircraftInfo(ac)) return;
+      if (!ac.nNumber && !ac.icao24) return;
+      const hit = await lookupAircraftTailOnline({ nNumber: ac.nNumber, icao24: ac.icao24 });
+      if (!hit) return;
+      if (hit.nNumber && !ac.nNumber) {
+        ac.nNumber = hit.nNumber;
+        ac.fr24Url = `https://www.flightradar24.com/data/aircraft/${encodeURIComponent(hit.nNumber.toLowerCase())}`;
+      }
+      if (hit.operator) ac.operator = hit.operator;
+      if (hit.equipment) ac.equipment = hit.equipment;
+      if (hit.notes) ac.notes = hit.notes;
+    }),
+  );
 
   aircraft.sort((a, b) => a.distMi - b.distMi);
 

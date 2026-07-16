@@ -14,7 +14,11 @@ public/data/phone-lan-url.txt
 request.txt
 requests.txt
 data/glm-sprite-events.json
+data/local-news.json
+data/local-news-criteria.json
 data/calendar-upcoming-cache.json
+data/calendar-presence-index.json
+data/telegram-how-we-met-prompts.json
 data/usgs-earthquake-pin.json
 data/market-watch-tickers.json
 data/market-watch-settings.json
@@ -42,6 +46,7 @@ data/events-finder.db-wal
 data/events-finder.db-shm
 data/geospace-magnetosphere-state.json
 data/fear-greed-last.json
+data/aircraft-tail-cache.json
 data/tool-library.json
 data/tool-library-assets/*
 !data/tool-library-assets/.gitkeep

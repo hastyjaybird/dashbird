@@ -18,8 +18,10 @@
       "category": "AI",
       "cadence": "usage",
       "weeklyUsd": 0,
-      "notes": "Telegram classify/vision/Whisper, Network enrich, Tool Library \u00b7 free models when credits empty",
-      "active": true
+      "notes": "Account spend measured from OpenRouter key \u00b7 programs listed below (not separately metered) \u00b7 includes Daily Summary digest (scans every 30 min; free-first models)",
+      "active": true,
+      "monthlyBudgetUsd": 5,
+      "measuredSource": "openrouter-key"
     },
     {
       "id": "cursor",
@@ -55,6 +57,15 @@
       "cadence": "optional",
       "weeklyUsd": 0,
       "notes": "Optional cloud catalog \u00b7 local JSON is default",
+      "active": false
+    },
+    {
+      "id": "apollo",
+      "label": "Apollo (company firmographics)",
+      "category": "Network",
+      "cadence": "usage",
+      "weeklyUsd": 0,
+      "notes": "Optional APOLLO_API_KEY \u00b7 org enrich credits for employees/revenue estimates \u00b7 set weeklyUsd after you have a plan",
       "active": false
     }
   ]

@@ -5,6 +5,10 @@ import {
   openExactNameConflictDialog,
   openNamesListDialog,
 } from '../lib/network-add-contacts-dialog.js?v=group-kind-9';
+import {
+  fetchHowWeMetSuggestion,
+  howWeMetStatusBit,
+} from '../lib/network-how-we-met-suggest.js?v=how-we-met-1';
 
 /**
  * Network groups management screen.
@@ -423,14 +427,20 @@ export function mountNetworkGroupsUi(root, opts) {
       if (gen !== detailGeneration) return;
       results.replaceChildren();
       const q = search.value.trim().toLowerCase();
-      const filtered = people.filter((c) => {
-        if (!q) return true;
-        const hay = [c.displayName, c.nickname, ...(c.aliases || []), c.org, c.networkCircles]
-          .filter(Boolean)
-          .join(' ')
-          .toLowerCase();
-        return hay.includes(q);
-      });
+      const filtered = people
+        .filter((c) => {
+          if (!q) return true;
+          const hay = [c.displayName, c.nickname, ...(c.aliases || []), c.org, c.networkCircles]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          return hay.includes(q);
+        })
+        .sort((a, b) =>
+          String(a.displayName || '').localeCompare(String(b.displayName || ''), undefined, {
+            sensitivity: 'base',
+          }),
+        );
       if (!filtered.length) {
         const empty = document.createElement('p');
         empty.className = 'muted';
@@ -709,6 +719,11 @@ export function mountNetworkGroupsUi(root, opts) {
             .toLowerCase();
           return hay.includes(q);
         })
+        .sort((a, b) =>
+          String(a.displayName || '').localeCompare(String(b.displayName || ''), undefined, {
+            sensitivity: 'base',
+          }),
+        )
         .slice(0, 40);
       if (!candidates.length) {
         const empty = document.createElement('p');
@@ -789,6 +804,7 @@ export function mountNetworkGroupsUi(root, opts) {
       const createdIds = [];
       let skipped = 0;
       let cancelled = false;
+      const met = await fetchHowWeMetSuggestion();
 
       try {
         for (let i = 0; i < names.length; i++) {
@@ -812,14 +828,16 @@ export function mountNetworkGroupsUi(root, opts) {
           }
 
           showStatus(`Creating “${name}” (${i + 1}/${names.length})…`);
+          const createBody = {
+            displayName: name,
+            kinds: ['friend'],
+            source: 'manual',
+          };
+          if (met?.howWeMet) createBody.howWeMet = met.howWeMet;
           const cr = await fetch('/api/network/contacts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              displayName: name,
-              kinds: ['friend'],
-              source: 'manual',
-            }),
+            body: JSON.stringify(createBody),
           });
           const cj = await cr.json();
           if (!cj.ok || !cj.contact?.id) {
@@ -846,6 +864,8 @@ export function mountNetworkGroupsUi(root, opts) {
         if (createdIds.length) bits.push(`${createdIds.length} added`);
         if (skipped) bits.push(`${skipped} skipped`);
         if (cancelled) bits.push('stopped early');
+        const metBit = howWeMetStatusBit(met).replace(/^\s·\s/, '');
+        if (metBit && createdIds.length) bits.push(metBit);
         showStatus(bits.length ? bits.join(' · ') : 'Nothing to add');
       } catch (err) {
         if (gen === detailGeneration) showStatus(String(err?.message || err), true);

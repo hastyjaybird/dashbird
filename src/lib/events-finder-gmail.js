@@ -90,6 +90,8 @@ function gmailCacheFingerprint(addresses, query, windowDays) {
     pastDays: windowDays?.pastDays ?? null,
     futureDays: windowDays?.futureDays ?? null,
     windowWeeks: windowDays?.windowWeeks ?? null,
+    // Bump when intake URL resolve / page-enrich behavior changes.
+    enrich: 'eb-clicks-v1',
   });
 }
 
@@ -110,9 +112,13 @@ const DEFAULT_QUERY =
 /**
  * Public event / invite links. Facebook: /events/{id}, page hosted tabs, group events.
  * Secret Party events are usually https://<slug>.secretparty.io/ (subdomain), not path URLs.
+ * Eventbrite: include clicks.* / www.* subdomains (ESP trackers + listing hosts).
  */
 const PLATFORM_HOST_RE =
-  /(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?secretparty\.io(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:www\.)?(?:partiful\.com|lu\.ma|luma\.com|eventbrite\.com|meetup\.com|facebook\.com\/(?:events\/[^\s"'<>)\]]+|[^/\s"'<>)\]]+\/(?:upcoming_hosted_events|past_hosted_events|events)|groups\/[^/\s"'<>)\]]+\/events)[^\s"'<>)\]]*)/gi;
+  /(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?secretparty\.io(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?(?:partiful\.com|lu\.ma|luma\.com|eventbrite\.com|meetup\.com)(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:www\.)?facebook\.com\/(?:events\/[^\s"'<>)\]]+|[^/\s"'<>)\]]+\/(?:upcoming_hosted_events|past_hosted_events|events)|groups\/[^/\s"'<>)\]]+\/events)[^\s"'<>)\]]*/gi;
+
+const GMAIL_FETCH_UA =
+  'Mozilla/5.0 (compatible; DashbirdEvents/1.0; +https://github.com/local/dashbird)';
 
 /**
  * @param {string} email
@@ -528,7 +534,7 @@ function b64urlDecode(s) {
  * @param {any} part
  * @param {{ texts: string[], htmls: string[], ics: string[] }} bag
  */
-function collectMimeParts(part, bag) {
+export function collectMimeParts(part, bag) {
   if (!part || typeof part !== 'object') return;
   const mime = String(part.mimeType || '').toLowerCase();
   const filename = String(part.filename || '').toLowerCase();
@@ -545,6 +551,81 @@ function collectMimeParts(part, bag) {
   if (Array.isArray(part.parts)) {
     for (const child of part.parts) collectMimeParts(child, bag);
   }
+}
+
+/**
+ * @param {string} href
+ * @returns {boolean}
+ */
+export function isEventbriteHost(href) {
+  try {
+    const host = new URL(href).hostname.replace(/^www\./, '').toLowerCase();
+    return host === 'eventbrite.com' || host.endsWith('.eventbrite.com');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {string} href
+ * @returns {boolean}
+ */
+export function isEventbriteEventUrl(href) {
+  try {
+    const u = new URL(href);
+    if (!isEventbriteHost(u.href)) return false;
+    return /\/e\/[a-z0-9-]+-\d+/i.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Prefer deep event pages over ESP trackers / bare marketing hosts.
+ * @param {string} href
+ * @returns {number}
+ */
+export function platformUrlScore(href) {
+  try {
+    const u = new URL(href);
+    const host = u.hostname.replace(/^www\./, '').toLowerCase();
+    const path = u.pathname || '/';
+    if (host === 'eventbrite.com' || host.endsWith('.eventbrite.com')) {
+      if (/\/e\/[a-z0-9-]+-\d+/i.test(path)) return 100;
+      if (host.startsWith('clicks.')) return 60;
+      if (path === '/' || path === '') return 1;
+      return 25;
+    }
+    if (host === 'partiful.com' || host.endsWith('.partiful.com')) {
+      return /\/e\//i.test(path) ? 90 : 20;
+    }
+    if (host === 'lu.ma' || host === 'luma.com' || host.endsWith('.luma.com')) {
+      return path.length > 1 ? 90 : 20;
+    }
+    if (host.endsWith('secretparty.io') && host !== 'track.secretparty.io') {
+      return 90;
+    }
+    if (host === 'meetup.com' || host.endsWith('.meetup.com')) {
+      return /\/events\//i.test(path) ? 90 : 20;
+    }
+    if (host === 'facebook.com' || host.endsWith('.facebook.com')) {
+      return /\/events\//i.test(path) ? 90 : 20;
+    }
+    return 10;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * @param {string[]} urls
+ * @param {string} [fallback]
+ * @returns {string}
+ */
+export function pickBestPlatformUrl(urls, fallback = '') {
+  const list = (urls || []).filter(Boolean);
+  if (!list.length) return fallback;
+  return [...list].sort((a, b) => platformUrlScore(b) - platformUrlScore(a))[0] || fallback;
 }
 
 /**
@@ -575,7 +656,106 @@ export function extractPlatformUrls(htmlOrText) {
       /* ignore */
     }
   }
+  // Drop bare Eventbrite homepage when a deeper / tracker URL exists.
+  const hasDeepEb = out.some((href) => platformUrlScore(href) >= 60);
+  if (hasDeepEb) {
+    return out.filter((href) => {
+      try {
+        if (!isEventbriteHost(href)) return true;
+        const path = new URL(href).pathname || '/';
+        return !(path === '/' || path === '');
+      } catch {
+        return true;
+      }
+    });
+  }
   return out;
+}
+
+/**
+ * Follow Eventbrite ESP click trackers to a canonical /e/{slug}-{id} URL.
+ * @param {string} href
+ * @param {number} [timeoutMs]
+ * @returns {Promise<string | null>}
+ */
+export async function resolveEventbriteTrackingUrl(href, timeoutMs = 8000) {
+  const start = String(href || '').trim();
+  if (!start) return null;
+  try {
+    if (isEventbriteEventUrl(start)) {
+      return new URL(start).href.split(/[?#]/)[0];
+    }
+    if (!isEventbriteHost(start)) return null;
+    const host = new URL(start).hostname.replace(/^www\./, '').toLowerCase();
+    // Bare www.eventbrite.com/ is not resolvable to a single event.
+    if (host === 'eventbrite.com') {
+      const path = new URL(start).pathname || '/';
+      if (path === '/' || path === '') return null;
+    }
+
+    let current = start;
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      for (let hop = 0; hop < 6; hop += 1) {
+        if (isEventbriteEventUrl(current)) {
+          return new URL(current).href.split(/[?#]/)[0];
+        }
+        const r = await fetch(current, {
+          method: 'GET',
+          redirect: 'manual',
+          signal: ac.signal,
+          headers: {
+            'user-agent': GMAIL_FETCH_UA,
+            accept: 'text/html,application/xhtml+xml',
+          },
+        });
+        try {
+          r.body?.cancel?.();
+        } catch {
+          /* ignore */
+        }
+        if (r.status >= 300 && r.status < 400) {
+          const loc = r.headers.get('location');
+          if (!loc) break;
+          current = new URL(loc, current).href;
+          continue;
+        }
+        // Some trackers land with redirect:follow semantics on the final hop.
+        if (isEventbriteEventUrl(current)) {
+          return new URL(current).href.split(/[?#]/)[0];
+        }
+        break;
+      }
+    } finally {
+      clearTimeout(t);
+    }
+
+    // One follow-all attempt when manual hops did not yield /e/.
+    const followed = await fetch(start, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        'user-agent': GMAIL_FETCH_UA,
+        accept: 'text/html,application/xhtml+xml',
+      },
+    }).catch(() => null);
+    if (followed) {
+      try {
+        followed.body?.cancel?.();
+      } catch {
+        /* ignore */
+      }
+      const finalUrl = followed.url || '';
+      if (isEventbriteEventUrl(finalUrl)) {
+        return new URL(finalUrl).href.split(/[?#]/)[0];
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
 }
 
 /**
@@ -689,7 +869,7 @@ function guessStartIso(blob) {
  * @param {string} accessToken
  * @param {string} pathAndQuery
  */
-async function gmailGet(accessToken, pathAndQuery) {
+export async function gmailGet(accessToken, pathAndQuery) {
   const r = await fetch(`${GMAIL_API}${pathAndQuery}`, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -711,7 +891,7 @@ async function gmailGet(accessToken, pathAndQuery) {
  * @param {Array<{ name?: string, value?: string }>} headers
  * @param {string} name
  */
-function headerValue(headers, name) {
+export function headerValue(headers, name) {
   const want = name.toLowerCase();
   const h = (headers || []).find((x) => String(x?.name || '').toLowerCase() === want);
   return h ? String(h.value || '').trim() : '';
@@ -761,7 +941,8 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
     for (const ev of parsed) {
       const startIso = Number.isFinite(ev.startMs) ? new Date(ev.startMs).toISOString() : null;
       const endIso = Number.isFinite(ev.endMs) ? new Date(ev.endMs).toISOString() : null;
-      const url = urls[0] || `https://mail.google.com/mail/u/0/#inbox/${id}`;
+      const url =
+        pickBestPlatformUrl(urls, `https://mail.google.com/mail/u/0/#inbox/${id}`);
       const platformSource = sourceFromPlatformUrls(urls.length ? urls : [url]);
       const slugTitle = platformSource === 'secretparty' ? secretPartyTitleFromUrl(url) : null;
       events.push({
@@ -783,6 +964,7 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
           mailbox: mailbox || null,
           via: 'ics',
           platform: platformSource,
+          urls,
         },
       });
     }
@@ -798,7 +980,8 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
         subject,
       );
     if (inviteish) {
-      const url = urls[0] || `https://mail.google.com/mail/u/0/#inbox/${id}`;
+      const url =
+        pickBestPlatformUrl(urls, `https://mail.google.com/mail/u/0/#inbox/${id}`);
       const platformSource = sourceFromPlatformUrls(urls.length ? urls : [url]);
       const slugTitle = platformSource === 'secretparty' ? secretPartyTitleFromUrl(url) : null;
       const cleanedSubject = subject.replace(/^(re|fwd):\s*/i, '').trim() || subject;
@@ -832,9 +1015,160 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
 }
 
 /**
+ * @param {object} event
+ * @returns {boolean}
+ */
+function gmailEventNeedsEventbriteEnrich(event) {
+  if (!event) return false;
+  const source = String(event.source || '').toLowerCase();
+  const url = String(event.url || '');
+  const rawUrls = Array.isArray(event.raw?.urls) ? event.raw.urls : [];
+  const candidates = [url, ...rawUrls].filter(Boolean);
+  const eb = candidates.some((u) => isEventbriteHost(u)) || source === 'eventbrite';
+  if (!eb) return false;
+  const thinUrl = !candidates.some((u) => isEventbriteEventUrl(u));
+  const missingPlace = !event.venue || !event.city;
+  const missingStart = !event.start;
+  const weakStart =
+    event.start
+    && /T00:00:00\.000Z$/.test(String(event.start))
+    && !event.end;
+  return thinUrl || missingPlace || missingStart || weakStart;
+}
+
+/**
+ * Resolve clicks.eventbrite.com → /e/… and fill venue/city/start from the public page.
+ * Keeps Gmail event ids stable for upsert.
+ * @param {object[]} events
+ * @param {{ concurrency?: number, timeoutMs?: number }} [opts]
+ * @returns {Promise<object[]>}
+ */
+export async function enrichGmailEventsFromPublicPages(events, opts = {}) {
+  const list = Array.isArray(events) ? events : [];
+  if (!list.length) return list;
+  const concurrency = Math.min(Math.max(Number(opts.concurrency) || 3, 1), 6);
+  const timeoutMs = Math.min(Math.max(Number(opts.timeoutMs) || 10000, 2000), 20000);
+  const { fetchNormalizedEventFromUrl } = await import('./events-finder-public-pages.js');
+
+  /** @type {Map<string, string | null>} */
+  const resolvedCache = new Map();
+  /** @type {Map<string, object | null>} */
+  const pageCache = new Map();
+
+  /**
+   * @param {string} href
+   * @returns {Promise<string | null>}
+   */
+  async function resolveEb(href) {
+    const key = String(href || '').split('#')[0].toLowerCase();
+    if (!key) return null;
+    if (resolvedCache.has(key)) return resolvedCache.get(key) ?? null;
+    if (isEventbriteEventUrl(href)) {
+      const clean = new URL(href).href.split(/[?#]/)[0];
+      resolvedCache.set(key, clean);
+      return clean;
+    }
+    const resolved = await resolveEventbriteTrackingUrl(href, timeoutMs);
+    resolvedCache.set(key, resolved);
+    return resolved;
+  }
+
+  /**
+   * @param {string} eventUrl
+   * @returns {Promise<object | null>}
+   */
+  async function loadPage(eventUrl) {
+    const key = String(eventUrl || '').split('#')[0].toLowerCase();
+    if (!key) return null;
+    if (pageCache.has(key)) return pageCache.get(key) ?? null;
+    const page = await fetchNormalizedEventFromUrl(eventUrl, 'eventbrite', timeoutMs);
+    pageCache.set(key, page);
+    return page;
+  }
+
+  const indexes = list
+    .map((ev, i) => (gmailEventNeedsEventbriteEnrich(ev) ? i : -1))
+    .filter((i) => i >= 0);
+  if (!indexes.length) return list;
+
+  const out = list.map((ev) => ev);
+  for (let i = 0; i < indexes.length; i += concurrency) {
+    const batch = indexes.slice(i, i + concurrency);
+    await Promise.all(
+      batch.map(async (idx) => {
+        const ev = out[idx];
+        const rawUrls = Array.isArray(ev.raw?.urls) ? ev.raw.urls : [];
+        const ebCandidates = [...new Set([ev.url, ...rawUrls].filter((u) => u && isEventbriteHost(u)))]
+          .sort((a, b) => platformUrlScore(b) - platformUrlScore(a));
+
+        let eventUrl = ebCandidates.find((u) => isEventbriteEventUrl(u)) || null;
+        if (!eventUrl) {
+          for (const c of ebCandidates) {
+            const resolved = await resolveEb(c);
+            if (resolved) {
+              eventUrl = resolved;
+              break;
+            }
+          }
+        }
+        if (!eventUrl) return;
+
+        const page = await loadPage(eventUrl);
+        if (!page) {
+          // Still upgrade URL if we resolved a deep link.
+          if (eventUrl && eventUrl !== ev.url) {
+            out[idx] = {
+              ...ev,
+              url: eventUrl,
+              source: 'eventbrite',
+              raw: {
+                ...(ev.raw || {}),
+                resolvedUrl: eventUrl,
+                enrich: 'eventbrite_url_only',
+              },
+            };
+          }
+          return;
+        }
+
+        const subjectish = String(ev.title || '');
+        const preferPageTitle =
+          !subjectish
+          || /^(just added!|new event|you're invited|you are invited)\b/i.test(subjectish)
+          || /📅/.test(subjectish)
+          || subjectish.length < 8;
+
+        out[idx] = {
+          ...ev,
+          title: preferPageTitle && page.title ? page.title : ev.title,
+          start: page.start || ev.start,
+          end: page.end || ev.end || null,
+          venue: page.venue || ev.venue || null,
+          location: page.venue || page.location || ev.location || null,
+          city: page.city || ev.city || null,
+          lat: page.lat ?? ev.lat ?? null,
+          lon: page.lon ?? ev.lon ?? null,
+          url: isEventbriteEventUrl(page.url) ? page.url : eventUrl,
+          source: 'eventbrite',
+          description: page.description || ev.description || null,
+          imageUrl: page.imageUrl || ev.imageUrl || null,
+          raw: {
+            ...(ev.raw || {}),
+            resolvedUrl: eventUrl,
+            enrich: 'eventbrite_page',
+            pageTitle: page.title || null,
+          },
+        };
+      }),
+    );
+  }
+  return out;
+}
+
+/**
  * @param {string} html
  */
-function stripHtml(html) {
+export function stripHtml(html) {
   return String(html || '')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -1289,11 +1623,19 @@ export async function fetchGmailEventAnnouncements(env = process.env, opts = {})
       }
     }
 
+    let enriched = events;
+    try {
+      enriched = await enrichGmailEventsFromPublicPages(events);
+    } catch (e) {
+      console.warn('[events-finder] gmail eventbrite enrich failed:', e?.message || e);
+      enriched = events;
+    }
+
     // Dedupe by platform URL when present, else by id
     const seen = new Set();
     /** @type {typeof events} */
     const deduped = [];
-    for (const ev of events) {
+    for (const ev of enriched) {
       const urlKey = ev.url && !ev.url.includes('mail.google.com')
         ? `url:${String(ev.url).split('#')[0].toLowerCase()}`
         : `id:${ev.id}`;
@@ -1429,6 +1771,81 @@ export async function gmailTokenExists(email, env = process.env) {
 }
 
 /**
+ * True when the contact email appears exactly in From / To / Cc (not name-only matches).
+ * @param {{ from?: string, to?: string, cc?: string } | null | undefined} message
+ * @param {string} email
+ */
+export function messageInvolvesExactEmail(message, email) {
+  const want = normalizeGmailAddress(email);
+  if (!want) return false;
+  const blob = [message?.from, message?.to, message?.cc].map((s) => String(s || '')).join(' ');
+  const found =
+    blob.match(/[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/gi) || [];
+  return found.some((addr) => normalizeGmailAddress(addr) === want);
+}
+
+/**
+ * Deep link that opens one specific Gmail message (never a subject search).
+ * @param {{
+ *   mailbox?: string,
+ *   gmailId?: string | null,
+ *   rfc822MessageId?: string | null,
+ *   id?: string,
+ * }} message
+ */
+export function gmailExactMessageUrl(message) {
+  const mailbox = normalizeGmailAddress(message?.mailbox || '');
+  if (!mailbox) return null;
+  const auth = encodeURIComponent(mailbox);
+  const rfc = String(message?.rfc822MessageId || '')
+    .trim()
+    .replace(/^<|>$/g, '');
+  if (rfc) {
+    return `https://mail.google.com/mail/u/?authuser=${auth}#search/${encodeURIComponent(`rfc822msgid:${rfc}`)}`;
+  }
+  const gmailId = String(message?.gmailId || '').trim().toLowerCase();
+  if (gmailId && /^[0-9a-f]+$/.test(gmailId) && !/^\d+$/.test(gmailId)) {
+    return `https://mail.google.com/mail/u/?authuser=${auth}#all/${gmailId}`;
+  }
+  const id = String(message?.id || '').trim();
+  // Gmail API ids are hex; bare IMAP UIDs are decimal — those must not use #all/.
+  if (id && /^[0-9a-f]+$/i.test(id) && !/^\d+$/.test(id)) {
+    return `https://mail.google.com/mail/u/?authuser=${auth}#all/${id.toLowerCase()}`;
+  }
+  return null;
+}
+
+/**
+ * Google/Outlook calendar bot notifications (invites, RSVPs, reminders, updates).
+ * Used to hide noise from the shared-email list; keep them for relationship summary.
+ * @param {{ from?: string, subject?: string, snippet?: string } | null | undefined} message
+ */
+export function isCalendarNotificationEmail(message) {
+  const from = String(message?.from || '').toLowerCase();
+  const subject = String(message?.subject || '').trim();
+  if (
+    /calendar-notification@google\.com/i.test(from)
+    || /calendar\.google\.com/i.test(from)
+    || /noreply@google\.com/i.test(from) && /\bgoogle calendar\b/i.test(from)
+    || /\bgoogle calendar\b/i.test(from)
+    || /calendar-notification@.*\.outlook\.com/i.test(from)
+    || /noreply@.*\.calendar\.office365\.com/i.test(from)
+  ) {
+    return true;
+  }
+  // Gmail often labels these with a stable subject prefix even when From is odd.
+  if (
+    /^(invitation|accepted|declined|tentatively accepted|updated invitation|canceled event|cancelled event|notification|reminder|proposed new time)\s*:/i.test(
+      subject,
+    )
+    && (/calendar/i.test(from) || /google\.com/i.test(from) || /outlook\.com/i.test(from))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Find emails across Gmail intake mailboxes that involve this person
  * (from/to/cc their email, or their name in the message).
  *
@@ -1438,7 +1855,7 @@ export async function gmailTokenExists(email, env = process.env) {
  *   aliases?: string[],
  * }} contact
  * @param {NodeJS.ProcessEnv} [env]
- * @param {{ maxMessages?: number }} [opts]
+ * @param {{ maxMessages?: number, mode?: 'list' | 'full', headersOnly?: boolean }} [opts]
  * @returns {Promise<{
  *   ok: boolean,
  *   error?: string,
@@ -1458,85 +1875,167 @@ export async function gmailTokenExists(email, env = process.env) {
  * }>}
  */
 export async function fetchSharedEmailsWithContact(contact, env = process.env, opts = {}) {
-  const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 24, 1), 50);
+  const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 24, 1), 100);
+  const listMode = opts.mode === 'list' || opts.headersOnly === true;
   const email = normalizeGmailAddress(contact?.email || '');
-  const name = String(contact?.displayName || '').trim();
-  const nickname = String(contact?.nickname || '').trim();
-  const aliases = Array.isArray(contact?.aliases)
-    ? contact.aliases.map((a) => String(a || '').trim()).filter(Boolean)
-    : [];
-
-  /** @type {string[]} */
-  const clauses = [];
-  if (email) {
-    clauses.push(`from:${email}`, `to:${email}`, `cc:${email}`);
-  }
-  for (const n of [name, nickname, ...aliases].filter(Boolean).slice(0, 5)) {
-    const q = /\s/.test(n) ? `"${n.replace(/"/g, '')}"` : n.replace(/"/g, '');
-    if (q) clauses.push(q);
-  }
-  if (!clauses.length) {
+  // Exact address only — name/alias text matches pull in unrelated mail.
+  if (!email) {
     return { ok: false, error: 'no_email_or_name' };
   }
-  const query = `(${[...new Set(clauses)].join(' OR ')})`;
+  const query = `(from:${email} OR to:${email} OR cc:${email})`;
 
   const mailboxes = gmailIntakeAddresses(env);
-  /** @type {Array<{ id: string, mailbox: string, subject: string, from: string, to: string, date: string, snippet: string, text: string }>} */
-  const messages = [];
   /** @type {string[]} */
   const errors = [];
 
-  for (const mailbox of mailboxes) {
-    let accessToken;
-    try {
-      accessToken = await getGmailAccessTokenFor(mailbox, env);
-    } catch (e) {
-      errors.push(`${mailbox}: ${e?.message || e}`);
-      continue;
-    }
-    if (!accessToken) {
-      errors.push(`${mailbox}: not_connected`);
-      continue;
+  /**
+   * @param {string} mailbox
+   * @returns {Promise<Array<{
+   *   id: string,
+   *   mailbox: string,
+   *   subject: string,
+   *   from: string,
+   *   to: string,
+   *   date: string,
+   *   snippet: string,
+   *   text: string,
+   *   gmailId?: string | null,
+   *   rfc822MessageId?: string | null,
+   * }>>}
+   */
+  async function fetchMailbox(mailbox) {
+    const appPassword = gmailAppPasswordFor(mailbox, env);
+    if (appPassword) {
+      const imap = await import('./events-finder-gmail-imap.js');
+      const found = listMode
+        ? await imap.fetchGmailMessageListViaImap(mailbox, appPassword, env, {
+            maxMessages,
+            query,
+            days: 3650,
+          })
+        : await imap.fetchGmailWeeklyMessagesViaImap(mailbox, appPassword, env, {
+            maxMessages,
+            query,
+            days: 3650,
+          });
+      if (!found.ok) {
+        errors.push(`${mailbox}: ${found.error || 'gmail_imap'}`);
+        return [];
+      }
+      return (found.messages || [])
+        .map((m) => ({
+          id: String(m.id || ''),
+          mailbox,
+          subject: String(m.subject || '(no subject)'),
+          from: String(m.from || ''),
+          to: String(m.to || ''),
+          cc: String(m.cc || ''),
+          date: String(m.date || ''),
+          snippet: String(m.snippet || '').trim().slice(0, 280),
+          text: listMode ? '' : String(m.text || m.snippet || '').trim().slice(0, 8_000),
+          gmailId: m.gmailId || null,
+          rfc822MessageId: m.rfc822MessageId || null,
+        }))
+        .filter((m) => messageInvolvesExactEmail(m, email));
     }
 
-    try {
-      const list = await gmailGet(
-        accessToken,
-        `/users/me/messages?maxResults=${maxMessages}&q=${encodeURIComponent(query)}`,
-      );
-      const ids = Array.isArray(list?.messages) ? list.messages.map((m) => String(m.id || '')).filter(Boolean) : [];
-      for (const id of ids.slice(0, maxMessages)) {
-        if (messages.some((m) => m.id === id && m.mailbox === mailbox)) continue;
-        const full = await gmailGet(accessToken, `/users/me/messages/${encodeURIComponent(id)}?format=full`);
-        const headers = full?.payload?.headers || [];
-        const subject = headerValue(headers, 'Subject') || '(no subject)';
-        const from = headerValue(headers, 'From');
-        const to = headerValue(headers, 'To');
-        const date = headerValue(headers, 'Date');
+    const auth = await getGmailAccessTokenFor(mailbox, env);
+    if (!auth?.ok || !auth.accessToken) {
+      errors.push(`${mailbox}: ${auth?.error || auth?.code || 'not_connected'}`);
+      return [];
+    }
+
+    const list = await gmailGet(
+      auth.accessToken,
+      `/users/me/messages?maxResults=${maxMessages}&q=${encodeURIComponent(query)}`,
+    );
+    const ids = Array.isArray(list?.messages)
+      ? list.messages.map((m) => String(m.id || '')).filter(Boolean)
+      : [];
+    /** @type {Array<{
+     *   id: string,
+     *   mailbox: string,
+     *   subject: string,
+     *   from: string,
+     *   to: string,
+     *   date: string,
+     *   snippet: string,
+     *   text: string,
+     *   gmailId?: string | null,
+     *   rfc822MessageId?: string | null,
+     * }>} */
+    const out = [];
+    for (const id of ids.slice(0, maxMessages)) {
+      const path = listMode
+        ? `/users/me/messages/${encodeURIComponent(id)}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Date&metadataHeaders=Message-ID`
+        : `/users/me/messages/${encodeURIComponent(id)}?format=full`;
+      const full = await gmailGet(auth.accessToken, path);
+      const headers = full?.payload?.headers || [];
+      const subject = headerValue(headers, 'Subject') || '(no subject)';
+      const from = headerValue(headers, 'From');
+      const to = headerValue(headers, 'To');
+      const cc = headerValue(headers, 'Cc');
+      const date = headerValue(headers, 'Date');
+      const rfc822MessageId = headerValue(headers, 'Message-ID').replace(/^<|>$/g, '') || null;
+      let text = '';
+      if (!listMode) {
         /** @type {{ texts: string[], htmls: string[], ics: string[] }} */
         const bag = { texts: [], htmls: [], ics: [] };
         collectMimeParts(full?.payload, bag);
-        const text = [...bag.texts, ...bag.htmls.map(stripHtml)]
+        text = [...bag.texts, ...bag.htmls.map(stripHtml)]
           .join('\n')
           .replace(/\s+\n/g, '\n')
           .trim()
           .slice(0, 8_000);
-        messages.push({
-          id,
-          mailbox,
-          subject,
-          from,
-          to,
-          date,
-          snippet: String(full?.snippet || '').trim().slice(0, 280),
-          text: text || String(full?.snippet || '').trim(),
-        });
-        if (messages.length >= maxMessages) break;
       }
-    } catch (e) {
-      errors.push(`${mailbox}: ${e?.message || e}`);
+      const row = {
+        id,
+        mailbox,
+        subject,
+        from,
+        to,
+        cc,
+        date,
+        snippet: String(full?.snippet || '').trim().slice(0, 280),
+        text: text || (listMode ? '' : String(full?.snippet || '').trim()),
+        gmailId: /^[0-9a-f]+$/i.test(id) ? id.toLowerCase() : null,
+        rfc822MessageId,
+      };
+      if (!messageInvolvesExactEmail(row, email)) continue;
+      out.push(row);
     }
-    if (messages.length >= maxMessages) break;
+    return out;
+  }
+
+  const batches = await Promise.all(
+    mailboxes.map(async (mailbox) => {
+      try {
+        return await fetchMailbox(mailbox);
+      } catch (e) {
+        errors.push(`${mailbox}: ${e?.message || e}`);
+        return [];
+      }
+    }),
+  );
+
+  /** @type {Array<{
+   *   id: string,
+   *   mailbox: string,
+   *   subject: string,
+   *   from: string,
+   *   to: string,
+   *   date: string,
+   *   snippet: string,
+   *   text: string,
+   *   gmailId?: string | null,
+   *   rfc822MessageId?: string | null,
+   * }>} */
+  const messages = [];
+  for (const batch of batches) {
+    for (const m of batch) {
+      if (messages.some((x) => x.id === m.id && x.mailbox === m.mailbox)) continue;
+      messages.push(m);
+    }
   }
 
   if (!messages.length) {
@@ -1548,19 +2047,25 @@ export async function fetchSharedEmailsWithContact(contact, env = process.env, o
   }
 
   messages.sort((a, b) => (Date.parse(b.date || '') || 0) - (Date.parse(a.date || '') || 0));
+  const trimmed = messages.slice(0, maxMessages);
 
-  const combinedText = messages
-    .map(
-      (m) =>
-        `Email (${m.mailbox})\nFrom: ${m.from}\nTo: ${m.to}\nDate: ${m.date}\nSubject: ${m.subject}\n\n${m.text || m.snippet}`,
-    )
-    .join('\n\n==========\n\n')
-    .slice(0, 28_000);
+  const combinedText = listMode
+    ? ''
+    : trimmed
+        .map(
+          (m) =>
+            `Email (${m.mailbox})\nFrom: ${m.from}\nTo: ${m.to}\nDate: ${m.date}\nSubject: ${m.subject}\n\n${m.text || m.snippet}`,
+        )
+        .join('\n\n==========\n\n')
+        .slice(0, 28_000);
 
   return {
     ok: true,
     query,
-    messages: messages.map((m) => ({ ...m, text: String(m.text || '').slice(0, 500) })),
+    messages: trimmed.map((m) => ({
+      ...m,
+      text: listMode ? '' : String(m.text || '').slice(0, 500),
+    })),
     combinedText,
   };
 }

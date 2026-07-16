@@ -9,6 +9,7 @@ import {
   CORVIDAE_ORG_ID,
   openNetworkDb,
   remapLegacyNetworkId,
+  rowToContact,
   rowToOrg,
   upsertOrgRow,
 } from './network-db.js';
@@ -58,7 +59,16 @@ function cleanStrList(v, max = 40, itemMax = 200) {
   return out;
 }
 
-const ORG_TYPES = new Set(['Prospect', 'Customer', 'Partner', 'Competitor', 'Other']);
+const ORG_TYPES = new Set([
+  'Prospect',
+  'Customer',
+  'Partner',
+  'Subcontractor',
+  'Vendor',
+  'Supplier',
+  'Competitor',
+  'Other',
+]);
 const ORG_RATINGS = new Set(['Fan', 'Hot', 'Warm', 'Cold']);
 const ORG_LIFECYCLES = new Set(['Prospect', 'Qualified', 'Customer', 'Churned']);
 
@@ -238,6 +248,32 @@ export async function ensureOrganizationByName(name, env = process.env) {
   const clean = cleanStr(name, 300);
   if (!clean) return null;
   const existing = await findOrganizationByName(clean, env);
+  // #region agent log
+  try {
+    const { appendFile, mkdir } = await import('node:fs/promises');
+    const { resolve, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+    const line = `${JSON.stringify({
+      sessionId: '3c9ec5',
+      runId: 'pre-fix',
+      hypothesisId: 'A',
+      location: 'network-organizations-store.js:ensureOrganizationByName',
+      message: existing ? 'org ensure hit existing' : 'org ensure will create',
+      data: {
+        name: clean,
+        existingId: existing?.id || null,
+        existingName: existing?.name || null,
+      },
+      timestamp: Date.now(),
+    })}\n`;
+    const p = resolve(root, 'data/debug-3c9ec5.ndjson');
+    await mkdir(dirname(p), { recursive: true });
+    await appendFile(p, line, 'utf8');
+  } catch {
+    /* ignore */
+  }
+  // #endregion
   if (existing) return existing;
   return addOrganization({ name: clean, source: 'manual' }, env);
 }
@@ -431,30 +467,84 @@ export async function upsertOrganizationFromTelegram(payload, env = process.env)
 }
 
 /**
+ * Contacts linked to an org via orgId or matching Organization name.
+ * @param {string} orgId
+ * @param {string} orgName
+ * @param {object[]} contacts
+ */
+function contactsAssignedToOrg(orgId, orgName, contacts) {
+  const id = remapLegacyNetworkId(String(orgId || ''));
+  const nameKey = String(orgName || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  if (!id && !nameKey) return [];
+  return (contacts || []).filter((c) => {
+    const cOrgId = c?.orgId ? remapLegacyNetworkId(String(c.orgId)) : null;
+    if (id && cOrgId === id) return true;
+    if (
+      nameKey &&
+      String(c?.org || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase() === nameKey
+    ) {
+      return true;
+    }
+    return false;
+  });
+}
+
+/**
+ * Delete organizations that are not assigned to any contact.
+ * Assigned orgs are skipped and listed in `inUse`.
  * @param {string[]} ids
  * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<{ deleted: number, inUse: { id: string, name: string, contactCount: number }[] }>}
  */
 export async function deleteOrganizations(ids, env = process.env) {
   const want = [...new Set((Array.isArray(ids) ? ids : []).map((id) => remapLegacyNetworkId(String(id))))].filter(
     Boolean,
   );
-  if (!want.length) return { deleted: 0 };
+  if (!want.length) return { deleted: 0, inUse: [] };
   const db = openNetworkDb(env);
+  const contactRows = db
+    .prepare('SELECT id, display_name, org, payload, created_at, updated_at FROM contacts')
+    .all();
+  const contacts = contactRows.map((r) => rowToContact(r));
+  const getOrg = db.prepare('SELECT id, name, payload, created_at, updated_at FROM organizations WHERE id = ?');
   const stmt = db.prepare('DELETE FROM organizations WHERE id = ?');
-  let deleted = 0;
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    for (const id of want) {
-      deleted += Number(stmt.run(id).changes) || 0;
+  /** @type {{ id: string, name: string, contactCount: number }[]} */
+  const inUse = [];
+  /** @type {string[]} */
+  const deletable = [];
+  for (const id of want) {
+    const row = getOrg.get(id);
+    if (!row) continue;
+    const org = rowToOrg(row);
+    const assigned = contactsAssignedToOrg(id, org.name, contacts);
+    if (assigned.length) {
+      inUse.push({ id, name: org.name || '', contactCount: assigned.length });
+      continue;
     }
-    db.exec('COMMIT');
-  } catch (e) {
-    try {
-      db.exec('ROLLBACK');
-    } catch {
-      /* ignore */
-    }
-    throw e;
+    deletable.push(id);
   }
-  return { deleted };
+  let deleted = 0;
+  if (deletable.length) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const id of deletable) {
+        deleted += Number(stmt.run(id).changes) || 0;
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        /* ignore */
+      }
+      throw e;
+    }
+  }
+  return { deleted, inUse };
 }

@@ -14,12 +14,15 @@ import {
   SCENE_APL_GROUPIE,
   SCENE_OLD_SHIPYARD,
   isDroppedSceneToken,
-  isOutOfTownToken,
+  isMisplacedLocationSceneToken,
+  isMisplacedKindSceneToken,
   isPolidayToken,
   normalizeContactDisplayName,
   normalizeSceneGroupName,
   remapAplShipyardCircles,
   relocateOutOfTownFromScenes,
+  kindsFromMisplacedScenes,
+  mergeKinds,
 } from './network-scene-normalize.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
@@ -138,6 +141,31 @@ function setMeta(db, key, value) {
     `INSERT INTO meta (key, value) VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
   ).run(key, value);
+}
+
+/** Meta key: user deleted a foundation contact — do not re-seed on DB open. */
+export function foundationOptOutMetaKey(contactId) {
+  return `foundation_opt_out:${remapLegacyNetworkId(String(contactId || ''))}`;
+}
+
+/**
+ * @param {DatabaseSync} db
+ * @param {string} contactId
+ */
+export function isFoundationContactOptedOut(db, contactId) {
+  const id = remapLegacyNetworkId(String(contactId || ''));
+  if (!id) return false;
+  return getMeta(db, foundationOptOutMetaKey(id)) === '1';
+}
+
+/**
+ * @param {DatabaseSync} db
+ * @param {string} contactId
+ */
+export function markFoundationContactOptedOut(db, contactId) {
+  const id = remapLegacyNetworkId(String(contactId || ''));
+  if (!id) return;
+  setMeta(db, foundationOptOutMetaKey(id), '1');
 }
 
 /**
@@ -420,14 +448,37 @@ function ensureFoundationRows(db, env = process.env) {
   const juliaCreated = '2020-01-01T00:00:00.000Z';
   const samCreated = '2020-01-01T00:00:01.000Z';
   const alreadyBootstrapped = getMeta(db, 'foundation_v1') === '1';
+  const juliaOptOut = isFoundationContactOptedOut(db, JULIA_CONTACT_ID);
+  const samOptOut = isFoundationContactOptedOut(db, SAM_CONTACT_ID);
 
   // After first bootstrap: only re-insert missing foundation rows. Never rewrite
   // existing Julia/Sam/Runway payloads on every process open (that looked like
   // edits "not sticking" across restarts and raced with live saves).
+  // User-deleted foundation contacts (opt-out meta) stay gone — do not reseed.
   if (alreadyBootstrapped) {
-    const missingJulia = !db.prepare('SELECT 1 AS ok FROM contacts WHERE id = ?').get(JULIA_CONTACT_ID);
-    const missingSam = !db.prepare('SELECT 1 AS ok FROM contacts WHERE id = ?').get(SAM_CONTACT_ID);
+    const missingJulia =
+      !juliaOptOut && !db.prepare('SELECT 1 AS ok FROM contacts WHERE id = ?').get(JULIA_CONTACT_ID);
+    const missingSam =
+      !samOptOut && !db.prepare('SELECT 1 AS ok FROM contacts WHERE id = ?').get(SAM_CONTACT_ID);
     const missingRunway = !db.prepare('SELECT 1 AS ok FROM groups WHERE id = ?').get(RUNWAY_HOUSE_GROUP_ID);
+    // #region agent log
+    if (missingJulia || missingSam || missingRunway || juliaOptOut || samOptOut) {
+      dbgFoundation({
+        hypothesisId: 'H1',
+        location: 'network-db.js:ensureFoundationRows',
+        message: 'foundation check after bootstrap',
+        data: {
+          alreadyBootstrapped,
+          missingJulia,
+          missingSam,
+          missingRunway,
+          juliaOptOut,
+          samOptOut,
+          willReseed: Boolean(missingJulia || missingSam || missingRunway),
+        },
+      });
+    }
+    // #endregion
     if (!missingJulia && !missingSam && !missingRunway) return;
   }
 
@@ -498,7 +549,15 @@ function ensureFoundationRows(db, env = process.env) {
   const hasJulia =
     db.prepare('SELECT 1 AS ok FROM contacts WHERE id = ?').get(JULIA_CONTACT_ID) ||
     db.prepare(`SELECT 1 AS ok FROM contacts WHERE lower(display_name) = 'julia hasty'`).get();
-  if (!hasJulia) {
+  if (!hasJulia && !juliaOptOut) {
+    // #region agent log
+    dbgFoundation({
+      hypothesisId: 'H1',
+      location: 'network-db.js:ensureFoundationRows:insertJulia',
+      message: 're-inserting Julia Hasty foundation contact',
+      data: { juliaId: JULIA_CONTACT_ID, avatarUrl, corvidaeExists: Boolean(hasOrg), juliaOptOut },
+    });
+    // #endregion
     upsertContactRow(db, {
       id: JULIA_CONTACT_ID,
       displayName: 'Julia Hasty',
@@ -551,7 +610,7 @@ function ensureFoundationRows(db, env = process.env) {
     db
       .prepare(`SELECT 1 AS ok FROM contacts WHERE lower(display_name) = 'sam levac-levey'`)
       .get();
-  if (!hasSam) {
+  if (!hasSam && !samOptOut) {
     upsertContactRow(db, {
       id: SAM_CONTACT_ID,
       displayName: 'Sam Levac-Levey',
@@ -659,15 +718,19 @@ function migrateSceneAliasesIfNeeded(db) {
     const aliased = CONTACT_DISPLAY_ALIASES[String(c.displayName || '').trim().toLowerCase()];
     const displayName = aliased || nextName || c.displayName || '';
     const relocated = relocateOutOfTownFromScenes(c.networkCircles, c.location, 4000, 300);
+    const kindsFromScene = kindsFromMisplacedScenes(c.networkCircles);
+    const kinds = mergeKinds(c.kinds, kindsFromScene);
     const networkCircles = remapAplShipyardCircles(relocated.networkCircles, {
       id: c.id,
       displayName,
-      kinds: c.kinds,
+      kinds,
     });
+    const kindsChanged = JSON.stringify(kinds) !== JSON.stringify(c.kinds || []);
     if (
       displayName === c.displayName
       && networkCircles === (c.networkCircles || '')
       && relocated.location === (c.location || '')
+      && !kindsChanged
     ) {
       continue;
     }
@@ -676,6 +739,7 @@ function migrateSceneAliasesIfNeeded(db) {
       displayName,
       networkCircles,
       location: relocated.location,
+      kinds,
       updatedAt: now,
     };
     upsert.run(contactToRow(next));
@@ -694,8 +758,13 @@ function migrateSceneAliasesIfNeeded(db) {
   const byCanon = new Map();
   for (const row of groupRows) {
     const g = rowToGroup(row);
-    // "Out of town" was a misplaced location tag, not a scene group — drop it.
-    if (isOutOfTownToken(g.name)) {
+    // Misplaced location tags (Out of town, Delta) are not scene groups — drop them.
+    if (isMisplacedLocationSceneToken(g.name)) {
+      db.prepare('DELETE FROM groups WHERE id = ?').run(g.id);
+      continue;
+    }
+    // Type-as-scene tags (Family) are not scene groups — drop them.
+    if (isMisplacedKindSceneToken(g.name)) {
       db.prepare('DELETE FROM groups WHERE id = ?').run(g.id);
       continue;
     }
@@ -805,6 +874,43 @@ function migrateSceneAliasesIfNeeded(db) {
 }
 
 const ORPHAN_CONTACT_REFS_MIGRATION = 'orphan_contact_refs_v1';
+const TELEGRAM_LAST_CONTACT_MIGRATION = 'clear_telegram_last_contact_v1';
+
+/**
+ * Clear lastContact* stamped by Telegram ingest (message arrival ≠ last contact).
+ * @param {DatabaseSync} db
+ */
+function migrateClearTelegramLastContactIfNeeded(db) {
+  if (getMeta(db, TELEGRAM_LAST_CONTACT_MIGRATION) === '1') return;
+  const now = new Date().toISOString();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const rows = db
+      .prepare('SELECT id, display_name, org, payload, created_at, updated_at FROM contacts')
+      .all();
+    for (const row of rows) {
+      const c = rowToContact(row);
+      const channel = String(c.lastContactChannel || '').trim().toLowerCase();
+      if (channel !== 'telegram') continue;
+      upsertContactRow(db, {
+        ...c,
+        lastContactAt: null,
+        lastContactPrecision: null,
+        lastContactChannel: null,
+        updatedAt: now,
+      });
+    }
+    setMeta(db, TELEGRAM_LAST_CONTACT_MIGRATION, '1');
+    db.exec('COMMIT');
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
+}
 
 /**
  * Drop group memberIds / note contact_ids that no longer point at a contact row.
@@ -920,6 +1026,7 @@ export function openNetworkDb(env = process.env) {
   ensureFoundationRows(db, env);
   migrateSceneAliasesIfNeeded(db);
   migrateOrphanContactRefsIfNeeded(db);
+  migrateClearTelegramLastContactIfNeeded(db);
   dbSingleton = db;
   dbPathSingleton = dbPath;
   return db;
@@ -935,3 +1042,31 @@ export function closeNetworkDb() {
   dbSingleton = null;
   dbPathSingleton = null;
 }
+
+// #region agent log
+function dbgFoundation(payload) {
+  const body = {
+    sessionId: '7b26c0',
+    runId: 'post-fix',
+    timestamp: Date.now(),
+    ...payload,
+  };
+  try {
+    const p = path.join(PKG_ROOT, '.cursor/debug-7b26c0.log');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.appendFileSync(p, `${JSON.stringify(body)}\n`, 'utf8');
+  } catch {
+    /* ignore */
+  }
+  for (const url of [
+    'http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22',
+    'http://172.17.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22',
+  ]) {
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7b26c0' },
+      body: JSON.stringify(body),
+    }).catch(() => {});
+  }
+}
+// #endregion

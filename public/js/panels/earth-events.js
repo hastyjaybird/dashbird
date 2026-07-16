@@ -38,6 +38,7 @@ const MINERS_LETTUCE_STRIP_SRC = '/assets/miners-lettuce-earth-strip.png';
 const TARANTULA_STRIP_ICON_SRC = '/assets/earth-tarantula-strip.png';
 const SALAMANDER_STRIP_ICON_SRC = '/assets/earth-salamander-strip.png';
 const EARTHQUAKE_PIN_SRC = '/assets/earth-earthquake-pin.png';
+const KILAUEA_STRIP_ICON_SRC = '/assets/earth-kilauea-volcano.png';
 const GLM_LIGHTNING_STRIP_SRC = '/assets/earth-glm-lightning-strip.png';
 const NASTURTIUM_STRIP_ICON_SRC = '/assets/earth-nasturtium-strip.png';
 const FIREFLY_STRIP_ICON_SRC = '/assets/earth-firefly-strip.png';
@@ -194,6 +195,20 @@ function buildQuakeWeekGlyph() {
   return wrap;
 }
 
+/** Kīlauea volcano / Hawaiʻi summit activity row. */
+function buildKilaueaGlyph() {
+  const wrap = document.createElement('span');
+  wrap.className = 'hero-astro-glyph hero-astro-glyph--img earth-kilauea-glyph';
+  wrap.setAttribute('aria-hidden', 'true');
+  const img = document.createElement('img');
+  img.src = KILAUEA_STRIP_ICON_SRC;
+  img.alt = '';
+  img.decoding = 'async';
+  img.loading = 'lazy';
+  wrap.appendChild(img);
+  return wrap;
+}
+
 /** @param {{ earthType?: string, label?: string, npnSpring?: object }} ev */
 function earthItemGlyph(ev) {
   const t = String(ev?.earthType || '');
@@ -201,6 +216,8 @@ function earthItemGlyph(ev) {
   if (t === 'goes_glm_lightning_max_recent') return buildGlmLightningGlyph();
   if (t === 'goes_glm_sprite_proxy') return buildGlmLightningGlyph();
   if (t === 'usgs_quake_week_max') return buildQuakeWeekGlyph();
+  if (t === 'kilauea_quake') return buildQuakeWeekGlyph();
+  if (t === 'kilauea_volcano') return buildKilaueaGlyph();
   if (t === 'diablo_tarantula_mating') return buildTarantulaGlyph();
   if (t === 'oakland_salamander_surface') return buildSalamanderGlyph();
   if (t.startsWith('monarch_')) return buildMonarchGlyph();
@@ -296,6 +313,12 @@ function earthItemTooltip(earthType, ev) {
         : formatLocalQuakeMd();
     return `Strongest nearby earthquake through ${md} (USGS): M>3 within 30 mi of the dashboard map point; opens USGS event (new tab)`;
   }
+  if (t === 'kilauea_volcano') {
+    return 'Kīlauea (Hawaiʻi): HVO alert level, eruption episode / fountain height when erupting; opens USGS volcano update (new tab)';
+  }
+  if (t === 'kilauea_quake') {
+    return 'Strongest earthquake near Kīlauea summit (USGS): M>3 within 30 mi of Halemaʻumaʻu; same M · depth · mi format as the local earthquake row; opens USGS event (new tab)';
+  }
   if (t === 'goes_glm_lightning_max_recent') {
     return 'Strongest recent GOES Geostationary Lightning Mapper flash (AWS open-data L2 CFA) within ~200 mi of dashboard lat/lon; thumbnail opens STAR GLM mosaic (new tab)';
   }
@@ -360,6 +383,7 @@ function mergeFastEarthPayloads([
   secondaryWatchJson,
   quakeJson,
   atlanticStormJson,
+  kilaueaJson,
 ]) {
   const npnSpringItems = parseEarthPayload(npnSpringJson);
   const tarantulaItems = parseEarthPayload(tarantulaJson);
@@ -371,6 +395,7 @@ function mergeFastEarthPayloads([
   const secondaryItems = parseEarthPayload(secondaryWatchJson);
   const quakeItems = parseEarthPayload(quakeJson);
   const atlanticStormItems = parseEarthPayload(atlanticStormJson);
+  const kilaueaItems = parseEarthPayload(kilaueaJson);
   const merged = npnSpringItems.concat(
     tarantulaItems,
     salamanderItems,
@@ -381,6 +406,7 @@ function mergeFastEarthPayloads([
     secondaryItems,
     quakeItems,
     atlanticStormItems,
+    kilaueaItems,
   );
   return { merged, quakeItems };
 }
@@ -428,7 +454,7 @@ export function mountEarthStrip(container) {
     const md = typeof quakeAsOfMd === 'string' && quakeAsOfMd ? quakeAsOfMd : formatLocalQuakeMd();
     container.setAttribute(
       'aria-label',
-      `Earth events: USA-NPN spring when active, Diablo-area tarantulas, Oakland salamander heuristic, monarch migration, salmon seasons, wild edible / foraging notes, nasturtium bloom, lightning bugs at secondary ZIP (7-day heads-up before start), fall foliage at secondary ZIP (21-day heads-up), Atlantic Category 1+ storms with forecasted landfall location when parsed from NHC advisories, nearby earthquake through ${md} when strongest is M>3 within 30 mi, GOES GLM strongest flash and optional Sprite-class proxy row when a tier match is stored (~200 mi, 7-day retention)`,
+      `Earth events: USA-NPN spring when active, Diablo-area tarantulas, Oakland salamander heuristic, monarch migration, salmon seasons, wild edible / foraging notes, nasturtium bloom, lightning bugs at secondary ZIP (7-day heads-up before start), fall foliage at secondary ZIP (21-day heads-up), Atlantic Category 1+ storms with forecasted landfall location when parsed from NHC advisories, nearby earthquake through ${md} when strongest is M>3 within 30 mi, Kīlauea eruption or nearby quake when active, GOES GLM strongest flash and optional Sprite-class proxy row when a tier match is stored (~200 mi, 7-day retention)`,
     );
   }
 
@@ -545,6 +571,7 @@ export function mountEarthStrip(container) {
     fetchEarthJson('/api/secondary-watch'),
     fetchEarthJson('/api/dashboard-earthquake-week'),
     fetchEarthJson('/api/atlantic-storm-watch'),
+    fetchEarthJson('/api/dashboard-kilauea'),
   ])
     .then((payloads) => {
       const { merged, quakeItems } = mergeFastEarthPayloads(payloads);

@@ -34,6 +34,7 @@ import diabloTarantulaRouter from './routes/diablo-tarantula.js';
 import oaklandSalamandersRouter from './routes/oakland-salamanders.js';
 import nasturtiumBloomRouter from './routes/nasturtium-bloom.js';
 import dashboardEarthquakeWeekRouter from './routes/dashboard-earthquake-week.js';
+import dashboardKilaueaRouter from './routes/dashboard-kilauea.js';
 import dashboardLightningGlmRouter from './routes/dashboard-lightning-glm.js';
 import marketWatchRouter from './routes/market-watch.js';
 import rainAlertRouter from './routes/rain-alert.js';
@@ -50,9 +51,11 @@ import secondaryWatchRouter from './routes/secondary-watch.js';
 import aircraftNearbyRouter from './routes/aircraft-nearby.js';
 import { startSuperbloomAgent } from './lib/superbloom-agent.js';
 import { warmGoogleCalendarCache } from './lib/google-calendar-ical.js';
+import { startCalendarPresenceIndexScheduler } from './lib/calendar-presence-index.js';
 import { syncManualCalendarEventsToCatalog } from './lib/manual-calendar-events.js';
 import { resolveDashboardWeatherLatLon } from './lib/hero-weather-location.js';
 import toolLibraryRouter from './routes/tool-library.js';
+import localNewsRouter from './routes/local-news.js';
 import webCatalogRouter from './routes/web-catalog.js';
 import { startWebCatalogWatchPoller } from './lib/web-catalog-watch.js';
 import { startWebCatalogDiscoveryWorker } from './lib/web-catalog-discovery.js';
@@ -62,9 +65,14 @@ import eventsFinderEventsRouter, {
 import { startFacebookEventsWeeklyScheduler } from './lib/events-finder-facebook.js';
 import { startTelegramEventsPoller } from './lib/events-finder-telegram.js';
 import { startToolsContactsBackupScheduler } from './lib/data-backup-schedule.js';
+import { startLocalNewsScheduler } from './lib/local-news-scheduler.js';
+
+import { startGmailWeeklySummaryScheduler } from './lib/gmail-weekly-summary-synth.js';
 import eventsFinderTelegramRouter from './routes/events-finder-telegram.js';
+import gmailWeeklySummaryRouter from './routes/gmail-weekly-summary.js';
 import networkRouter from './routes/network.js';
 import devNotesRouter from './routes/dev-notes.js';
+import devAgentLogRouter from './routes/dev-agent-log.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -90,8 +98,22 @@ app.use(
         return;
       }
       const isHtml = p.endsWith('.html');
-      if (isHtml) {
+      // JS/CSS change often; max-age hid Network UI edits behind a 5-minute cache
+      // even after docker rebuilds when the SPA stayed open or query tags lagged.
+      const isScriptOrStyle =
+        p.endsWith('.js') || p.endsWith('.mjs') || p.endsWith('.css') || p.endsWith('.map');
+      if (isHtml || isScriptOrStyle) {
         res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+        return;
+      }
+      // Bookmark JSON + other public/data files: short TTL for remote RTT (same UI).
+      const isBookmarkJson =
+        p.endsWith('/bookmarks-personal.json') ||
+        p.endsWith('/bookmarks-work.json') ||
+        p.endsWith('bookmarks-personal.json') ||
+        p.endsWith('bookmarks-work.json');
+      if (isBookmarkJson) {
+        res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
         return;
       }
       res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=60');
@@ -120,6 +142,7 @@ app.use('/api/diablo-tarantula', diabloTarantulaRouter);
 app.use('/api/oakland-salamanders', oaklandSalamandersRouter);
 app.use('/api/nasturtium-bloom', nasturtiumBloomRouter);
 app.use('/api/dashboard-earthquake-week', dashboardEarthquakeWeekRouter);
+app.use('/api/dashboard-kilauea', dashboardKilaueaRouter);
 app.use('/api/dashboard-lightning-glm', dashboardLightningGlmRouter);
 app.use('/api/market-watch', marketWatchRouter);
 app.use('/api/rain-alert', rainAlertRouter);
@@ -144,11 +167,15 @@ app.use('/api/events-finder-gmail', eventsFinderGmailRouter);
 app.use('/api/events-finder-sources', eventsFinderSourcesRouter);
 app.use('/api/events-finder/events', eventsFinderEventsRouter);
 app.use('/api/events-finder/telegram', eventsFinderTelegramRouter);
+app.use('/api/gmail-daily-summary', gmailWeeklySummaryRouter);
+app.use('/api/gmail-weekly-summary', gmailWeeklySummaryRouter); // legacy alias
 app.use('/api/network', networkRouter);
 app.use('/api/open-desktop', openDesktopRouter);
 app.use('/api/tool-library', toolLibraryRouter);
+app.use('/api/local-news', localNewsRouter);
 app.use('/api/web-catalog', webCatalogRouter);
 app.use('/api/dev-notes', devNotesRouter);
+app.use('/api/dev-agent-log', devAgentLogRouter);
 
 
 app.get('*', (req, res) => {
@@ -192,7 +219,10 @@ app.listen(port, '0.0.0.0', () => {
   kick(() => startEventsFinderIngestScheduler(), 900);
   kick(() => startTelegramEventsPoller(), 1000);
   kick(() => startToolsContactsBackupScheduler(), 1100);
+  kick(() => startLocalNewsScheduler(), 1150);
+  kick(() => startGmailWeeklySummaryScheduler(), 1250);
   kick(() => warmGoogleCalendarCache(), 1200);
+  kick(() => startCalendarPresenceIndexScheduler(), 1500);
   kick(() => {
     void syncManualCalendarEventsToCatalog()
       .then((r) => {

@@ -28,6 +28,9 @@ services:
       DBUS_SESSION_BUS_ADDRESS: ${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/1000/bus}
       RAIN_ALERT_DEBUG: ${RAIN_ALERT_DEBUG:-}
       RAIN_ALERT_DEBUG_MINUTES: ${RAIN_ALERT_DEBUG_MINUTES:-42}
+      # Cloud (Vultr) is the sole Telegram getUpdates consumer. LAN + cloud both
+      # polling the same bot token causes Conflict and split/missing ingests.
+      TELEGRAM_EVENTS_ENABLED: "0"
     depends_on:
       vikunja:
         condition: service_started

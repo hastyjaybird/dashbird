@@ -10,7 +10,7 @@ Cross-reference: v1 ships the dashboard shell and core panels; v2 items mount in
 
 - **Chat** — out of scope for this dashboard repo.
 - **CompHealth** — separate project; not built here.
-- **Hetzner / public VPS** — out of scope; dashbird stays **local LAN only**.
+- **Public cloud** — **live path:** Vultr Silicon Valley + DuckDNS ([`deploy-vultr.md`](deploy-vultr.md)). LAN compose remains for desktop/Playwright enrich.
 - **Desktop protocol tiles** (`cursor://`, local app launchers) — out of scope; bookmarks are web URLs only.
 
 ---
@@ -106,7 +106,7 @@ flowchart LR
 
 - Chat surfaces in this dashboard.
 - CompHealth workflows in this repo.
-- Hetzner / public cloud deployment for dashbird.
+- Hetzner-as-primary (superseded by Vultr; see [`deploy-vultr.md`](deploy-vultr.md)).
 - Desktop app launch / `cursor://` / local protocol bookmark tiles.
 - Embedding or executing Lovelace YAML / HACS card bundles inside this app.
 - Re-implementing Home Assistant inside this repo.

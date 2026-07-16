@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { eventTicketPriceRank } from './events-finder-price.js';
+import { inferEventCity } from './events-finder-geo.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
@@ -37,6 +38,22 @@ function toFiniteNumber(value) {
 }
 
 /**
+ * Persist lat/lon only when both are finite and not Null Island (0,0).
+ * APIs often send missing geo as zeros; storing that pins the map in the Atlantic.
+ * @param {unknown} latRaw
+ * @param {unknown} lonRaw
+ * @returns {{ lat: number | null, lon: number | null }}
+ */
+function toLatLonPair(latRaw, lonRaw) {
+  const lat = toFiniteNumber(latRaw);
+  const lon = toFiniteNumber(lonRaw);
+  if (lat == null || lon == null) return { lat: null, lon: null };
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return { lat: null, lon: null };
+  if (Math.abs(lat) < 0.01 && Math.abs(lon) < 0.01) return { lat: null, lon: null };
+  return { lat, lon };
+}
+
+/**
  * @param {unknown} value
  * @returns {string | null}
  */
@@ -57,6 +74,10 @@ function toIsoOrNull(value) {
 export function normalizeEventImageUrl(url) {
   const raw = String(url || '').trim();
   if (!raw) return null;
+  // Banned: Telegram brand tile must never appear as event card art.
+  if (raw === '/assets/tile-telegram.svg' || /\/tile-telegram\.svg(?:\?|$)/i.test(raw)) {
+    return null;
+  }
   if (/^external\/user\//i.test(raw) || /^external\//i.test(raw)) {
     return `https://partiful.imgix.net/${raw.replace(/^\/+/, '')}?fit=clip&w=640&auto=format`;
   }
@@ -454,21 +475,39 @@ function normalizeRow(event) {
     ?? /** @type {{ venue?: unknown, location?: unknown }} */ (event).location;
   const venue = venueRaw != null ? String(venueRaw).trim().slice(0, 300) || null : null;
   const cityRaw = /** @type {{ city?: unknown }} */ (event).city;
-  const city = cityRaw != null ? String(cityRaw).trim().slice(0, 120) || null : null;
+  let city = cityRaw != null ? String(cityRaw).trim().slice(0, 120) || null : null;
   const descriptionRaw = /** @type {{ description?: unknown }} */ (event).description;
   const description =
     descriptionRaw != null ? String(descriptionRaw).replace(/\s+/g, ' ').trim().slice(0, 2000) || null : null;
   const imageRaw = /** @type {{ imageUrl?: unknown }} */ (event).imageUrl;
   const imageUrl = normalizeEventImageUrl(imageRaw);
 
+  if (!city) {
+    city =
+      inferEventCity({
+        city: null,
+        venue,
+        location: venue,
+        title,
+        description,
+        url,
+      })?.slice(0, 120) || null;
+  }
+
   /** @type {Record<string, unknown>} */
   const payload = { .../** @type {Record<string, unknown>} */ (event) };
+  if (city && !payload.city) payload.city = city;
   // Keep raw but avoid huge nested blobs blowing the row — still store what sources send.
   try {
     JSON.stringify(payload);
   } catch {
     delete payload.raw;
   }
+
+  const { lat, lon } = toLatLonPair(
+    /** @type {{ lat?: unknown }} */ (event).lat,
+    /** @type {{ lon?: unknown }} */ (event).lon,
+  );
 
   return {
     id: id.slice(0, 512),
@@ -480,8 +519,8 @@ function normalizeRow(event) {
     endAt: toIsoOrNull(/** @type {{ end?: unknown }} */ (event).end),
     venue,
     city,
-    lat: toFiniteNumber(/** @type {{ lat?: unknown }} */ (event).lat),
-    lon: toFiniteNumber(/** @type {{ lon?: unknown }} */ (event).lon),
+    lat,
+    lon,
     online,
     description,
     imageUrl,
@@ -676,6 +715,20 @@ export function upsertEventsFinderEvents(events, env = process.env) {
 }
 
 /**
+ * Fresh SQLite read by id — used to confirm Telegram ingest actually persisted.
+ * @param {string} id
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {object | null}
+ */
+export function getEventsFinderEventById(id, env = process.env) {
+  const key = String(id || '').trim();
+  if (!key) return null;
+  const db = openEventsFinderDb(env);
+  const row = db.prepare('SELECT * FROM events WHERE id = ?').get(key);
+  return row ? rowToEvent(row) : null;
+}
+
+/**
  * @param {Record<string, unknown>} row
  * @returns {object}
  */
@@ -690,22 +743,38 @@ function rowToEvent(row) {
   }
 
   const online = Number(row.online) === 1;
+  const venue = row.venue != null ? String(row.venue) : payload.venue ?? null;
+  const title = String(row.title || payload.title || '');
+  const url = row.url != null ? String(row.url) : payload.url ?? '';
+  const description =
+    row.description != null ? String(row.description) : payload.description ?? null;
+  let city = row.city != null ? String(row.city) : payload.city ?? null;
+  if (!city) {
+    city = inferEventCity({
+      city: null,
+      venue,
+      location: venue ?? payload.location ?? null,
+      title,
+      description,
+      url,
+    });
+  }
   return {
     ...payload,
     id: String(row.id),
     source: String(row.source || payload.source || 'unknown'),
-    title: String(row.title || payload.title || ''),
+    title,
     start: row.start_at != null ? String(row.start_at) : payload.start ?? null,
     end: row.end_at != null ? String(row.end_at) : payload.end ?? null,
-    venue: row.venue != null ? String(row.venue) : payload.venue ?? null,
-    location: row.venue != null ? String(row.venue) : payload.location ?? payload.venue ?? null,
-    city: row.city != null ? String(row.city) : payload.city ?? null,
+    venue,
+    location: venue != null ? venue : payload.location ?? payload.venue ?? null,
+    city,
     lat: row.lat != null ? Number(row.lat) : payload.lat ?? null,
     lon: row.lon != null ? Number(row.lon) : payload.lon ?? null,
-    url: row.url != null ? String(row.url) : payload.url ?? '',
+    url,
     online,
     isOnline: online,
-    description: row.description != null ? String(row.description) : payload.description ?? null,
+    description,
     imageUrl: normalizeEventImageUrl(
       row.image_url != null ? String(row.image_url) : payload.imageUrl ?? null,
     ),

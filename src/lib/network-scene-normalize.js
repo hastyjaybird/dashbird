@@ -16,9 +16,19 @@ export const SCENE_WORD_ACRONYMS = {
   apl: 'APL',
   wuyc: 'WUYC',
   sf: 'SF',
+  flg: 'FLG',
+  dpw: 'DPW',
+  pdx: 'PDX',
+  t3: 'T3',
 };
 
-/** @type {Record<string, string>} lowercase token → canonical scene label */
+/**
+ * lowercase token → canonical scene label.
+ * Keep aliases specific — short tokens that steal real scene names (e.g. former
+ * `flg → Old Shipyard`) cause chips to “disappear” on save.
+ *
+ * @type {Record<string, string>}
+ */
 export const SCENE_TOKEN_ALIASES = {
   alessandra: 'Ali Warehouse',
   'alessandra warehouse': 'Ali Warehouse',
@@ -30,7 +40,10 @@ export const SCENE_TOKEN_ALIASES = {
   shipyard: SCENE_OLD_SHIPYARD,
   'shipyard old school': SCENE_OLD_SHIPYARD,
   'old shipyard': SCENE_OLD_SHIPYARD,
+  // FLG is its own scene — never fold into Old Shipyard again.
+  flg: 'FLG',
   deralleurs: 'Derailleurs',
+  derailleurs: 'Derailleurs',
   gui: 'Gui/Aviary',
   aviary: 'Gui/Aviary',
   'gui/aviary': 'Gui/Aviary',
@@ -39,14 +52,40 @@ export const SCENE_TOKEN_ALIASES = {
   swarm: 'T3 Art Collective',
   lds: 'T3 Art Collective',
   't3 art collective': 'T3 Art Collective',
+  // Legacy lone "art" tag (not "SF Art" / "Underground Art").
   art: 'T3',
   idaete: 'Ideate',
   idate: 'Ideate',
-  flg: SCENE_OLD_SHIPYARD,
-  miles: 'SF Polycule',
+  // Was briefly "SF Polycule" — too explicit for list subtitles.
+  miles: 'Miles House',
+  'miles house': 'Miles House',
+  'sf polycule': 'Miles House',
+  polycule: 'Miles House',
   finn: 'Finn House',
   'finn house': 'Finn House',
   'fenn house': 'Finn House',
+  'flava pack': 'Flava Packet',
+  'flava packet': 'Flava Packet',
+  // Spelling / casing cleanup (shows under names in the people list).
+  burningman: 'Burning Man',
+  'burning man': 'Burning Man',
+  highschool: 'High School',
+  'high school': 'High School',
+  stonybrook: 'Stony Brook',
+  'stony brook': 'Stony Brook',
+  'old pdx': 'Old PDX',
+  'dpw power': 'DPW Power',
+  dpw: 'DPW Power',
+  'prof. conference circuit': 'Professional Network',
+  'prof conference circuit': 'Professional Network',
+  'conference circuit': 'Professional Network',
+  client: 'Professional Network',
+  'professional network': 'Professional Network',
+  techie: 'Nerd Crew',
+  tech: 'Nerd Crew',
+  'nerd crew': 'Nerd Crew',
+  'makerfarm 1.0': 'Makerfarm 1.0',
+  'makerfarm1.0': 'Makerfarm 1.0',
 };
 
 /** @type {Record<string, string>} lowercase displayName → preferred display name */
@@ -56,19 +95,35 @@ export const CONTACT_DISPLAY_ALIASES = {
 
 /** Misplaced as a Scene tag / group — belongs in contact.location instead. */
 export const OUT_OF_TOWN_LOCATION = 'Out of town';
+export const DELTA_LOCATION = 'Delta';
+
+/**
+ * Scene tokens that are really locations (lowercase key → location label).
+ * @type {Readonly<Record<string, string>>}
+ */
+export const SCENE_LOCATION_LABELS = {
+  'out of town': OUT_OF_TOWN_LOCATION,
+  delta: DELTA_LOCATION,
+};
 
 /**
  * Scene labels to strip entirely (not renamed). Deleted from contacts + groups
  * on normalize / migration.
+ * Vague one-off tags that aren't a real crew/place — they only clutter list subtitles.
  * @type {ReadonlySet<string>}
  */
-export const DROPPED_SCENE_TOKENS = new Set(['jake', 'jake crew']);
+export const DROPPED_SCENE_TOKENS = new Set([
+  'jake',
+  'jake crew',
+  'virginia',
+  'rando',
+]);
 
 /**
  * Bump when SCENE_TOKEN_ALIASES / CONTACT_DISPLAY_ALIASES / DROPPED_SCENE_TOKENS
- * gain entries that should rewrite rows already stored in SQLite.
+ * / SCENE_LOCATION_LABELS / SCENE_KIND_LABELS gain entries that should rewrite rows already stored in SQLite.
  */
-export const SCENE_ALIASES_MIGRATION = 'scene_aliases_v16';
+export const SCENE_ALIASES_MIGRATION = 'scene_aliases_v25';
 
 /**
  * @param {unknown} token
@@ -173,11 +228,115 @@ export function remapAplShipyardCircles(raw, contact = {}, maxLen = 4000) {
 }
 
 /**
+ * Location label if this scene token is really a location (else '').
+ * @param {unknown} token
+ */
+export function locationLabelForMisplacedScene(token) {
+  return SCENE_LOCATION_LABELS[sceneTokenKey(token)] || '';
+}
+
+/**
+ * Scene tags that belong in contact.location (Out of town, Delta, …).
+ * @param {unknown} token
+ */
+export function isMisplacedLocationSceneToken(token) {
+  return Boolean(locationLabelForMisplacedScene(token));
+}
+
+/**
+ * Scene tokens that are really contact Type / kinds (lowercase key → kind id).
+ * @type {Readonly<Record<string, string>>}
+ */
+export const SCENE_KIND_LABELS = {
+  family: 'family',
+};
+
+/**
+ * Kind id if this scene token is really a Type (else '').
+ * @param {unknown} token
+ */
+export function kindForMisplacedScene(token) {
+  return SCENE_KIND_LABELS[sceneTokenKey(token)] || '';
+}
+
+/**
+ * Scene tags that belong in contact.kinds (Family, …).
+ * @param {unknown} token
+ */
+export function isMisplacedKindSceneToken(token) {
+  return Boolean(kindForMisplacedScene(token));
+}
+
+/**
+ * Collect Type ids that were wrongly stored as Scene tags.
+ * @param {unknown} networkCirclesRaw
+ * @returns {string[]}
+ */
+export function kindsFromMisplacedScenes(networkCirclesRaw) {
+  const out = [];
+  const seen = new Set();
+  for (const part of String(networkCirclesRaw ?? '').split(/[,;|/]+/)) {
+    const kind = kindForMisplacedScene(part);
+    if (!kind || seen.has(kind)) continue;
+    seen.add(kind);
+    out.push(kind);
+  }
+  return out;
+}
+
+/**
+ * Merge kind ids into an existing kinds list (dedupe, stable order).
+ * @param {string[]} kinds
+ * @param {string[]} extra
+ * @param {string[]} [order]
+ */
+export function mergeKinds(kinds, extra, order = ['friend', 'organizer', 'business', 'family']) {
+  const set = new Set(
+    [...(Array.isArray(kinds) ? kinds : []), ...(Array.isArray(extra) ? extra : [])]
+      .map((k) => String(k || '').toLowerCase().trim())
+      .filter(Boolean),
+  );
+  const out = [];
+  for (const k of order) {
+    if (set.has(k)) out.push(k);
+  }
+  for (const k of set) {
+    if (!out.includes(k)) out.push(k);
+  }
+  return out.length ? out : ['friend'];
+}
+
+/**
+ * Strip kind-as-scene tags from Scene and return kinds to merge onto the contact.
+ * @param {unknown} networkCirclesRaw
+ * @param {unknown} kindsRaw
+ * @param {number} [circlesMax]
+ * @returns {{ networkCircles: string, kinds: string[], relocated: boolean }}
+ */
+export function relocateFamilyFromScenes(networkCirclesRaw, kindsRaw, circlesMax = 4000) {
+  const fromScene = kindsFromMisplacedScenes(networkCirclesRaw);
+  const networkCircles = normalizeSceneCircles(networkCirclesRaw, circlesMax);
+  /** @type {string[]} */
+  let baseKinds = [];
+  if (Array.isArray(kindsRaw)) {
+    baseKinds = kindsRaw.map((k) => String(k || '').toLowerCase().trim()).filter(Boolean);
+  }
+  const kinds = mergeKinds(baseKinds, fromScene);
+  return { networkCircles, kinds, relocated: fromScene.length > 0 };
+}
+
+/**
  * @param {unknown} token
  */
 export function isOutOfTownToken(token) {
-  const t = sceneTokenKey(token);
-  return t === 'out of town';
+  return sceneTokenKey(token) === 'out of town';
+}
+
+/**
+ * @param {unknown} token
+ */
+export function isDeltaToken(token) {
+  return sceneTokenKey(token) === 'delta';
 }
 
 /**
@@ -207,7 +366,8 @@ export function canonicalizeSceneToken(token) {
     .replace(/\s+/g, ' ')
     .trim();
   if (!t) return '';
-  if (isOutOfTownToken(t)) return '';
+  if (isMisplacedLocationSceneToken(t)) return '';
+  if (isMisplacedKindSceneToken(t)) return '';
   if (isPolidayToken(t)) return '';
   if (isDroppedSceneToken(t)) return '';
   const mapped = SCENE_TOKEN_ALIASES[t.toLowerCase()];
@@ -216,7 +376,7 @@ export function canonicalizeSceneToken(token) {
 
 /**
  * Split comma/semicolon/pipe scene lists, canonicalize, dedupe.
- * Strips "Out of town" (that belongs in location — see relocateOutOfTownFromScenes).
+ * Strips misplaced location tags (Out of town, Delta) and Type tags (Family).
  * @param {unknown} raw
  * @param {number} [maxLen]
  */
@@ -241,7 +401,8 @@ export function normalizeSceneCircles(raw, maxLen = 4000) {
 }
 
 /**
- * If "Out of town" appears in Scene tags, remove it and fill empty location.
+ * If a location-as-scene tag (Out of town, Delta, …) appears in Scene, remove it
+ * and fill empty location with that label.
  * @param {unknown} networkCirclesRaw
  * @param {unknown} locationRaw
  * @param {number} [circlesMax]
@@ -257,18 +418,25 @@ export function relocateOutOfTownFromScenes(
   const rawCircles = String(networkCirclesRaw ?? '')
     .replace(/\s+/g, ' ')
     .trim();
-  const hadInScenes = rawCircles
-    .split(/[,;|/]+/)
-    .some((p) => isOutOfTownToken(p));
+  /** @type {string[]} */
+  const fromScene = [];
+  const seenFromScene = new Set();
+  for (const part of rawCircles.split(/[,;|/]+/)) {
+    const label = locationLabelForMisplacedScene(part);
+    if (!label) continue;
+    const key = label.toLowerCase();
+    if (seenFromScene.has(key)) continue;
+    seenFromScene.add(key);
+    fromScene.push(label);
+  }
   const networkCircles = normalizeSceneCircles(rawCircles, circlesMax);
   let location = String(locationRaw ?? '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, locationMax);
-  let relocated = false;
-  if (hadInScenes) {
-    relocated = true;
-    if (!location) location = OUT_OF_TOWN_LOCATION.slice(0, locationMax);
+  const relocated = fromScene.length > 0;
+  if (relocated && !location) {
+    location = fromScene[0].slice(0, locationMax);
   }
   return { networkCircles, location, relocated };
 }

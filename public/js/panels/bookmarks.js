@@ -318,7 +318,8 @@ export async function mountBookmarkGrid(root, dataPath, emptyHint) {
   }
 
   try {
-    const r = await fetch(dataPath, { cache: 'no-store' });
+    // Prefer HTTP cache (server sets short max-age in production); still revalidate.
+    const r = await fetch(dataPath, { cache: 'default' });
     if (!r.ok) {
       if (!cached) root.innerHTML = `<p class="muted">${emptyHint}</p>`;
       return;

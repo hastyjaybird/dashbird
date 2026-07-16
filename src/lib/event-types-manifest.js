@@ -31,6 +31,7 @@ export const EVENT_TYPE_LIVE_URLS = {
   firefly_season: 'https://www.farmersalmanac.com/fireflies-weather',
   fall_foliage_season: 'https://www.usanpn.org/data/maps/land_surface_phenology',
   usgs_quake_week: 'https://earthquake.usgs.gov/earthquakes/map/',
+  kilauea_volcano: 'https://www.usgs.gov/volcanoes/kilauea/volcano-updates',
   goes_glm_lightning: 'https://www.star.nesdis.noaa.gov/GOES/thumbnail.php?v=glm',
   goes_glm_sprite: 'https://www.star.nesdis.noaa.gov/GOES/thumbnail.php?v=glm',
   fear_greed_index: 'https://www.cnn.com/markets/fear-and-greed',
@@ -76,7 +77,7 @@ export const SKY_TYPE_DATA_SOURCES = {
   starlink: 'Curated rows in sky-events-calendar.json; 3-day heads-up + look direction; strip only when startsAt is after sunset and before sunrise at WEATHER_LAT/LON.',
   rocket: 'Curated rows in sky-events-calendar.json (launch schedules); 3-day heads-up + look direction; strip only when startsAt is after sunset and before sunrise at WEATHER_LAT/LON.',
   aircraft:
-    'adsb.fi within AIRCRAFT_WATCH_RADIUS_MI of rain-alert address (registration + type from feed); labels from oakland-aircraft-registry.json when known. Excludes airlines and alt <50 ft. SKY_AIRCRAFT_NEARBY=0 disables.',
+    'adsb.fi within AIRCRAFT_WATCH_RADIUS_MI of rain-alert address (registration + type from feed); labels from oakland-aircraft-registry.json when known. Unknown craft with a tail/hex get a one-shot adsbdb/hexdb registry lookup (cached in data/aircraft-tail-cache.json). Excludes airlines and alt <50 ft. SKY_AIRCRAFT_NEARBY=0 disables.',
 };
 
 /** Earth + moonbow rows (order preserved for Settings table). */
@@ -155,6 +156,12 @@ export const EARTH_EVENT_MANIFEST = [
     label: 'Earthquake (week)',
     category: 'Earth',
     dataSource: 'USGS FDSNWS · strongest M>3 within 30 mi (7 days)',
+  },
+  {
+    id: 'kilauea_volcano',
+    label: 'Kīlauea (Hawaiʻi)',
+    category: 'Earth',
+    dataSource: 'USGS HANS + HVO messages · eruption stats; nearby M>3 quake same format as local row',
   },
   {
     id: 'goes_glm_lightning',
