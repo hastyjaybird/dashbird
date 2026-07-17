@@ -2459,7 +2459,7 @@ function buildGmailWeeklySummaryBlock(root) {
   const intro = document.createElement('p');
   intro.className = 'settings-page__intro';
   intro.textContent =
-    'Markdown guide for what intake mail becomes action items (jay.intake.box + julia.hasty). Scans every 30 minutes. Rolling 10-day window — older items delete unless pinned. 👍/👎 on the main page append to Learned preferences. Template: docs/gmail-daily-summary-guide.md · live: data/gmail-daily-summary-guide.md';
+    'Markdown guide for what intake mail becomes action items (jay.intake.box + julia.hasty). Scans every 30 minutes. Rolling 10-day window — older items delete unless pinned. 👍 appends to Prefer more; 👎 always Prefer less (3× similar → Soft skip, 5× → Never show). Template: docs/gmail-daily-summary-guide.md · live: data/gmail-daily-summary-guide.md';
   body.append(intro);
 
   const guideLabel = document.createElement('label');

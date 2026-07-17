@@ -31,6 +31,12 @@ echo "[dashbird] Syncing repo code to ${HOST}:${REMOTE_DIR}/"
 ssh "$HOST" "mkdir -p '${REMOTE_DIR}/data' '${REMOTE_DIR}/public/data' '${REMOTE_DIR}/data/vikunja/db' '${REMOTE_DIR}/data/vikunja/files'"
 "${RSYNC_CODE[@]}" "$ROOT/" "${HOST}:${REMOTE_DIR}/"
 
+GUIDE_MD="$ROOT/data/gmail-daily-summary-guide.md"
+if [[ -f "$GUIDE_MD" ]]; then
+  echo "[dashbird] Syncing Daily Summary guide (learned preferences md only)"
+  rsync -avz "$GUIDE_MD" "${HOST}:${REMOTE_DIR}/data/gmail-daily-summary-guide.md"
+fi
+
 if [[ "$SYNC_ENV" == "1" ]]; then
   echo "[dashbird] Syncing .env (if present locally)"
   if [[ -f "$ROOT/.env" ]]; then
@@ -41,6 +47,7 @@ if [[ "$SYNC_ENV" == "1" ]]; then
 fi
 
 if [[ "$SYNC_DATA" == "1" ]]; then
+  echo "[dashbird] SYNC_DATA=1 — pushing local data/ to cloud (overwrites remote data/)"
   echo "[dashbird] Syncing persistent data/ (tools, network, events, assets — never commit these)"
   mkdir -p "$ROOT/data"
   rsync -avz "$ROOT/data/" "${HOST}:${REMOTE_DIR}/data/"

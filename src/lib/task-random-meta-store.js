@@ -45,8 +45,9 @@ function normalizeTaskMeta(raw) {
   }
   const locs = normalizeLocations(r.locations);
   if (locs.length && !out.location && !out.locationAny) out.locations = locs;
+  if (r.timeAny === true) out.timeAny = true;
   const times = normalizeTimes(r.times ?? r.time);
-  if (times.length) out.times = times;
+  if (times.length && !out.timeAny) out.times = times;
   return Object.keys(out).length ? out : null;
 }
 
@@ -256,8 +257,16 @@ export async function patchTaskMeta(taskId, patch, env = process.env) {
   }
   if (patch.times !== undefined) {
     const times = normalizeTimes(patch.times);
-    if (times.length) next.times = times;
-    else delete next.times;
+    if (times.length) {
+      next.times = times;
+      delete next.timeAny;
+    } else {
+      delete next.times;
+    }
+  }
+  if (patch.timeAny === true) {
+    next.timeAny = true;
+    delete next.times;
   }
   if (Object.keys(next).length) meta.byTaskId[id] = next;
   else delete meta.byTaskId[id];

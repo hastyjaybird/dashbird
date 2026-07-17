@@ -108,16 +108,38 @@ export function mountCalendarUpcoming(root, config, opts = {}) {
   advanceBtn.innerHTML =
     '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>';
 
-  wrap.append(backBtn, main, advanceBtn);
+  const openBtn = document.createElement('button');
+  openBtn.type = 'button';
+  openBtn.className = 'cal-upcoming__open';
+  openBtn.textContent = 'Go to calendar';
+  openBtn.setAttribute('aria-label', 'Go to calendar');
+  openBtn.title = 'Jump to the Calendar panel below';
+
+  openBtn.addEventListener('click', () => {
+    const panel =
+      document.getElementById('h-calendar')?.closest('.panel--calendar')
+      || document.querySelector('.panel--calendar');
+    if (panel && panel.offsetParent !== null) {
+      panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      panel.classList.add('panel--calendar--focus');
+      window.setTimeout(() => panel.classList.remove('panel--calendar--focus'), 1500);
+      return;
+    }
+    const authuser = String(config.googleCalendarAuthuser || '').trim();
+    const url =
+      authuser.includes('@')
+        ? `https://calendar.google.com/calendar?authuser=${encodeURIComponent(authuser)}`
+        : 'https://calendar.google.com/';
+    window.open(url, '_blank', 'noopener,noreferrer');
+  });
+
+  wrap.append(backBtn, main, openBtn, advanceBtn);
   root.appendChild(wrap);
 
   let events = [];
   /** Index into `events` (0 = next from now per API sort). Reset on each feed reload. */
   let skip = 0;
   let timeZone = config.weatherTimeZone || 'America/Los_Angeles';
-  const embedUrl = (config.calendarEmbedUrl || '').trim();
-  let weekUrl = (config.calendarWeekUrl || '').trim();
-  const openCalendarUrl = embedUrl || weekUrl || 'https://calendar.google.com/';
 
   function render() {
     if (!events.length) {
@@ -144,8 +166,8 @@ export function mountCalendarUpcoming(root, config, opts = {}) {
     backBtn.disabled = navDisabled;
     advanceBtn.disabled = navDisabled;
 
-    main.onclick = () => window.open(openCalendarUrl, '_blank', 'noopener,noreferrer');
-    main.style.cursor = 'pointer';
+    main.onclick = null;
+    main.style.cursor = '';
   }
 
   function applyPayload(j, { keepPreviousOnError = false } = {}) {
@@ -160,8 +182,8 @@ export function mountCalendarUpcoming(root, config, opts = {}) {
         'Set GOOGLE_CALENDAR_ICAL_URL to your Google Calendar secret iCal address (Settings → Integrate calendar).';
       backBtn.disabled = true;
       advanceBtn.disabled = true;
-      main.style.cursor = 'pointer';
-      main.onclick = () => window.open(openCalendarUrl, '_blank', 'noopener,noreferrer');
+      main.onclick = null;
+      main.style.cursor = '';
       return;
     }
     events = Array.isArray(j.events) ? j.events : [];

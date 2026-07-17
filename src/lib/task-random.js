@@ -81,7 +81,8 @@ function resolveTimeKind(timeZone) {
 }
 
 export async function resolveTaskContext(opts = {}, env = process.env) {
-  const device = String(opts.device || 'laptop').trim().toLowerCase() === 'phone' ? 'phone' : 'laptop';
+  const deviceRaw = String(opts.device || 'laptop').trim().toLowerCase();
+  const device = deviceRaw === 'phone' || deviceRaw === 'mobile' ? 'phone' : 'laptop';
   const timeZone =
     String(opts.timeZone || env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim()
     || 'America/Los_Angeles';
@@ -150,12 +151,23 @@ export function effectiveTaskLocations(taskMeta, projectMeta) {
 }
 
 export function effectiveTaskTimes(taskMeta) {
+  if (taskMeta?.timeAny) return [];
   return taskMeta?.times?.length ? taskMeta.times : [];
 }
 
 function overlaps(have, allowed) {
   if (!have.length) return true;
   return have.some((x) => allowed.includes(x));
+}
+
+/**
+ * True when the task is tagged for laptop only (not phone-ok / home / etc.).
+ * @param {Record<string, unknown> | null | undefined} taskMeta
+ * @param {Record<string, unknown> | null | undefined} projectMeta
+ */
+function isLaptopOnlyTask(taskMeta, projectMeta) {
+  const locs = effectiveTaskLocations(taskMeta, projectMeta);
+  return locs.length > 0 && locs.every((loc) => loc === 'laptop');
 }
 
 export function taskMatchesRandomFilters(taskMeta, projectMeta, filters, context) {
@@ -171,6 +183,7 @@ export function taskMatchesRandomFilters(taskMeta, projectMeta, filters, context
       if (taskTier > budgetTier) return false;
     }
   }
+  if (context.device === 'phone' && isLaptopOnlyTask(taskMeta, projectMeta)) return false;
   const locs = effectiveTaskLocations(taskMeta, projectMeta);
   if (!overlaps(locs, context.allowedLocations)) return false;
   const times = effectiveTaskTimes(taskMeta);
@@ -184,7 +197,7 @@ export function missingTaskMetaFields(taskMeta, projectMeta) {
   if (!taskMeta?.difficulty) missing.push('difficulty');
   if (!taskMeta?.duration) missing.push('duration');
   if (!effectiveTaskLocations(taskMeta, projectMeta).length) missing.push('locations');
-  if (!effectiveTaskTimes(taskMeta).length) missing.push('times');
+  if (!taskMeta?.timeAny && !effectiveTaskTimes(taskMeta).length) missing.push('times');
   return missing;
 }
 

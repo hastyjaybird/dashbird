@@ -53,6 +53,7 @@ Always exclude — even if something else might match:
 ## Learned preferences
 
 Appended from 👍 / 👎 on Daily Summary items. One bullet per feedback; edit freely.
+Repeated similar 👎 on the same pattern auto-promotes: **Prefer less** → **Soft skip** (3×) → **Never show** (5×).
 
 ### Prefer more like this
 

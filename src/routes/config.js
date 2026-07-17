@@ -8,6 +8,7 @@ import {
   resolveCalendarEmbedUrl,
   resolveGoogleCalendarIcalUrl,
 } from '../lib/google-calendar-ical.js';
+import { resolveEventsFinderGoogleCalendar } from '../lib/events-finder-google-calendar.js';
 import { resolveDashboardWeatherLatLon } from '../lib/hero-weather-location.js';
 import { fetchNwsPointsDocument, mapClickUrlForLatLon } from '../lib/nws-points.js';
 import { reverseGeocodeCoords } from '../lib/reverse-geocode.js';
@@ -72,6 +73,7 @@ router.get('/', async (req, res) => {
   const calendarEmbedMisconfigured = calEmbedRaw.length > 0 && !normalizeCalendarEmbedUrl(calEmbedRaw);
   const calendarIcalUrl = resolveGoogleCalendarIcalUrl();
   const calendarWeekUrl = calendarEmbedUrl ? calendarWeekUrlFromEmbed(calendarEmbedUrl) : '';
+  const { authuser: googleCalendarAuthuser } = resolveEventsFinderGoogleCalendar();
 
   const lanRaw = (process.env.DASHBOARD_LAN_ORIGIN || '').trim();
   let lanOrigin =
@@ -131,6 +133,7 @@ router.get('/', async (req, res) => {
     calendarEmbedMisconfigured,
     calendarIcalConfigured: calendarIcalUrl.length > 0,
     calendarWeekUrl,
+    googleCalendarAuthuser,
     weatherLat: lat,
     weatherLon: lon,
     weatherZip,

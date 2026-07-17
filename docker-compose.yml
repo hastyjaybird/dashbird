@@ -1,3 +1,9 @@
+# LAN stack — local read/write sandbox for dev, UX testing, Playwright tool shots, desktop tiles.
+# Data lives in ./data/ only; nothing here pushes to cloud automatically.
+# Cloud is the daily driver (dashbird.duckdns.org). To refresh LAN from cloud:
+#   ./scripts/sync-from-cloud.sh
+# To push LAN data up only when you mean to:
+#   SYNC_DATA=1 ./scripts/sync-to-cloud.sh
 services:
   dashboard:
     build: .

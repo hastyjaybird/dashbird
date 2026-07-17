@@ -1,5 +1,6 @@
 import { openRandomTaskPicker, openProjectLocationsTable } from '../lib/task-random-ui.js';
-import { buildTaskLocationSelect, fetchTaskRandomMeta } from '../lib/task-location-meta.js';
+import { fetchTaskRandomMeta } from '../lib/task-location-meta.js';
+import { onTaskCreated } from '../lib/task-bridge.js';
 
 /**
  * Main Tasks panel — browse Vikunja projects, add/complete tasks on Dashbird.
@@ -29,7 +30,7 @@ export function mountTasks(root, config = {}) {
   const randomBtn = document.createElement('button');
   randomBtn.type = 'button';
   randomBtn.className = 'tasks-panel__header-btn';
-  randomBtn.textContent = 'Do Random Task';
+  randomBtn.textContent = 'Random Task';
 
   const openLink = document.createElement('a');
   openLink.className = 'tasks-panel__open';
@@ -210,6 +211,40 @@ export function mountTasks(root, config = {}) {
         setTimeout(() => el.classList.remove('tasks-panel__item--random-pick'), 4000);
       }
     });
+  }
+
+  /**
+   * Task created from Daily Summary (or other panels) — show it in the active project list.
+   * @param {{ id: string, text?: string, projectId?: number | null }} task
+   */
+  function ingestExternalTask(task) {
+    const id = String(task.id || '').trim();
+    const text = String(task.text || '').trim();
+    if (!id || !text) return;
+
+    const pid = task.projectId != null ? Number(task.projectId) : projectId;
+    const row = { id, text, done: false };
+
+    if (pid != null && pid !== projectId) {
+      const cached = todosCache.get(pid) || [];
+      if (!cached.some((it) => it.id === id)) {
+        todosCache.set(pid, [row, ...cached]);
+      }
+      selectProject(pid);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => highlightTaskFromRandom({ id, projectId: pid }));
+      });
+      return;
+    }
+
+    if (!items.some((it) => it.id === id)) {
+      items.unshift(row);
+      if (projectId != null) {
+        todosCache.set(projectId, items.map((it) => ({ ...it })));
+      }
+      renderList();
+    }
+    highlightTaskFromRandom({ id, projectId: pid ?? projectId });
   }
 
   function showStatus(msg, isErr = false) {
@@ -466,9 +501,14 @@ export function mountTasks(root, config = {}) {
         const err =
           j.error === 'archive_project_protected'
             ? 'The Archive project cannot be deleted.'
-            : j.error === 'not_found'
-              ? 'Project not found.'
-              : j.detail || j.error || `HTTP ${r.status}`;
+            : j.error === 'default_project_protected'
+              ? 'This is your Vikunja default project and there is no other project to switch to.'
+              : j.error === 'not_found'
+                ? 'Project not found.'
+                : j.error === 'vikunja_upstream' &&
+                    /invalid token provided/i.test(String(j.detail || ''))
+                  ? 'Vikunja API token cannot delete projects — add projects.delete to the token in Vikunja settings.'
+                  : j.detail || j.error || `HTTP ${r.status}`;
         throw new Error(err);
       }
 
@@ -836,19 +876,7 @@ export function mountTasks(root, config = {}) {
 
     label.append(cb, text);
 
-    const projectMeta =
-      projectId != null ? taskRandomMeta.byProjectId[String(projectId)] || null : null;
-    const taskMeta = taskRandomMeta.byTaskId[item.id] || null;
-    const locSelect = buildTaskLocationSelect({
-      taskId: item.id,
-      taskMeta,
-      projectMeta,
-      className: 'tasks-panel__loc-select',
-      onSaved: (meta) => {
-        taskRandomMeta = meta;
-      },
-    });
-    row.append(handle, label, locSelect);
+    row.append(handle, label);
     li.append(row);
 
     cb.addEventListener('change', () => {
@@ -914,6 +942,47 @@ export function mountTasks(root, config = {}) {
     syncRowDom(id, false);
     const li = list.querySelector(`[data-id="${CSS.escape(id)}"]`);
     if (li) li.draggable = true;
+  }
+
+  /**
+   * @param {string} id
+   * @param {number | null} [taskProjectId]
+   */
+  function removeTaskLocally(id, taskProjectId = null) {
+    const index = items.findIndex((it) => it.id === id);
+    if (index >= 0) {
+      items = items.filter((it) => it.id !== id);
+      if (projectId != null) todosCache.set(projectId, items.map((it) => ({ ...it })));
+      renderList();
+      return;
+    }
+    if (taskProjectId != null && todosCache.has(taskProjectId)) {
+      todosCache.set(
+        taskProjectId,
+        todosCache.get(taskProjectId).filter((it) => it.id !== id),
+      );
+    }
+  }
+
+  /**
+   * @param {string} id
+   * @param {string} text
+   * @param {number | null} [taskProjectId]
+   */
+  function updateTaskTextLocally(id, text, taskProjectId = null) {
+    const index = items.findIndex((it) => it.id === id);
+    if (index >= 0) {
+      items[index] = { ...items[index], text };
+      if (projectId != null) todosCache.set(projectId, items.map((it) => ({ ...it })));
+      renderList();
+      return;
+    }
+    if (taskProjectId != null && todosCache.has(taskProjectId)) {
+      todosCache.set(
+        taskProjectId,
+        todosCache.get(taskProjectId).map((it) => (it.id === id ? { ...it, text } : it)),
+      );
+    }
   }
 
   /**
@@ -1107,8 +1176,11 @@ export function mountTasks(root, config = {}) {
       root: wrap,
       projects,
       onHighlightTask: highlightTaskFromRandom,
-      onDone: async (id) => {
-        await commitDone(id);
+      onDone: (id, taskProjectId) => {
+        removeTaskLocally(id, taskProjectId ?? null);
+      },
+      onTextChange: (id, text, taskProjectId) => {
+        updateTaskTextLocally(id, text, taskProjectId ?? null);
       },
     });
   });
@@ -1119,7 +1191,6 @@ export function mountTasks(root, config = {}) {
       projects,
       onMetaChange: (meta) => {
         taskRandomMeta = meta;
-        renderList();
       },
     });
   });
@@ -1135,6 +1206,8 @@ export function mountTasks(root, config = {}) {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !moveOverlay.hidden) hideMoveOverlay();
   });
+
+  onTaskCreated(ingestExternalTask);
 
   void bootstrap().catch(() => {
     setWritable(false);

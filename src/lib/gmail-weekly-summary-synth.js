@@ -6,6 +6,11 @@
  */
 import { loadGmailDailySummaryGuide } from './gmail-daily-summary-guide-store.js';
 import {
+  bumpOpenRouterRateLimit,
+  openRouterChatJson,
+  openRouterRateLimitUntilMs,
+} from './openrouter-chat-json.js';
+import {
   fetchWeeklySummaryMail,
   gmailWeeklySummaryDays,
 } from './gmail-weekly-summary-fetch.js';
@@ -18,18 +23,6 @@ import {
   shouldExcludeDailySummaryItem,
 } from './gmail-weekly-summary-store.js';
 
-const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
-/**
- * Prefer free models; fall back to cheap paid gpt-4o-mini when free endpoints are
- * congested (429). Free-tier keys still 402 on paid — that path continues/fails cleanly.
- * Llama 3.3 70B free is frequently upstream-429'd; keep it last among free options.
- */
-const DEFAULT_TEXT_MODEL = 'openai/gpt-oss-20b:free';
-const TEXT_FALLBACK_MODELS = [
-  'google/gemma-4-31b-it:free',
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'openai/gpt-4o-mini',
-];
 const MAX_MESSAGES_FOR_PROMPT = 48;
 const EXCERPT_CAP = 700;
 const DEFAULT_INTERVAL_MS = 30 * 60 * 1000;
@@ -47,8 +40,6 @@ let bootstrapStarted = false;
 let lastBootstrapAttemptMs = 0;
 /** Longer backoff so free/paid rate limits are not hammered every minute. */
 const BOOTSTRAP_RETRY_MS = 2 * 60 * 60 * 1000;
-/** @type {number} */
-let rateLimitUntilMs = 0;
 
 /**
  * @param {NodeJS.ProcessEnv} [env]
@@ -67,21 +58,6 @@ function envFirst(env, keys) {
  */
 function openRouterKey(env = process.env) {
   return String(env.OPENROUTER_API_KEY || '').trim();
-}
-
-/**
- * @param {NodeJS.ProcessEnv} [env]
- */
-function textModel(env = process.env) {
-  // Explicit Daily Summary model wins. Do not inherit OPENROUTER_MODEL (often paid gpt-4o-mini)
-  // — free-tier keys 402 on paid, then cascade into congested free Llama.
-  return (
-    envFirst(env, [
-      'GMAIL_DAILY_SUMMARY_MODEL',
-      'GMAIL_WEEKLY_SUMMARY_MODEL',
-      'OPENROUTER_FREE_TEXT_MODEL',
-    ]) || DEFAULT_TEXT_MODEL
-  );
 }
 
 /**
@@ -174,36 +150,6 @@ export function shouldRunGmailWeeklySummaryDaily(env = process.env, now = new Da
 }
 
 /**
- * @param {string} primary
- * @param {string[]} fallbacks
- */
-function modelChain(primary, fallbacks) {
-  return [...new Set([primary, ...fallbacks].map((m) => String(m || '').trim()).filter(Boolean))];
-}
-
-/**
- * @param {unknown} content
- */
-function extractJsonObject(content) {
-  const raw = String(content || '').trim();
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    const start = raw.indexOf('{');
-    const end = raw.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(raw.slice(start, end + 1));
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-}
-
-/**
  * @param {string} guideMarkdown
  */
 function buildSystemPrompt(guideMarkdown) {
@@ -240,6 +186,7 @@ Rules:
 - detail: 1-2 short sentences. MUST name that company/org (who is asking) so the ask is never anonymous. Example: "PayPal: June statement is ready — log in to review."
 - Deduplicate: if the same company/sender sends multiple emails about the same ask, create ONE item and cite only the most recent message in sourceRefs. Do not list repeats. Distinct asks stay separate (e.g. two different workspace deletion reminders).
 - Follow the email ingestion guide below when deciding which mail becomes items. Learned preference bullets override generic rules when they conflict.
+- Repeated similar 👎 patterns under Prefer less are treated as stronger exclusion; promoted Soft skip / Never show lines in the guide are hard rules.
 - Email ingestion guide:
 ${guide}
 - deadline: ISO 8601 when an explicit date/time is clear; else null.
@@ -426,77 +373,6 @@ function mapSynthItems(parsed, messages) {
 }
 
 /**
- * @param {NodeJS.ProcessEnv} [env]
- * @param {Array<{ role: string, content: string }>} messages
- * @param {{ ignoreRateLimit?: boolean }} [opts]
- */
-async function openRouterChatJson(env, messages, opts = {}) {
-  if (!openRouterKey(env)) {
-    return { ok: false, error: 'openrouter_not_configured' };
-  }
-  // Scheduled/bootstrap respect cooldown; manual Refresh always tries again.
-  if (!opts.ignoreRateLimit && Date.now() < rateLimitUntilMs) {
-    return { ok: false, error: 'openrouter_http_429' };
-  }
-  const models = modelChain(textModel(env), TEXT_FALLBACK_MODELS);
-  let lastError = 'openrouter_failed';
-  for (let i = 0; i < models.length; i++) {
-    const model = models[i];
-    let r;
-    try {
-      r = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${openRouterKey(env)}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': env.OPENROUTER_HTTP_REFERER || 'http://localhost',
-          'X-Title': env.OPENROUTER_X_TITLE || 'dashbird-daily-summary',
-        },
-        body: JSON.stringify({
-          model,
-          temperature: 0.2,
-          max_tokens: 2500,
-          response_format: { type: 'json_object' },
-          messages,
-        }),
-        signal: AbortSignal.timeout(90_000),
-      });
-    } catch (e) {
-      lastError = String(e?.message || e || 'openrouter_unreachable');
-      continue;
-    }
-    if (!r.ok) {
-      lastError = `openrouter_http_${r.status}`;
-      if (r.status === 401 || r.status === 403) break;
-      // Rate limit: try next model (other free provider or paid last resort).
-      if (r.status === 429) {
-        const ra = Number(r.headers.get('retry-after'));
-        const waitSec = Number.isFinite(ra) && ra > 0 ? Math.min(Math.max(ra, 2), 45) : 5;
-        if (i < models.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, waitSec * 1000));
-          continue;
-        }
-        rateLimitUntilMs = Date.now() + Math.max(waitSec, 60) * 1000;
-        break;
-      }
-      // Paid out of credits → try next model.
-      if (r.status === 402 || r.status >= 500) continue;
-      break;
-    }
-    const j = await r.json().catch(() => ({}));
-    const parsed = extractJsonObject(j?.choices?.[0]?.message?.content);
-    if (!parsed || typeof parsed !== 'object') {
-      lastError = 'parse_failed';
-      continue;
-    }
-    // Successful completion clears prior free-tier cooldown.
-    rateLimitUntilMs = 0;
-    return { ok: true, parsed, model };
-  }
-  return { ok: false, error: lastError };
-}
-
-/**
  * Run a mail fetch + synthesis pass. Merges new items; never resurrects dismissed/tasked.
  * @param {NodeJS.ProcessEnv} [env]
  * @param {{ forceMailRefresh?: boolean, reason?: string }} [opts]
@@ -644,7 +520,7 @@ export async function bootstrapGmailWeeklySummaryIfNeeded(env = process.env) {
     return { ok: true, skipped: true, reason: 'already_scanned', digest };
   }
   const now = Date.now();
-  if (now < rateLimitUntilMs) {
+  if (now < openRouterRateLimitUntilMs()) {
     return { ok: true, skipped: true, reason: 'rate_limited' };
   }
   if (lastBootstrapAttemptMs && now - lastBootstrapAttemptMs < BOOTSTRAP_RETRY_MS) {
@@ -664,7 +540,7 @@ export async function bootstrapGmailWeeklySummaryIfNeeded(env = process.env) {
       // Soft failure (e.g. OpenRouter 429) — retry after long backoff.
       bootstrapStarted = false;
       if (String(result.error || '').includes('429')) {
-        rateLimitUntilMs = Math.max(rateLimitUntilMs, Date.now() + BOOTSTRAP_RETRY_MS);
+        bumpOpenRouterRateLimit(Date.now() + BOOTSTRAP_RETRY_MS);
       }
     }
     console.log(
@@ -722,9 +598,9 @@ export function startGmailWeeklySummaryScheduler(env = process.env) {
     if (dailyInFlight) return;
     if (!shouldRunGmailWeeklySummaryInterval(env)) return;
     dailyInFlight = true;
-    if (Date.now() < rateLimitUntilMs) {
+    if (Date.now() < openRouterRateLimitUntilMs()) {
       console.log(
-        `[daily-summary] interval scan deferred (rate-limited until ${new Date(rateLimitUntilMs).toISOString()})`,
+        `[daily-summary] interval scan deferred (rate-limited until ${new Date(openRouterRateLimitUntilMs()).toISOString()})`,
       );
       dailyInFlight = false;
       return;

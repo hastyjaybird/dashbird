@@ -2,10 +2,76 @@
  * Server-side Vikunja REST client. Tokens stay in env; never sent to the browser.
  */
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_TITLE_LEN = 280;
 
 const ARCHIVE_PROJECT_TITLE = 'Archive';
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function resolveVikunjaDbPath(env = process.env) {
+  const raw = String(env.VIKUNJA_DB_PATH || 'data/vikunja/db/vikunja.db').trim();
+  return join(process.cwd(), raw);
+}
+
+/**
+ * @param {{ status: number, json?: { message?: string } | null, text?: string }} res
+ */
+function isDefaultProjectDeleteBlocked(res) {
+  if (res.status !== 412) return false;
+  const msg = String(res.json?.message || res.text || '').toLowerCase();
+  return msg.includes('default project');
+}
+
+/**
+ * Vikunja blocks deleting a user's default project (412). Re-point defaults locally, then retry delete.
+ * @param {number} fromProjectId
+ * @param {number} toProjectId
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function reassignVikunjaDefaultProject(fromProjectId, toProjectId, env = process.env) {
+  const dbPath = resolveVikunjaDbPath(env);
+  if (!existsSync(dbPath)) {
+    const err = new Error('vikunja_db_not_found');
+    err.code = 'vikunja_db_not_found';
+    err.status = 503;
+    throw err;
+  }
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare('UPDATE users SET default_project_id = ? WHERE default_project_id = ?').run(
+      toProjectId,
+      fromProjectId,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * @param {number} excludingId
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function pickDefaultProjectFallback(excludingId, env = process.env) {
+  const cfg = resolveVikunjaConfig(env);
+  const archiveId = await resolveArchiveProjectId(env);
+  const projects = await listPanelProjects(env);
+  const candidates = projects.filter((p) => p.id !== excludingId && p.id !== archiveId);
+  if (
+    cfg.projectId &&
+    cfg.projectId !== excludingId &&
+    cfg.projectId !== archiveId &&
+    candidates.some((p) => p.id === cfg.projectId)
+  ) {
+    return cfg.projectId;
+  }
+  return candidates[0]?.id ?? null;
+}
 
 /** @type {number | null} */
 let cachedArchiveProjectId = null;
@@ -373,10 +439,25 @@ export async function deletePanelProject(projectId, env = process.env) {
     err.status = 404;
     throw err;
   }
-  if (!res.ok && res.status !== 204) {
-    const err = new Error(safeUpstreamMessage(res) || 'vikunja_project_delete_failed');
+  let finalRes = res;
+  if (!finalRes.ok && finalRes.status !== 204 && isDefaultProjectDeleteBlocked(finalRes)) {
+    const fallbackId = await pickDefaultProjectFallback(projectId, env);
+    if (fallbackId == null) {
+      const err = new Error('default_project_protected');
+      err.code = 'default_project_protected';
+      err.status = 409;
+      throw err;
+    }
+    reassignVikunjaDefaultProject(projectId, fallbackId, env);
+    finalRes = await vikunjaFetch(`projects/${projectId}`, {
+      method: 'DELETE',
+      env,
+    });
+  }
+  if (!finalRes.ok && finalRes.status !== 204) {
+    const err = new Error(safeUpstreamMessage(finalRes) || 'vikunja_project_delete_failed');
     err.code = 'vikunja_upstream';
-    err.status = res.status >= 400 && res.status < 600 ? res.status : 502;
+    err.status = finalRes.status >= 400 && finalRes.status < 600 ? finalRes.status : 502;
     throw err;
   }
 }
@@ -748,6 +829,67 @@ export async function setPanelTodoDone(id, done, env = process.env, opts = {}) {
           ? Number(getRes.json.project_id)
           : null,
   };
+}
+
+/**
+ * @param {string} id
+ * @param {string} text
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function updatePanelTodoText(id, text, env = process.env) {
+  const taskId = String(id || '').trim();
+  if (!/^\d+$/.test(taskId)) {
+    const err = new Error('invalid_id');
+    err.code = 'invalid_id';
+    err.status = 400;
+    throw err;
+  }
+
+  const normalized = normalizeTodoTitle(text);
+  if (!normalized) {
+    const err = new Error('invalid_text');
+    err.code = 'invalid_text';
+    err.status = 400;
+    throw err;
+  }
+
+  const getRes = await vikunjaFetch(`tasks/${taskId}`, { env });
+  if (getRes.status === 404) {
+    const err = new Error('not_found');
+    err.code = 'not_found';
+    err.status = 404;
+    throw err;
+  }
+  if (!getRes.ok || !getRes.json || typeof getRes.json !== 'object') {
+    const err = new Error(safeUpstreamMessage(getRes) || 'vikunja_get_failed');
+    err.code = 'vikunja_upstream';
+    err.status = getRes.status >= 400 && getRes.status < 600 ? getRes.status : 502;
+    throw err;
+  }
+
+  const postRes = await vikunjaFetch(`tasks/${taskId}`, {
+    method: 'POST',
+    body: {
+      ...getRes.json,
+      title: normalized,
+    },
+    env,
+  });
+  if (!postRes.ok) {
+    const err = new Error(safeUpstreamMessage(postRes) || 'vikunja_update_failed');
+    err.code = 'vikunja_upstream';
+    err.status = postRes.status >= 400 && postRes.status < 600 ? postRes.status : 502;
+    throw err;
+  }
+
+  const item = mapVikunjaTask(postRes.json);
+  if (!item) {
+    const err = new Error('vikunja_update_failed');
+    err.code = 'vikunja_upstream';
+    err.status = 502;
+    throw err;
+  }
+  return item;
 }
 
 /**

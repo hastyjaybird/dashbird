@@ -13,6 +13,7 @@ import {
   resolveVikunjaConfig,
   setPanelTodoDone,
   updatePanelProject,
+  updatePanelTodoText,
   vikunjaFetch,
 } from '../lib/vikunja-client.js';
 import {
@@ -236,6 +237,17 @@ router.patch('/todos/:id/move', async (req, res) => {
       return;
     }
     const item = await movePanelTodo(req.params.id, projectId);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, item });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.patch('/todos/:id', async (req, res) => {
+  try {
+    const text = req.body?.text ?? req.body?.title;
+    const item = await updatePanelTodoText(req.params.id, text);
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, item });
   } catch (e) {

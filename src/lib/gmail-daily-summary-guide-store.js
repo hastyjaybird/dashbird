@@ -4,11 +4,39 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { recordThumbsDownAndEscalate } from './gmail-daily-summary-guide-feedback.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
 const LEARNED_MORE_HEADING = '### Prefer more like this';
 const LEARNED_LESS_HEADING = '### Prefer less like this';
+
+/** @typedef {'show_these' | 'soft_skip' | 'never_show' | 'prefer_more' | 'prefer_less'} GuideSectionKey */
+
+/** @type {Record<GuideSectionKey, string>} */
+export const GUIDE_SECTION_KEYS = {
+  show_these: '## Show these (important)',
+  soft_skip: '## Soft skip',
+  never_show: '## Never show',
+  prefer_more: LEARNED_MORE_HEADING,
+  prefer_less: LEARNED_LESS_HEADING,
+};
+
+/**
+ * @param {string} [sectionKey]
+ */
+export function guideSectionHeading(sectionKey) {
+  const key = String(sectionKey || '').trim();
+  if (key in GUIDE_SECTION_KEYS) return GUIDE_SECTION_KEYS[/** @type {GuideSectionKey} */ (key)];
+  return LEARNED_MORE_HEADING;
+}
+
+/**
+ * @param {'up' | 'down'} vibe
+ */
+export function vibeDefaultSection(vibe) {
+  return vibe === 'down' ? 'prefer_less' : 'prefer_more';
+}
 
 /**
  * @param {NodeJS.ProcessEnv} [env]
@@ -219,17 +247,42 @@ export function suggestGuideAppend(item, vibe) {
 /**
  * @param {{
  *   vibe: 'up' | 'down',
+ *   section?: string,
  *   append?: string,
+ *   item?: { title?: string, company?: string, detail?: string },
  * }} patch
  * @param {NodeJS.ProcessEnv} [env]
  */
 export async function applyGmailDailySummaryGuidePreference(patch, env = process.env) {
   const vibe = patch?.vibe === 'down' ? 'down' : 'up';
-  const heading = vibe === 'up' ? LEARNED_MORE_HEADING : LEARNED_LESS_HEADING;
+  const append = String(patch?.append || '').trim();
   const prev = await loadGmailDailySummaryGuide(env);
-  const next = appendToGuideSection(prev, heading, patch?.append || '');
-  if (next === prev) return prev;
-  return saveGmailDailySummaryGuide(next, env);
+  let guide = prev;
+  let escalation = null;
+
+  if (vibe === 'down') {
+    guide = appendToGuideSection(guide, LEARNED_LESS_HEADING, append);
+    const escalated = await recordThumbsDownAndEscalate(
+      { append, item: patch?.item },
+      guide,
+      env,
+    );
+    guide = escalated.guide;
+    escalation = escalated.escalation;
+  } else {
+    const sectionKey = String(patch?.section || '').trim();
+    const heading =
+      sectionKey in GUIDE_SECTION_KEYS
+        ? GUIDE_SECTION_KEYS[/** @type {GuideSectionKey} */ (sectionKey)]
+        : LEARNED_MORE_HEADING;
+    guide = appendToGuideSection(guide, heading, append);
+  }
+
+  if (guide === prev) {
+    return { guide: prev, escalation };
+  }
+  const saved = await saveGmailDailySummaryGuide(guide, env);
+  return { guide: saved, escalation };
 }
 
 /** @deprecated use loadGmailDailySummaryGuide */
@@ -252,7 +305,7 @@ export async function saveGmailWeeklySummaryCriteria(body, env = process.env) {
 
 /** @deprecated use applyGmailDailySummaryGuidePreference */
 export async function applyGmailWeeklySummaryPreference(patch, env = process.env) {
-  const guide = await applyGmailDailySummaryGuidePreference(
+  const { guide } = await applyGmailDailySummaryGuidePreference(
     { vibe: patch?.vibe, append: patch?.append || patch?.lookFor || patch?.skip || patch?.blacklist },
     env,
   );

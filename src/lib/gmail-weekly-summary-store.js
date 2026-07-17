@@ -888,34 +888,42 @@ export function resolveItemDueDate(item) {
 
 /**
  * Gmail web UI deep link for a source message.
- * Prefers hex Gmail id (API / X-GM-MSGID), then rfc822msgid search, then subject
- * search — IMAP UIDs alone do not open the right message in the web UI.
+ * Prefers rfc822msgid search (reliable cold load), then thread inbox, then hex
+ * `#all/` — IMAP UIDs alone do not open the right message in the web UI.
  * @param {GmailWeeklySource | null | undefined} source
  */
 export function gmailReplyUrl(source) {
   if (!source?.email) return null;
   const email = encodeURIComponent(String(source.email).trim().toLowerCase());
-  const gmailId = String(source.gmailId || '').trim().toLowerCase();
-  if (gmailId && /^[0-9a-f]+$/.test(gmailId)) {
-    return `https://mail.google.com/mail/u/?authuser=${email}#all/${gmailId}`;
-  }
-  const apiId = String(source.messageId || '').trim();
-  // Gmail API ids are hex; bare IMAP UIDs are decimal and must not use #all/.
-  if (apiId && /^[0-9a-f]+$/i.test(apiId) && !/^\d+$/.test(apiId)) {
-    return `https://mail.google.com/mail/u/?authuser=${email}#all/${apiId.toLowerCase()}`;
-  }
+  const base = `https://mail.google.com/mail/u/?authuser=${email}`;
+
   const rfc = String(source.rfc822MessageId || '')
     .trim()
     .replace(/^<|>$/g, '');
   if (rfc) {
-    return `https://mail.google.com/mail/u/?authuser=${email}#search/${encodeURIComponent(`rfc822msgid:${rfc}`)}`;
+    return `${base}#search/${encodeURIComponent(`rfc822msgid:${rfc}`)}`;
+  }
+
+  const threadId = String(source.threadId || '').trim();
+  if (threadId && /^[0-9a-f]+$/i.test(threadId) && !/^\d+$/.test(threadId)) {
+    return `${base}#inbox/${threadId.toLowerCase()}`;
+  }
+
+  const gmailId = String(source.gmailId || '').trim().toLowerCase();
+  if (gmailId && /^[0-9a-f]+$/.test(gmailId) && !/^\d+$/.test(gmailId)) {
+    return `${base}#all/${gmailId}`;
+  }
+  const apiId = String(source.messageId || '').trim();
+  // Gmail API ids are hex; bare IMAP UIDs are decimal and must not use #all/.
+  if (apiId && /^[0-9a-f]+$/i.test(apiId) && !/^\d+$/.test(apiId)) {
+    return `${base}#all/${apiId.toLowerCase()}`;
   }
   const subject = String(source.subject || '').trim();
   if (subject) {
-    return `https://mail.google.com/mail/u/?authuser=${email}#search/${encodeURIComponent(`subject:${subject}`)}`;
+    return `${base}#search/${encodeURIComponent(`subject:${subject}`)}`;
   }
   if (apiId) {
-    return `https://mail.google.com/mail/u/?authuser=${email}#search/${encodeURIComponent(apiId)}`;
+    return `${base}#search/${encodeURIComponent(apiId)}`;
   }
   return null;
 }

@@ -8,12 +8,13 @@ import path from 'node:path';
 import {
   applyGmailDailySummaryGuidePreference,
   gmailDailySummaryGuidePath,
+  GUIDE_SECTION_KEYS,
   loadGmailDailySummaryGuide,
   loadGmailWeeklySummaryCriteria,
   saveGmailDailySummaryGuide,
   saveGmailWeeklySummaryCriteria,
-  suggestGuideAppend,
 } from '../lib/gmail-daily-summary-guide-store.js';
+import { suggestGuidePreference } from '../lib/gmail-daily-summary-guide-suggest.js';
 import { gmailIntakeStatusSummary } from '../lib/events-finder-gmail.js';
 import {
   GMAIL_DAILY_SUMMARY_MAX_AGE_DAYS,
@@ -233,7 +234,10 @@ router.post('/items/:id/create-task', async (req, res) => {
         .trim()
         .slice(0, 280) || item.title;
     const dueDate = resolveItemDueDate(item);
-    const todo = await createPanelTodo(title, process.env, { dueDate });
+    const bodyProjectId = Number(req.body?.projectId ?? req.body?.project_id);
+    const projectId =
+      Number.isFinite(bodyProjectId) && bodyProjectId > 0 ? bodyProjectId : null;
+    const todo = await createPanelTodo(title, process.env, { dueDate, projectId });
     const next = await setGmailWeeklyItemStatus(item.id, 'tasked', {
       vikunjaTaskId: todo.id,
     });
@@ -276,9 +280,22 @@ router.put('/guide', async (req, res) => {
 router.post('/guide/suggest', async (req, res) => {
   try {
     const vibe = req.body?.vibe === 'down' ? 'down' : 'up';
-    const append = suggestGuideAppend(req.body?.item || {}, vibe);
+    const skipLlm = req.body?.skipLlm === true || req.body?.quick === true;
+    const result = await suggestGuidePreference(req.body?.item || {}, vibe, process.env, { skipLlm });
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ ok: true, vibe, append });
+    res.json({
+      ok: true,
+      vibe: result.vibe,
+      review: result.review,
+      section: result.section,
+      heading: result.heading,
+      proposedLines: result.proposedLines,
+      append: result.proposedLines,
+      source: result.source,
+      llmError: result.llmError || null,
+      model: result.model || null,
+      sections: GUIDE_SECTION_KEYS,
+    });
   } catch (e) {
     sendErr(e, res);
   }
@@ -307,15 +324,21 @@ router.put('/criteria', async (req, res) => {
 router.post('/preference', async (req, res) => {
   try {
     const vibe = req.body?.vibe === 'down' ? 'down' : 'up';
+    const section = String(req.body?.section || '').trim() || undefined;
     const append =
-      String(req.body?.append || '').trim()
+      String(req.body?.append || req.body?.proposedLines || '').trim()
       || [req.body?.lookFor, req.body?.skip, req.body?.blacklist]
         .map((v) => String(v || '').trim())
         .filter(Boolean)
         .join('\n');
-    const guide = await applyGmailDailySummaryGuidePreference({ vibe, append });
+    const { guide, escalation } = await applyGmailDailySummaryGuidePreference({
+      vibe,
+      section,
+      append,
+      item: req.body?.item || null,
+    });
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ ok: true, guide, criteria: { guide } });
+    res.json({ ok: true, guide, escalation, criteria: { guide } });
   } catch (e) {
     sendErr(e, res);
   }

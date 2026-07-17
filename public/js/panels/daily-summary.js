@@ -3,6 +3,16 @@
  * @param {HTMLElement | null} root
  */
 import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
+import {
+  gmailMobileOpenUrl,
+  gmailWebMessageUrl,
+  isMobileGmailClient,
+} from '../lib/gmail-open-url.js';
+import {
+  focusTasksPanel,
+  notifyTaskCreated,
+  readTasksProjectId,
+} from '../lib/task-bridge.js';
 
 const CACHE_KEY = 'gmail-daily-summary';
 const CACHE_MAX_MS = 6 * 60 * 60 * 1000;
@@ -43,15 +53,12 @@ function wireCardChrome(root) {
 
   /** @type {HTMLElement | null} */
   let urgencyEl = null;
-  if (bar && heading && !bar.querySelector('.daily-summary__card-head')) {
-    const head = document.createElement('div');
-    head.className = 'daily-summary__card-head';
+  if (bar && heading && !bar.querySelector('.daily-summary__card-urgency')) {
     urgencyEl = document.createElement('span');
     urgencyEl.className = 'daily-summary__card-urgency daily-summary__urgency daily-summary__urgency--low';
     urgencyEl.setAttribute('role', 'img');
     urgencyEl.hidden = true;
-    head.append(urgencyEl, heading);
-    bar.insertBefore(head, bar.firstChild);
+    bar.insertBefore(urgencyEl, heading);
   } else if (bar) {
     urgencyEl = /** @type {HTMLElement | null} */ (bar.querySelector('.daily-summary__card-urgency'));
   }
@@ -164,6 +171,17 @@ function urgencyLabel(level) {
   return 'Low urgency';
 }
 
+/**
+ * @param {string} text
+ * @param {number} [maxChars]
+ */
+function summarizeDetail(text, maxChars = 132) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return '';
+  if (clean.length <= maxChars) return clean;
+  return `${clean.slice(0, Math.max(0, maxChars - 1)).trim()}…`;
+}
+
 /** Bookmark ribbon — outline when off, filled when pinned (currentColor). */
 const PIN_ICON_SVG =
   '<svg class="daily-summary__pin-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
@@ -184,76 +202,144 @@ function makeUrgencyIcon(level) {
   return el;
 }
 
+const GUIDE_MORE_HEADING = '### Prefer more like this';
+const GUIDE_LESS_HEADING = '### Prefer less like this';
+const GUIDE_DRAFT_PENDING_LABEL = 'Drafting guidelines with AI';
+
 /**
- * @param {{ title?: string, detail?: string, company?: string, needsReply?: boolean }} item
- * @param {'up' | 'down'} vibe
+ * @param {string} sectionKey
  */
-function suggestGuideAppendLocal(item, vibe) {
-  const company = String(item?.company || '').trim();
-  const title = String(item?.title || '').trim();
-  const detail = String(item?.detail || '').trim().replace(/\s+/g, ' ');
-  const from = company ? `From **${company}**` : 'Similar mail';
-
-  if (vibe === 'up') {
-    let line = `- ${from}: ${title || 'Important follow-up'}`;
-    if (detail) line += ` — ${detail.slice(0, 120)}`;
-    return line;
-  }
-
-  let line = `- ${from}: ${title || 'FYI with no action needed'}`;
-  if (item?.needsReply === false) line += ' (no reply needed)';
-  else if (detail) line += ` — ${detail.slice(0, 80)}`;
-  return line;
+function clampSeeMoreSection(sectionKey) {
+  const key = String(sectionKey || '').trim();
+  return key === 'show_these' ? 'show_these' : 'prefer_more';
 }
 
 /**
- * @param {HTMLElement} root
- * @param {{ title?: string, detail?: string, company?: string, needsReply?: boolean }} item
- * @param {'up' | 'down'} vibe
- * @param {() => void} onSaved
+ * @param {string} sectionKey
  */
-function openPreferenceModal(root, item, vibe, onSaved) {
-  const wantMore = vibe === 'up';
+function guideSaveMessageUp(sectionKey) {
+  return clampSeeMoreSection(sectionKey) === 'show_these'
+    ? 'Saved under Show these'
+    : 'Saved under Prefer more';
+}
+
+/** @type {Record<string, string>} */
+const GUIDE_SECTION_HEADINGS = {
+  show_these: '## Show these (important)',
+  soft_skip: '## Soft skip',
+  never_show: '## Never show',
+  prefer_more: GUIDE_MORE_HEADING,
+  prefer_less: GUIDE_LESS_HEADING,
+};
+
+/**
+ * @param {string} sectionKey
+ */
+function guideHeadingForSection(sectionKey) {
+  return GUIDE_SECTION_HEADINGS[String(sectionKey || '').trim()] || GUIDE_MORE_HEADING;
+}
+
+/**
+ * @param {{ similarCount?: number, promoteSection?: string | null, tier?: string } | null | undefined} escalation
+ */
+function guideEscalationMessage(escalation) {
+  if (!escalation) return 'Saved under Prefer less';
+  const n = Number(escalation.similarCount) || 0;
+  if (escalation.promoteSection === 'never_show') {
+    return `Saved — ${n}× similar 👎, promoted to Never show`;
+  }
+  if (escalation.promoteSection === 'soft_skip') {
+    return `Saved — ${n}× similar 👎, promoted to Soft skip`;
+  }
+  return n > 1 ? `Saved under Prefer less (${n}× similar)` : 'Saved under Prefer less';
+}
+
+/**
+ * @param {string} guide
+ * @param {string} heading
+ * @param {string} appendText
+ */
+function appendToGuideSectionLocal(guide, heading, appendText) {
+  const lines = String(appendText || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (!lines.length) return guide;
+
+  const text = String(guide || '');
+  const idx = text.indexOf(heading);
+  if (idx < 0) {
+    const suffix = lines.map((l) => (l.startsWith('-') ? l : `- ${l}`)).join('\n');
+    return `${text.trimEnd()}\n\n${heading}\n\n${suffix}\n`;
+  }
+
+  const afterHeading = idx + heading.length;
+  const rest = text.slice(afterHeading);
+  const nextSection = rest.search(/\n(?:##|###)\s+/);
+  const sectionEnd = nextSection >= 0 ? afterHeading + nextSection : text.length;
+  const sectionBody = text.slice(afterHeading, sectionEnd);
+  const existing = new Set(
+    sectionBody
+      .split('\n')
+      .map((l) => l.trim().replace(/^-\s*/, '').toLowerCase())
+      .filter(Boolean),
+  );
+
+  const additions = [];
+  for (const line of lines) {
+    const bullet = line.startsWith('-') ? line : `- ${line}`;
+    const key = bullet.replace(/^-\s*/, '').trim().toLowerCase();
+    if (!key || existing.has(key)) continue;
+    existing.add(key);
+    additions.push(bullet);
+  }
+  if (!additions.length) return text;
+
+  const insertAt = sectionEnd;
+  const prefix = text.slice(0, insertAt).replace(/\s*$/, '');
+  const suffix = text.slice(insertAt);
+  const block = `\n${additions.join('\n')}`;
+  return `${prefix}${block}${suffix.startsWith('\n') ? '' : '\n'}${suffix}`.replace(/\n{3,}/g, '\n\n');
+}
+
+/**
+ * @param {{
+ *   guide?: string,
+ *   path?: string,
+ *   onSaved?: () => void,
+ * }} [opts]
+ */
+async function openGuideEditorModal(opts = {}) {
   const backdrop = document.createElement('div');
-  backdrop.className = 'daily-summary__modal-backdrop';
+  backdrop.className = 'daily-summary__modal-backdrop daily-summary__modal-backdrop--guide-full';
   const modal = document.createElement('div');
-  modal.className = 'daily-summary__modal daily-summary__modal--guide';
+  modal.className = 'daily-summary__modal daily-summary__modal--guide-full';
   modal.setAttribute('role', 'dialog');
   modal.setAttribute('aria-modal', 'true');
 
   const title = document.createElement('h3');
   title.className = 'daily-summary__modal-title';
-  title.textContent = wantMore ? 'See more like this?' : 'See less like this?';
+  title.textContent = 'Email ingestion guide';
 
   const hint = document.createElement('p');
   hint.className = 'daily-summary__modal-hint';
-  hint.textContent = wantMore
-    ? 'Append a line to the ingestion guide under “Prefer more like this”. Edit before saving.'
-    : 'This item is dismissed. Append a line under “Prefer less like this” so similar mail stays out.';
+  hint.textContent = 'Edit the full markdown guide used when synthesizing Daily Summary items.';
 
-  const itemLabel = document.createElement('p');
-  itemLabel.className = 'daily-summary__modal-item';
-  itemLabel.textContent = item.title || 'Untitled item';
+  const pathLabel = document.createElement('p');
+  pathLabel.className = 'daily-summary__modal-section';
+  pathLabel.textContent = opts.path || 'data/gmail-daily-summary-guide.md';
 
-  const sectionLabel = document.createElement('p');
-  sectionLabel.className = 'daily-summary__modal-section';
-  sectionLabel.textContent = wantMore
-    ? '### Prefer more like this'
-    : '### Prefer less like this';
-
-  const appendArea = document.createElement('textarea');
-  appendArea.className = 'daily-summary__modal-textarea daily-summary__modal-textarea--guide';
-  appendArea.rows = 6;
-  appendArea.spellcheck = true;
-  appendArea.placeholder = 'Suggested line to append to data/gmail-daily-summary-guide.md…';
-  appendArea.value = suggestGuideAppendLocal(item, vibe);
+  const guideArea = document.createElement('textarea');
+  guideArea.className = 'daily-summary__modal-textarea daily-summary__modal-textarea--guide-full';
+  guideArea.spellcheck = true;
+  guideArea.value = String(opts.guide || '');
 
   const msg = document.createElement('p');
   msg.className = 'daily-summary__modal-msg';
   msg.hidden = true;
 
   const actions = document.createElement('div');
-  actions.className = 'daily-summary__modal-actions';
+  actions.className = 'daily-summary__modal-actions daily-summary__modal-actions--split';
   const cancel = document.createElement('button');
   cancel.type = 'button';
   cancel.className = 'daily-summary__btn';
@@ -261,36 +347,45 @@ function openPreferenceModal(root, item, vibe, onSaved) {
   const save = document.createElement('button');
   save.type = 'button';
   save.className = 'daily-summary__btn daily-summary__btn--primary';
-  save.textContent = 'Append to guide';
+  save.textContent = 'Save guide';
 
   const close = () => backdrop.remove();
   cancel.addEventListener('click', close);
   backdrop.addEventListener('click', (e) => {
     if (e.target === backdrop) close();
   });
-  save.addEventListener('click', async () => {
-    const append = String(appendArea.value || '').trim();
-    if (!append) {
-      msg.hidden = false;
-      msg.textContent = 'Add at least one line to append.';
-      return;
+
+  if (!opts.guide) {
+    msg.hidden = false;
+    msg.textContent = 'Loading guide…';
+    try {
+      const r = await fetch('/api/gmail-daily-summary/guide', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || 'load_failed');
+      guideArea.value = String(j.guide || '');
+      pathLabel.textContent = String(j.path || pathLabel.textContent);
+      msg.hidden = true;
+    } catch (e) {
+      msg.textContent = String(e?.message || e || 'Could not load guide');
+      save.disabled = true;
     }
+  }
+
+  save.addEventListener('click', async () => {
     save.disabled = true;
     msg.hidden = false;
     msg.textContent = 'Saving…';
     try {
-      const r = await fetch('/api/gmail-daily-summary/preference', {
-        method: 'POST',
+      const r = await fetch('/api/gmail-daily-summary/guide', {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          vibe: wantMore ? 'up' : 'down',
-          append,
-        }),
+        body: JSON.stringify({ guide: guideArea.value }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || 'save_failed');
+      guideArea.value = String(j.guide || guideArea.value);
       close();
-      onSaved();
+      opts.onSaved?.();
     } catch (e) {
       msg.textContent = String(e?.message || e || 'Could not save');
       save.disabled = false;
@@ -298,11 +393,541 @@ function openPreferenceModal(root, item, vibe, onSaved) {
   });
 
   actions.append(cancel, save);
-  modal.append(title, hint, itemLabel, sectionLabel, appendArea, msg, actions);
+  modal.append(title, hint, pathLabel, guideArea, msg, actions);
   backdrop.append(modal);
   document.body.append(backdrop);
-  appendArea.focus();
-  appendArea.setSelectionRange(appendArea.value.length, appendArea.value.length);
+  guideArea.focus();
+}
+
+/**
+ * @returns {HTMLSpanElement}
+ */
+function makeChaseDotsEl() {
+  const dots = document.createElement('span');
+  dots.className = 'daily-summary__chase-dots';
+  dots.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < 3; i += 1) {
+    const d = document.createElement('span');
+    d.textContent = '.';
+    dots.append(d);
+  }
+  return dots;
+}
+
+/**
+ * @param {unknown} err
+ */
+function isNetworkFetchError(err) {
+  if (err instanceof TypeError) return true;
+  const msg = String(err?.message || err || '');
+  return (
+    msg.includes('NetworkError')
+    || msg.includes('Failed to fetch')
+    || msg.includes('Load failed')
+    || msg.includes('Network request failed')
+  );
+}
+
+/**
+ * @param {unknown} err
+ */
+function networkErrorLabel(err) {
+  if (isNetworkFetchError(err)) {
+    return 'Could not reach Dashbird (server may be restarting). Edit the draft below or try again.';
+  }
+  return String(err?.message || err || 'Could not draft guide update');
+}
+
+/**
+ * @param {string} url
+ * @param {RequestInit} init
+ * @param {number} [retries]
+ */
+async function fetchJsonWithRetry(url, init, retries = 2) {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const r = await fetch(url, init);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) {
+        throw new Error(String(j.error || j.detail || `http_${r.status}`));
+      }
+      return j;
+    } catch (e) {
+      lastErr = e;
+      if (!isNetworkFetchError(e) || attempt >= retries) break;
+      await new Promise((resolve) => setTimeout(resolve, 650 + attempt * 450));
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * @param {HTMLTextAreaElement} textarea
+ * @param {string} pendingLabel
+ */
+function wrapPendingTextarea(textarea, pendingLabel) {
+  const shell = document.createElement('div');
+  shell.className = 'daily-summary__modal-field-shell daily-summary__modal-field-shell--loading';
+  const pending = document.createElement('div');
+  pending.className = 'daily-summary__modal-field-pending';
+  pending.setAttribute('role', 'status');
+  pending.setAttribute('aria-live', 'polite');
+  const labelEl = document.createElement('span');
+  labelEl.className = 'daily-summary__modal-pending-label';
+  labelEl.textContent = pendingLabel;
+  pending.append(labelEl, makeChaseDotsEl());
+  textarea.disabled = true;
+  textarea.setAttribute('aria-busy', 'true');
+  shell.append(textarea, pending);
+  return {
+    shell,
+    setLoading(on) {
+      shell.classList.toggle('daily-summary__modal-field-shell--loading', on);
+      textarea.disabled = on;
+      if (on) textarea.setAttribute('aria-busy', 'true');
+      else textarea.removeAttribute('aria-busy');
+    },
+  };
+}
+
+/**
+ * @param {HTMLElement} root
+ * @param {{ title?: string, detail?: string, company?: string, needsReply?: boolean }} item
+ * @param {() => void} onSaved
+ * @param {(msg: string, isErr?: boolean) => void} showStatus
+ */
+function openSeeLessModal(root, item, onSaved, showStatus) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'daily-summary__modal-backdrop';
+  const modal = document.createElement('div');
+  modal.className = 'daily-summary__modal daily-summary__modal--guide daily-summary__modal--see-less';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+
+  const title = document.createElement('h3');
+  title.className = 'daily-summary__modal-title';
+  title.textContent = 'See less like this?';
+
+  const itemLabel = document.createElement('p');
+  itemLabel.className = 'daily-summary__modal-item';
+  itemLabel.textContent = item.title || 'Untitled item';
+
+  const rationale = document.createElement('p');
+  rationale.className = 'daily-summary__modal-rationale';
+  rationale.hidden = true;
+
+  const lineLabel = document.createElement('label');
+  lineLabel.className = 'daily-summary__modal-field-label';
+  lineLabel.textContent = 'Guide line to append';
+
+  const lineArea = document.createElement('textarea');
+  lineArea.className = 'daily-summary__modal-textarea daily-summary__modal-textarea--guide';
+  lineArea.rows = 5;
+  lineArea.spellcheck = true;
+  lineArea.placeholder = '';
+  const lineShell = wrapPendingTextarea(lineArea, GUIDE_DRAFT_PENDING_LABEL);
+
+  const msg = document.createElement('p');
+  msg.className = 'daily-summary__modal-msg';
+  msg.hidden = true;
+
+  const actions = document.createElement('div');
+  actions.className = 'daily-summary__modal-actions daily-summary__modal-actions--split';
+  const editFull = document.createElement('button');
+  editFull.type = 'button';
+  editFull.className = 'daily-summary__btn daily-summary__btn--ghost daily-summary__modal-edit-full';
+  editFull.textContent = 'Edit full guide';
+  editFull.title = 'Open data/gmail-daily-summary-guide.md';
+  editFull.disabled = true;
+  const actionRight = document.createElement('div');
+  actionRight.className = 'daily-summary__modal-actions-right';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'daily-summary__btn';
+  cancel.textContent = 'Cancel';
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.className = 'daily-summary__btn daily-summary__btn--primary';
+  save.textContent = 'Save to guide';
+  save.disabled = true;
+
+  const close = () => backdrop.remove();
+  cancel.addEventListener('click', close);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  const finishSuggestLoading = () => {
+    lineShell.setLoading(false);
+    editFull.disabled = false;
+  };
+
+  /**
+   * @param {{ review?: string, proposedLines?: string, append?: string }} j
+   */
+  const applySuggestResponse = (j) => {
+    const review = String(j.review || '').trim();
+    if (review) {
+      rationale.textContent = review;
+      rationale.hidden = false;
+    }
+    lineArea.value = String(j.proposedLines || j.append || '').trim();
+  };
+
+  const loadSuggestion = async () => {
+    modal.setAttribute('aria-busy', 'true');
+    msg.hidden = true;
+    const payload = { vibe: 'down', item };
+    let gotDraft = false;
+
+    try {
+      const quick = await fetchJsonWithRetry(
+        '/api/gmail-daily-summary/guide/suggest',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...payload, skipLlm: true }),
+        },
+        1,
+      );
+      applySuggestResponse(quick);
+      gotDraft = true;
+      msg.hidden = true;
+      msg.textContent = '';
+    } catch {
+      /* quick draft unavailable */
+    }
+
+    try {
+      const full = await fetchJsonWithRetry(
+        '/api/gmail-daily-summary/guide/suggest',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+        2,
+      );
+      applySuggestResponse(full);
+      finishSuggestLoading();
+      modal.removeAttribute('aria-busy');
+      if (full.source === 'heuristic' && full.llmError) {
+        msg.textContent = 'LLM unavailable — using a local draft. Edit before saving.';
+        msg.hidden = false;
+      } else {
+        msg.hidden = true;
+        msg.textContent = '';
+      }
+      save.disabled = false;
+      lineArea.focus();
+    } catch (e) {
+      finishSuggestLoading();
+      modal.removeAttribute('aria-busy');
+      save.disabled = false;
+      if (gotDraft) {
+        msg.textContent = 'Could not reach AI — local draft shown. Edit before saving.';
+        msg.hidden = false;
+        lineArea.focus();
+        return;
+      }
+      msg.textContent = networkErrorLabel(e);
+      rationale.hidden = false;
+      rationale.textContent =
+        'Could not load a suggestion. Describe the mail pattern you want in the guide line below.';
+      lineArea.value = '- FYI or automated notices that do not need a reply or decision';
+      lineArea.focus();
+    }
+  };
+
+  editFull.addEventListener('click', async () => {
+    editFull.disabled = true;
+    msg.hidden = false;
+    msg.textContent = 'Loading guide…';
+    try {
+      const heading = GUIDE_LESS_HEADING;
+      const append = String(lineArea.value || '').trim();
+      const r = await fetch('/api/gmail-daily-summary/guide', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || 'load_failed');
+      let guide = String(j.guide || '');
+      if (append) guide = appendToGuideSectionLocal(guide, heading, append);
+      close();
+      await openGuideEditorModal({
+        guide,
+        path: String(j.path || ''),
+        onSaved: () => showStatus('Guide saved'),
+      });
+    } catch (e) {
+      msg.textContent = String(e?.message || e || 'Could not load guide');
+      editFull.disabled = false;
+    }
+  });
+
+  save.addEventListener('click', async () => {
+    const append = String(lineArea.value || '').trim();
+    if (!append) {
+      msg.hidden = false;
+      msg.textContent = 'Add a guide line to append.';
+      return;
+    }
+    save.disabled = true;
+    msg.hidden = false;
+    msg.textContent = 'Saving…';
+    try {
+      const j = await fetchJsonWithRetry('/api/gmail-daily-summary/preference', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vibe: 'down',
+          append,
+          item,
+        }),
+      }, 1);
+      close();
+      showStatus(guideEscalationMessage(j.escalation));
+      onSaved();
+    } catch (e) {
+      msg.textContent = networkErrorLabel(e);
+      save.disabled = false;
+    }
+  });
+
+  actionRight.append(cancel, save);
+  actions.append(editFull, actionRight);
+  modal.append(title, itemLabel, rationale, lineLabel, lineShell.shell, msg, actions);
+  backdrop.append(modal);
+  document.body.append(backdrop);
+  void loadSuggestion();
+}
+
+/**
+ * @param {HTMLElement} root
+ * @param {{ title?: string, detail?: string, company?: string, needsReply?: boolean }} item
+ * @param {() => void} onSaved
+ * @param {(msg: string, isErr?: boolean) => void} showStatus
+ */
+function openSeeMoreModal(root, item, onSaved, showStatus) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'daily-summary__modal-backdrop';
+  const modal = document.createElement('div');
+  modal.className = 'daily-summary__modal daily-summary__modal--guide daily-summary__modal--see-less';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+
+  const title = document.createElement('h3');
+  title.className = 'daily-summary__modal-title';
+  title.textContent = 'See more like this?';
+
+  const itemLabel = document.createElement('p');
+  itemLabel.className = 'daily-summary__modal-item';
+  itemLabel.textContent = item.title || 'Untitled item';
+
+  const rationale = document.createElement('p');
+  rationale.className = 'daily-summary__modal-rationale';
+  rationale.hidden = true;
+
+  const lineLabel = document.createElement('label');
+  lineLabel.className = 'daily-summary__modal-field-label';
+  lineLabel.textContent = 'Guide line to append';
+
+  const lineArea = document.createElement('textarea');
+  lineArea.className = 'daily-summary__modal-textarea daily-summary__modal-textarea--guide';
+  lineArea.rows = 5;
+  lineArea.spellcheck = true;
+  lineArea.placeholder = '';
+  const lineShell = wrapPendingTextarea(lineArea, GUIDE_DRAFT_PENDING_LABEL);
+
+  const msg = document.createElement('p');
+  msg.className = 'daily-summary__modal-msg';
+  msg.hidden = true;
+
+  const actions = document.createElement('div');
+  actions.className = 'daily-summary__modal-actions daily-summary__modal-actions--split';
+  const editFull = document.createElement('button');
+  editFull.type = 'button';
+  editFull.className = 'daily-summary__btn daily-summary__btn--ghost daily-summary__modal-edit-full';
+  editFull.textContent = 'Edit full guide';
+  editFull.title = 'Open data/gmail-daily-summary-guide.md';
+  editFull.disabled = true;
+  const actionRight = document.createElement('div');
+  actionRight.className = 'daily-summary__modal-actions-right';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'daily-summary__btn';
+  cancel.textContent = 'Cancel';
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.className = 'daily-summary__btn daily-summary__btn--primary';
+  save.textContent = 'Save to guide';
+  save.disabled = true;
+
+  let saveSection = 'prefer_more';
+
+  const close = () => backdrop.remove();
+  cancel.addEventListener('click', close);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  const finishSuggestLoading = () => {
+    lineShell.setLoading(false);
+    editFull.disabled = false;
+  };
+
+  /**
+   * @param {{ review?: string, section?: string, proposedLines?: string, append?: string }} j
+   */
+  const applySuggestResponse = (j) => {
+    const review = String(j.review || '').trim();
+    if (review) {
+      rationale.textContent = review;
+      rationale.hidden = false;
+    }
+    saveSection = clampSeeMoreSection(j.section);
+    lineArea.value = String(j.proposedLines || j.append || '').trim();
+  };
+
+  const loadSuggestion = async () => {
+    modal.setAttribute('aria-busy', 'true');
+    msg.hidden = true;
+    const payload = { vibe: 'up', item };
+    let gotDraft = false;
+
+    try {
+      const quick = await fetchJsonWithRetry(
+        '/api/gmail-daily-summary/guide/suggest',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...payload, skipLlm: true }),
+        },
+        1,
+      );
+      applySuggestResponse(quick);
+      gotDraft = true;
+      msg.hidden = true;
+      msg.textContent = '';
+    } catch {
+      /* quick draft unavailable */
+    }
+
+    try {
+      const full = await fetchJsonWithRetry(
+        '/api/gmail-daily-summary/guide/suggest',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+        2,
+      );
+      applySuggestResponse(full);
+      finishSuggestLoading();
+      modal.removeAttribute('aria-busy');
+      if (full.source === 'heuristic' && full.llmError) {
+        msg.textContent = 'LLM unavailable — using a local draft. Edit before saving.';
+        msg.hidden = false;
+      } else {
+        msg.hidden = true;
+        msg.textContent = '';
+      }
+      save.disabled = false;
+      lineArea.focus();
+    } catch (e) {
+      finishSuggestLoading();
+      modal.removeAttribute('aria-busy');
+      save.disabled = false;
+      if (gotDraft) {
+        msg.textContent = 'Could not reach AI — local draft shown. Edit before saving.';
+        msg.hidden = false;
+        lineArea.focus();
+        return;
+      }
+      msg.textContent = networkErrorLabel(e);
+      rationale.hidden = false;
+      rationale.textContent =
+        'Could not load a suggestion. Describe the mail pattern you want in the guide line below.';
+      lineArea.value = '- Important follow-ups that deserve a dedicated action item';
+      lineArea.focus();
+    }
+  };
+
+  editFull.addEventListener('click', async () => {
+    editFull.disabled = true;
+    msg.hidden = false;
+    msg.textContent = 'Loading guide…';
+    try {
+      const heading = guideHeadingForSection(saveSection);
+      const append = String(lineArea.value || '').trim();
+      const r = await fetch('/api/gmail-daily-summary/guide', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || 'load_failed');
+      let guide = String(j.guide || '');
+      if (append) guide = appendToGuideSectionLocal(guide, heading, append);
+      close();
+      await openGuideEditorModal({
+        guide,
+        path: String(j.path || ''),
+        onSaved: () => showStatus('Guide saved'),
+      });
+    } catch (e) {
+      msg.textContent = String(e?.message || e || 'Could not load guide');
+      editFull.disabled = false;
+    }
+  });
+
+  save.addEventListener('click', async () => {
+    const append = String(lineArea.value || '').trim();
+    if (!append) {
+      msg.hidden = false;
+      msg.textContent = 'Add a guide line to append.';
+      return;
+    }
+    save.disabled = true;
+    msg.hidden = false;
+    msg.textContent = 'Saving…';
+    try {
+      await fetchJsonWithRetry('/api/gmail-daily-summary/preference', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vibe: 'up',
+          section: saveSection,
+          append,
+          item,
+        }),
+      }, 1);
+      close();
+      showStatus(guideSaveMessageUp(saveSection));
+      onSaved();
+    } catch (e) {
+      msg.textContent = networkErrorLabel(e);
+      save.disabled = false;
+    }
+  });
+
+  actionRight.append(cancel, save);
+  actions.append(editFull, actionRight);
+  modal.append(title, itemLabel, rationale, lineLabel, lineShell.shell, msg, actions);
+  backdrop.append(modal);
+  document.body.append(backdrop);
+  void loadSuggestion();
+}
+
+/**
+ * @param {HTMLElement} root
+ * @param {{ title?: string, detail?: string, company?: string, needsReply?: boolean }} item
+ * @param {'up' | 'down'} vibe
+ * @param {() => void} onSaved
+ * @param {(msg: string, isErr?: boolean) => void} showStatus
+ */
+function openPreferenceModal(root, item, vibe, onSaved, showStatus) {
+  if (vibe === 'down') {
+    openSeeLessModal(root, item, onSaved, showStatus);
+    return;
+  }
+  openSeeMoreModal(root, item, onSaved, showStatus);
 }
 
 /**
@@ -337,8 +962,6 @@ export function mountDailySummary(root) {
 
   /** Kept for cache round-trips; items are the summary UI. */
   let summaryText = '';
-  /** @type {Set<string>} */
-  const openDetailIds = new Set();
 
   wrap.append(toolbar, list, status);
   root.append(wrap);
@@ -370,10 +993,6 @@ export function mountDailySummary(root) {
   function applyPayload(payload) {
     summaryText = String(payload?.summaryText || '').trim();
     items = Array.isArray(payload?.items) ? payload.items : [];
-    const liveIds = new Set(items.map((it) => String(it.id || '')));
-    for (const id of [...openDetailIds]) {
-      if (!liveIds.has(id)) openDetailIds.delete(id);
-    }
     renderList();
     if (payload?.lastError) {
       showStatus(String(payload.lastError), true);
@@ -396,7 +1015,6 @@ export function mountDailySummary(root) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) throw new Error(j.error || 'dismiss_failed');
     items = Array.isArray(j.items) ? j.items : items.filter((x) => x.id !== id);
-    openDetailIds.delete(id);
     renderList();
     persistCache();
     return true;
@@ -419,7 +1037,6 @@ export function mountDailySummary(root) {
     const t = setTimeout(() => {
       pendingUnpinTimers.delete(id);
       items = items.filter((x) => x.id !== id);
-      openDetailIds.delete(id);
       renderList();
       persistCache();
     }, delay);
@@ -456,6 +1073,214 @@ export function mountDailySummary(root) {
     }
   }
 
+  /**
+   * @param {object} item
+   */
+  function buildMailCard(item) {
+    const id = String(item.id || '');
+    const urgency = itemUrgency(item);
+    const company = String(item.company || '').trim();
+
+    const card = document.createElement('article');
+    card.className = 'daily-summary__card';
+    card.classList.add(`daily-summary__card--urgency-${urgency}`);
+    if (item.pinned) card.classList.add('daily-summary__card--pinned');
+    card.dataset.id = id;
+    card.dataset.urgency = urgency;
+
+    const head = document.createElement('div');
+    head.className = 'daily-summary__card-head';
+    const title = document.createElement('div');
+    title.className = 'daily-summary__card-title';
+    title.textContent = String(item.title || 'Untitled');
+
+    const pinBtn = document.createElement('button');
+    pinBtn.type = 'button';
+    pinBtn.className = 'daily-summary__card-pin';
+    if (item.pinned) pinBtn.classList.add('daily-summary__card-pin--on');
+    pinBtn.title = item.pinned ? 'Unpin (keeps past 10 days until unpinned)' : 'Pin to keep past 10 days';
+    pinBtn.setAttribute(
+      'aria-label',
+      item.pinned ? `Unpin ${String(item.title || 'item')}` : `Pin ${String(item.title || 'item')}`,
+    );
+    pinBtn.setAttribute('aria-pressed', item.pinned ? 'true' : 'false');
+    pinBtn.innerHTML = PIN_ICON_SVG;
+    pinBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      pinBtn.disabled = true;
+      void setItemPinned(item, !item.pinned)
+        .catch((err) => {
+          showStatus(String(err?.message || err), true);
+        })
+        .finally(() => {
+          pinBtn.disabled = false;
+        });
+    });
+    head.append(title, pinBtn);
+
+    const companyEl = document.createElement('p');
+    companyEl.className = 'daily-summary__card-company';
+    if (company) {
+      companyEl.textContent = company;
+      companyEl.title = `Request from ${company}`;
+    } else {
+      companyEl.hidden = true;
+    }
+
+    const meta = document.createElement('p');
+    meta.className = 'daily-summary__card-meta';
+    const metaBits = [];
+    const due = formatDeadline(item.deadline);
+    if (due) metaBits.push(`Due ${due}`);
+    if (item.needsReply) metaBits.push('Needs reply');
+    const boxes = Array.isArray(item.mailboxes) ? item.mailboxes : [];
+    for (const box of boxes) metaBits.push(shortMailbox(box));
+    if (metaBits.length) meta.textContent = metaBits.join(' · ');
+    else meta.hidden = true;
+
+    const blurb = document.createElement('p');
+    blurb.className = 'daily-summary__card-blurb';
+    const blurbText = summarizeDetail(item.detail);
+    if (blurbText) blurb.textContent = blurbText;
+    else blurb.hidden = true;
+
+    const actions = document.createElement('div');
+    actions.className = 'daily-summary__card-actions';
+
+    const upBtn = document.createElement('button');
+    upBtn.type = 'button';
+    upBtn.className = 'daily-summary__card-action daily-summary__card-action--up';
+    upBtn.title = 'See more like this';
+    upBtn.setAttribute('aria-label', 'See more like this');
+    upBtn.textContent = '👍';
+    upBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openPreferenceModal(root, item, 'up', () => {}, showStatus);
+    });
+
+    const downBtn = document.createElement('button');
+    downBtn.type = 'button';
+    downBtn.className = 'daily-summary__card-action daily-summary__card-action--down';
+    downBtn.title = 'See less like this (dismisses this item)';
+    downBtn.setAttribute('aria-label', 'See less like this');
+    downBtn.textContent = '👎';
+    downBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      downBtn.disabled = true;
+      upBtn.disabled = true;
+      void dismissItem(item)
+        .then(() => {
+            openPreferenceModal(root, item, 'down', () => {}, showStatus);
+        })
+        .catch((err) => {
+          showStatus(String(err?.message || err), true);
+          downBtn.disabled = false;
+          upBtn.disabled = false;
+        });
+    });
+
+    const dismissBtn = document.createElement('button');
+    dismissBtn.type = 'button';
+    dismissBtn.className = 'daily-summary__card-action daily-summary__card-action--dismiss';
+    dismissBtn.title = 'Dismiss';
+    dismissBtn.setAttribute('aria-label', `Dismiss ${String(item.title || 'item')}`);
+    dismissBtn.textContent = 'Dismiss';
+    dismissBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dismissBtn.disabled = true;
+      void dismissItem(item).catch((err) => {
+        showStatus(String(err?.message || err), true);
+        dismissBtn.disabled = false;
+      });
+    });
+
+    const primary = Array.isArray(item.sources) && item.sources.length ? item.sources[0] : null;
+    const webUrl = gmailWebMessageUrl(primary) || String(item.replyUrl || '').trim();
+    const openLink = document.createElement(webUrl ? 'a' : 'button');
+    if (webUrl) {
+      /** @type {HTMLAnchorElement} */ (openLink).href = isMobileGmailClient()
+        ? gmailMobileOpenUrl(webUrl, primary)
+        : webUrl;
+      if (!isMobileGmailClient()) {
+        /** @type {HTMLAnchorElement} */ (openLink).target = '_blank';
+        /** @type {HTMLAnchorElement} */ (openLink).rel = 'noopener noreferrer';
+      }
+    } else {
+      /** @type {HTMLButtonElement} */ (openLink).type = 'button';
+      /** @type {HTMLButtonElement} */ (openLink).disabled = true;
+    }
+    openLink.className = 'daily-summary__card-action daily-summary__card-action--open';
+    openLink.textContent = 'Open';
+    openLink.title = 'Open in Gmail';
+
+    const createTask = document.createElement('button');
+    createTask.type = 'button';
+    createTask.className = 'daily-summary__card-action daily-summary__card-action--task';
+    createTask.textContent = 'Task';
+    createTask.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      createTask.disabled = true;
+      try {
+        const projectId = readTasksProjectId();
+        const r = await fetch(
+          `/api/gmail-daily-summary/items/${encodeURIComponent(id)}/create-task`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(projectId != null ? { projectId } : {}),
+          },
+        );
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || 'create_task_failed');
+        items = Array.isArray(j.items) ? j.items : items.filter((x) => x.id !== id);
+        renderList();
+        persistCache();
+        if (j.todo?.id) {
+          notifyTaskCreated({
+            id: String(j.todo.id),
+            text: String(j.todo.text || item.title || '').trim(),
+            projectId: j.todo.projectId != null ? Number(j.todo.projectId) : projectId,
+            dueDate: j.dueDate || null,
+          });
+          focusTasksPanel();
+        }
+        showStatus(
+          j.dueDate
+            ? `Added to Tasks · due ${formatDeadline(j.dueDate)}`
+            : 'Added to Tasks',
+        );
+      } catch (err) {
+        showStatus(String(err?.message || err), true);
+        createTask.disabled = false;
+      }
+    });
+
+    actions.append(upBtn, downBtn, dismissBtn, createTask, openLink);
+
+    const footerBits = [];
+    if (item.pinned) footerBits.push('pinned');
+    const sourceCount = Number(item.sourceCount) || (Array.isArray(item.sources) ? item.sources.length : 0);
+    if (sourceCount > 1) footerBits.push(`${sourceCount} sources`);
+    const footer = document.createElement('p');
+    footer.className = 'daily-summary__card-footer';
+    if (footerBits.length) footer.textContent = footerBits.join(' · ');
+    else footer.hidden = true;
+    if (sourceCount > 1) {
+      footer.title = (item.sources || [])
+        .map((s) => String(s.subject || s.messageId || '').trim())
+        .filter(Boolean)
+        .join('\n');
+    }
+
+    card.append(head, companyEl, meta, blurb, actions, footer);
+    return card;
+  }
+
   function renderList() {
     list.replaceChildren();
     chrome.setUrgency(maxUrgency(items));
@@ -472,204 +1297,8 @@ export function mountDailySummary(root) {
     for (const item of items) {
       const id = String(item.id || '');
       const li = document.createElement('li');
-      li.className = 'daily-summary__summary-item';
-      if (item.pinned) li.classList.add('daily-summary__summary-item--pinned');
-      li.dataset.id = id;
-
-      const urgency = itemUrgency(item);
-      li.dataset.urgency = urgency;
-
-      const details = document.createElement('details');
-      details.className = 'daily-summary__item-details';
-      details.open = openDetailIds.has(id);
-      details.addEventListener('toggle', () => {
-        if (details.open) openDetailIds.add(id);
-        else openDetailIds.delete(id);
-      });
-
-      const row = document.createElement('summary');
-      row.className = 'daily-summary__summary-row';
-
-      const urgencyEl = makeUrgencyIcon(urgency);
-
-      const head = document.createElement('span');
-      head.className = 'daily-summary__summary-head';
-
-      const title = document.createElement('span');
-      title.className = 'daily-summary__summary-title';
-      title.textContent = String(item.title || 'Untitled');
-
-      const rowActions = document.createElement('span');
-      rowActions.className = 'daily-summary__row-actions';
-
-      const pin = document.createElement('button');
-      pin.type = 'button';
-      pin.className = 'daily-summary__pin';
-      if (item.pinned) pin.classList.add('daily-summary__pin--on');
-      pin.title = item.pinned ? 'Unpin (keeps past 10 days until unpinned)' : 'Pin to keep past 10 days';
-      pin.setAttribute('aria-label', item.pinned ? `Unpin ${String(item.title || 'item')}` : `Pin ${String(item.title || 'item')}`);
-      pin.setAttribute('aria-pressed', item.pinned ? 'true' : 'false');
-      pin.innerHTML = PIN_ICON_SVG;
-      pin.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        pin.disabled = true;
-        void setItemPinned(item, !item.pinned)
-          .catch((err) => {
-            showStatus(String(err?.message || err), true);
-          })
-          .finally(() => {
-            pin.disabled = false;
-          });
-      });
-
-      const dismiss = document.createElement('button');
-      dismiss.type = 'button';
-      dismiss.className = 'daily-summary__dismiss-x';
-      dismiss.title = 'Dismiss';
-      dismiss.setAttribute('aria-label', `Dismiss ${String(item.title || 'item')}`);
-      dismiss.textContent = '×';
-      dismiss.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        dismiss.disabled = true;
-        void dismissItem(item).catch((err) => {
-          showStatus(String(err?.message || err), true);
-          dismiss.disabled = false;
-        });
-      });
-
-      rowActions.append(pin, dismiss);
-      head.append(urgencyEl, title);
-      row.append(head, rowActions);
-
-      const body = document.createElement('div');
-      body.className = 'daily-summary__item-body';
-
-      const company = String(item.company || '').trim();
-      if (company) {
-        const companyEl = document.createElement('p');
-        companyEl.className = 'daily-summary__item-company';
-        companyEl.textContent = company;
-        companyEl.title = `Request from ${company}`;
-        body.append(companyEl);
-      }
-
-      const detail = document.createElement('p');
-      detail.className = 'daily-summary__item-detail';
-      detail.textContent = String(item.detail || '');
-      detail.hidden = !item.detail;
-
-      const meta = document.createElement('div');
-      meta.className = 'daily-summary__meta';
-      const boxes = Array.isArray(item.mailboxes) ? item.mailboxes : [];
-      for (const box of boxes) {
-        const tag = document.createElement('span');
-        tag.className = 'daily-summary__tag';
-        tag.textContent = shortMailbox(box);
-        meta.append(tag);
-      }
-      const due = formatDeadline(item.deadline);
-      if (due) {
-        const dueEl = document.createElement('span');
-        dueEl.className = 'daily-summary__due';
-        dueEl.textContent = `Due ${due}`;
-        meta.append(dueEl);
-      }
-      if (item.pinned) {
-        const pinTag = document.createElement('span');
-        pinTag.className = 'daily-summary__tag daily-summary__tag--pinned';
-        pinTag.textContent = 'pinned';
-        meta.append(pinTag);
-      }
-      const sourceCount = Number(item.sourceCount) || (Array.isArray(item.sources) ? item.sources.length : 0);
-      if (sourceCount > 1) {
-        const src = document.createElement('span');
-        src.className = 'daily-summary__sources';
-        src.textContent = `${sourceCount} sources`;
-        src.title = (item.sources || [])
-          .map((s) => String(s.subject || s.messageId || '').trim())
-          .filter(Boolean)
-          .join('\n');
-        meta.append(src);
-      }
-      meta.hidden = !meta.childElementCount;
-
-      const thumbs = document.createElement('div');
-      thumbs.className = 'daily-summary__thumbs daily-summary__thumbs--row';
-      const up = document.createElement('button');
-      up.type = 'button';
-      up.className = 'daily-summary__thumb daily-summary__thumb--more';
-      up.title = 'See more like this';
-      up.setAttribute('aria-label', 'See more like this');
-      up.textContent = '👍';
-      const down = document.createElement('button');
-      down.type = 'button';
-      down.className = 'daily-summary__thumb daily-summary__thumb--less';
-      down.title = 'See less like this (dismisses this item)';
-      down.setAttribute('aria-label', 'See less like this');
-      down.textContent = '👎';
-      up.addEventListener('click', () =>
-        openPreferenceModal(root, item, 'up', () => showStatus('Appended to ingestion guide')),
-      );
-      down.addEventListener('click', () => {
-        down.disabled = true;
-        up.disabled = true;
-        void dismissItem(item)
-          .then(() => {
-            openPreferenceModal(root, item, 'down', () => showStatus('Appended to ingestion guide'));
-          })
-          .catch((e) => {
-            showStatus(String(e?.message || e), true);
-            down.disabled = false;
-            up.disabled = false;
-          });
-      });
-      thumbs.append(up, down);
-
-      const actions = document.createElement('div');
-      actions.className = 'daily-summary__actions';
-
-      const reply = document.createElement(item.replyUrl ? 'a' : 'button');
-      if (item.replyUrl) {
-        /** @type {HTMLAnchorElement} */ (reply).href = String(item.replyUrl);
-        /** @type {HTMLAnchorElement} */ (reply).target = '_blank';
-        /** @type {HTMLAnchorElement} */ (reply).rel = 'noopener noreferrer';
-      } else {
-        /** @type {HTMLButtonElement} */ (reply).type = 'button';
-        /** @type {HTMLButtonElement} */ (reply).disabled = true;
-      }
-      reply.className = 'daily-summary__btn';
-      reply.textContent = 'Reply';
-
-      const createTask = document.createElement('button');
-      createTask.type = 'button';
-      createTask.className = 'daily-summary__btn daily-summary__btn--primary';
-      createTask.textContent = 'Create task';
-      createTask.addEventListener('click', async () => {
-        createTask.disabled = true;
-        try {
-          const r = await fetch(
-            `/api/gmail-daily-summary/items/${encodeURIComponent(id)}/create-task`,
-            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
-          );
-          const j = await r.json().catch(() => ({}));
-          if (!r.ok || j.ok === false) throw new Error(j.error || j.detail || 'create_task_failed');
-          items = Array.isArray(j.items) ? j.items : items.filter((x) => x.id !== id);
-          openDetailIds.delete(id);
-          renderList();
-          persistCache();
-          showStatus(j.dueDate ? `Task created · due ${formatDeadline(j.dueDate)}` : 'Task created');
-        } catch (e) {
-          showStatus(String(e?.message || e), true);
-          createTask.disabled = false;
-        }
-      });
-
-      actions.append(reply, createTask, thumbs);
-      body.append(detail, meta, actions);
-      details.append(row, body);
-      li.append(details);
+      li.className = 'daily-summary__list-item';
+      li.append(buildMailCard(item));
       list.append(li);
 
       if (item.unpinDeleteAt) scheduleUnpinRemoval(id, item.unpinDeleteAt);
