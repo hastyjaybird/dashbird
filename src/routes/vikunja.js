@@ -4,6 +4,7 @@ import {
   createPanelProject,
   createPanelTodo,
   deletePanelProject,
+  listAllPanelTodos,
   listPanelProjects,
   listPanelTodos,
   movePanelTodo,
@@ -14,6 +15,15 @@ import {
   updatePanelProject,
   vikunjaFetch,
 } from '../lib/vikunja-client.js';
+import {
+  loadTaskRandomMeta,
+  patchProjectMeta,
+  patchTaskMeta,
+  readProjectLocationsMarkdown,
+  saveProjectLocationsMarkdown,
+  syncProjectLocationsMarkdown,
+} from '../lib/task-random-meta-store.js';
+import { pickRandomTask, resolveTaskContext } from '../lib/task-random.js';
 
 const router = Router();
 router.use(express.json({ limit: '32kb' }));
@@ -228,6 +238,144 @@ router.patch('/todos/:id/move', async (req, res) => {
     const item = await movePanelTodo(req.params.id, projectId);
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, item });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+
+router.get('/task-meta', async (_req, res) => {
+  try {
+    const meta = await loadTaskRandomMeta();
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, ...meta });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.get('/project-locations-md', async (_req, res) => {
+  try {
+    const markdown = await readProjectLocationsMarkdown();
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.type('text/markdown').send(markdown || '');
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.put('/project-locations-md', async (req, res) => {
+  try {
+    const markdown = typeof req.body === 'string' ? req.body : String(req.body?.markdown || '');
+    const meta = await saveProjectLocationsMarkdown(markdown);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, ...meta });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.post('/project-locations/sync', async (_req, res) => {
+  try {
+    const projects = await listPanelProjects();
+    const result = await syncProjectLocationsMarkdown(projects);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.get('/task-context', async (req, res) => {
+  try {
+    const lat = Number(req.query.lat);
+    const lon = Number(req.query.lon);
+    const device = String(req.query.device || 'laptop');
+    const context = await resolveTaskContext(
+      {
+        lat: Number.isFinite(lat) ? lat : null,
+        lon: Number.isFinite(lon) ? lon : null,
+        device,
+        timeZone: req.query.timeZone,
+      },
+      process.env,
+    );
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, context });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.post('/random-task', async (req, res) => {
+  try {
+    const difficulty = req.body?.difficulty ?? null;
+    const duration = req.body?.duration ?? null;
+    const lat = Number(req.body?.lat);
+    const lon = Number(req.body?.lon);
+    const device = String(req.body?.device || 'laptop');
+    const excludeIds = Array.isArray(req.body?.excludeIds) ? req.body.excludeIds.map(String) : [];
+    const [tasks, meta, context] = await Promise.all([
+      listAllPanelTodos(),
+      loadTaskRandomMeta(),
+      resolveTaskContext(
+        {
+          lat: Number.isFinite(lat) ? lat : null,
+          lon: Number.isFinite(lon) ? lon : null,
+          device,
+          timeZone: req.body?.timeZone,
+        },
+        process.env,
+      ),
+    ]);
+    const result = pickRandomTask(tasks, meta, { difficulty, duration, excludeIds }, context);
+    res.setHeader('Cache-Control', 'private, no-store');
+    if (!result.task) {
+      res.json({ ok: true, matched: false, poolSize: 0, context, message: 'No tasks match — try relaxing filters.' });
+      return;
+    }
+    res.json({
+      ok: true,
+      matched: true,
+      context,
+      poolSize: result.poolSize,
+      task: result.task,
+      meta: result.meta,
+      projectMeta: result.projectMeta,
+      missingFields: result.missingFields,
+      effectiveLocations: result.effectiveLocations,
+    });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.patch('/todos/:id/meta', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!/^\d+$/.test(id)) {
+      res.status(400).json({ ok: false, error: 'invalid_id' });
+      return;
+    }
+    const meta = await patchTaskMeta(id, req.body || {});
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, meta, row: meta.byTaskId[id] || null });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.patch('/projects/:id/meta', async (req, res) => {
+  try {
+    const id = parseProjectId(req.params.id);
+    if (id == null) {
+      res.status(400).json({ ok: false, error: 'invalid_id' });
+      return;
+    }
+    const projects = await listPanelProjects();
+    const meta = await patchProjectMeta(id, req.body || {}, projects);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, meta, row: meta.byProjectId[String(id)] || null });
   } catch (e) {
     sendErr(e, res);
   }

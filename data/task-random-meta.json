@@ -1,0 +1,55 @@
+{
+  "byTaskId": {},
+  "byProjectId": {
+    "1": {
+      "notes": "catch-all"
+    },
+    "27": {
+      "location": "home"
+    },
+    "30": {
+      "location": "out"
+    },
+    "31": {
+      "location": "laptop"
+    },
+    "32": {
+      "location": "laptop"
+    },
+    "33": {
+      "location": "phone"
+    },
+    "34": {
+      "location": "laptop"
+    },
+    "35": {
+      "location": "out",
+      "notes": "errands around town"
+    },
+    "36": {
+      "location": "out"
+    },
+    "37": {
+      "location": "laptop"
+    },
+    "39": {
+      "location": "makerfarm",
+      "notes": "all tasks on-site"
+    },
+    "40": {
+      "location": "out"
+    },
+    "41": {
+      "location": "out"
+    },
+    "48": {
+      "location": "laptop"
+    },
+    "49": {
+      "location": "phone"
+    },
+    "50": {
+      "location": "home"
+    }
+  }
+}

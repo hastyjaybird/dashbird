@@ -526,6 +526,33 @@ export async function listPanelTodos(env = process.env, opts = {}) {
   return rows.map(mapVikunjaTask).filter(Boolean);
 }
 
+
+/**
+ * Open tasks across all panel projects (for random task picker).
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ limit?: number }} [opts]
+ * @returns {Promise<Array<{ id: string, text: string, done: boolean, projectId: number | null, projectTitle: string }>>}
+ */
+export async function listAllPanelTodos(env = process.env, opts = {}) {
+  const cap = Number.isFinite(Number(opts.limit)) ? Math.min(500, Math.max(1, Number(opts.limit))) : 500;
+  const projects = await listPanelProjects(env);
+  /** @type {Array<{ id: string, text: string, done: boolean, projectId: number | null, projectTitle: string }>} */
+  const all = [];
+  for (const proj of projects) {
+    if (all.length >= cap) break;
+    const items = await listPanelTodos(env, { projectId: proj.id });
+    for (const item of items) {
+      if (all.length >= cap) break;
+      all.push({
+        ...item,
+        projectId: proj.id,
+        projectTitle: proj.title,
+      });
+    }
+  }
+  return all;
+}
+
 /**
  * Normalize optional due date for Vikunja (`due_date` RFC3339).
  * @param {unknown} value

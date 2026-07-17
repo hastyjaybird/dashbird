@@ -1,3 +1,5 @@
+import { openRandomTaskPicker, openProjectLocationsTable } from '../lib/task-random-ui.js';
+
 /**
  * Main Tasks panel — browse Vikunja projects, add/complete tasks on Dashbird.
  * Projects list + task detail; rename/add projects; drag tasks onto projects.
@@ -18,6 +20,19 @@ export function mountTasks(root, config = {}) {
   const header = document.createElement('div');
   header.className = 'tasks-panel__header';
 
+  const headerActions = document.createElement('div');
+  headerActions.className = 'tasks-panel__header-actions';
+
+  const randomBtn = document.createElement('button');
+  randomBtn.type = 'button';
+  randomBtn.className = 'tasks-panel__header-btn';
+  randomBtn.textContent = 'Do Random Task';
+
+  const locationsBtn = document.createElement('button');
+  locationsBtn.type = 'button';
+  locationsBtn.className = 'tasks-panel__header-btn';
+  locationsBtn.textContent = 'Project locations';
+
   const openLink = document.createElement('a');
   openLink.className = 'tasks-panel__open';
   openLink.target = '_blank';
@@ -29,7 +44,14 @@ export function mountTasks(root, config = {}) {
   } else {
     openLink.hidden = true;
   }
-  header.append(openLink);
+  headerActions.append(randomBtn, locationsBtn, openLink);
+  header.append(headerActions);
+
+  const vikunjaConfigured = config.vikunjaConfigured !== false;
+  if (!vikunjaConfigured) {
+    randomBtn.hidden = true;
+    locationsBtn.hidden = true;
+  }
 
   const split = document.createElement('div');
   split.className = 'tasks-panel__split';
@@ -121,6 +143,29 @@ export function mountTasks(root, config = {}) {
 
   /** @type {Map<string, ReturnType<typeof setTimeout>>} */
   const pendingDone = new Map();
+
+
+  /** @type {string | null} */
+  let highlightTaskId = null;
+
+  /**
+   * @param {{ id: string, projectId?: number | null }} task
+   */
+  function highlightTaskFromRandom(task) {
+    highlightTaskId = String(task.id);
+    const pid = task.projectId != null ? Number(task.projectId) : projectId;
+    if (pid != null && pid !== projectId) {
+      selectProject(pid);
+    }
+    requestAnimationFrame(() => {
+      const el = list.querySelector(`.tasks-panel__item[data-id="${CSS.escape(highlightTaskId)}"]`);
+      if (el) {
+        el.classList.add('tasks-panel__item--random-pick');
+        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        setTimeout(() => el.classList.remove('tasks-panel__item--random-pick'), 4000);
+      }
+    });
+  }
 
   function showStatus(msg, isErr = false) {
     status.hidden = !msg;
@@ -855,6 +900,22 @@ export function mountTasks(root, config = {}) {
     const t = addProjectInput.value;
     addProjectInput.value = '';
     void createProject(t).then(() => addProjectInput.focus());
+  });
+
+
+  randomBtn.addEventListener('click', () => {
+    openRandomTaskPicker({
+      root: wrap,
+      projects,
+      onHighlightTask: highlightTaskFromRandom,
+      onDone: async (id) => {
+        await commitDone(id);
+      },
+    });
+  });
+
+  locationsBtn.addEventListener('click', () => {
+    void openProjectLocationsTable({ root: wrap, projects });
   });
 
   void bootstrap().catch(() => {

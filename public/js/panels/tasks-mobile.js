@@ -1,3 +1,5 @@
+import { openRandomTaskPicker, openProjectLocationsTable } from '../lib/task-random-ui.js';
+
 /**
  * Mobile Vikunja Tasks: project list → task detail (add / complete).
  * @param {HTMLElement | null} root
@@ -202,7 +204,23 @@ export function mountTasksMobile(root, config = {}) {
   const publicUrl = String(config.vikunjaPublicUrl || '').trim();
   if (publicUrl) openLink.href = publicUrl;
   else openLink.hidden = true;
-  listHeadActions.append(listRefreshBtn, openLink);
+  const randomBtn = document.createElement('button');
+  randomBtn.type = 'button';
+  randomBtn.className = 'mobile-tasks__header-btn';
+  randomBtn.textContent = 'Random';
+
+  const locationsBtn = document.createElement('button');
+  locationsBtn.type = 'button';
+  locationsBtn.className = 'mobile-tasks__header-btn';
+  locationsBtn.textContent = 'Locations';
+
+  listHeadActions.append(listRefreshBtn, randomBtn, locationsBtn, openLink);
+
+  const vikunjaConfigured = config.vikunjaConfigured !== false;
+  if (!vikunjaConfigured) {
+    randomBtn.hidden = true;
+    locationsBtn.hidden = true;
+  }
   listHead.append(listTitle, listHeadActions);
 
   const projectsList = document.createElement('ul');
@@ -271,6 +289,25 @@ export function mountTasksMobile(root, config = {}) {
   let taskPointerId = null;
   /** @type {number | null} */
   let moveTargetProjectId = null;
+
+
+  function highlightTaskFromRandom(task) {
+    const pid = task.projectId != null ? Number(task.projectId) : projectId;
+    const go = async () => {
+      const listEl = detailPane.querySelector('.mobile-tasks__list');
+      const el = listEl?.querySelector(`.mobile-tasks__item[data-id="${CSS.escape(String(task.id))}"]`);
+      if (el) {
+        el.classList.add('mobile-tasks__item--random-pick');
+        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        setTimeout(() => el.classList.remove('mobile-tasks__item--random-pick'), 4000);
+      }
+    };
+    if (pid != null && pid !== projectId) {
+      void openProject(pid).then(go);
+    } else {
+      void go();
+    }
+  }
 
   function showStatus(msg, isErr = false) {
     status.hidden = !msg;
@@ -1181,6 +1218,22 @@ export function mountTasksMobile(root, config = {}) {
     const targetProjectId = moveTargetProjectId;
     hideMoveOverlay();
     if (taskId && targetProjectId != null) void moveTask(taskId, targetProjectId);
+  });
+
+
+  randomBtn.addEventListener('click', () => {
+    openRandomTaskPicker({
+      root,
+      projects,
+      onHighlightTask: highlightTaskFromRandom,
+      onDone: async (id) => {
+        await commitDone(id);
+      },
+    });
+  });
+
+  locationsBtn.addEventListener('click', () => {
+    void openProjectLocationsTable({ root, projects });
   });
 
   void loadProjects();

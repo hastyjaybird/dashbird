@@ -35,7 +35,7 @@ function saveTab(tab) {
 }
 
 /**
- * Lean mobile shell: Contacts | Groups | Events | Tasks.
+ * Lean mobile shell: Tasks | Events | Contacts | Groups.
  * @param {{
  *   tabsRoot?: HTMLElement | null,
  *   networkRoot?: HTMLElement | null,
@@ -84,7 +84,7 @@ export function mountMobileShell(mounts = {}) {
   tasksBtn.className = 'mobile-shell__tab';
   tasksBtn.textContent = 'Tasks';
 
-  tabsRoot.append(networkBtn, groupsBtn, eventsBtn, tasksBtn);
+  tabsRoot.append(tasksBtn, eventsBtn, networkBtn, groupsBtn);
 
   function syncTabs() {
     networkBtn.classList.toggle('mobile-shell__tab--active', tab === 'network');
