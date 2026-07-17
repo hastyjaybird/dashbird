@@ -9,10 +9,13 @@ import {
   mergeHiddenIdsIntoSkipped,
   normalizeSkippedEvents,
   removeSkippedEventsFromStore,
+  resolveUnskipRecordIds,
   skippedEventIds,
   syncSkippedEventsToStore,
 } from './events-finder-skipped.js';
 import { rollingLocalDatesForWindowWeeks } from './events-finder-window.js';
+import { collectTasteLinesFromSkipRecords, removeTasteLines } from './taste-lines.js';
+import { normalizeConferenceWatchlist } from './events-finder-conference-watchlist.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
@@ -117,6 +120,8 @@ const DEFAULT_CRITERIA = {
   favoriteEventIds: /** @type {string[]} */ ([]),
   /** Event ids the user added to Google Calendar. */
   calendarAddedEventIds: /** @type {string[]} */ ([]),
+  /** Big conferences / festivals to track with ~2-month heads-up. */
+  conferenceWatchlist: /** @type {string[]} */ ([]),
 };
 
 export function eventsFinderCriteriaPath(env = process.env) {
@@ -575,6 +580,7 @@ function normalizeHiddenEventIds(raw) {
  *   skippedEvents: import('./events-finder-skipped.js').SkippedEventRecord[],
  *   favoriteEventIds: string[],
  *   calendarAddedEventIds: string[],
+ *   conferenceWatchlist: string[],
  * }}
  */
 function normalize(raw) {
@@ -621,6 +627,12 @@ function normalize(raw) {
           /** @type {{ calendarAddedEventIds?: unknown }} */ (raw).calendarAddedEventIds,
         )
       : [];
+  const conferenceWatchlist =
+    raw && typeof raw === 'object' && 'conferenceWatchlist' in /** @type {object} */ (raw)
+      ? normalizeConferenceWatchlist(
+          /** @type {{ conferenceWatchlist?: unknown }} */ (raw).conferenceWatchlist,
+        )
+      : [];
   return {
     lookFor,
     skip,
@@ -631,6 +643,7 @@ function normalize(raw) {
     skippedEvents,
     favoriteEventIds,
     calendarAddedEventIds,
+    conferenceWatchlist,
   };
 }
 
@@ -657,6 +670,7 @@ async function ensureFile() {
  *   skippedEvents: import('./events-finder-skipped.js').SkippedEventRecord[],
  *   favoriteEventIds: string[],
  *   calendarAddedEventIds: string[],
+ *   conferenceWatchlist: string[],
  * }>}
  */
 export async function loadEventsFinderCriteria() {
@@ -677,6 +691,7 @@ export async function loadEventsFinderCriteria() {
       skippedEvents: [],
       favoriteEventIds: [],
       calendarAddedEventIds: [],
+      conferenceWatchlist: [],
     };
   }
   // SQLite is authoritative for skips (survives filter-only criteria saves).
@@ -700,6 +715,7 @@ export async function loadEventsFinderCriteria() {
  *   unskipEventIds?: unknown,
  *   favoriteEventIds?: unknown,
  *   calendarAddedEventIds?: unknown,
+ *   conferenceWatchlist?: unknown,
  * }} body
  * @returns {Promise<
  *   | {
@@ -713,6 +729,7 @@ export async function loadEventsFinderCriteria() {
  *       skippedEvents: import('./events-finder-skipped.js').SkippedEventRecord[],
  *       favoriteEventIds: string[],
  *       calendarAddedEventIds: string[],
+ *       conferenceWatchlist: string[],
  *     }
  *   | { ok: false, error: string }
  * >}
@@ -739,7 +756,15 @@ export async function saveEventsFinderCriteria(body) {
   const unskipIds = Array.isArray(body.unskipEventIds)
     ? body.unskipEventIds.map((id) => String(id || '').trim()).filter(Boolean)
     : [];
+  /** @type {{ lookFor: string[], grey: string[], black: string[] }} */
+  let unskipTaste = { lookFor: [], grey: [], black: [] };
   if (unskipIds.length) {
+    const existingSkipped = loadSkippedEventsFromStore(existing.skippedEvents, process.env);
+    const resolvedIds = new Set(resolveUnskipRecordIds(unskipIds, process.env));
+    const toRemove = existingSkipped.filter(
+      (s) => resolvedIds.has(s.id) || unskipIds.includes(s.id),
+    );
+    unskipTaste = collectTasteLinesFromSkipRecords(toRemove);
     // Explicit Unskip — delete by id only; never infer removals from a partial list.
     skippedEvents = removeSkippedEventsFromStore(unskipIds, process.env);
   }
@@ -778,13 +803,18 @@ export async function saveEventsFinderCriteria(body) {
     // Filter-only save: never touch skips (SQLite + existing criteria).
     skippedEvents = loadSkippedEventsFromStore(existing.skippedEvents, process.env);
   }
-  const lookFor = normalizeKeywordList(body.lookFor);
-  const skip = normalizeKeywordList(body.skip);
+  let lookFor = normalizeKeywordList(body.lookFor);
+  let skip = normalizeKeywordList(body.skip);
   // Omit blacklist to preserve (filter-only / thumbs / Facebook avg saves).
-  const blacklist =
+  let blacklist =
     typeof body.blacklist === 'string'
       ? normalizeKeywordList(body.blacklist)
       : existing.blacklist;
+  if (unskipIds.length) {
+    lookFor = removeTasteLines(lookFor, unskipTaste.lookFor);
+    skip = removeTasteLines(skip, unskipTaste.grey);
+    blacklist = removeTasteLines(blacklist, unskipTaste.black);
+  }
   // Ingestion-only saves omit filters; browse-filter saves omit scrape — preserve the other.
   const nextScrape = body.scrape === undefined
     ? existing.scrape
@@ -828,6 +858,10 @@ export async function saveEventsFinderCriteria(body) {
       body.calendarAddedEventIds === undefined
         ? existing.calendarAddedEventIds
         : normalizeHiddenEventIds(body.calendarAddedEventIds),
+    conferenceWatchlist:
+      body.conferenceWatchlist === undefined
+        ? existing.conferenceWatchlist
+        : normalizeConferenceWatchlist(body.conferenceWatchlist),
   };
   const live = await ensureFile();
   const tmp = `${live}.${process.pid}.${Date.now()}.tmp`;

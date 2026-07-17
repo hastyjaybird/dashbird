@@ -574,6 +574,20 @@ function migrate(db) {
     CREATE INDEX IF NOT EXISTS idx_skipped_events_name_date ON skipped_events(name_date_key);
   `);
   ensureSkippedSeriesKeyColumn(db);
+  ensureSkippedTasteJsonColumn(db);
+}
+
+/**
+ * @param {DatabaseSync} db
+ */
+function ensureSkippedTasteJsonColumn(db) {
+  const cols = db.prepare('PRAGMA table_info(skipped_events)').all();
+  const hasTaste = (Array.isArray(cols) ? cols : []).some(
+    (c) => String(/** @type {{ name?: unknown }} */ (c)?.name || '') === 'taste_json',
+  );
+  if (!hasTaste) {
+    db.exec('ALTER TABLE skipped_events ADD COLUMN taste_json TEXT');
+  }
 }
 
 /**
@@ -902,15 +916,71 @@ export function deleteEventsFinderByIds(ids, env = process.env) {
  *   venue: string | null,
  *   city: string | null,
  *   imageUrl: string | null,
+ *   seriesKey?: string | null,
  *   skippedAt: string,
+ *   tasteLookFor?: string[] | null,
+ *   tasteGrey?: string[] | null,
+ *   tasteBlack?: string[] | null,
  * }} EventsFinderSkippedRow
  */
+
+/**
+ * @param {unknown} raw
+ * @returns {{ tasteLookFor?: string[], tasteGrey?: string[], tasteBlack?: string[] }}
+ */
+function parseSkippedTasteJson(raw) {
+  if (raw == null || raw === '') return {};
+  try {
+    const o = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!o || typeof o !== 'object') return {};
+    const row = /** @type {Record<string, unknown>} */ (o);
+    const tasteLookFor = Array.isArray(row.tasteLookFor)
+      ? row.tasteLookFor.map((l) => String(l || '').trim()).filter(Boolean).slice(0, 24)
+      : undefined;
+    const tasteGrey = Array.isArray(row.tasteGrey)
+      ? row.tasteGrey.map((l) => String(l || '').trim()).filter(Boolean).slice(0, 24)
+      : undefined;
+    const tasteBlack = Array.isArray(row.tasteBlack)
+      ? row.tasteBlack.map((l) => String(l || '').trim()).filter(Boolean).slice(0, 24)
+      : undefined;
+    return {
+      ...(tasteLookFor?.length ? { tasteLookFor } : {}),
+      ...(tasteGrey?.length ? { tasteGrey } : {}),
+      ...(tasteBlack?.length ? { tasteBlack } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * @param {Record<string, unknown>} rec
+ * @returns {string | null}
+ */
+function serializeSkippedTasteJson(rec) {
+  const tasteLookFor = Array.isArray(rec.tasteLookFor)
+    ? rec.tasteLookFor.map((l) => String(l || '').trim()).filter(Boolean).slice(0, 24)
+    : [];
+  const tasteGrey = Array.isArray(rec.tasteGrey)
+    ? rec.tasteGrey.map((l) => String(l || '').trim()).filter(Boolean).slice(0, 24)
+    : [];
+  const tasteBlack = Array.isArray(rec.tasteBlack)
+    ? rec.tasteBlack.map((l) => String(l || '').trim()).filter(Boolean).slice(0, 24)
+    : [];
+  if (!tasteLookFor.length && !tasteGrey.length && !tasteBlack.length) return null;
+  return JSON.stringify({
+    ...(tasteLookFor.length ? { tasteLookFor } : {}),
+    ...(tasteGrey.length ? { tasteGrey } : {}),
+    ...(tasteBlack.length ? { tasteBlack } : {}),
+  });
+}
 
 /**
  * @param {Record<string, unknown>} row
  * @returns {EventsFinderSkippedRow}
  */
 function skippedDbRowToRecord(row) {
+  const taste = parseSkippedTasteJson(row.taste_json);
   return {
     id: String(row.id || ''),
     key: row.name_date_key != null ? String(row.name_date_key) : null,
@@ -923,6 +993,7 @@ function skippedDbRowToRecord(row) {
     imageUrl: row.image_url != null ? String(row.image_url) : null,
     seriesKey: row.series_key != null ? String(row.series_key) : null,
     skippedAt: String(row.skipped_at || new Date().toISOString()),
+    ...taste,
   };
 }
 
@@ -936,7 +1007,7 @@ export function listSkippedEventsFinderRecords(env = process.env) {
   const rows = db
     .prepare(
       `
-      SELECT id, url_key, name_date_key, title, start_at, source, venue, city, image_url, series_key, skipped_at
+      SELECT id, url_key, name_date_key, title, start_at, source, venue, city, image_url, series_key, skipped_at, taste_json
       FROM skipped_events
       ORDER BY skipped_at DESC
       LIMIT 1000
@@ -969,9 +1040,9 @@ export function upsertSkippedEventsFinderRecords(records, env = process.env) {
   const db = openEventsFinderDb(env);
   const stmt = db.prepare(`
     INSERT INTO skipped_events (
-      id, url_key, name_date_key, title, start_at, source, venue, city, image_url, series_key, skipped_at
+      id, url_key, name_date_key, title, start_at, source, venue, city, image_url, series_key, skipped_at, taste_json
     ) VALUES (
-      @id, @urlKey, @nameDateKey, @title, @startAt, @source, @venue, @city, @imageUrl, @seriesKey, @skippedAt
+      @id, @urlKey, @nameDateKey, @title, @startAt, @source, @venue, @city, @imageUrl, @seriesKey, @skippedAt, @tasteJson
     )
     ON CONFLICT(id) DO UPDATE SET
       url_key = COALESCE(excluded.url_key, skipped_events.url_key),
@@ -983,7 +1054,8 @@ export function upsertSkippedEventsFinderRecords(records, env = process.env) {
       city = COALESCE(excluded.city, skipped_events.city),
       image_url = COALESCE(excluded.image_url, skipped_events.image_url),
       series_key = COALESCE(excluded.series_key, skipped_events.series_key),
-      skipped_at = excluded.skipped_at
+      skipped_at = excluded.skipped_at,
+      taste_json = COALESCE(excluded.taste_json, skipped_events.taste_json)
   `);
   let n = 0;
   db.exec('BEGIN IMMEDIATE');
@@ -1017,6 +1089,7 @@ export function upsertSkippedEventsFinderRecords(records, env = process.env) {
           rec.skippedAt != null && String(rec.skippedAt).trim()
             ? String(rec.skippedAt).trim().slice(0, 40)
             : new Date().toISOString(),
+        tasteJson: serializeSkippedTasteJson(/** @type {Record<string, unknown>} */ (rec)),
       });
       n += 1;
     }
@@ -1125,46 +1198,6 @@ export function deleteSkippedEventsFinderByIds(ids, env = process.env) {
     for (const id of list) {
       const r = stmt.run(id);
       deleted += Number(r.changes) || 0;
-    }
-    db.exec('COMMIT');
-  } catch (e) {
-    try {
-      db.exec('ROLLBACK');
-    } catch {
-      /* ignore */
-    }
-    throw e;
-  }
-  return deleted;
-}
-
-/**
- * Delete catalog rows that match skip records by id or url.
- * Name/date matches are enforced at feed time via isEventSkipped.
- * @param {EventsFinderSkippedRow[]} records
- * @param {NodeJS.ProcessEnv} [env]
- * @returns {number}
- */
-export function deleteEventsFinderMatchingSkipped(records, env = process.env) {
-  const list = Array.isArray(records) ? records : [];
-  if (!list.length) return 0;
-  const ids = [];
-  const urls = [];
-  for (const rec of list) {
-    if (rec?.id) ids.push(String(rec.id));
-    if (rec?.url) urls.push(String(rec.url));
-  }
-  const db = openEventsFinderDb(env);
-  const byId = db.prepare('DELETE FROM events WHERE id = ?');
-  const byUrl = db.prepare('DELETE FROM events WHERE lower(url) = lower(?)');
-  let deleted = 0;
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    for (const id of ids) {
-      deleted += Number(byId.run(id).changes) || 0;
-    }
-    for (const url of urls) {
-      deleted += Number(byUrl.run(url).changes) || 0;
     }
     db.exec('COMMIT');
   } catch (e) {

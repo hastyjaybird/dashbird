@@ -36,10 +36,13 @@ CLOUD_HOST=root@YOUR_VULTR_IP SYNC_DATA=0 SYNC_ENV=0 ./scripts/sync-to-cloud.sh
 ```bash
 cd /opt/dashbird
 cp deploy/env.cloud.example .env
-# edit: CADDY_EMAIL, DASHBOARD_BASIC_AUTH_HASH, VIKUNJA_SERVICE_SECRET, API tokens
+# edit: CADDY_EMAIL, DASHBOARD_BASIC_AUTH_HASH, DASHBOARD_TRUSTED_DEVICE_SECRET, DASHBOARD_TRUSTED_DEVICE_IDS, VIKUNJA_SERVICE_SECRET, API tokens
 docker run --rm caddy:2-alpine caddy hash-password --plaintext 'YOUR_PASSWORD'
 # paste into DASHBOARD_BASIC_AUTH_HASH= with every `$` doubled for Compose:
 #   $2a$14$abc...  →  $$2a$$14$$abc...
+# trusted devices (passwordless for Jay home Linux + phone only):
+#   openssl rand -base64 48  →  DASHBOARD_TRUSTED_DEVICE_SECRET=
+#   DASHBOARD_TRUSTED_DEVICE_IDS=edd37155-3ffe-4d18-a775-d6cdcedbf343,1c0c1947-ad36-4032-aed5-00eb5b28e166
 ```
 
 6. Bring up the stack:
@@ -51,7 +54,10 @@ docker compose -f docker-compose.cloud.yml up -d --build
 docker compose -f docker-compose.cloud.yml ps
 ```
 
-7. Open `https://dashbird.duckdns.org` — browser basic-auth, then dashbird.
+7. **One-time per device** — open these bookmarks (no password after this):
+   - **Home Linux laptop:** `https://dashbird.duckdns.org/auth/device-bind?did=edd37155-3ffe-4d18-a775-d6cdcedbf343`
+   - **Phone:** `https://dashbird.duckdns.org/auth/device-bind?did=1c0c1947-ad36-4032-aed5-00eb5b28e166`
+   Other browsers/devices still require basic auth every visit. Revoke trust by rotating `DASHBOARD_TRUSTED_DEVICE_SECRET` in `.env` and rebuilding.
 
 If basic-auth credentials were generated on the server:
 

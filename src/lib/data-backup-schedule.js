@@ -1,7 +1,9 @@
 /**
- * Weekly backup of Tool Library + Network contacts (SQLite + assets).
- * Default: Sunday 03:00 America/Los_Angeles → data/backups/tools-contacts-YYYY-MM-DD/
+ * Scheduled backups:
+ * - Daily full data tarball → data/backups/daily-YYYY-MM-DD.tar.gz (default 03:15 local)
+ * - Weekly Tool Library + Network → data/backups/tools-contacts-YYYY-MM-DD/ (default Sun 03:00)
  */
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
@@ -13,11 +15,25 @@ import { networkAssetsDir } from './network-contacts-store.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
+const DAILY_SQLITE_DBS = ['network.db', 'events-finder.db', 'telegram-intake.db'];
+
+const DAILY_PUBLIC_FILES = [
+  'public/data/bookmarks-personal.json',
+  'public/data/notes.md',
+];
+
 /**
  * @param {NodeJS.ProcessEnv} [env]
  */
 export function dataBackupWeeklyEnabled(env = process.env) {
   return String(env.DATA_BACKUP_WEEKLY ?? '1').trim() !== '0';
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function dataBackupDailyEnabled(env = process.env) {
+  return String(env.DATA_BACKUP_DAILY ?? '1').trim() !== '0';
 }
 
 /**
@@ -65,6 +81,28 @@ function dataBackupRetain(env = process.env) {
 }
 
 /**
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {{ hour: number, minute: number }}
+ */
+function dataBackupDailyWhen(env = process.env) {
+  const hourRaw = Number(env.DATA_BACKUP_DAILY_HOUR);
+  const minuteRaw = Number(env.DATA_BACKUP_DAILY_MINUTE);
+  return {
+    hour: Number.isFinite(hourRaw) && hourRaw >= 0 && hourRaw <= 23 ? Math.round(hourRaw) : 3,
+    minute: Number.isFinite(minuteRaw) && minuteRaw >= 0 && minuteRaw <= 59 ? Math.round(minuteRaw) : 15,
+  };
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function dataBackupDailyRetain(env = process.env) {
+  const n = Number(env.DATA_BACKUP_DAILY_RETAIN);
+  if (Number.isFinite(n) && n >= 1 && n <= 90) return Math.round(n);
+  return 14;
+}
+
+/**
  * Local calendar parts in the schedule timezone.
  * @param {Date} [now]
  * @param {string} [timeZone]
@@ -106,6 +144,19 @@ export function shouldRunDataBackupWeekly(env = process.env, now = new Date()) {
   const when = dataBackupWhen(env);
   const local = dataBackupLocalParts(now, dataBackupTz(env));
   if (local.dow !== when.dow) return false;
+  if (local.hour !== when.hour) return false;
+  if (local.minute < when.minute || local.minute > when.minute + 1) return false;
+  return true;
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {Date} [now]
+ */
+export function shouldRunDataBackupDaily(env = process.env, now = new Date()) {
+  if (!dataBackupDailyEnabled(env)) return false;
+  const when = dataBackupDailyWhen(env);
+  const local = dataBackupLocalParts(now, dataBackupTz(env));
   if (local.hour !== when.hour) return false;
   if (local.minute < when.minute || local.minute > when.minute + 1) return false;
   return true;
@@ -174,6 +225,27 @@ async function pruneOldBackups(dir, retain) {
     .reverse();
   for (const name of folders.slice(retain)) {
     await fsPromises.rm(path.join(dir, name), { recursive: true, force: true });
+  }
+}
+
+/**
+ * @param {string} dir
+ * @param {number} retain
+ */
+async function pruneOldDailyBackups(dir, retain) {
+  let entries;
+  try {
+    entries = await fsPromises.readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  const files = entries
+    .filter((e) => e.isFile() && /^daily-\d{4}-\d{2}-\d{2}\.tar\.gz$/.test(e.name))
+    .map((e) => e.name)
+    .sort()
+    .reverse();
+  for (const name of files.slice(retain)) {
+    await fsPromises.rm(path.join(dir, name), { force: true });
   }
 }
 
@@ -260,11 +332,86 @@ export async function runToolsContactsBackup(env = process.env, opts = {}) {
   }
 }
 
+/**
+ * Full daily tarball of data/ (+ optional public notes/bookmarks).
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ ymd?: string }} [opts]
+ * @returns {Promise<{ ok: boolean, file?: string, ymd?: string, error?: string, bytes?: number }>}
+ */
+export async function runDailyDataBackup(env = process.env, opts = {}) {
+  const tz = dataBackupTz(env);
+  const ymd = opts.ymd || dataBackupLocalParts(new Date(), tz).ymd;
+  const root = dataBackupDir(env);
+  const outFile = path.join(root, `daily-${ymd}.tar.gz`);
+  const tmpFile = `${outFile}.tmp.${process.pid}.${Date.now()}`;
+  const snapDir = path.join(root, `.sqlite-snap-${process.pid}-${Date.now()}`);
+
+  try {
+    await fsPromises.mkdir(root, { recursive: true });
+    await fsPromises.mkdir(snapDir, { recursive: true });
+
+    /** @type {string[]} */
+    const snapNames = [];
+    for (const db of DAILY_SQLITE_DBS) {
+      const src = path.join(PKG_ROOT, 'data', db);
+      if (backupSqliteDb(src, path.join(snapDir, db))) snapNames.push(db);
+    }
+
+    /** @type {string[]} */
+    const tarArgs = [
+      '--warning=no-file-changed',
+      '-czf', tmpFile, '-C', PKG_ROOT, '--exclude=data/backups',
+    ];
+    for (const db of snapNames) {
+      tarArgs.push('--exclude', `data/${db}`, '--exclude', `data/${db}-wal`, '--exclude', `data/${db}-shm`);
+    }
+    tarArgs.push('data');
+    for (const rel of DAILY_PUBLIC_FILES) {
+      if (fs.existsSync(path.join(PKG_ROOT, rel))) tarArgs.push(rel);
+    }
+    if (snapNames.length) {
+      tarArgs.push('-C', snapDir, '--transform', 's,^,data/,', ...snapNames);
+    }
+
+    const result = spawnSync('tar', tarArgs, { encoding: 'utf8' });
+    let tarOk = false;
+    try {
+      const st = await fsPromises.stat(tmpFile);
+      tarOk = st.isFile() && st.size > 0;
+    } catch {
+      tarOk = false;
+    }
+    if (!tarOk && result.status !== 0) {
+      const detail = (result.stderr || result.stdout || '').trim();
+      throw new Error(detail || `tar exited ${result.status}`);
+    }
+
+    await fsPromises.rm(outFile, { force: true });
+    await fsPromises.rename(tmpFile, outFile);
+    await fsPromises.rm(snapDir, { recursive: true, force: true });
+
+    const st = await fsPromises.stat(outFile);
+    await pruneOldDailyBackups(root, dataBackupDailyRetain(env));
+    await writeLastBackupStamp(env, new Date().toISOString());
+
+    return { ok: true, file: outFile, ymd, bytes: st.size };
+  } catch (e) {
+    await fsPromises.rm(tmpFile, { force: true });
+    await fsPromises.rm(snapDir, { recursive: true, force: true });
+    return { ok: false, error: e?.message || String(e), ymd };
+  }
+}
+
 /** @type {string | null} */
 let lastBackupYmd = null;
+/** @type {string | null} */
+let lastDailyBackupYmd = null;
 /** @type {ReturnType<typeof setInterval> | null} */
 let backupTimer = null;
+/** @type {ReturnType<typeof setInterval> | null} */
+let dailyBackupTimer = null;
 let backupInFlight = false;
+let dailyBackupInFlight = false;
 
 /**
  * Seed same-day dedupe from an existing backup folder (survives restarts).
@@ -339,4 +486,77 @@ export function startToolsContactsBackupScheduler(env = process.env) {
   setTimeout(() => {
     void tick();
   }, 20_000);
+}
+
+/**
+ * Seed same-day dedupe from an existing daily tarball (survives restarts).
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function seedLastDailyBackupYmd(env = process.env) {
+  const tz = dataBackupTz(env);
+  const when = dataBackupDailyWhen(env);
+  const nowLocal = dataBackupLocalParts(new Date(), tz);
+  const expected = path.join(dataBackupDir(env), `daily-${nowLocal.ymd}.tar.gz`);
+  try {
+    const st = await fsPromises.stat(expected);
+    if (!st.isFile()) return;
+    const afterSlot =
+      nowLocal.hour > when.hour
+      || (nowLocal.hour === when.hour && nowLocal.minute >= when.minute);
+    if (afterSlot) lastDailyBackupYmd = nowLocal.ymd;
+  } catch {
+    /* no daily backup yet today */
+  }
+}
+
+/**
+ * Start daily full-data backup scheduler.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function startDailyDataBackupScheduler(env = process.env) {
+  if (!dataBackupDailyEnabled(env)) {
+    console.log('[data-backup] daily full-data backup disabled');
+    return;
+  }
+  if (dailyBackupTimer) return;
+
+  const when = dataBackupDailyWhen(env);
+  const tz = dataBackupTz(env);
+  const whenLabel = `${String(when.hour).padStart(2, '0')}:${String(when.minute).padStart(2, '0')}`;
+  console.log(`[data-backup] daily full-data: ${whenLabel} ${tz} → ${dataBackupDir(env)}/daily-YYYY-MM-DD.tar.gz`);
+
+  const tick = async () => {
+    if (dailyBackupInFlight) return;
+    if (!shouldRunDataBackupDaily(env)) return;
+    const ymd = dataBackupLocalParts(new Date(), tz).ymd;
+    if (lastDailyBackupYmd === ymd) return;
+    dailyBackupInFlight = true;
+    lastDailyBackupYmd = ymd;
+    console.log(`[data-backup] daily backup starting (${ymd})`);
+    try {
+      const result = await runDailyDataBackup(env, { ymd });
+      if (result.ok) {
+        const mb = result.bytes ? (result.bytes / (1024 * 1024)).toFixed(1) : '?';
+        console.log(`[data-backup] daily backup done → ${result.file} (${mb} MB)`);
+      } else {
+        console.warn(`[data-backup] daily backup failed: ${result.error}`);
+        lastDailyBackupYmd = null;
+      }
+    } catch (e) {
+      console.warn('[data-backup] daily backup failed', e?.message || e);
+      lastDailyBackupYmd = null;
+    } finally {
+      dailyBackupInFlight = false;
+    }
+  };
+
+  void seedLastDailyBackupYmd(env).catch(() => {});
+
+  dailyBackupTimer = setInterval(() => {
+    void tick();
+  }, 60_000);
+  if (typeof dailyBackupTimer.unref === 'function') dailyBackupTimer.unref();
+  setTimeout(() => {
+    void tick();
+  }, 25_000);
 }

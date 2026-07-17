@@ -829,6 +829,23 @@ export async function fetchFacebookEvents(env = process.env, opts = {}) {
     return result;
   }
 
+  // Read-only hosts (LAN compose sets FACEBOOK_EVENTS_WEEKLY=0) never start background scrapes.
+  if (!facebookWeeklyEnabled(env) && cache?.events?.length) {
+    return {
+      ok: true,
+      events: cache.events,
+      fromCache: true,
+      stale: !cacheFresh(cache, env, scrape),
+      cachedAt: cache.cachedAt,
+      searchQueries: cache.searchQueries || [],
+      startUrls: cache.startUrls || [],
+      scanned: cache.count ?? cache.events.length,
+      count: cache.events.length,
+      scrape,
+      hint: 'Apify scrape disabled on this host — cloud runs daily refresh; sync data/facebook-events-cache.json',
+    };
+  }
+
   // Daily schedule owns paid runs — don't scrape on every sidebar open.
   if (facebookWeeklyEnabled(env) && cache?.events?.length) {
     // #region agent log

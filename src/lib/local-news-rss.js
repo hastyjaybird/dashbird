@@ -46,6 +46,42 @@ function tagContent(block, tag) {
 }
 
 /**
+ * First image URL from RSS enclosure, media tags, or inline img in description.
+ * @param {string} block
+ */
+function extractImage(block) {
+  const enclosure = block.match(
+    /<enclosure\b[^>]*\burl=["']([^"']+)["'][^>]*(?:\btype=["']image[^"']*["']|)/i,
+  );
+  if (enclosure) {
+    const typeM = (enclosure[0] || '').match(/\btype=["']([^"']+)["']/i);
+    const type = typeM ? typeM[1].toLowerCase() : '';
+    if (!type || type.startsWith('image/')) return enclosure[1].trim();
+  }
+
+  const mediaTags = [
+    ...block.matchAll(/<media:(?:content|thumbnail)\b[^>]*\burl=["']([^"']+)["']/gi),
+  ];
+  for (const m of mediaTags) {
+    const tag = m[0] || '';
+    const mediumM = tag.match(/\bmedium=["']([^"']+)["']/i);
+    const typeM = tag.match(/\btype=["']([^"']+)["']/i);
+    const medium = mediumM ? mediumM[1].toLowerCase() : '';
+    const type = typeM ? typeM[1].toLowerCase() : '';
+    if (!medium || medium === 'image' || type.startsWith('image/')) return m[1].trim();
+  }
+
+  const desc =
+    tagContent(block, 'description')
+    || tagContent(block, 'summary')
+    || tagContent(block, 'content');
+  const img = desc.match(/<img\b[^>]*\bsrc=["']([^"']+)["']/i);
+  if (img) return img[1].trim();
+
+  return '';
+}
+
+/**
  * Atom <link href="..."/> or RSS <link>text</link>.
  * @param {string} block
  */
@@ -66,7 +102,7 @@ function extractLink(block) {
 
 /**
  * @param {string} xml
- * @returns {Array<{ title: string, link: string, publishedAt: string | null, summary: string }>}
+ * @returns {Array<{ title: string, link: string, publishedAt: string | null, summary: string, imageUrl: string | null }>}
  */
 export function parseFeedXml(xml) {
   const text = String(xml || '');
@@ -93,7 +129,9 @@ export function parseFeedXml(xml) {
       tagContent(block, 'description') || tagContent(block, 'summary') || tagContent(block, 'content'),
     ).slice(0, 400);
     if (!title && !link) continue;
-    items.push({ title: title || '(untitled)', link, publishedAt, summary });
+    const imageRaw = extractImage(block);
+    const imageUrl = imageRaw && /^https?:\/\//i.test(imageRaw) ? imageRaw : null;
+    items.push({ title: title || '(untitled)', link, publishedAt, summary, imageUrl });
   }
   return items;
 }

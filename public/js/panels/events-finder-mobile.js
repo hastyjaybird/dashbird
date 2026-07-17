@@ -1,5 +1,10 @@
 import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
 import {
+  pushMobileNav,
+  mobileNavBack,
+  isMobileNavApplying,
+} from '../lib/mobile-history.js';
+import {
   createCityChecks,
   createRangeCalendar,
   normalizeLocalTime,
@@ -223,9 +228,78 @@ function skippedRecordFromEvent(ev) {
     venue: String(ev.venue || ev.location || '').trim() || null,
     city: ev.city != null ? String(ev.city) : null,
     imageUrl: String(ev.imageUrl || '').trim() || null,
-    seriesKey: null,
+    seriesKey: String(ev?.seriesKey || '').trim() || null,
     skippedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * @param {unknown} title
+ * @returns {string}
+ */
+function normalizeSkipTitleFuzzyKey(title) {
+  const base = String(title || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!base) return '';
+  return base
+    .replace(/\b\d{1,2}(:\d{2})?\s*(am|pm)\b/g, ' ')
+    .replace(/\bfrom\s+(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+)?to\b/g, 'from-to')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * @param {object} event
+ * @param {object[]} skipped
+ * @returns {boolean}
+ */
+function eventMatchesSkippedLocal(event, skipped) {
+  const list = Array.isArray(skipped) ? skipped : [];
+  if (!list.length || !event) return false;
+  const id = String(event.id || '').trim();
+  const url = String(event.url || '').trim().toLowerCase();
+  const title = String(event.title || '').trim().toLowerCase();
+  const day = event.start != null ? String(event.start).slice(0, 10) : '';
+  const seriesKey = String(event.seriesKey || '').trim();
+  const source = String(event.source || '').trim().toLowerCase();
+  const fuzzy = normalizeSkipTitleFuzzyKey(event.title);
+  const fuzzyKey = fuzzy.length >= 24 && source ? `${source}|${fuzzy}` : '';
+  for (const s of list) {
+    if (id && String(s?.id || '') === id) return true;
+    const sSeries = String(s?.seriesKey || '').trim();
+    if (seriesKey && sSeries && seriesKey === sSeries) return true;
+    const sUrl = String(s?.url || '').trim().toLowerCase();
+    if (url && sUrl && (url === sUrl || url.includes(sUrl) || sUrl.includes(url))) return true;
+    const sTitle = String(s?.title || '').trim().toLowerCase();
+    const sDay = s?.start != null ? String(s.start).slice(0, 10) : '';
+    if (title && sTitle && title === sTitle && day && sDay && day === sDay) return true;
+    if (fuzzyKey) {
+      const sSource = String(s?.source || '').trim().toLowerCase();
+      const sFuzzy = normalizeSkipTitleFuzzyKey(s?.title);
+      if (sSource && sFuzzy.length >= 24 && `${sSource}|${sFuzzy}` === fuzzyKey) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @param {object} ev
+ * @param {object} record
+ * @returns {boolean}
+ */
+function eventMatchesSkipRecord(ev, record) {
+  if (!ev || !record) return false;
+  const id = String(ev?.id || '').trim();
+  const recordId = String(record?.id || '').trim();
+  if (id && recordId && id === recordId) return true;
+  const seriesKey = String(ev?.seriesKey || '').trim();
+  const recordSeries = String(record?.seriesKey || '').trim();
+  if (seriesKey && recordSeries && seriesKey === recordSeries) return true;
+  return eventMatchesSkippedLocal(ev, [record]);
 }
 
 /**
@@ -344,6 +418,50 @@ export function mountEventsFinderMobile(root) {
   timeField.append(timeLabel, timeInput);
   filterPanel.append(timeField);
 
+  const conferenceField = document.createElement('div');
+  conferenceField.className = 'mobile-events__filter mobile-events__filter--block mobile-events__filter--conferences';
+
+  const conferenceToggle = document.createElement('button');
+  conferenceToggle.type = 'button';
+  conferenceToggle.className = 'mobile-events__conferences-toggle';
+  conferenceToggle.setAttribute('aria-expanded', 'false');
+  conferenceToggle.textContent = 'Big conferences & festivals';
+
+  const conferencePanel = document.createElement('div');
+  conferencePanel.className = 'mobile-events__conferences-panel';
+  conferencePanel.hidden = true;
+
+  const conferenceHint = document.createElement('p');
+  conferenceHint.className = 'mobile-events__conferences-hint muted';
+  conferenceHint.textContent = 'One name per line — ~2 month heads-up with ticket and early bird dates.';
+
+  const conferenceInput = document.createElement('textarea');
+  conferenceInput.className = 'mobile-events__conferences-input';
+  conferenceInput.rows = 4;
+  conferenceInput.placeholder = 'e.g. open sauce';
+
+  conferencePanel.append(conferenceHint, conferenceInput);
+  conferenceField.append(conferenceToggle, conferencePanel);
+  filterPanel.append(conferenceField);
+
+  conferenceToggle.addEventListener('click', () => {
+    const open = conferencePanel.hidden;
+    conferencePanel.hidden = !open;
+    conferenceToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    conferenceToggle.classList.toggle('mobile-events__conferences-toggle--open', open);
+  });
+
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let conferenceAutosaveTimer = null;
+  conferenceInput.addEventListener('input', () => {
+    if (!criteriaReady || applyingCriteria) return;
+    if (conferenceAutosaveTimer) clearTimeout(conferenceAutosaveTimer);
+    conferenceAutosaveTimer = setTimeout(() => {
+      conferenceAutosaveTimer = null;
+      void autosaveConferenceWatchlist();
+    }, 650);
+  });
+
   const filterActions = document.createElement('div');
   filterActions.className = 'mobile-events__filter-actions';
 
@@ -376,7 +494,7 @@ export function mountEventsFinderMobile(root) {
 
   root.append(toolbar, filterPanel, status, list);
 
-  /** @type {{ lookFor: string, skip: string, blacklist: string, scrape?: object, favoriteEventIds: string[], calendarAddedEventIds: string[], skippedEvents: object[] } | null} */
+  /** @type {{ lookFor: string, skip: string, blacklist: string, scrape?: object, favoriteEventIds: string[], calendarAddedEventIds: string[], conferenceWatchlist: string[], skippedEvents: object[] } | null} */
   let taste = null;
   /** @type {{ name: string, authuser: string, src: string }} */
   let googleCalendarTarget = { ...DEFAULT_GOOGLE_CALENDAR };
@@ -395,6 +513,11 @@ export function mountEventsFinderMobile(root) {
     filterPanel.hidden = !open;
     filterToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
     filterToggle.classList.toggle('mobile-events__filter-toggle--open', open);
+    if (open && !isMobileNavApplying()) {
+      pushMobileNav({ tab: 'events', pane: 'list', overlay: 'filters' });
+    } else if (!open && history.state?.overlay === 'filters') {
+      mobileNavBack();
+    }
   });
 
   /**
@@ -419,6 +542,17 @@ export function mountEventsFinderMobile(root) {
       : `Show skipped${n ? ` (${n})` : ''}`;
     showSkippedBtn.setAttribute('aria-pressed', showSkipped ? 'true' : 'false');
     showSkippedBtn.classList.toggle('mobile-events__show-skipped--on', showSkipped);
+  }
+
+  /**
+   * @returns {string[]}
+   */
+  function readConferenceWatchlistFromForm() {
+    return String(conferenceInput.value || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim().replace(/\s+/g, ' '))
+      .filter(Boolean)
+      .slice(0, 30);
   }
 
   /**
@@ -497,16 +631,20 @@ export function mountEventsFinderMobile(root) {
       calendarAddedEventIds: Array.isArray(data.calendarAddedEventIds)
         ? data.calendarAddedEventIds.map(String)
         : [],
+      conferenceWatchlist: Array.isArray(data.conferenceWatchlist)
+        ? data.conferenceWatchlist.map(String)
+        : [],
       skippedEvents: Array.isArray(data.skippedEvents) ? data.skippedEvents : [],
     };
     applyGoogleCalendarConfig(data.googleCalendar);
     applyFiltersToForm(data);
+    conferenceInput.value = (taste.conferenceWatchlist || []).join('\n');
     criteriaReady = true;
     syncShowSkippedButton();
   }
 
   /**
-   * @param {{ skippedEvents?: object[], unskipEventIds?: string[], favoriteEventIds?: string[], calendarAddedEventIds?: string[], includeFilters?: boolean, silent?: boolean }} [patch]
+   * @param {{ skippedEvents?: object[], unskipEventIds?: string[], favoriteEventIds?: string[], calendarAddedEventIds?: string[], conferenceWatchlist?: string[], includeFilters?: boolean, silent?: boolean }} [patch]
    * @returns {Promise<boolean>}
    */
   async function saveCriteria(patch = {}) {
@@ -541,6 +679,9 @@ export function mountEventsFinderMobile(root) {
       }
       if (patch.calendarAddedEventIds !== undefined) {
         body.calendarAddedEventIds = patch.calendarAddedEventIds;
+      }
+      if (patch.conferenceWatchlist !== undefined) {
+        body.conferenceWatchlist = patch.conferenceWatchlist;
       }
       if (patch.includeFilters) {
         const filters = readFiltersFromForm();
@@ -577,6 +718,11 @@ export function mountEventsFinderMobile(root) {
       } else if (patch.calendarAddedEventIds) {
         taste.calendarAddedEventIds = patch.calendarAddedEventIds.map(String);
       }
+      if (Array.isArray(data.conferenceWatchlist)) {
+        taste.conferenceWatchlist = data.conferenceWatchlist.map(String);
+      } else if (patch.conferenceWatchlist) {
+        taste.conferenceWatchlist = patch.conferenceWatchlist.map(String);
+      }
       if (Array.isArray(data.skippedEvents)) {
         taste.skippedEvents = data.skippedEvents;
       }
@@ -591,9 +737,13 @@ export function mountEventsFinderMobile(root) {
         filters: data.filters || body.filters,
         favoriteEventIds: taste.favoriteEventIds,
         calendarAddedEventIds: taste.calendarAddedEventIds,
+        conferenceWatchlist: taste.conferenceWatchlist,
         skippedEvents: taste.skippedEvents,
         googleCalendar: googleCalendarTarget,
       });
+      if (patch.conferenceWatchlist !== undefined) {
+        conferenceInput.value = (taste.conferenceWatchlist || []).join('\n');
+      }
       syncShowSkippedButton();
       if (!silent) {
         filterMsg.textContent = 'Saved';
@@ -700,30 +850,52 @@ export function mountEventsFinderMobile(root) {
     if (!id || !taste || !criteriaReady) return;
     const record = skippedRecordFromEvent(ev);
     if (!record) return;
+    /** @type {object[]} */
+    const skipBatch = [record];
+    const seriesKey = String(record.seriesKey || '').trim();
+    if (seriesKey) {
+      skipBatch.push({
+        id: `series:${seriesKey}`.slice(0, 400),
+        key: null,
+        url: null,
+        title: record.title,
+        start: record.start,
+        source: record.source,
+        venue: record.venue,
+        city: record.city,
+        imageUrl: record.imageUrl,
+        seriesKey,
+        skippedAt: record.skippedAt,
+      });
+    }
+    const batchIds = new Set(skipBatch.map((s) => String(s?.id || '')).filter(Boolean));
     const prevSkipped = [...taste.skippedEvents];
     taste.skippedEvents = [
-      record,
-      ...prevSkipped.filter((s) => String(s?.id || '') !== id),
+      ...skipBatch,
+      ...prevSkipped.filter((s) => !batchIds.has(String(s?.id || ''))),
     ];
     if (lastEventsPayload && Array.isArray(lastEventsPayload.events)) {
       lastEventsPayload = {
         ...lastEventsPayload,
-        events: lastEventsPayload.events.filter((e) => String(e?.id || '') !== id),
+        events: lastEventsPayload.events.filter(
+          (e) => !skipBatch.some((rec) => eventMatchesSkipRecord(e, rec)),
+        ),
         skippedEvents: [
           { ...ev, skipped: true, skippedAt: record.skippedAt },
           ...(Array.isArray(lastEventsPayload.skippedEvents)
-            ? lastEventsPayload.skippedEvents.filter((e) => String(e?.id || '') !== id)
+            ? lastEventsPayload.skippedEvents.filter((e) => !batchIds.has(String(e?.id || '')))
             : []),
         ],
         skippedCount: taste.skippedEvents.length,
       };
       paint(lastEventsPayload);
     }
-    const ok = await saveCriteria({ skippedEvents: [record], silent: true });
+    const ok = await saveCriteria({ skippedEvents: skipBatch, silent: true });
     if (!ok) {
       taste.skippedEvents = prevSkipped;
       void loadEvents();
     } else {
+      if (lastEventsPayload) writePanelCache(EVENTS_CACHE_KEY, lastEventsPayload);
       syncShowSkippedButton();
     }
   }
@@ -750,6 +922,8 @@ export function mountEventsFinderMobile(root) {
     const ok = await saveCriteria({ unskipEventIds: [id], silent: true });
     if (!ok) {
       taste.skippedEvents = prevSkipped;
+    } else if (lastEventsPayload) {
+      writePanelCache(EVENTS_CACHE_KEY, lastEventsPayload);
     }
     syncShowSkippedButton();
     void loadEvents();
@@ -789,6 +963,71 @@ export function mountEventsFinderMobile(root) {
       taste.calendarAddedEventIds = prev;
       void loadEvents();
     }
+  }
+
+  async function autosaveConferenceWatchlist() {
+    const ok = await saveCriteria({
+      silent: true,
+      conferenceWatchlist: readConferenceWatchlistFromForm(),
+    });
+    if (ok) void loadEvents();
+    return ok;
+  }
+
+  /**
+   * @param {object} item
+   * @returns {HTMLElement}
+   */
+  function buildConferenceHeadsUpCard(item) {
+    const card = document.createElement('article');
+    card.className = 'mobile-events__card mobile-events__card--conference-heads-up';
+
+    const row = document.createElement('div');
+    row.className = 'mobile-events__row';
+
+    const icon = document.createElement('div');
+    icon.className = 'mobile-events__icon mobile-events__icon--empty';
+    icon.textContent = '★';
+
+    const body = document.createElement('div');
+    body.className = 'mobile-events__body';
+
+    const badge = document.createElement('p');
+    badge.className = 'mobile-events__conference-badge';
+    badge.textContent = '2-month heads-up';
+
+    const eventUrl = String(item.url || '').trim();
+    const title = document.createElement(eventUrl ? 'a' : 'h3');
+    title.className = 'mobile-events__title';
+    title.textContent = String(item.title || item.query || 'Conference');
+    if (eventUrl && title instanceof HTMLAnchorElement) {
+      title.href = eventUrl;
+      title.target = '_blank';
+      title.rel = 'noopener noreferrer';
+    }
+
+    const meta = document.createElement('p');
+    meta.className = 'mobile-events__meta';
+    const bits = [String(item.whenLabel || 'Dates TBD')];
+    if (item.placeLabel) bits.push(String(item.placeLabel));
+    meta.textContent = bits.join(' · ');
+
+    const ticket = document.createElement('p');
+    ticket.className = 'mobile-events__conference-ticket';
+    if (item.researching) {
+      ticket.textContent = 'Looking up dates and tickets…';
+    } else if (item.earlyBirdLine) {
+      ticket.textContent = String(item.earlyBirdLine);
+    } else if (item.ticketPrice) {
+      ticket.textContent = String(item.ticketPrice);
+    } else {
+      ticket.hidden = true;
+    }
+
+    body.append(badge, title, meta, ticket);
+    row.append(icon, body);
+    card.append(row);
+    return card;
   }
 
   /**
@@ -987,7 +1226,13 @@ export function mountEventsFinderMobile(root) {
       return true;
     }
 
-    const mainEvents = Array.isArray(data?.events) ? data.events : [];
+    const mainEvents = (Array.isArray(data?.events) ? data.events : []).filter((ev) => {
+      const skippedPool = [
+        ...(Array.isArray(data?.skippedEvents) ? data.skippedEvents : []),
+        ...(Array.isArray(taste?.skippedEvents) ? taste.skippedEvents : []),
+      ];
+      return !eventMatchesSkippedLocal(ev, skippedPool);
+    });
     const skippedList = Array.isArray(data?.skippedEvents)
       ? data.skippedEvents
       : Array.isArray(taste?.skippedEvents)
@@ -995,9 +1240,25 @@ export function mountEventsFinderMobile(root) {
         : [];
     const pool = showSkipped ? skippedList : mainEvents;
     const events = pool.filter(passesClientFilters);
+    const conferenceHeadsUp = !showSkipped && Array.isArray(data?.conferenceHeadsUp)
+      ? data.conferenceHeadsUp
+      : [];
 
     list.replaceChildren();
+    if (conferenceHeadsUp.length) {
+      const heading = document.createElement('p');
+      heading.className = 'mobile-events__heads-up-title';
+      heading.textContent = 'Big conferences & festivals';
+      list.append(heading);
+      for (const item of conferenceHeadsUp) {
+        list.append(buildConferenceHeadsUpCard(item));
+      }
+    }
     if (!events.length) {
+      if (conferenceHeadsUp.length) {
+        status.hidden = true;
+        return;
+      }
       status.hidden = false;
       status.textContent = showSkipped
         ? 'No skipped events match these filters.'
@@ -1055,6 +1316,7 @@ export function mountEventsFinderMobile(root) {
         geo: data.geo,
         favoriteEventIds: taste?.favoriteEventIds || [],
         calendarAddedEventIds: taste?.calendarAddedEventIds || [],
+        conferenceWatchlist: taste?.conferenceWatchlist || [],
         skippedEvents: taste?.skippedEvents || [],
         googleCalendar: googleCalendarTarget,
       });
@@ -1093,4 +1355,20 @@ export function mountEventsFinderMobile(root) {
   }
 
   void Promise.all([loadCriteria(), loadEvents()]);
+
+  document.addEventListener('dashbird:mobile-nav', (e) => {
+    const s = e.detail;
+    if (!s || s.tab !== 'events') return;
+    if (s.overlay === 'filters') {
+      filterPanel.hidden = true;
+      filterToggle.setAttribute('aria-expanded', 'false');
+      filterToggle.classList.remove('mobile-events__filter-toggle--open');
+      return;
+    }
+    if (s.pane === 'list') {
+      filterPanel.hidden = true;
+      filterToggle.setAttribute('aria-expanded', 'false');
+      filterToggle.classList.remove('mobile-events__filter-toggle--open');
+    }
+  });
 }

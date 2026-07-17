@@ -113,7 +113,18 @@ export function scoreArticleTaste(article, criteria = {}) {
     };
   }
 
+  // Grey list (skip): when Look for is empty, only deprioritize so more headlines stay
+  // visible; once Look for has lines, grey hides articles with no Look for overlap.
   if (matchedSkip.length && !matchedLookFor.length) {
+    if (!lookFor.length) {
+      return {
+        ok: true,
+        score: -1000,
+        matchedLookFor,
+        matchedSkip,
+        matchedBlacklist,
+      };
+    }
     return {
       ok: false,
       reason: 'skip',
@@ -130,6 +141,28 @@ export function scoreArticleTaste(article, criteria = {}) {
     matchedLookFor,
     matchedSkip,
     matchedBlacklist,
+  };
+}
+
+/**
+ * Sort: higher human-experience importance first (when scored), then taste, then tieBreak.
+ * Feed re-sorts as importance scores arrive from background relevance generation.
+ * @param {(a: object, b: object) => number} [tieBreak]
+ * @returns {(a: object, b: object) => number}
+ */
+export function compareArticlesByImportanceThenTaste(tieBreak) {
+  return (a, b) => {
+    const ia = Number(a?.importance);
+    const ib = Number(b?.importance);
+    const aHas = Number.isFinite(ia) && ia > 0;
+    const bHas = Number.isFinite(ib) && ib > 0;
+    if (aHas && bHas && ib !== ia) return ib - ia;
+    if (aHas && !bHas) return -1;
+    if (!aHas && bHas) return 1;
+    const sa = Number(a?.tasteScore) || 0;
+    const sb = Number(b?.tasteScore) || 0;
+    if (sb !== sa) return sb - sa;
+    return typeof tieBreak === 'function' ? tieBreak(a, b) : 0;
   };
 }
 

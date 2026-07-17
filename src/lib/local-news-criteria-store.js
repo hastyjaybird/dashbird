@@ -6,6 +6,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { normalizeTasteLineArray, removeTasteLines } from './taste-lines.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
@@ -23,6 +24,7 @@ const DEFAULT_CRITERIA = {
   skip: '',
   blacklist: '',
   hiddenArticleIds: /** @type {string[]} */ ([]),
+  hiddenArticleTaste: /** @type {Record<string, { lookFor?: string[], grey?: string[], black?: string[] }>} */ ({}),
 };
 
 /**
@@ -38,6 +40,24 @@ function normalizeHiddenArticleIds(raw) {
   return [...new Set(ids)].slice(-2000);
 }
 
+function normalizeHiddenArticleTaste(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  /** @type {Record<string, { lookFor?: string[], grey?: string[], black?: string[] }>} */
+  const out = {};
+  for (const [id, row] of Object.entries(/** @type {Record<string, unknown>} */ (raw))) {
+    const key = String(id || '').trim().slice(0, 300);
+    if (!key || !row || typeof row !== 'object') continue;
+    const o = /** @type {Record<string, unknown>} */ (row);
+    const entry = {
+      ...(normalizeTasteLineArray(o.lookFor) ? { lookFor: normalizeTasteLineArray(o.lookFor) } : {}),
+      ...(normalizeTasteLineArray(o.grey) ? { grey: normalizeTasteLineArray(o.grey) } : {}),
+      ...(normalizeTasteLineArray(o.black) ? { black: normalizeTasteLineArray(o.black) } : {}),
+    };
+    if (entry.lookFor || entry.grey || entry.black) out[key] = entry;
+  }
+  return out;
+}
+
 /**
  * @param {unknown} raw
  */
@@ -48,6 +68,7 @@ function normalize(raw) {
     skip: String(o.skip ?? '').slice(0, 8000),
     blacklist: String(o.blacklist ?? '').slice(0, 8000),
     hiddenArticleIds: normalizeHiddenArticleIds(o.hiddenArticleIds),
+    hiddenArticleTaste: normalizeHiddenArticleTaste(o.hiddenArticleTaste),
   };
 }
 
@@ -79,19 +100,81 @@ async function writeCriteria(criteria, env) {
 /**
  * lookFor/skip/blacklist are full-text replaces (the client already merges lines before
  * saving); hiddenArticleIds are unioned onto the existing list so a save never drops ids.
- * @param {{ lookFor?: string, skip?: string, blacklist?: string, hiddenArticleIds?: string[] }} patch
+ * @param {{ lookFor?: string, skip?: string, blacklist?: string, hiddenArticleIds?: string[], hiddenArticleTaste?: Record<string, { lookFor?: string[], grey?: string[], black?: string[] }>, unhideArticleIds?: string[] }} patch
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {Promise<{ ok: true } & typeof DEFAULT_CRITERIA>}
  */
 export async function saveLocalNewsCriteria(patch, env = process.env) {
   const current = await loadLocalNewsCriteria(env);
+  let lookFor = patch.lookFor !== undefined ? patch.lookFor : current.lookFor;
+  let skip = patch.skip !== undefined ? patch.skip : current.skip;
+  let blacklist = patch.blacklist !== undefined ? patch.blacklist : current.blacklist;
   const next = normalize({
-    lookFor: patch.lookFor !== undefined ? patch.lookFor : current.lookFor,
-    skip: patch.skip !== undefined ? patch.skip : current.skip,
-    blacklist: patch.blacklist !== undefined ? patch.blacklist : current.blacklist,
-    hiddenArticleIds: Array.isArray(patch.hiddenArticleIds)
-      ? [...current.hiddenArticleIds, ...patch.hiddenArticleIds]
-      : current.hiddenArticleIds,
+    lookFor,
+    skip,
+    blacklist,
+    hiddenArticleIds: (() => {
+      let ids = [...current.hiddenArticleIds];
+      if (Array.isArray(patch.unhideArticleIds) && patch.unhideArticleIds.length) {
+        const drop = new Set(
+          patch.unhideArticleIds.map((id) => String(id || '').trim()).filter(Boolean),
+        );
+        for (const id of drop) {
+          const taste = current.hiddenArticleTaste?.[id];
+          if (taste) {
+            lookFor = removeTasteLines(lookFor, taste.lookFor || []);
+            skip = removeTasteLines(skip, taste.grey || []);
+            blacklist = removeTasteLines(blacklist, taste.black || []);
+          }
+        }
+        ids = ids.filter((id) => !drop.has(id));
+      }
+      if (Array.isArray(patch.hiddenArticleIds) && patch.hiddenArticleIds.length) {
+        ids = [...ids, ...patch.hiddenArticleIds];
+      }
+      return normalizeHiddenArticleIds(ids);
+    })(),
+    hiddenArticleTaste: (() => {
+      const taste = { ...current.hiddenArticleTaste };
+      if (Array.isArray(patch.unhideArticleIds) && patch.unhideArticleIds.length) {
+        for (const id of patch.unhideArticleIds) {
+          const key = String(id || '').trim();
+          if (key) delete taste[key];
+        }
+      }
+      if (patch.hiddenArticleTaste && typeof patch.hiddenArticleTaste === 'object') {
+        for (const [id, row] of Object.entries(patch.hiddenArticleTaste)) {
+          const key = String(id || '').trim().slice(0, 300);
+          if (!key || !row || typeof row !== 'object') continue;
+          const entry = {
+            ...(normalizeTasteLineArray(row.lookFor) ? { lookFor: normalizeTasteLineArray(row.lookFor) } : {}),
+            ...(normalizeTasteLineArray(row.grey) ? { grey: normalizeTasteLineArray(row.grey) } : {}),
+            ...(normalizeTasteLineArray(row.black) ? { black: normalizeTasteLineArray(row.black) } : {}),
+          };
+          if (entry.lookFor || entry.grey || entry.black) taste[key] = entry;
+        }
+      }
+      // Drop taste entries for articles no longer hidden.
+      const hidden = new Set(
+        (() => {
+          let ids = [...current.hiddenArticleIds];
+          if (Array.isArray(patch.unhideArticleIds) && patch.unhideArticleIds.length) {
+            const drop = new Set(
+              patch.unhideArticleIds.map((id) => String(id || '').trim()).filter(Boolean),
+            );
+            ids = ids.filter((id) => !drop.has(id));
+          }
+          if (Array.isArray(patch.hiddenArticleIds) && patch.hiddenArticleIds.length) {
+            ids = [...ids, ...patch.hiddenArticleIds];
+          }
+          return normalizeHiddenArticleIds(ids);
+        })(),
+      );
+      for (const key of Object.keys(taste)) {
+        if (!hidden.has(key)) delete taste[key];
+      }
+      return taste;
+    })(),
   });
   await writeCriteria(next, env);
   return { ok: true, ...next };

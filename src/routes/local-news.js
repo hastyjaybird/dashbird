@@ -5,15 +5,26 @@ import {
   saveLocalNewsState,
   seedBootstrapArticlesIfNeeded,
 } from '../lib/local-news-store.js';
-import { generateSuggestion, localNewsSuggestionsEnabled } from '../lib/local-news-scheduler.js';
+import { generateSuggestion, localNewsSuggestionsEnabled, promoteDeferredSuggestionIfDue, LOCAL_NEWS_SUGGESTION_INTERVAL_MS } from '../lib/local-news-scheduler.js';
 import { fetchFeedItems } from '../lib/local-news-rss.js';
 import { loadLocalNewsCriteria, saveLocalNewsCriteria } from '../lib/local-news-criteria-store.js';
-import { scoreArticleTaste, compareArticlesByTasteThen } from '../lib/local-news-taste.js';
+import {
+  scoreArticleTaste,
+  compareArticlesByImportanceThenTaste,
+} from '../lib/local-news-taste.js';
+import {
+  attachRelevanceToArticles,
+  ensureRelevanceForArticles,
+  localNewsRelevanceEnabled,
+  queueRelevanceGeneration,
+} from '../lib/local-news-relevance.js';
 
 const router = Router();
 router.use(express.json({ limit: '32kb' }));
 
 const ARTICLE_CACHE_MS = 15 * 60 * 1000;
+const ARTICLE_FEED_LIMIT = 100;
+const SUGGESTION_PREVIEW_LIMIT = 10;
 /** @type {Map<string, { fetchedAt: number, items: Array<object> }>} */
 const articleCache = new Map();
 
@@ -54,6 +65,7 @@ async function fetchArticlesFor(subscriptions) {
 router.get('/', async (_req, res) => {
   try {
     let state = await loadLocalNewsState();
+    state = await promoteDeferredSuggestionIfDue(state);
     state = await seedBootstrapArticlesIfNeeded(state);
 
     const [subscriptionArticles, criteria] = await Promise.all([
@@ -67,26 +79,52 @@ router.get('/', async (_req, res) => {
     }
 
     const hidden = new Set(criteria.hiddenArticleIds);
-    const articles = [...byId.values()]
-      .filter((a) => !hidden.has(a.id))
-      .map((a) => ({ ...a, ...scoreArticleTasteResult(a, criteria) }))
-      .filter((a) => a.tasteOk)
-      .sort(
-        compareArticlesByTasteThen((a, b) => {
-          const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
-          const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
-          return tb - ta;
-        }),
-      )
-      .slice(0, 60);
+    const byDateDesc = (a, b) => {
+      const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
+      const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
+      return tb - ta;
+    };
+    const scored = [...byId.values()].map((a) => ({
+      ...a,
+      ...scoreArticleTasteResult(a, criteria),
+      skipped: hidden.has(a.id),
+    }));
+
+    /** Most recently skipped first — hiddenArticleIds are appended on each skip. */
+    const hiddenOrder = new Map(
+      criteria.hiddenArticleIds.map((id, i) => [id, i]),
+    );
+    const byHiddenDesc = (a, b) => {
+      const ra = hiddenOrder.get(a.id) ?? -1;
+      const rb = hiddenOrder.get(b.id) ?? -1;
+      if (rb !== ra) return rb - ra;
+      return byDateDesc(a, b);
+    };
+
+    const skippedArticles = scored.filter((a) => a.skipped).sort(byHiddenDesc);
+
+    const articlesRaw = scored
+      .filter((a) => !a.skipped && a.tasteOk)
+      .sort(compareArticlesByImportanceThenTaste(byDateDesc))
+      .slice(0, ARTICLE_FEED_LIMIT);
+
+    const [articles, skippedWithRelevance] = await Promise.all([
+      attachRelevanceToArticles(articlesRaw),
+      attachRelevanceToArticles(skippedArticles),
+    ]);
+
+    queueRelevanceGeneration(articles, process.env);
 
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({
       ok: true,
       enabled: localNewsSuggestionsEnabled(),
+      relevanceEnabled: localNewsRelevanceEnabled(),
       subscriptions: state.subscriptions,
       pendingSuggestion: state.pendingSuggestion,
       criteria: { lookFor: criteria.lookFor, skip: criteria.skip, blacklist: criteria.blacklist },
+      skippedCount: skippedWithRelevance.length,
+      skippedArticles: skippedWithRelevance,
       articles,
     });
   } catch (e) {
@@ -127,7 +165,7 @@ router.put('/criteria', async (req, res) => {
 router.post('/suggestion/respond', async (req, res) => {
   try {
     const response = String(req.body?.response || '').trim().toLowerCase();
-    if (response !== 'yes' && response !== 'no') {
+    if (response !== 'yes' && response !== 'no' && response !== 'defer') {
       res.status(400).json({ ok: false, error: 'invalid_response' });
       return;
     }
@@ -136,6 +174,28 @@ router.post('/suggestion/respond', async (req, res) => {
     const pending = state.pendingSuggestion;
     if (!pending) {
       res.status(400).json({ ok: false, error: 'no_pending_suggestion' });
+      return;
+    }
+
+    if (response === 'defer') {
+      const now = new Date().toISOString();
+      state.deferredSuggestion = {
+        feed: pending.feed,
+        reason: pending.reason,
+        createdAt: pending.createdAt,
+        deferredAt: now,
+        showAfter: new Date(Date.now() + LOCAL_NEWS_SUGGESTION_INTERVAL_MS).toISOString(),
+      };
+      state.pendingSuggestion = null;
+      state.lastSuggestionAt = now;
+      await saveLocalNewsState(state);
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.json({
+        ok: true,
+        subscriptions: state.subscriptions,
+        pendingSuggestion: null,
+        deferredSuggestion: state.deferredSuggestion,
+      });
       return;
     }
 
@@ -168,6 +228,61 @@ router.post('/suggestion/fresh', async (_req, res) => {
     const { state, exhausted } = await generateSuggestion('fresh', process.env, { force: true });
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, pendingSuggestion: state.pendingSuggestion, exhausted: Boolean(exhausted) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+router.get('/suggestion/preview', async (_req, res) => {
+  try {
+    const state = await loadLocalNewsState();
+    const pending = state.pendingSuggestion;
+    if (!pending?.feed?.url) {
+      res.status(404).json({ ok: false, error: 'no_pending_suggestion' });
+      return;
+    }
+
+    const feed = pending.feed;
+    const [fetchResult, criteria] = await Promise.all([
+      fetchFeedItems(feed.url),
+      loadLocalNewsCriteria(),
+    ]);
+    if (!fetchResult.ok) {
+      res.status(502).json({ ok: false, error: fetchResult.error || 'feed_fetch_failed' });
+      return;
+    }
+
+    const byDateDesc = (a, b) => {
+      const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
+      const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
+      return tb - ta;
+    };
+
+    const articlesRaw = fetchResult.items
+      .map((it) => ({
+        ...it,
+        id: it.link || `${feed.id}:${it.title}`,
+        feedId: feed.id,
+        feedTitle: feed.title,
+        category: feed.category,
+      }))
+      .map((a) => ({ ...a, ...scoreArticleTasteResult(a, criteria) }))
+      .filter((a) => a.tasteOk)
+      .sort(compareArticlesByImportanceThenTaste(byDateDesc))
+      .slice(0, SUGGESTION_PREVIEW_LIMIT);
+
+    const articles = await ensureRelevanceForArticles(articlesRaw);
+
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({
+      ok: true,
+      feed: {
+        title: feed.title,
+        siteUrl: feed.siteUrl || feed.url,
+        url: feed.url,
+      },
+      articles,
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }

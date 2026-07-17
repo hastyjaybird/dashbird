@@ -7,10 +7,16 @@ import {
   eventLocalDateKey,
   eventNameDateDedupeKey,
   eventSeriesDedupeKey,
+  listEventsFinderEvents,
   listSkippedEventsFinderRecords,
   normalizeEventTitleKey,
+  openEventsFinderDb,
   upsertSkippedEventsFinderRecords,
 } from './events-finder-store.js';
+import { normalizeTasteLineArray } from './taste-lines.js';
+
+/** @type {ReturnType<typeof setInterval> | null} */
+let skippedPurgeTimer = null;
 
 /**
  * @typedef {{
@@ -25,10 +31,93 @@ import {
  *   imageUrl: string | null,
  *   seriesKey?: string | null,
  *   skippedAt: string,
+ *   tasteLookFor?: string[],
+ *   tasteGrey?: string[],
+ *   tasteBlack?: string[],
  * }} SkippedEventRecord
  */
 
 const MAX_SKIPPED = 1000;
+
+/** Min length for source+fuzzy-title skip matching (avoids hiding generic short titles). */
+const FUZZY_TITLE_MIN_LEN = 24;
+
+/**
+ * Title key with clock times stripped so near-duplicate listings still match
+ * (e.g. Luma "Floor block … 5pm" vs "… 7pm").
+ * @param {unknown} title
+ * @returns {string | null}
+ */
+export function normalizeSkipTitleFuzzyKey(title) {
+  const base = normalizeEventTitleKey(title);
+  if (!base) return null;
+  const fuzzy = base
+    .replace(/\b\d{1,2}(:\d{2})?\s*(am|pm)\b/g, ' ')
+    .replace(/\bfrom\s+(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+)?to\b/g, 'from-to')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return fuzzy || null;
+}
+
+/**
+ * @param {object | null | undefined} eventOrRecord
+ * @returns {string | null}
+ */
+export function skipTitleFuzzyLookupKey(eventOrRecord) {
+  if (!eventOrRecord || typeof eventOrRecord !== 'object') return null;
+  const fuzzy = normalizeSkipTitleFuzzyKey(
+    /** @type {{ title?: unknown }} */ (eventOrRecord).title,
+  );
+  if (!fuzzy || fuzzy.length < FUZZY_TITLE_MIN_LEN) return null;
+  const source = String(
+    /** @type {{ source?: unknown }} */ (eventOrRecord).source || '',
+  )
+    .trim()
+    .toLowerCase();
+  if (!source) return null;
+  return `${source}|${fuzzy}`;
+}
+
+/**
+ * Series fingerprint for a skip record or live event (recurring Meetup/Luma, etc.).
+ * @param {object | null | undefined} eventOrRecord
+ * @returns {string | null}
+ */
+export function resolveSkipSeriesKey(eventOrRecord) {
+  if (!eventOrRecord || typeof eventOrRecord !== 'object') return null;
+  const explicit = String(eventOrRecord.seriesKey || '').trim();
+  if (explicit) return explicit.slice(0, 400);
+  const computed = eventSeriesDedupeKey(eventOrRecord);
+  return computed ? computed.slice(0, 400) : null;
+}
+
+/**
+ * Fill url/key/seriesKey on a skip record so ingest + feed matching stay stable.
+ * @param {SkippedEventRecord} rec
+ * @param {string} [timeZone]
+ * @returns {SkippedEventRecord}
+ */
+export function enrichSkippedRecord(rec, timeZone) {
+  const tz =
+    typeof timeZone === 'string' && timeZone.trim()
+      ? timeZone.trim()
+      : String(process.env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim()
+        || 'America/Los_Angeles';
+  const title = rec.title != null ? String(rec.title).trim().slice(0, 500) || null : null;
+  const start = rec.start != null ? String(rec.start).trim().slice(0, 40) || null : null;
+  const keyRaw = rec.key != null ? String(rec.key).trim().slice(0, 400) : '';
+  const key =
+    keyRaw
+    || (title && start ? eventNameDateDedupeKey({ title, start }, tz) : null);
+  const url = normalizeEventUrlKey(rec.url);
+  const seriesKey = resolveSkipSeriesKey(rec);
+  return {
+    ...rec,
+    key: key || null,
+    url,
+    seriesKey: seriesKey || null,
+  };
+}
 
 /**
  * Stable URL key for skip matching.
@@ -86,23 +175,37 @@ export function normalizeSkippedEvents(raw, timeZone) {
     const key =
       keyRaw
       || (title && start ? eventNameDateDedupeKey({ title, start }, tz) : null);
-    out.push({
-      id,
-      key: key || null,
-      url: normalizeEventUrlKey(row.url),
-      title,
-      start,
-      source: row.source != null ? String(row.source).trim().slice(0, 64) || null : null,
-      venue: row.venue != null ? String(row.venue).trim().slice(0, 300) || null : null,
-      city: row.city != null ? String(row.city).trim().slice(0, 120) || null : null,
-      imageUrl: row.imageUrl != null ? String(row.imageUrl).trim().slice(0, 2000) || null : null,
-      seriesKey:
-        row.seriesKey != null ? String(row.seriesKey).trim().slice(0, 400) || null : null,
-      skippedAt:
-        row.skippedAt != null && String(row.skippedAt).trim()
-          ? String(row.skippedAt).trim().slice(0, 40)
-          : new Date().toISOString(),
-    });
+    out.push(
+      enrichSkippedRecord(
+        {
+          id,
+          key: key || null,
+          url: normalizeEventUrlKey(row.url),
+          title,
+          start,
+          source: row.source != null ? String(row.source).trim().slice(0, 64) || null : null,
+          venue: row.venue != null ? String(row.venue).trim().slice(0, 300) || null : null,
+          city: row.city != null ? String(row.city).trim().slice(0, 120) || null : null,
+          imageUrl: row.imageUrl != null ? String(row.imageUrl).trim().slice(0, 2000) || null : null,
+          seriesKey:
+            row.seriesKey != null ? String(row.seriesKey).trim().slice(0, 400) || null : null,
+          skippedAt:
+            row.skippedAt != null && String(row.skippedAt).trim()
+              ? String(row.skippedAt).trim().slice(0, 40)
+              : new Date().toISOString(),
+          ...(normalizeTasteLineArray(row.tasteLookFor)
+            ? { tasteLookFor: normalizeTasteLineArray(row.tasteLookFor) }
+            : {}),
+          ...(normalizeTasteLineArray(row.tasteGrey)
+            ? { tasteGrey: normalizeTasteLineArray(row.tasteGrey) }
+            : {}),
+          ...(normalizeTasteLineArray(row.tasteBlack)
+            ? { tasteBlack: normalizeTasteLineArray(row.tasteBlack) }
+            : {}),
+        },
+        tz,
+      ),
+    );
     if (out.length >= MAX_SKIPPED) break;
   }
   return out;
@@ -158,9 +261,11 @@ export function mergeSkippedEventLists(a, b) {
         continue;
       }
       const prevScore =
-        (prev.url ? 2 : 0) + (prev.key ? 2 : 0) + (prev.title ? 1 : 0) + (prev.start ? 1 : 0);
+        (prev.url ? 2 : 0) + (prev.key ? 2 : 0) + (prev.title ? 1 : 0) + (prev.start ? 1 : 0)
+        + ((prev.tasteGrey?.length || prev.tasteBlack?.length || prev.tasteLookFor?.length) ? 1 : 0);
       const nextScore =
-        (rec.url ? 2 : 0) + (rec.key ? 2 : 0) + (rec.title ? 1 : 0) + (rec.start ? 1 : 0);
+        (rec.url ? 2 : 0) + (rec.key ? 2 : 0) + (rec.title ? 1 : 0) + (rec.start ? 1 : 0)
+        + ((rec.tasteGrey?.length || rec.tasteBlack?.length || rec.tasteLookFor?.length) ? 1 : 0);
       const prevAt = Date.parse(String(prev.skippedAt || ''));
       const nextAt = Date.parse(String(rec.skippedAt || ''));
       if (
@@ -184,12 +289,101 @@ export function mergeSkippedEventLists(a, b) {
 }
 
 /**
+ * Local calendar YYYY-MM-DD for now in timeZone.
+ * @param {string} [timeZone]
+ * @param {Date} [now]
+ * @returns {string}
+ */
+export function localTodayDateKey(timeZone, now = new Date()) {
+  const tz =
+    typeof timeZone === 'string' && timeZone.trim()
+      ? timeZone.trim()
+      : String(process.env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim()
+        || 'America/Los_Angeles';
+  return eventLocalDateKey(now.toISOString(), tz) || now.toISOString().slice(0, 10);
+}
+
+/**
+ * True when the skip should be removed (day after the event's local date).
+ * Whole-series skips persist until manual Unskip.
+ * @param {SkippedEventRecord} rec
+ * @param {string} todayKey YYYY-MM-DD local today
+ * @param {string} tz
+ * @returns {boolean}
+ */
+export function isSkippedRecordExpired(rec, todayKey, tz) {
+  const id = String(rec?.id || '').trim();
+  if (id.startsWith('series:')) return false;
+
+  const eventDay = eventLocalDateKey(rec.start, tz);
+  if (!eventDay) {
+    const skipDay = eventLocalDateKey(rec.skippedAt, tz);
+    if (!skipDay) return false;
+    return skipDay < todayKey;
+  }
+  return eventDay < todayKey;
+}
+
+/**
+ * Delete skip rows whose event local date is before today (purge starts day after event).
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function purgeExpiredSkippedEvents(env = process.env) {
+  const tz =
+    String(env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim()
+    || 'America/Los_Angeles';
+  const todayKey = localTodayDateKey(tz);
+  let records = [];
+  try {
+    records = listSkippedEventsFinderRecords(env);
+  } catch (e) {
+    console.warn('[events-finder] skipped purge list failed:', e?.message || e);
+    return 0;
+  }
+  const expiredIds = records
+    .filter((rec) => isSkippedRecordExpired(rec, todayKey, tz))
+    .map((rec) => String(rec.id || '').trim())
+    .filter(Boolean);
+  if (!expiredIds.length) return 0;
+  try {
+    const deleted = deleteSkippedEventsFinderByIds(expiredIds, env);
+    if (deleted > 0) {
+      console.log(`[events-finder] purged ${deleted} expired skipped event(s)`);
+    }
+    return deleted;
+  } catch (e) {
+    console.warn('[events-finder] skipped purge delete failed:', e?.message || e);
+    return 0;
+  }
+}
+
+/**
+ * Hourly purge of day-after expired skips (catches midnight rollovers between requests).
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function startSkippedEventsPurgeScheduler(env = process.env) {
+  if (skippedPurgeTimer) return;
+  const run = () => {
+    try {
+      purgeExpiredSkippedEvents(env);
+    } catch (e) {
+      console.warn('[events-finder] skipped purge scheduler:', e?.message || e);
+    }
+  };
+  run();
+  skippedPurgeTimer = setInterval(run, 60 * 60 * 1000);
+  if (typeof skippedPurgeTimer.unref === 'function') skippedPurgeTimer.unref();
+}
+
+/**
  * Load skips from SQLite, merging any criteria JSON leftovers (one-time migration path).
  * @param {SkippedEventRecord[]} [criteriaSkipped]
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {SkippedEventRecord[]}
  */
 export function loadSkippedEventsFromStore(criteriaSkipped = [], env = process.env) {
+  purgeExpiredSkippedEvents(env);
   let fromDb = [];
   try {
     fromDb = listSkippedEventsFinderRecords(env);
@@ -198,15 +392,57 @@ export function loadSkippedEventsFromStore(criteriaSkipped = [], env = process.e
   }
   const fromCriteria = normalizeSkippedEvents(criteriaSkipped);
   const merged = mergeSkippedEventLists(fromDb, fromCriteria);
-  // Persist criteria leftovers into SQLite so filter saves cannot drop them later.
-  if (fromCriteria.length && merged.length > fromDb.length) {
+  const enriched = merged.map((rec) => enrichSkippedRecord(rec));
+  const needsBackfill = enriched.some((rec, i) => {
+    const prev = merged[i];
+    return (
+      (rec.seriesKey && rec.seriesKey !== prev.seriesKey)
+      || (rec.url && rec.url !== prev.url)
+      || (rec.key && rec.key !== prev.key)
+    );
+  });
+  // Persist criteria leftovers + backfilled series/url keys into SQLite.
+  if ((fromCriteria.length && merged.length > fromDb.length) || needsBackfill) {
     try {
-      upsertSkippedEventsFinderRecords(merged, env);
+      upsertSkippedEventsFinderRecords(enriched, env);
     } catch (e) {
       console.warn('[events-finder] skipped sqlite migrate failed:', e?.message || e);
     }
   }
-  return merged;
+  return enriched;
+}
+
+/**
+ * Occurrence skips with a venue-anchored seriesKey also get a series skip so
+ * monthly re-listings (new id/url) stay hidden after the event date passes.
+ * @param {SkippedEventRecord[]} records
+ * @param {string} [timeZone]
+ * @returns {SkippedEventRecord[]}
+ */
+export function expandSkipRecordsWithSeries(records, timeZone) {
+  const normalized = normalizeSkippedEvents(records, timeZone);
+  if (!normalized.length) return normalized;
+  /** @type {SkippedEventRecord[]} */
+  const out = [...normalized];
+  /** @type {Set<string>} */
+  const seenSeries = new Set();
+  for (const rec of normalized) {
+    const id = String(rec?.id || '').trim();
+    if (id.startsWith('series:')) {
+      const sk = resolveSkipSeriesKey(rec);
+      if (sk) seenSeries.add(sk);
+    }
+  }
+  for (const rec of normalized) {
+    const id = String(rec?.id || '').trim();
+    if (id.startsWith('series:')) continue;
+    const seriesKey = resolveSkipSeriesKey(rec);
+    if (!seriesKey || seenSeries.has(seriesKey)) continue;
+    seenSeries.add(seriesKey);
+    const seriesRec = skippedSeriesRecordFromEvent({ ...rec, seriesKey }, timeZone);
+    if (seriesRec) out.unshift(seriesRec);
+  }
+  return out.slice(0, MAX_SKIPPED);
 }
 
 /**
@@ -217,7 +453,33 @@ export function loadSkippedEventsFromStore(criteriaSkipped = [], env = process.e
  * @returns {SkippedEventRecord[]}
  */
 export function syncSkippedEventsToStore(records, env = process.env) {
-  const normalized = normalizeSkippedEvents(records);
+  const tz =
+    String(env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim()
+    || 'America/Los_Angeles';
+  const normalized = expandSkipRecordsWithSeries(normalizeSkippedEvents(records, tz), tz);
+  // #region agent log
+  if (normalized.some((r) => String(r?.id || '').startsWith('series:'))) {
+    const seriesAdded = normalized.filter((r) => String(r?.id || '').startsWith('series:'));
+    fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '25d735' },
+      body: JSON.stringify({
+        sessionId: '25d735',
+        runId: 'pre-fix',
+        hypothesisId: 'A-D',
+        location: 'events-finder-skipped.js:syncSkippedEventsToStore',
+        message: 'skip upsert with series expansion',
+        data: {
+          inputCount: Array.isArray(records) ? records.length : 0,
+          upsertCount: normalized.length,
+          seriesIds: seriesAdded.map((r) => r.id).slice(0, 5),
+          titles: normalized.map((r) => r.title).filter(Boolean).slice(0, 5),
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+  }
+  // #endregion
   if (normalized.length) {
     try {
       upsertSkippedEventsFinderRecords(normalized, env);
@@ -233,16 +495,68 @@ export function syncSkippedEventsToStore(records, env = process.env) {
 }
 
 /**
+ * Resolve skip-row ids to delete for Unskip (handles series/url matches, not just row id).
+ * @param {unknown} ids
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {string[]}
+ */
+export function resolveUnskipRecordIds(ids, env = process.env) {
+  const want = (Array.isArray(ids) ? ids : [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean)
+    .slice(0, 1000);
+  if (!want.length) return [];
+
+  const skipped = loadSkippedEventsFromStore([], env);
+  const index = buildSkippedEventsIndex(skipped);
+  /** @type {Set<string>} */
+  const toDelete = new Set(want);
+
+  for (const id of want) {
+    if (index.byId.has(id)) continue;
+    if (id.startsWith('series:')) continue;
+    let catalogEvent = null;
+    try {
+      const catalog = listEventsFinderEvents({ env });
+      catalogEvent = catalog.find((ev) => String(ev?.id || '').trim() === id) || null;
+    } catch {
+      catalogEvent = null;
+    }
+    if (catalogEvent) {
+      const match = findSkippedEventMatch(catalogEvent, index);
+      if (match?.id) toDelete.add(String(match.id));
+      continue;
+    }
+    const pseudo = skipped.find(
+      (rec) =>
+        String(rec?.id || '') === id
+        || (rec?.url && normalizeEventUrlKey(rec.url) === normalizeEventUrlKey(id)),
+    );
+    if (pseudo) toDelete.add(String(pseudo.id));
+  }
+
+  // Occurrence unskip also clears the auto-created series companion (mobile/default skip).
+  for (const id of [...toDelete]) {
+    if (id.startsWith('series:')) continue;
+    const rec = index.byId.get(id);
+    if (!rec) continue;
+    const sk = resolveSkipSeriesKey(rec);
+    if (!sk) continue;
+    const seriesId = `series:${sk}`.slice(0, 400);
+    if (index.byId.has(seriesId)) toDelete.add(seriesId);
+  }
+
+  return [...toDelete].slice(0, 1000);
+}
+
+/**
  * Remove skip designations by id (Unskip).
  * @param {unknown} ids
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {SkippedEventRecord[]}
  */
 export function removeSkippedEventsFromStore(ids, env = process.env) {
-  const list = (Array.isArray(ids) ? ids : [])
-    .map((id) => String(id || '').trim())
-    .filter(Boolean)
-    .slice(0, 1000);
+  const list = resolveUnskipRecordIds(ids, env);
   if (list.length) {
     try {
       deleteSkippedEventsFinderByIds(list, env);
@@ -268,7 +582,7 @@ export function skippedRecordFromEvent(event, timeZone) {
   if (!id) return null;
   const title = String(event?.title || '').trim().slice(0, 500) || null;
   const start = event?.start != null ? String(event.start).trim().slice(0, 40) || null : null;
-  return {
+  const base = {
     id,
     key: eventNameDateDedupeKey(event, timeZone) || null,
     url: normalizeEventUrlKey(event?.url),
@@ -282,9 +596,10 @@ export function skippedRecordFromEvent(event, timeZone) {
     city: event?.city != null ? String(event.city).trim().slice(0, 120) || null : null,
     imageUrl:
       event?.imageUrl != null ? String(event.imageUrl).trim().slice(0, 2000) || null : null,
-    seriesKey: null,
+    seriesKey: resolveSkipSeriesKey(event),
     skippedAt: new Date().toISOString(),
   };
+  return enrichSkippedRecord(base, timeZone);
 }
 
 /**
@@ -353,6 +668,7 @@ export function removeSkippedById(skipped, id) {
  *   keys: Map<string, SkippedEventRecord>,
  *   seriesKeys: Map<string, SkippedEventRecord>,
  *   titleDays: Map<string, SkippedEventRecord>,
+ *   fuzzyTitles: Map<string, SkippedEventRecord>,
  * }} SkippedEventsIndex
  */
 
@@ -375,18 +691,23 @@ export function buildSkippedEventsIndex(skipped, timeZone) {
     keys: new Map(),
     seriesKeys: new Map(),
     titleDays: new Map(),
+    fuzzyTitles: new Map(),
   };
   const list = Array.isArray(skipped) ? skipped : [];
   for (const s of list) {
     if (!s || typeof s !== 'object') continue;
     if (s.id) index.byId.set(String(s.id).trim(), s);
-    if (s.url) index.urls.set(String(s.url), s);
+    const urlKey = normalizeEventUrlKey(s.url);
+    if (urlKey) index.urls.set(urlKey, s);
     if (s.key) index.keys.set(String(s.key), s);
-    if (s.seriesKey) index.seriesKeys.set(String(s.seriesKey).trim(), s);
+    const seriesKey = resolveSkipSeriesKey(s);
+    if (seriesKey) index.seriesKeys.set(seriesKey, s);
     const titleKey = normalizeEventTitleKey(s.title);
     const skipDay =
       eventLocalDateKey(s.start, tz) || (s.start ? String(s.start).slice(0, 10) : null);
     if (titleKey && skipDay) index.titleDays.set(`${titleKey}|${skipDay}`, s);
+    const fuzzyKey = skipTitleFuzzyLookupKey(s);
+    if (fuzzyKey) index.fuzzyTitles.set(fuzzyKey, s);
   }
   return index;
 }
@@ -420,6 +741,11 @@ export function findSkippedEventMatch(event, index) {
   if (titleKey && eventDay) {
     const hit = index.titleDays.get(`${titleKey}|${eventDay}`);
     if (hit) return hit;
+  }
+
+  const fuzzyKey = skipTitleFuzzyLookupKey(event);
+  if (fuzzyKey && index.fuzzyTitles.has(fuzzyKey)) {
+    return index.fuzzyTitles.get(fuzzyKey) || null;
   }
   return null;
 }
@@ -455,10 +781,12 @@ export function isEventSkipped(event, skipped, timeZone) {
     (event.seriesKey != null ? String(event.seriesKey).trim() : '')
     || eventSeriesDedupeKey(event)
     || '';
+  const fuzzyKey = skipTitleFuzzyLookupKey(event);
 
   for (const s of list) {
     if (id && s.id === id) return true;
-    if (seriesKey && s.seriesKey && seriesKey === s.seriesKey) return true;
+    const skipSeries = resolveSkipSeriesKey(s);
+    if (seriesKey && skipSeries && seriesKey === skipSeries) return true;
     if (url && s.url && url === s.url) return true;
     if (key && s.key && key === s.key) return true;
     // Same title on same local calendar day even if key formatting drifted
@@ -466,8 +794,56 @@ export function isEventSkipped(event, skipped, timeZone) {
       const skipDay = eventLocalDateKey(s.start, tz) || (s.start ? String(s.start).slice(0, 10) : null);
       if (eventDay && skipDay && eventDay === skipDay) return true;
     }
+    if (fuzzyKey && skipTitleFuzzyLookupKey(s) === fuzzyKey) return true;
   }
   return false;
+}
+
+/**
+ * Delete catalog rows that match skip records (id, url, series, name+date).
+ * @param {SkippedEventRecord[]} records
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function deleteEventsFinderMatchingSkipped(records, env = process.env) {
+  const list = normalizeSkippedEvents(records);
+  if (!list.length) return 0;
+  const tz =
+    String(env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim()
+    || 'America/Los_Angeles';
+  const index = buildSkippedEventsIndex(list, tz);
+  let catalog = [];
+  try {
+    catalog = listEventsFinderEvents({ env });
+  } catch {
+    return 0;
+  }
+  const ids = new Set();
+  for (const event of catalog) {
+    if (findSkippedEventMatch(event, index)?.id) {
+      const id = String(event?.id || '').trim();
+      if (id) ids.add(id);
+    }
+  }
+  if (!ids.size) return 0;
+  const db = openEventsFinderDb(env);
+  const stmt = db.prepare('DELETE FROM events WHERE id = ?');
+  let deleted = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const id of ids) {
+      deleted += Number(stmt.run(id).changes) || 0;
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
+  return deleted;
 }
 
 /**

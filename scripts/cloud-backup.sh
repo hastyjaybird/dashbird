@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Nightly (or on-demand) backup of dashbird data on the cloud host.
+# See docs/backups.md for LAN daily/weekly schedules and restore steps.
 # Intended to run ON the VPS via cron, e.g.:
 #   15 3 * * * /opt/dashbird/scripts/cloud-backup.sh >> /var/log/dashbird-backup.log 2>&1
 #

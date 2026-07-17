@@ -5,52 +5,38 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>dashbird</title>
     <!--
-      View gate MUST run before any link[rel=preload]. Firefox stalls for ~20s+ on
-      credential-less crossorigin preloads of basic-auth APIs (/api/config).
+      View gate MUST run before any link[rel=preload]. On cloud (forward_auth cookies),
+      never set crossOrigin on same-origin preloads — Firefox omits cookies and stalls ~20s+.
     -->
     <script>
       (function () {
-        function dbg(hypothesisId, location, message, data) {
-          var payload = {
-            sessionId: '7a319b',
-            runId: 'phone-stall-6',
-            hypothesisId: hypothesisId,
-            location: location,
-            message: message,
-            data: data || {},
-            timestamp: Date.now(),
-          };
-          try {
-            fetch('/api/dev-agent-log', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7a319b' },
-              body: JSON.stringify(payload),
-            }).catch(function () {});
-          } catch (e) {}
-          // #region agent log
-          /* Image beacon survives when fetch is delayed/blocked (Firefox ETP quirks). */
-          try {
-            var img = new Image();
-            img.src =
-              '/api/dev-agent-log?beacon=1&sid=7a319b&hid=' +
-              encodeURIComponent(hypothesisId) +
-              '&loc=' +
-              encodeURIComponent(location) +
-              '&msg=' +
-              encodeURIComponent(String(message || '').slice(0, 80)) +
-              '&t=' +
-              Date.now();
-          } catch (e2) {}
-          // #endregion
-        }
-        // #region agent log
-        dbg('H1', 'index.html:inline-first', 'inline script started', {
-          ua: String(navigator.userAgent || '').slice(0, 160),
-          href: String(location.href || '').slice(0, 80),
-          proto: String(location.protocol || ''),
-        });
-        // #endregion
         try {
+          /* Cloud trusted-device: mirror local device ID to cookie before any fetch. */
+          (function syncDid() {
+            var key = 'dashbird_did';
+            var id = '';
+            var m = document.cookie.match(new RegExp('(?:^|;\\s*)' + key + '=([^;]*)'));
+            if (m) {
+              try {
+                id = decodeURIComponent(m[1]);
+              } catch (e2) {
+                id = m[1];
+              }
+            }
+            if (!id) {
+              try {
+                id = String(localStorage.getItem(key) || '').trim();
+              } catch (e) {}
+            }
+            if (!id && window.crypto && crypto.randomUUID) id = crypto.randomUUID();
+            if (!id) return;
+            try {
+              localStorage.setItem(key, id);
+            } catch (e3) {}
+            var secure = location.protocol === 'https:' ? '; Secure' : '';
+            document.cookie =
+              key + '=' + encodeURIComponent(id) + '; Path=/; SameSite=Lax; Max-Age=31536000' + secure;
+          })();
           if (localStorage.getItem('dashbird-sky-sidebar-hidden') === '1') {
             document.documentElement.classList.add('sky-sidebar-hidden');
           }
@@ -92,28 +78,13 @@
               link.rel = 'preload';
               link.href = desktopPreloads[i][0];
               link.as = desktopPreloads[i][1];
-              if (desktopPreloads[i][1] === 'fetch') link.crossOrigin = 'anonymous';
               document.head.appendChild(link);
             }
           }
-          // #region agent log
-          dbg('A', 'index.html:view-gate', 'view gate decided', {
-            stored: stored,
-            view: view,
-            phoneDetect: phone,
-            hasMobileClass: document.documentElement.classList.contains('dashbird-view-mobile'),
-            ua: String(navigator.userAgent || '').slice(0, 140),
-            isFirefox: /Firefox\//i.test(String(navigator.userAgent || '')),
-          });
-          // #endregion
-        } catch (e) {
-          // #region agent log
-          dbg('E', 'index.html:view-gate', 'view gate error', { error: String(e && e.message || e) });
-          // #endregion
-        }
+        } catch (e) {}
       })();
     </script>
-    <link rel="stylesheet" href="/styles.css?v=ff-h2-2" />
+    <link rel="stylesheet" href="/styles.css?v=mobile-panels-20260716-4" />
     <!-- Instant search: no modules — Enter opens a new tab before app.js loads. -->
     <script>
       window.__dashbirdSearch = (function () {
@@ -201,6 +172,16 @@
         <nav id="mount-page-tabs" class="topbar__tabs-mount" aria-label="Dashboard pages"></nav>
       </div>
       <div class="topbar__end">
+        <div class="topbar__env-links" aria-label="Dashboard environments">
+          <div class="topbar__env-link">
+            <span class="topbar__env-link-label">production link</span>
+            <a class="topbar__env-link-url" href="https://dashbird.duckdns.org/" rel="noopener noreferrer">dashbird.duckdns.org</a>
+          </div>
+          <div class="topbar__env-link">
+            <span class="topbar__env-link-label">developer link</span>
+            <a class="topbar__env-link-url" href="http://127.0.0.1:8788/" rel="noopener noreferrer">127.0.0.1:8788</a>
+          </div>
+        </div>
         <div
           id="mount-topbar-context"
           class="topbar__context"
@@ -444,10 +425,16 @@
           </div>
 
           <div class="row row--stack">
-            <section class="panel panel--glass panel--tasks" aria-labelledby="h-tasks">
-              <h2 id="h-tasks">Tasks</h2>
-              <div id="mount-tasks" class="panel__body tasks-body"></div>
-            </section>
+            <div class="row row--tasks-news">
+              <section class="panel panel--glass panel--tasks" aria-labelledby="h-tasks">
+                <h2 id="h-tasks">Tasks</h2>
+                <div id="mount-tasks" class="panel__body tasks-body"></div>
+              </section>
+              <section class="panel panel--glass panel--main-news" aria-labelledby="h-main-news">
+                <h2 id="h-main-news">News</h2>
+                <div id="mount-main-news" class="panel__body main-news-body"></div>
+              </section>
+            </div>
             <section class="panel panel--glass panel--calendar" aria-labelledby="h-calendar">
               <h2 id="h-calendar">Calendar</h2>
               <div id="mount-calendar" class="panel__body panel__body--calendar"></div>
@@ -647,6 +634,6 @@
       </section>
     </div>
     </div>
-    <script type="module" src="/js/app.js?v=ff-h2-2"></script>
+    <script type="module" src="/js/app.js?v=mobile-panels-20260716-4"></script>
   </body>
 </html>

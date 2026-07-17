@@ -83,6 +83,7 @@ router.put('/', async (req, res) => {
       scrape: saved.scrape,
       favoriteEventIds: saved.favoriteEventIds,
       calendarAddedEventIds: saved.calendarAddedEventIds,
+      conferenceWatchlist: saved.conferenceWatchlist,
       googleCalendar: resolveEventsFinderGoogleCalendar(),
       geo: geoPayload(geo),
       facebookBilling,

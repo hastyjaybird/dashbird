@@ -1,5 +1,10 @@
 import { contactActions } from '../lib/contact-deep-links.js';
 import { formatContactBirthday } from '../lib/network-birthday.js';
+import {
+  pushMobileNav,
+  mobileNavBack,
+  isMobileNavApplying,
+} from '../lib/mobile-history.js';
 
 const RELATIONSHIP_STATUSES = [
   'Lead',
@@ -260,7 +265,6 @@ export function mountNetworkContactsMobile(root) {
         openFilterMenu = menu;
       }
     });
-    menu.addEventListener('click', (e) => e.stopPropagation());
 
     setOptions(options);
     wrapEl.append(span, btn, menu);
@@ -338,6 +342,21 @@ export function mountNetworkContactsMobile(root) {
   );
   toolbar.append(search, filterBar);
 
+  const selectionBar = document.createElement('div');
+  selectionBar.className = 'mobile-network__selection-bar';
+  selectionBar.hidden = true;
+  const selectionCount = document.createElement('span');
+  selectionCount.className = 'mobile-network__selection-count';
+  const addToGroupBtn = document.createElement('button');
+  addToGroupBtn.type = 'button';
+  addToGroupBtn.className = 'mobile-network__selection-btn mobile-network__selection-btn--primary';
+  addToGroupBtn.textContent = 'Add to group';
+  const clearSelectionBtn = document.createElement('button');
+  clearSelectionBtn.type = 'button';
+  clearSelectionBtn.className = 'mobile-network__selection-btn';
+  clearSelectionBtn.textContent = 'Clear';
+  selectionBar.append(selectionCount, addToGroupBtn, clearSelectionBtn);
+
   const listPane = document.createElement('div');
   listPane.className = 'mobile-network__list-pane';
   const list = document.createElement('ul');
@@ -352,7 +371,7 @@ export function mountNetworkContactsMobile(root) {
   status.className = 'mobile-network__status';
   status.textContent = 'Loading…';
 
-  root.append(toolbar, status, listPane, detailPane);
+  root.append(toolbar, selectionBar, status, listPane, detailPane);
 
   /** @type {object[]} */
   let contacts = [];
@@ -362,6 +381,8 @@ export function mountNetworkContactsMobile(root) {
   let relationshipOptions = RELATIONSHIP_STATUSES.slice();
   /** @type {string | null} */
   let selectedId = null;
+  /** @type {Set<string>} */
+  const selectedContactIds = new Set();
   let dirty = false;
 
   let peopleFilters = {
@@ -501,6 +522,96 @@ export function mountNetworkContactsMobile(root) {
     detailPane.replaceChildren();
     listPane.hidden = false;
     toolbar.hidden = false;
+    syncSelectionUi();
+  }
+
+  function syncSelectionUi() {
+    const n = selectedContactIds.size;
+    selectionBar.hidden = n === 0 || !detailPane.hidden;
+    if (n === 0) return;
+    selectionCount.textContent = n === 1 ? '1 selected' : `${n} selected`;
+    addToGroupBtn.textContent = n === 1 ? 'Add to group' : `Add to group (${n})`;
+  }
+
+  /**
+   * Mobile-friendly group picker (replaces desktop prompt()).
+   * @param {object[]} groups
+   * @param {number} contactCount
+   * @returns {Promise<object | null>}
+   */
+  function openGroupPickerDialog(groups, contactCount) {
+    return new Promise((resolve) => {
+      const backdrop = document.createElement('div');
+      backdrop.className = 'mobile-network__sheet-backdrop';
+      backdrop.setAttribute('role', 'presentation');
+
+      const sheet = document.createElement('div');
+      sheet.className = 'mobile-network__sheet';
+      sheet.setAttribute('role', 'dialog');
+      sheet.setAttribute('aria-modal', 'true');
+      sheet.setAttribute('aria-label', 'Add to group');
+
+      const header = document.createElement('div');
+      header.className = 'mobile-network__sheet-head';
+      const title = document.createElement('h3');
+      title.className = 'mobile-network__sheet-title';
+      title.textContent =
+        contactCount === 1 ? 'Add 1 contact to group' : `Add ${contactCount} contacts to group`;
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'mobile-network__sheet-close';
+      closeBtn.textContent = 'Cancel';
+      header.append(title, closeBtn);
+
+      const listEl = document.createElement('ul');
+      listEl.className = 'mobile-network__sheet-list';
+
+      let settled = false;
+      /** @param {object | null} group */
+      function finish(group) {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener('keydown', onKey);
+        backdrop.remove();
+        resolve(group);
+      }
+
+      /** @param {KeyboardEvent} e */
+      function onKey(e) {
+        if (e.key === 'Escape') finish(null);
+      }
+
+      for (const g of groups) {
+        const kind = g.kind === 'event' ? 'Event' : 'Community';
+        const typeBit = g.kind === 'event' && g.eventType ? ` · ${g.eventType}` : '';
+        const memberCount = Array.isArray(g.memberIds) ? g.memberIds.length : 0;
+        const li = document.createElement('li');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'mobile-network__sheet-option';
+        const name = document.createElement('span');
+        name.className = 'mobile-network__sheet-option-name';
+        name.textContent = g.name || 'Untitled';
+        const meta = document.createElement('span');
+        meta.className = 'mobile-network__sheet-option-meta';
+        meta.textContent = `[${kind}${typeBit}] · ${memberCount} member${memberCount === 1 ? '' : 's'}`;
+        btn.append(name, meta);
+        btn.addEventListener('click', () => finish(g));
+        li.append(btn);
+        listEl.append(li);
+      }
+
+      closeBtn.addEventListener('click', () => finish(null));
+      backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) finish(null);
+      });
+
+      sheet.append(header, listEl);
+      backdrop.append(sheet);
+      document.body.append(backdrop);
+      document.addEventListener('keydown', onKey);
+      closeBtn.focus();
+    });
   }
 
   /**
@@ -560,14 +671,20 @@ export function mountNetworkContactsMobile(root) {
 
   /**
    * @param {object} c
+   * @param {{ fromHistory?: boolean }} [opts]
    */
-  function showDetail(c) {
+  function showDetail(c, opts = {}) {
     selectedId = c.id;
     dirty = false;
     listPane.hidden = true;
     toolbar.hidden = true;
+    selectionBar.hidden = true;
     detailPane.hidden = false;
     detailPane.replaceChildren();
+
+    if (!opts.fromHistory && !isMobileNavApplying()) {
+      pushMobileNav({ tab: 'network', pane: 'contact', contactId: String(c.id) });
+    }
 
     /** @type {object} */
     let current = c;
@@ -578,8 +695,7 @@ export function mountNetworkContactsMobile(root) {
     back.textContent = '← Contacts';
     back.addEventListener('click', () => {
       if (dirty && !confirm('Discard unsaved changes?')) return;
-      showList();
-      renderList();
+      mobileNavBack();
     });
 
     const head = document.createElement('div');
@@ -926,6 +1042,21 @@ export function mountNetworkContactsMobile(root) {
     for (const c of items) {
       const li = document.createElement('li');
       li.className = 'mobile-network__row';
+      li.classList.toggle('mobile-network__row--selected', selectedContactIds.has(c.id));
+
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.className = 'mobile-network__row-select';
+      check.checked = selectedContactIds.has(c.id);
+      check.setAttribute('aria-label', `Select ${contactName(c)}`);
+      check.addEventListener('click', (e) => e.stopPropagation());
+      check.addEventListener('change', () => {
+        if (check.checked) selectedContactIds.add(c.id);
+        else selectedContactIds.delete(c.id);
+        li.classList.toggle('mobile-network__row--selected', check.checked);
+        syncSelectionUi();
+      });
+
       const avatar = document.createElement('div');
       avatar.className = 'mobile-network__avatar';
       const avatarUrl = String(c.avatarUrl || '').trim();
@@ -950,10 +1081,14 @@ export function mountNetworkContactsMobile(root) {
       if (subText) subEl.textContent = subText;
       else subEl.hidden = true;
       body.append(name, subEl);
-      li.append(avatar, body);
-      li.addEventListener('click', () => showDetail(c));
+      li.append(check, avatar, body);
+      li.addEventListener('click', (e) => {
+        if (e.target instanceof Element && e.target.closest('.mobile-network__row-select')) return;
+        showDetail(c);
+      });
       list.append(li);
     }
+    syncSelectionUi();
   }
 
   search.addEventListener('input', () => {
@@ -973,51 +1108,75 @@ export function mountNetworkContactsMobile(root) {
   locationFilter.onChange(onFilterChange);
   hidePausedFilter.cb.addEventListener('change', onFilterChange);
   hideFormerFilter.cb.addEventListener('change', onFilterChange);
-  document.addEventListener('click', closeOpenFilterMenu);
+  document.addEventListener('pointerdown', (e) => {
+    if (e.target instanceof Element && e.target.closest('.mobile-network__filter--multi')) return;
+    closeOpenFilterMenu();
+  });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeOpenFilterMenu();
   });
 
+  clearSelectionBtn.addEventListener('click', () => {
+    selectedContactIds.clear();
+    renderList();
+  });
+
+  addToGroupBtn.addEventListener('click', async () => {
+    const ids = [...selectedContactIds];
+    if (!ids.length) return;
+    status.hidden = false;
+    status.textContent = 'Loading groups…';
+    try {
+      const r = await fetch('/api/network/groups');
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'groups_failed');
+      const groups = Array.isArray(j.groups) ? j.groups : [];
+      if (!groups.length) {
+        status.textContent = 'No groups yet — create one from the Groups tab first.';
+        return;
+      }
+      status.hidden = true;
+      const group = await openGroupPickerDialog(groups, ids.length);
+      if (!group) return;
+      status.hidden = false;
+      status.textContent = 'Adding to group…';
+      const ar = await fetch(`/api/network/groups/${encodeURIComponent(group.id)}/members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactIds: ids }),
+      });
+      const aj = await ar.json();
+      if (!aj.ok) throw new Error(aj.error || 'add_failed');
+      selectedContactIds.clear();
+      syncSelectionUi();
+      if (group.kind !== 'event') {
+        try {
+          const cr = await fetch('/api/network/contacts', { cache: 'no-store' });
+          const cj = await cr.json();
+          if (cr.ok && cj.ok !== false && Array.isArray(cj.contacts)) {
+            contacts = cj.contacts.slice();
+            contacts.sort((a, b) =>
+              contactName(a).localeCompare(contactName(b), undefined, { sensitivity: 'base' }),
+            );
+          }
+        } catch {
+          /* keep existing contacts */
+        }
+      }
+      renderList();
+      status.textContent = `Added to ${group.name || 'group'}`;
+      setTimeout(() => {
+        if (status.textContent.startsWith('Added to')) status.hidden = true;
+      }, 2000);
+    } catch (err) {
+      status.textContent = String(err?.message || err);
+    }
+  });
+
   async function load() {
-    // #region agent log
-    const t0 = Date.now();
-    fetch('/api/dev-agent-log', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7a319b' },
-      body: JSON.stringify({
-        sessionId: '7a319b',
-        runId: 'phone-stall',
-        hypothesisId: 'C',
-        location: 'network-contacts-mobile.js:load:start',
-        message: 'GET /api/network/contacts starting',
-        data: {},
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
     try {
       const r = await fetch('/api/network/contacts', { cache: 'no-store' });
       const data = await r.json().catch(() => ({}));
-      // #region agent log
-      fetch('/api/dev-agent-log', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7a319b' },
-        body: JSON.stringify({
-          sessionId: '7a319b',
-          runId: 'phone-stall',
-          hypothesisId: 'C',
-          location: 'network-contacts-mobile.js:load:done',
-          message: 'contacts fetch finished',
-          data: {
-            ms: Date.now() - t0,
-            ok: r.ok,
-            status: r.status,
-            count: Array.isArray(data.contacts) ? data.contacts.length : -1,
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
       if (!r.ok || data.ok === false) {
         throw new Error(data.error || `HTTP ${r.status}`);
       }
@@ -1032,57 +1191,39 @@ export function mountNetworkContactsMobile(root) {
       contacts.sort((a, b) =>
         contactName(a).localeCompare(contactName(b), undefined, { sensitivity: 'base' }),
       );
-      // #region agent log
-      const withAvatar = contacts.filter((c) => String(c.avatarUrl || '').trim()).length;
-      // #endregion
       renderList();
-      // #region agent log
-      const pane = root.closest('.mobile-shell__pane') || root;
-      fetch('/api/dev-agent-log', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7a319b' },
-        body: JSON.stringify({
-          sessionId: '7a319b',
-          runId: 'phone-stall-2',
-          hypothesisId: 'G',
-          location: 'network-contacts-mobile.js:load:rendered',
-          message: 'contacts list rendered',
-          data: {
-            ms: Date.now() - t0,
-            count: contacts.length,
-            withAvatar,
-            listKids: list.childElementCount,
-            rootH: root.clientHeight,
-            paneH: pane.clientHeight,
-            winH: window.innerHeight,
-            docH: document.documentElement.clientHeight,
-            scrollH: pane.scrollHeight,
-            dpr: window.devicePixelRatio || 1,
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
+      const navState = history.state;
+      if (
+        navState?.dashbirdMobile &&
+        navState.tab === 'network' &&
+        navState.pane === 'contact' &&
+        navState.contactId
+      ) {
+        document.dispatchEvent(new CustomEvent('dashbird:mobile-nav', { detail: navState }));
+      }
     } catch (e) {
-      // #region agent log
-      fetch('/api/dev-agent-log', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '7a319b' },
-        body: JSON.stringify({
-          sessionId: '7a319b',
-          runId: 'phone-stall',
-          hypothesisId: 'C',
-          location: 'network-contacts-mobile.js:load:error',
-          message: 'contacts fetch failed',
-          data: { ms: Date.now() - t0, error: String(e?.message || e) },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
       status.hidden = false;
       status.textContent = `Could not load contacts: ${e?.message || e}`;
     }
   }
 
   void load();
+
+  document.addEventListener('dashbird:mobile-nav', (e) => {
+    const s = e.detail;
+    if (!s || s.tab !== 'network') return;
+    if (s.pane === 'list') {
+      showList();
+      renderList();
+      return;
+    }
+    if (s.pane === 'contact' && s.contactId) {
+      const c = contacts.find((x) => String(x.id) === String(s.contactId));
+      if (c) showDetail(c, { fromHistory: true });
+      else {
+        showList();
+        renderList();
+      }
+    }
+  });
 }

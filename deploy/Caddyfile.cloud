@@ -27,9 +27,19 @@
 		format json
 	}
 
-	basic_auth {
-		{$DASHBOARD_BASIC_AUTH_USER} {$DASHBOARD_BASIC_AUTH_HASH}
+	# Trusted-device bypass: only allowlisted device IDs (Jay home Linux + phone).
+	# /auth/device-bind seeds cookies once per device — no password on later visits.
+	route {
+		@device_bind path /auth/device-bind
+		handle @device_bind {
+			reverse_proxy dashboard:3000
+		}
+		handle {
+			forward_auth dashboard:3000 {
+				uri /api/trusted-device/auth
+				copy_headers Set-Cookie
+			}
+			reverse_proxy dashboard:3000
+		}
 	}
-
-	reverse_proxy dashboard:3000
 }

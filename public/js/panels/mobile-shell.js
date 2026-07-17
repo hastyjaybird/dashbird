@@ -1,4 +1,14 @@
+import {
+  initMobileHistory,
+  pushMobileNav,
+  setMobileNavApplyHandler,
+  runMobileNavApply,
+  isMobileNavApplying,
+} from '../lib/mobile-history.js';
+
 const MOBILE_TAB_KEY = 'dashbirdMobileTab';
+/** Bump when any mobile panel module changes (cache-bust dynamic imports). */
+const MOBILE_PANELS_V = 'mobile-panels-20260716-4';
 
 /**
  * @returns {'network' | 'events' | 'groups' | 'tasks'}
@@ -10,7 +20,7 @@ function loadTab() {
   } catch {
     /* ignore */
   }
-  return 'events';
+  return 'network';
 }
 
 /**
@@ -25,7 +35,7 @@ function saveTab(tab) {
 }
 
 /**
- * Lean mobile shell: Events | Network | Groups | Tasks.
+ * Lean mobile shell: Contacts | Groups | Events | Tasks.
  * @param {{
  *   tabsRoot?: HTMLElement | null,
  *   networkRoot?: HTMLElement | null,
@@ -54,27 +64,27 @@ export function mountMobileShell(mounts = {}) {
   let groupsMounted = false;
   let tasksMounted = false;
 
-  const eventsBtn = document.createElement('button');
-  eventsBtn.type = 'button';
-  eventsBtn.className = 'mobile-shell__tab';
-  eventsBtn.textContent = 'Events';
-
   const networkBtn = document.createElement('button');
   networkBtn.type = 'button';
   networkBtn.className = 'mobile-shell__tab';
-  networkBtn.textContent = 'Network';
+  networkBtn.textContent = 'Contacts';
 
   const groupsBtn = document.createElement('button');
   groupsBtn.type = 'button';
   groupsBtn.className = 'mobile-shell__tab';
   groupsBtn.textContent = 'Groups';
 
+  const eventsBtn = document.createElement('button');
+  eventsBtn.type = 'button';
+  eventsBtn.className = 'mobile-shell__tab';
+  eventsBtn.textContent = 'Events';
+
   const tasksBtn = document.createElement('button');
   tasksBtn.type = 'button';
   tasksBtn.className = 'mobile-shell__tab';
   tasksBtn.textContent = 'Tasks';
 
-  tabsRoot.append(eventsBtn, networkBtn, groupsBtn, tasksBtn);
+  tabsRoot.append(networkBtn, groupsBtn, eventsBtn, tasksBtn);
 
   function syncTabs() {
     networkBtn.classList.toggle('mobile-shell__tab--active', tab === 'network');
@@ -100,7 +110,9 @@ export function mountMobileShell(mounts = {}) {
     status.textContent = 'Loading contacts…';
     networkRoot.append(status);
     try {
-      const { mountNetworkContactsMobile } = await import('./network-contacts-mobile.js');
+      const { mountNetworkContactsMobile } = await import(
+        `./network-contacts-mobile.js?v=${MOBILE_PANELS_V}`
+      );
       mountNetworkContactsMobile(networkRoot);
     } catch (e) {
       status.textContent = `Contacts failed: ${e?.message || e}`;
@@ -117,7 +129,9 @@ export function mountMobileShell(mounts = {}) {
     status.textContent = 'Loading events…';
     eventsRoot.append(status);
     try {
-      const { mountEventsFinderMobile } = await import('./events-finder-mobile.js');
+      const { mountEventsFinderMobile } = await import(
+        `./events-finder-mobile.js?v=${MOBILE_PANELS_V}`
+      );
       mountEventsFinderMobile(eventsRoot);
     } catch (e) {
       status.textContent = `Events failed: ${e?.message || e}`;
@@ -134,7 +148,9 @@ export function mountMobileShell(mounts = {}) {
     status.textContent = 'Loading groups…';
     groupsRoot.append(status);
     try {
-      const { mountNetworkGroupsMobile } = await import('./network-groups-mobile.js');
+      const { mountNetworkGroupsMobile } = await import(
+        `./network-groups-mobile.js?v=${MOBILE_PANELS_V}`
+      );
       mountNetworkGroupsMobile(groupsRoot);
     } catch (e) {
       status.textContent = `Groups failed: ${e?.message || e}`;
@@ -152,7 +168,7 @@ export function mountMobileShell(mounts = {}) {
     tasksRoot.append(status);
     try {
       const [{ mountTasksMobile }, config] = await Promise.all([
-        import('./tasks-mobile.js'),
+        import(`./tasks-mobile.js?v=${MOBILE_PANELS_V}`),
         fetch('/api/config', { cache: 'no-store' })
           .then((r) => r.json())
           .catch(() => ({})),
@@ -166,21 +182,51 @@ export function mountMobileShell(mounts = {}) {
 
   /**
    * @param {'network' | 'events' | 'groups' | 'tasks'} next
+   * @param {{ fromHistory?: boolean }} [opts]
    */
-  function setTab(next) {
+  async function setTab(next, opts = {}) {
     tab = next;
     saveTab(tab);
     syncTabs();
-    if (tab === 'network') void ensureNetwork();
-    else if (tab === 'groups') void ensureGroups();
-    else if (tab === 'tasks') void ensureTasks();
-    else void ensureEvents();
+    if (tab === 'network') await ensureNetwork();
+    else if (tab === 'groups') await ensureGroups();
+    else if (tab === 'tasks') await ensureTasks();
+    else await ensureEvents();
   }
 
-  networkBtn.addEventListener('click', () => setTab('network'));
-  eventsBtn.addEventListener('click', () => setTab('events'));
-  groupsBtn.addEventListener('click', () => setTab('groups'));
-  tasksBtn.addEventListener('click', () => setTab('tasks'));
+  /**
+   * @param {'network' | 'events' | 'groups' | 'tasks'} next
+   */
+  function onTabClick(next) {
+    if (isMobileNavApplying()) return;
+    if (next === tab) {
+      pushMobileNav({ tab: next, pane: 'list' });
+      document.dispatchEvent(
+        new CustomEvent('dashbird:mobile-nav', { detail: { tab: next, pane: 'list' } }),
+      );
+      return;
+    }
+    pushMobileNav({ tab: next, pane: 'list' });
+    void setTab(next).then(() => {
+      document.dispatchEvent(
+        new CustomEvent('dashbird:mobile-nav', { detail: { tab: next, pane: 'list' } }),
+      );
+    });
+  }
 
-  setTab(tab);
+  initMobileHistory(tab);
+
+  setMobileNavApplyHandler((state) =>
+    runMobileNavApply(state, async (s) => {
+      if (s.tab !== tab) await setTab(s.tab, { fromHistory: true });
+      document.dispatchEvent(new CustomEvent('dashbird:mobile-nav', { detail: s }));
+    }),
+  );
+
+  networkBtn.addEventListener('click', () => onTabClick('network'));
+  eventsBtn.addEventListener('click', () => onTabClick('events'));
+  groupsBtn.addEventListener('click', () => onTabClick('groups'));
+  tasksBtn.addEventListener('click', () => onTabClick('tasks'));
+
+  void setTab(tab);
 }

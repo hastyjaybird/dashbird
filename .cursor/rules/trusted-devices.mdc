@@ -1,0 +1,22 @@
+---
+description: Jay's two trusted Dashbird cloud devices — passwordless access only for these
+alwaysApply: true
+---
+
+# Trusted cloud devices (Jay only)
+
+Dashbird cloud (`dashbird.duckdns.org`) uses HTTP basic auth. **Only two devices skip the password** — never weaken this to “any device after login.”
+
+| Device | Unique ID |
+|--------|-----------|
+| Home Linux laptop | `edd37155-3ffe-4d18-a775-d6cdcedbf343` |
+| Cell phone | `1c0c1947-ad36-4032-aed5-00eb5b28e166` |
+
+Configured via `DASHBOARD_TRUSTED_DEVICE_IDS` in cloud `.env` (see `deploy/env.cloud.example`).
+
+## Agent behavior
+
+- Do **not** ask Jay for the cloud basic-auth password when working on trusted-device auth for these two IDs.
+- Do **not** broaden passwordless access to other devices, IPs, or “trust on first login” for everyone.
+- LAN `docker-compose.yml` stays **without** auth — this rule is cloud-only.
+- One-time setup per device: bookmark `/auth/device-bind?did=<id>` (documented in `docs/deploy-vultr.md`).

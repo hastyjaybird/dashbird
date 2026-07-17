@@ -250,6 +250,17 @@ function mergeTasteLines(existing, additions) {
 }
 
 /**
+ * @param {string} block
+ * @returns {string[]}
+ */
+function tasteLinesFromBlock(block) {
+  return String(block || '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/#.*$/, '').trim())
+    .filter((line) => line && !line.startsWith('//'));
+}
+
+/**
  * Client mirror of server taste matching (events-finder-taste.js).
  * Used to refilter the cached feed immediately when Skip words change.
  * @param {string} block
@@ -602,6 +613,59 @@ export function mountEventsFinder(root) {
   timeField.append(timeInput);
   filterPanel.append(timeField);
 
+  const conferenceField = document.createElement('div');
+  conferenceField.className = 'events-finder__field events-finder__field--conferences';
+
+  const conferenceToggle = document.createElement('button');
+  conferenceToggle.type = 'button';
+  conferenceToggle.className = 'events-finder__conferences-toggle';
+  conferenceToggle.setAttribute('aria-expanded', 'false');
+  conferenceToggle.setAttribute('aria-controls', 'events-finder-conferences-panel');
+  conferenceToggle.textContent = 'Big conferences & festivals';
+  conferenceToggle.title =
+    'Track big events with ~2 month heads-up — finds the site, dates, ticket price, and early bird windows.';
+
+  const conferencePanel = document.createElement('div');
+  conferencePanel.id = 'events-finder-conferences-panel';
+  conferencePanel.className = 'events-finder__conferences-panel';
+  conferencePanel.hidden = true;
+
+  const conferenceHint = document.createElement('p');
+  conferenceHint.className = 'events-finder__conferences-hint muted';
+  conferenceHint.textContent =
+    'One name per line. Dashbird searches for the official site, event dates, ticket price, and early bird sale start/end.';
+
+  const conferenceInput = document.createElement('textarea');
+  conferenceInput.id = 'events-finder-conferences';
+  conferenceInput.className = 'events-finder__conferences-input';
+  conferenceInput.rows = 4;
+  conferenceInput.placeholder = 'e.g. open sauce';
+  conferenceInput.spellcheck = true;
+  conferenceInput.title = 'Conference or festival names to watch';
+
+  conferencePanel.append(conferenceHint, conferenceInput);
+  conferenceField.append(conferenceToggle, conferencePanel);
+  filterPanel.append(conferenceField);
+
+  conferenceToggle.addEventListener('click', () => {
+    const open = conferencePanel.hidden;
+    conferencePanel.hidden = !open;
+    conferenceToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    conferenceToggle.classList.toggle('events-finder__conferences-toggle--open', open);
+  });
+
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let conferenceAutosaveTimer = null;
+
+  conferenceInput.addEventListener('input', () => {
+    if (!filtersReady || applyingCriteria) return;
+    if (conferenceAutosaveTimer) clearTimeout(conferenceAutosaveTimer);
+    conferenceAutosaveTimer = setTimeout(() => {
+      conferenceAutosaveTimer = null;
+      void autosaveConferenceWatchlist();
+    }, FILTER_AUTOSAVE_MS);
+  });
+
   const filterActions = document.createElement('div');
   filterActions.className = 'events-finder__filter-actions';
 
@@ -635,7 +699,7 @@ export function mountEventsFinder(root) {
 
   root.append(toolbar, filterPanel, listEl);
 
-  /** @type {{ lookFor: string, skip: string, blacklist: string, scrape?: object, hiddenEventIds: string[], skippedEvents: object[], favoriteEventIds: string[], calendarAddedEventIds: string[] } | null} */
+  /** @type {{ lookFor: string, skip: string, blacklist: string, scrape?: object, hiddenEventIds: string[], skippedEvents: object[], favoriteEventIds: string[], calendarAddedEventIds: string[], conferenceWatchlist: string[] } | null} */
   let taste = null;
   let filtersReady = false;
   /** Suppress autosave while applying server/cache criteria into the form. */
@@ -1005,6 +1069,17 @@ export function mountEventsFinder(root) {
   }
 
   /**
+   * @returns {string[]}
+   */
+  function readConferenceWatchlistFromForm() {
+    return String(conferenceInput.value || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim().replace(/\s+/g, ' '))
+      .filter(Boolean)
+      .slice(0, 30);
+  }
+
+  /**
    * Build browse filters from the form, or null if values are incomplete/invalid
    * (e.g. user still typing a ZIP).
    * @returns {Record<string, unknown> | null}
@@ -1078,6 +1153,19 @@ export function mountEventsFinder(root) {
   }
 
   /**
+   * @returns {Promise<boolean>}
+   */
+  async function autosaveConferenceWatchlist() {
+    const conferenceWatchlist = readConferenceWatchlistFromForm();
+    const ok = await saveCriteria({
+      silent: true,
+      conferenceWatchlist,
+    });
+    if (ok) void loadEvents({ catalogOnly: true, quiet: true });
+    return ok;
+  }
+
+  /**
    * Wait until any in-flight criteria save finishes (for silent favorite/hide patches).
    * @param {number} [timeoutMs]
    */
@@ -1093,7 +1181,7 @@ export function mountEventsFinder(root) {
 
   /**
    * Persist current taste + feed filters (and optional hidden/favorite ids).
-   * @param {{ lookFor?: string, skip?: string, blacklist?: string, hiddenEventIds?: string[], skippedEvents?: object[], unskipEventIds?: string[], favoriteEventIds?: string[], calendarAddedEventIds?: string[], silent?: boolean, includeFilters?: boolean, filters?: Record<string, unknown>, waitForIdle?: boolean }} [patch]
+   * @param {{ lookFor?: string, skip?: string, blacklist?: string, hiddenEventIds?: string[], skippedEvents?: object[], unskipEventIds?: string[], favoriteEventIds?: string[], calendarAddedEventIds?: string[], conferenceWatchlist?: string[], silent?: boolean, includeFilters?: boolean, filters?: Record<string, unknown>, waitForIdle?: boolean }} [patch]
    * @returns {Promise<boolean>}
    */
   async function saveCriteria(patch = {}) {
@@ -1144,6 +1232,11 @@ export function mountEventsFinder(root) {
         body.calendarAddedEventIds = patch.calendarAddedEventIds;
       } else if (!patch.silent) {
         body.calendarAddedEventIds = taste?.calendarAddedEventIds ?? [];
+      }
+      if (patch.conferenceWatchlist !== undefined) {
+        body.conferenceWatchlist = patch.conferenceWatchlist;
+      } else if (!patch.silent) {
+        body.conferenceWatchlist = taste?.conferenceWatchlist ?? readConferenceWatchlistFromForm();
       }
       // Silent taste/skip saves omit filters so they don't clobber ZIP/radius/dates.
       // Autosave and explicit Save pass includeFilters (or non-silent) to persist browse state.
@@ -1218,6 +1311,11 @@ export function mountEventsFinder(root) {
           : (patch.calendarAddedEventIds !== undefined
             ? patch.calendarAddedEventIds.map(String)
             : (taste?.calendarAddedEventIds || [])),
+        conferenceWatchlist: Array.isArray(data.conferenceWatchlist)
+          ? data.conferenceWatchlist.map(String)
+          : (patch.conferenceWatchlist !== undefined
+            ? patch.conferenceWatchlist.map(String)
+            : (taste?.conferenceWatchlist || [])),
       };
       writePanelCache(CRITERIA_CACHE_KEY, {
         lookFor: taste.lookFor,
@@ -1228,9 +1326,13 @@ export function mountEventsFinder(root) {
         skippedEvents: taste.skippedEvents,
         favoriteEventIds: taste.favoriteEventIds,
         calendarAddedEventIds: taste.calendarAddedEventIds,
+        conferenceWatchlist: taste.conferenceWatchlist,
         filters: data.filters,
         geo: data.geo,
       });
+      if (patch.conferenceWatchlist !== undefined) {
+        conferenceInput.value = taste.conferenceWatchlist.join('\n');
+      }
       if (data.filters?.earliestLocalTime) {
         timeInput.value = normalizeLocalTime(data.filters.earliestLocalTime) || data.filters.earliestLocalTime;
       }
@@ -1380,7 +1482,7 @@ export function mountEventsFinder(root) {
     const save = document.createElement('button');
     save.type = 'button';
     save.className = 'events-finder__modal-btn events-finder__modal-btn--primary';
-    save.textContent = wantMore ? 'Add to Look for' : 'Save & skip event';
+    save.textContent = wantMore ? 'Add to Look for' : 'Skip event';
 
     const close = () => backdrop.remove();
     cancel.addEventListener('click', close);
@@ -1404,11 +1506,7 @@ export function mountEventsFinder(root) {
         msg.textContent = 'Add at least one preference line.';
         return;
       }
-      if (!wantMore && !hasGrey && !hasBlack) {
-        msg.hidden = false;
-        msg.textContent = 'Add at least one grey-list or black-list line (or both).';
-        return;
-      }
+      // Skip the event even when no taste lines are added — optional grey/black refine the feed.
       save.disabled = true;
       msg.hidden = false;
       msg.textContent = 'Saving…';
@@ -1440,13 +1538,25 @@ export function mountEventsFinder(root) {
         const id = String(ev.id || '').trim();
         if (id) {
           const record = skippedRecordFromEventLocal(ev);
+          /** @type {object[]} */
+          const skipBatch = record ? [record] : [];
+          const seriesKey = String(record?.seriesKey || '').trim();
+          if (record && seriesKey) {
+            const seriesRecord = skippedRecordFromEventLocal(ev, { series: true });
+            if (seriesRecord) skipBatch.push(seriesRecord);
+          }
+          if (record) {
+            if (hasGrey) record.tasteGrey = tasteLinesFromBlock(greyAdditions);
+            if (hasBlack) record.tasteBlack = tasteLinesFromBlock(blackAdditions);
+          }
+          const batchIds = new Set(skipBatch.map((s) => String(s?.id || '')).filter(Boolean));
           const prevSkipped = Array.isArray(taste?.skippedEvents) ? [...taste.skippedEvents] : [];
           const nextSkipped = [
-            record,
-            ...prevSkipped.filter((s) => String(s?.id || '') !== id),
+            ...skipBatch,
+            ...prevSkipped.filter((s) => !batchIds.has(String(s?.id || ''))),
           ].filter(Boolean);
-          // Upsert only this record — server merges; never send a stale full list.
-          patch.skippedEvents = record ? [record] : [];
+          // Upsert only this batch — server merges + expands series; never send a stale full list.
+          patch.skippedEvents = skipBatch;
           if (taste) {
             taste = {
               ...taste,
@@ -1532,13 +1642,28 @@ export function mountEventsFinder(root) {
       venue: String(ev.venue || ev.location || '').trim() || null,
       city: ev.city != null ? String(ev.city) : null,
       imageUrl: String(ev.imageUrl || '').trim() || null,
-      seriesKey: null,
+      seriesKey,
       skippedAt: new Date().toISOString(),
     };
   }
 
+  function normalizeSkipTitleFuzzyKey(title) {
+    const base = String(title || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!base) return '';
+    return base
+      .replace(/\b\d{1,2}(:\d{2})?\s*(am|pm)\b/g, ' ')
+      .replace(/\bfrom\s+(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+)?to\b/g, 'from-to')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   /**
-   * Client-side skip match (id / url / title+day / series) so filter repaints never revive skips.
+   * Client-side skip match (id / url / title+day / series / fuzzy title) so filter repaints never revive skips.
    * @param {object} event
    * @param {object[]} skipped
    * @returns {boolean}
@@ -1551,6 +1676,9 @@ export function mountEventsFinder(root) {
     const title = String(event.title || '').trim().toLowerCase();
     const day = event.start != null ? String(event.start).slice(0, 10) : '';
     const seriesKey = String(event.seriesKey || '').trim();
+    const source = String(event.source || '').trim().toLowerCase();
+    const fuzzy = normalizeSkipTitleFuzzyKey(event.title);
+    const fuzzyKey = fuzzy.length >= 24 && source ? `${source}|${fuzzy}` : '';
     for (const s of list) {
       if (id && String(s?.id || '') === id) return true;
       const sSeries = String(s?.seriesKey || '').trim();
@@ -1560,8 +1688,29 @@ export function mountEventsFinder(root) {
       const sTitle = String(s?.title || '').trim().toLowerCase();
       const sDay = s?.start != null ? String(s.start).slice(0, 10) : '';
       if (title && sTitle && title === sTitle && day && sDay && day === sDay) return true;
+      if (fuzzyKey) {
+        const sSource = String(s?.source || '').trim().toLowerCase();
+        const sFuzzy = normalizeSkipTitleFuzzyKey(s?.title);
+        if (sSource && sFuzzy.length >= 24 && `${sSource}|${sFuzzy}` === fuzzyKey) return true;
+      }
     }
     return false;
+  }
+
+  /**
+   * @param {object} ev
+   * @param {object} record
+   */
+  function eventMatchesSkipRecord(ev, record) {
+    if (!ev || !record) return false;
+    const id = String(ev?.id || '').trim();
+    const recordId = String(record?.id || '').trim();
+    if (id && recordId && id === recordId) return true;
+    const seriesKey = String(ev?.seriesKey || '').trim();
+    const recordSeries = String(record?.seriesKey || '').trim();
+    if (seriesKey && recordSeries && seriesKey === recordSeries) return true;
+    if (recordId.startsWith('series:') && recordSeries && seriesKey === recordSeries) return true;
+    return eventMatchesSkippedLocal(ev, [record]);
   }
 
   /**
@@ -1572,17 +1721,24 @@ export function mountEventsFinder(root) {
     const id = String(ev.id || '').trim();
     if (!id) return;
     if (!filtersReady) return;
-    if (opts.series && !ev.isSeries) return;
+    if (opts.series && !String(ev.seriesKey || '').trim()) return;
     // Zoom/pan stay put via mapDidInitialFit (do not touch mapViewBeforePopup —
     // that stash is only for restoring the pre-pin-popup view).
     const record = skippedRecordFromEventLocal(ev, { series: Boolean(opts.series) });
     if (!record) return;
     const recordId = String(record.id || '');
     const seriesKey = String(record.seriesKey || '').trim();
+    /** @type {object[]} */
+    const skipBatch = [record];
+    if (!opts.series && seriesKey) {
+      const seriesRecord = skippedRecordFromEventLocal(ev, { series: true });
+      if (seriesRecord) skipBatch.push(seriesRecord);
+    }
     const prevSkipped = Array.isArray(taste?.skippedEvents) ? [...taste.skippedEvents] : [];
+    const batchIds = new Set(skipBatch.map((s) => String(s?.id || '')).filter(Boolean));
     const nextSkipped = [
-      record,
-      ...prevSkipped.filter((s) => String(s?.id || '') !== recordId),
+      ...skipBatch,
+      ...prevSkipped.filter((s) => !batchIds.has(String(s?.id || ''))),
     ].filter(Boolean);
     const nextHidden = nextSkipped.map((s) => String(s.id));
     if (taste) {
@@ -1590,19 +1746,14 @@ export function mountEventsFinder(root) {
     }
     // Optimistic remove from main feed (whole series when requested).
     if (lastEventsPayload && Array.isArray(lastEventsPayload.events)) {
-      const removed = lastEventsPayload.events.filter((e) => {
-        if (String(e?.id || '') === id) return true;
-        if (seriesKey && String(e?.seriesKey || '') === seriesKey) return true;
-        return false;
-      });
-      const removedIds = new Set(removed.map((e) => String(e?.id || '')).filter(Boolean));
+      const removed = lastEventsPayload.events.filter((e) =>
+        skipBatch.some((rec) => eventMatchesSkipRecord(e, rec)),
+      );
       lastEventsPayload = {
         ...lastEventsPayload,
-        events: lastEventsPayload.events.filter((e) => {
-          if (removedIds.has(String(e?.id || ''))) return false;
-          if (seriesKey && String(e?.seriesKey || '') === seriesKey) return false;
-          return true;
-        }),
+        events: lastEventsPayload.events.filter(
+          (e) => !skipBatch.some((rec) => eventMatchesSkipRecord(e, rec)),
+        ),
         skippedEvents: [
           {
             ...(removed[0] || ev),
@@ -1620,8 +1771,28 @@ export function mountEventsFinder(root) {
       };
       paintEvents(lastEventsPayload);
     }
+    // #region agent log
+    fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '25d735' },
+      body: JSON.stringify({
+        sessionId: '25d735',
+        runId: 'pre-fix',
+        hypothesisId: 'A-D',
+        location: 'events-finder.js:hideEvent',
+        message: 'client skip',
+        data: {
+          id: recordId,
+          title: record.title || null,
+          seriesKey: seriesKey || null,
+          seriesMode: Boolean(opts.series),
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
     const ok = await saveCriteria({
-      skippedEvents: [record],
+      skippedEvents: skipBatch,
       silent: true,
       waitForIdle: true,
     });
@@ -1795,6 +1966,73 @@ export function mountEventsFinder(root) {
       if (taste) taste = { ...taste, calendarAddedEventIds: prev };
       void loadEvents();
     }
+  }
+
+  /**
+   * @param {object} item
+   * @returns {HTMLElement}
+   */
+  function buildConferenceHeadsUpCard(item) {
+    const card = document.createElement('article');
+    card.className = 'events-finder__card events-finder__card--conference-heads-up';
+    const eventUrl = String(item.url || '').trim();
+
+    const badge = document.createElement('p');
+    badge.className = 'events-finder__conference-badge';
+    badge.textContent = '2-month heads-up';
+
+    const head = document.createElement('div');
+    head.className = 'events-finder__card-head';
+    const title = document.createElement(eventUrl ? 'a' : 'div');
+    title.className = 'events-finder__card-title';
+    title.textContent = item.title || item.query || 'Conference';
+    if (eventUrl && title instanceof HTMLAnchorElement) {
+      title.href = eventUrl;
+      title.target = '_blank';
+      title.rel = 'noopener noreferrer';
+    }
+    head.append(title);
+
+    const whenEl = document.createElement('p');
+    whenEl.className = 'events-finder__card-meta';
+    whenEl.textContent = String(item.whenLabel || 'Dates TBD');
+
+    const placeEl = document.createElement('p');
+    placeEl.className = 'events-finder__card-place';
+    if (item.placeLabel) {
+      placeEl.textContent = String(item.placeLabel);
+    } else {
+      placeEl.hidden = true;
+    }
+
+    const ticketEl = document.createElement('p');
+    ticketEl.className = 'events-finder__conference-ticket';
+    if (item.researching) {
+      ticketEl.textContent = 'Looking up dates and tickets…';
+    } else if (item.earlyBirdLine) {
+      ticketEl.textContent = String(item.earlyBirdLine);
+      if (item.earlyBirdKind === 'active') {
+        ticketEl.classList.add('events-finder__conference-ticket--active');
+      }
+    } else if (item.ticketPrice) {
+      ticketEl.textContent = String(item.ticketPrice);
+    } else if (item.error) {
+      ticketEl.textContent = 'Could not find ticket details yet — will retry.';
+      ticketEl.classList.add('muted');
+    } else {
+      ticketEl.hidden = true;
+    }
+
+    const notesEl = document.createElement('p');
+    notesEl.className = 'events-finder__card-desc muted';
+    if (item.notes && !item.researching) {
+      notesEl.textContent = String(item.notes).slice(0, 220);
+    } else {
+      notesEl.hidden = true;
+    }
+
+    card.append(badge, head, whenEl, placeEl, ticketEl, notesEl);
+    return card;
   }
 
   /**
@@ -1973,7 +2211,9 @@ export function mountEventsFinder(root) {
     } else {
       hideBtn.className = 'events-finder__card-action events-finder__card-action--hide';
       hideBtn.setAttribute('aria-label', 'Skip this event');
-      hideBtn.title = 'Not interested — skip this occurrence';
+      hideBtn.title = ev.seriesKey
+        ? 'Not interested — skip this and future dates at this venue'
+        : 'Not interested — skip this event';
       hideBtn.textContent = 'Skip';
       hideBtn.addEventListener('click', (e) => {
         e.preventDefault();
@@ -2210,10 +2450,25 @@ export function mountEventsFinder(root) {
       });
     const events = showSkipped ? skippedList : mainEvents;
     lastFilteredEvents = events;
+    const conferenceHeadsUp = !showSkipped && Array.isArray(data.conferenceHeadsUp)
+      ? data.conferenceHeadsUp
+      : [];
     const gmail = data.sources?.gmail;
     const facebook = data.sources?.facebook;
     const hadCards = listEl.querySelector('.events-finder__card') != null;
     listEl.replaceChildren();
+    if (conferenceHeadsUp.length) {
+      const section = document.createElement('div');
+      section.className = 'events-finder__heads-up';
+      const heading = document.createElement('p');
+      heading.className = 'events-finder__heads-up-title';
+      heading.textContent = 'Big conferences & festivals';
+      section.append(heading);
+      for (const item of conferenceHeadsUp) {
+        section.append(buildConferenceHeadsUpCard(item));
+      }
+      listEl.append(section);
+    }
     if (data.ingestPending === true && !showSkipped) {
       const updating = document.createElement('p');
       updating.className = 'events-finder__stub events-finder__updating muted';
@@ -2221,6 +2476,10 @@ export function mountEventsFinder(root) {
       listEl.append(updating);
     }
     if (!events.length) {
+      if (conferenceHeadsUp.length) {
+        if (mapBackdrop) syncMap([], data);
+        return;
+      }
       if ((opts.fromCache || data.ingestPending || dateReloadPending) && !showSkipped) {
         if (dateReloadPending) {
           // Ensure catalog reload catches up when UI dates aren't in this payload yet.
@@ -2506,7 +2765,7 @@ export function mountEventsFinder(root) {
     setFiltersOpen(false);
   });
 
-  const controls = [zipInput, milesInput, timeInput, saveBtn];
+  const controls = [zipInput, milesInput, timeInput, conferenceInput, saveBtn];
   for (const el of controls) el.disabled = true;
   calendar.setDisabled(true);
   cityChecks.setDisabled(true);
@@ -2535,9 +2794,13 @@ export function mountEventsFinder(root) {
         calendarAddedEventIds: Array.isArray(data.calendarAddedEventIds)
           ? data.calendarAddedEventIds.map(String)
           : [],
+        conferenceWatchlist: Array.isArray(data.conferenceWatchlist)
+          ? data.conferenceWatchlist.map(String)
+          : [],
       };
       applyGoogleCalendarConfig(data.googleCalendar);
       syncShowSkippedButton();
+      conferenceInput.value = (taste.conferenceWatchlist || []).join('\n');
 
       const miles = data.filters?.maxMiles;
       milesInput.value = miles == null || miles === '' ? '25' : String(miles);

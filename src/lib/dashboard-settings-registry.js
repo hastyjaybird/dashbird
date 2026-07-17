@@ -15,7 +15,11 @@
 export const DASHBOARD_SETTING_VARIABLES = [
   { key: 'PORT', group: 'Runtime', label: 'Server listen port (container)', source: '.env → process.env.PORT' },
   { key: 'HOST_PORT', group: 'Runtime', label: 'Published port (docker compose)', source: 'docker-compose.yml host mapping' },
-  { key: 'LAST_BACKUP_AT', group: 'Health sidebar', label: 'Last backup timestamp', source: '.env or public/data/last-backup.txt (auto-written by weekly backup)' },
+  { key: 'LAST_BACKUP_AT', group: 'Health sidebar', label: 'Last backup timestamp', source: '.env or public/data/last-backup.txt (auto-written by daily/weekly backup)' },
+  { key: 'DATA_BACKUP_DAILY', group: 'Health sidebar', label: 'Daily full-data backup', source: '.env (1=on, 0=off; default on)' },
+  { key: 'DATA_BACKUP_DAILY_HOUR', group: 'Health sidebar', label: 'Daily backup local hour', source: '.env (default 3)' },
+  { key: 'DATA_BACKUP_DAILY_MINUTE', group: 'Health sidebar', label: 'Daily backup local minute', source: '.env (default 15)' },
+  { key: 'DATA_BACKUP_DAILY_RETAIN', group: 'Health sidebar', label: 'Daily tarballs to retain', source: '.env (default 14)' },
   { key: 'DATA_BACKUP_WEEKLY', group: 'Health sidebar', label: 'Weekly tools+contacts backup', source: '.env (1=on, 0=off; default on)' },
   { key: 'DATA_BACKUP_WEEKLY_DOW', group: 'Health sidebar', label: 'Weekly backup weekday (0=Sun…6=Sat)', source: '.env (default 0 Sunday)' },
   { key: 'DATA_BACKUP_WEEKLY_HOUR', group: 'Health sidebar', label: 'Weekly backup local hour', source: '.env (default 3)' },

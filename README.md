@@ -4,6 +4,7 @@ Local **homepage dashboard** (Dashy-inspired glass UI): hero weather/clock, book
 
 Planning and deferred work: [`docs/v2-roadmap.md`](docs/v2-roadmap.md)  
 Security operating plan: [`docs/security-plan.md`](docs/security-plan.md)  
+**Backups (daily + weekly):** [`docs/backups.md`](docs/backups.md)  
 Cross-project naming: [`docs/naming-system.md`](docs/naming-system.md)
 
 ## Current product truth

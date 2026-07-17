@@ -62,9 +62,10 @@ import { startWebCatalogDiscoveryWorker } from './lib/web-catalog-discovery.js';
 import eventsFinderEventsRouter, {
   startEventsFinderIngestScheduler,
 } from './routes/events-finder-events.js';
+import { startSkippedEventsPurgeScheduler } from './lib/events-finder-skipped.js';
 import { startFacebookEventsWeeklyScheduler } from './lib/events-finder-facebook.js';
 import { startTelegramEventsPoller } from './lib/events-finder-telegram.js';
-import { startToolsContactsBackupScheduler } from './lib/data-backup-schedule.js';
+import { startToolsContactsBackupScheduler, startDailyDataBackupScheduler } from './lib/data-backup-schedule.js';
 import { startLocalNewsScheduler } from './lib/local-news-scheduler.js';
 
 import { startGmailWeeklySummaryScheduler } from './lib/gmail-weekly-summary-synth.js';
@@ -73,6 +74,10 @@ import gmailWeeklySummaryRouter from './routes/gmail-weekly-summary.js';
 import networkRouter from './routes/network.js';
 import devNotesRouter from './routes/dev-notes.js';
 import devAgentLogRouter from './routes/dev-agent-log.js';
+import trustedDeviceAuthRouter, {
+  deviceBindHandler,
+  trustedDeviceGateMiddleware,
+} from './routes/trusted-device-auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -83,6 +88,10 @@ const leafletDir = path.join(root, 'node_modules', 'leaflet', 'dist');
 const app = express();
 const port = Number(process.env.PORT) || 3000;
 const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
+
+app.get('/auth/device-bind', deviceBindHandler);
+app.use(trustedDeviceGateMiddleware());
+app.use('/api/trusted-device', trustedDeviceAuthRouter);
 
 app.use(
   express.static(publicDir, {
@@ -217,8 +226,10 @@ app.listen(port, '0.0.0.0', () => {
   kick(() => startWebCatalogDiscoveryWorker(), 600);
   kick(() => startFacebookEventsWeeklyScheduler(), 800);
   kick(() => startEventsFinderIngestScheduler(), 900);
+  kick(() => startSkippedEventsPurgeScheduler(), 950);
   kick(() => startTelegramEventsPoller(), 1000);
   kick(() => startToolsContactsBackupScheduler(), 1100);
+  kick(() => startDailyDataBackupScheduler(), 1125);
   kick(() => startLocalNewsScheduler(), 1150);
   kick(() => startGmailWeeklySummaryScheduler(), 1250);
   kick(() => warmGoogleCalendarCache(), 1200);

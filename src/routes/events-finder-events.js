@@ -27,7 +27,6 @@ import {
   annotateEventsWithSeriesInfo,
   countEventSeriesKeys,
   dedupeEventsByNameAndDate,
-  deleteEventsFinderMatchingSkipped,
   getEventsFinderStoreStats,
   listEventsFinderEvents,
   pruneEventsFinderEvents,
@@ -39,8 +38,10 @@ import {
 } from '../lib/events-finder-calendar-occupancy.js';
 import {
   buildSkippedEventsIndex,
+  deleteEventsFinderMatchingSkipped,
   findSkippedEventMatch,
   isEventSkipped,
+  purgeExpiredSkippedEvents,
 } from '../lib/events-finder-skipped.js';
 import { scoreEventTaste } from '../lib/events-finder-taste.js';
 import { geocodeUsZip5 } from '../lib/zip-geocode.js';
@@ -51,6 +52,10 @@ import {
   eventsFinderScheduleTz,
   isEventsFinderIngestQuietHours,
 } from '../lib/events-finder-ingest-schedule.js';
+import {
+  loadConferenceHeadsUp,
+  scheduleConferenceWatchlistResearch,
+} from '../lib/events-finder-conference-watchlist.js';
 
 const router = Router();
 
@@ -137,6 +142,7 @@ function scheduleEventsFinderIngest(opts) {
   }
 
   const { forceFacebook = false, criteria, timeZone, skippedRecords } = opts;
+  purgeExpiredSkippedEvents(process.env);
   const skippedIndex = buildSkippedEventsIndex(skippedRecords, timeZone);
 
   eventsFinderIngestInflight = (async () => {
@@ -576,6 +582,15 @@ router.get('/', async (req, res) => {
 
     const availableCities = uniqueEventCities([...filtered, ...skippedFeed]);
 
+    const conferenceHeadsUpPack = await loadConferenceHeadsUp(
+      criteria.conferenceWatchlist,
+      new Date(),
+      process.env,
+    );
+    if (conferenceHeadsUpPack.needResearch.length) {
+      scheduleConferenceWatchlistResearch(conferenceHeadsUpPack.needResearch, process.env);
+    }
+
     // Closest first; taste score breaks distance ties.
     const byClosest = (a, b) => {
       const geoCmp = compareEventsByGeo(a, b);
@@ -600,84 +615,31 @@ router.get('/', async (req, res) => {
 
     // #region agent log
     {
-      const debugEids = ['2179524519500835', '1005106102497320'];
-      /** @type {Record<string, object>} */
-      const debugEvents = {};
-      for (const debugEid of debugEids) {
-        const debugId = `facebook:${debugEid}`;
-        const inRaw = raw.find((e) => String(e?.id || '').includes(debugEid) || String(e?.url || '').includes(debugEid));
-        const inDeduped = deduped.find((e) => String(e?.id || '').includes(debugEid) || String(e?.url || '').includes(debugEid));
-        const inFeed = filtered.find((e) => String(e?.id || '').includes(debugEid) || String(e?.url || '').includes(debugEid));
-        const inSkipped = skippedFeed.find((e) => String(e?.id || '').includes(debugEid) || String(e?.url || '').includes(debugEid));
-        let gateReason = null;
-        if (inDeduped) {
-          const gate = eventPassesFeedFilters(inDeduped, filtersBase, home, { timeZone });
-          const taste = scoreEventTaste(inDeduped, criteria);
-          gateReason = {
-            gateOk: gate.ok,
-            reason: gate.reason || null,
-            distanceMiles: gate.distanceMiles,
-            tasteOk: taste.ok,
-            cityLabel: eventCityLabel(inDeduped),
-            start: inDeduped.start || null,
-          };
-        }
-        debugEvents[debugEid] = {
-          debugId,
-          inCatalog: Boolean(inRaw),
-          inDeduped: Boolean(inDeduped),
-          inFeed: Boolean(inFeed),
-          inSkippedFeed: Boolean(inSkipped),
-          catalogTitle: inRaw?.title || null,
-          gateReason,
-        };
-      }
-      const potluckInQueries = (facebook.searchQueries || []).some((q) =>
-        String(q || '').toLowerCase().includes('potluck'),
+      const floorInFeed = filtered.filter((e) =>
+        String(e?.title || '').toLowerCase().includes('floor block'),
+      );
+      const floorInSkipped = skippedFeed.filter((e) =>
+        String(e?.title || '').toLowerCase().includes('floor block'),
       );
       const payload = {
-        sessionId: '02a20c',
-        runId: 'tiny-garage-pre',
-        hypothesisId: 'A-E',
+        sessionId: '6ae69a',
+        runId: 'feed',
+        hypothesisId: 'A',
         location: 'events-finder-events.js:feed',
-        message: 'debug target event presence',
+        message: 'skip feed snapshot',
         data: {
-          debugEvents,
-          filters: {
-            cities: filtersBase.cities || null,
-            dates: filtersBase.dates || null,
-            maxMiles: filtersBase.maxMiles ?? null,
-            earliestLocalTime: filtersBase.earliestLocalTime || null,
-          },
-          facebook: {
-            fromCache: facebook.fromCache === true,
-            cachedAt: facebook.cachedAt || null,
-            scanned: facebook.scanned ?? null,
-            count: Array.isArray(facebook.events) ? facebook.events.length : null,
-            potluckInQueries,
-            searchQueries: facebook.searchQueries || [],
-          },
           feedTotal: filtered.length,
-          totalRaw: raw.length,
+          skippedFeedTotal: skippedFeed.length,
+          skippedRecords: skippedRecords.length,
+          floorInFeed: floorInFeed.map((e) => ({ id: e.id, title: e.title })),
+          floorInSkipped: floorInSkipped.map((e) => ({ id: e.id, title: e.title })),
         },
         timestamp: Date.now(),
       };
       fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '02a20c' },
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '6ae69a' },
         body: JSON.stringify(payload),
-      }).catch(() => {});
-      fetch('http://172.17.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '02a20c' },
-        body: JSON.stringify(payload),
-      }).catch(() => {});
-      import('node:fs').then((fs) => {
-        try {
-          fs.appendFileSync('/app/data/debug-02a20c.ndjson', `${JSON.stringify(payload)}\n`);
-        } catch {
-          /* ignore */
-        }
       }).catch(() => {});
     }
     // #endregion
@@ -793,6 +755,8 @@ router.get('/', async (req, res) => {
       geo,
       availableCities,
       ingestWindow: eventsIngestWindowDays(process.env, { scrape: criteria.scrape }),
+      conferenceHeadsUp: conferenceHeadsUpPack.active,
+      conferenceWatchlist: conferenceHeadsUpPack.watchlist,
       events: filtered,
       skippedEvents: skippedFeed,
       skippedCount: skippedRecords.length,

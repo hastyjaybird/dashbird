@@ -31,6 +31,8 @@ services:
       # Cloud (Vultr) is the sole Telegram getUpdates consumer. LAN + cloud both
       # polling the same bot token causes Conflict and split/missing ingests.
       TELEGRAM_EVENTS_ENABLED: "0"
+      # Cloud is the sole Facebook Apify scraper (daily 4am). LAN serves synced cache.
+      FACEBOOK_EVENTS_WEEKLY: "0"
     depends_on:
       vikunja:
         condition: service_started

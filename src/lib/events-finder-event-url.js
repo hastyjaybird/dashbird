@@ -273,7 +273,7 @@ async function searchYahoo(query) {
  * @param {string} query
  * @returns {Promise<Array<{ url: string, title: string }>>}
  */
-async function searchWeb(query) {
+export async function searchWeb(query) {
   const [ddg, yahoo] = await Promise.all([searchDuckDuckGo(query), searchYahoo(query)]);
   /** @type {Array<{ url: string, title: string }>} */
   const out = [];

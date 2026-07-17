@@ -161,6 +161,12 @@ function urgencyLabel(level) {
   return 'Low urgency';
 }
 
+/** Bookmark ribbon — outline when off, filled when pinned (currentColor). */
+const PIN_ICON_SVG =
+  '<svg class="daily-summary__pin-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+  '<path class="daily-summary__pin-svg-outline" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round" d="M7 3h10a1.5 1.5 0 0 1 1.5 1.5V21L12 17.5 7 21V4.5A1.5 1.5 0 0 1 7 3Z"/>' +
+  '<path class="daily-summary__pin-svg-fill" fill="currentColor" d="M7 3h10a1.5 1.5 0 0 1 1.5 1.5V21L12 17.5 7 21V4.5A1.5 1.5 0 0 1 7 3Z"/></svg>';
+
 /**
  * Compact signal icon for item urgency.
  * @param {'high' | 'med' | 'low'} level
@@ -524,7 +530,7 @@ export function mountDailySummary(root) {
       pin.title = item.pinned ? 'Unpin (keeps past 10 days until unpinned)' : 'Pin to keep past 10 days';
       pin.setAttribute('aria-label', item.pinned ? `Unpin ${String(item.title || 'item')}` : `Pin ${String(item.title || 'item')}`);
       pin.setAttribute('aria-pressed', item.pinned ? 'true' : 'false');
-      pin.textContent = item.pinned ? '📌' : '📍';
+      pin.innerHTML = PIN_ICON_SVG;
       pin.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();

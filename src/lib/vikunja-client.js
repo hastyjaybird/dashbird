@@ -336,6 +336,52 @@ export async function renamePanelProject(projectId, title, env = process.env) {
 }
 
 /**
+ * Delete a panel project (and its tasks upstream).
+ * @param {number} projectId
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function deletePanelProject(projectId, env = process.env) {
+  const cfg = resolveVikunjaConfig(env);
+  if (!cfg.configured) {
+    const err = new Error('vikunja_not_configured');
+    err.code = 'vikunja_not_configured';
+    err.status = 503;
+    throw err;
+  }
+  if (!Number.isFinite(projectId) || projectId <= 0) {
+    const err = new Error('invalid_id');
+    err.code = 'invalid_id';
+    err.status = 400;
+    throw err;
+  }
+
+  const archiveId = await resolveArchiveProjectId(env);
+  if (projectId === archiveId) {
+    const err = new Error('archive_project_protected');
+    err.code = 'archive_project_protected';
+    err.status = 403;
+    throw err;
+  }
+
+  const res = await vikunjaFetch(`projects/${projectId}`, {
+    method: 'DELETE',
+    env,
+  });
+  if (res.status === 404) {
+    const err = new Error('not_found');
+    err.code = 'not_found';
+    err.status = 404;
+    throw err;
+  }
+  if (!res.ok && res.status !== 204) {
+    const err = new Error(safeUpstreamMessage(res) || 'vikunja_project_delete_failed');
+    err.code = 'vikunja_upstream';
+    err.status = res.status >= 400 && res.status < 600 ? res.status : 502;
+    throw err;
+  }
+}
+
+/**
  * Persist a custom project order via Vikunja `position` (parallel writes).
  * @param {unknown} idsRaw
  * @param {NodeJS.ProcessEnv} [env]

@@ -202,6 +202,20 @@ function createTile(row) {
 const BOOKMARK_CACHE_PREFIX = 'bookmarks:';
 const BOOKMARK_CACHE_MAX_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** Bookmark categories expanded on load (Personal + Admin columns). */
+const AUTO_OPEN_SECTION_TITLES = new Set([
+  'tools',
+  'utilities',
+  'clients',
+  'community',
+  'social',
+  'shopping',
+]);
+
+function shouldAutoOpenSection(title) {
+  return AUTO_OPEN_SECTION_TITLES.has(String(title || '').trim().toLowerCase());
+}
+
 /** @param {string} dataPath */
 function readBookmarkCache(dataPath) {
   return readPanelCache(BOOKMARK_CACHE_PREFIX + dataPath, BOOKMARK_CACHE_MAX_MS);
@@ -232,7 +246,6 @@ function mountSections(root, data, emptyHint) {
     return;
   }
   let any = false;
-  let visibleSectionIndex = 0;
   for (const sec of data.sections) {
     if (!sec || typeof sec.title !== 'string' || !Array.isArray(sec.items)) continue;
     let items = sec.items.filter((row) => row && typeof row.href === 'string' && row.word != null);
@@ -253,10 +266,9 @@ function mountSections(root, data, emptyHint) {
 
     const details = document.createElement('details');
     details.className = 'bookmark-section';
-    if (visibleSectionIndex === 0) {
+    if (shouldAutoOpenSection(sec.title)) {
       details.open = true;
     }
-    visibleSectionIndex += 1;
 
     const summary = document.createElement('summary');
     summary.className = 'bookmark-section-summary';

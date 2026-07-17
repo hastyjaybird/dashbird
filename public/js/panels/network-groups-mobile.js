@@ -1,4 +1,46 @@
 import { contactActions } from '../lib/contact-deep-links.js';
+import {
+  pushMobileNav,
+  mobileNavBack,
+  isMobileNavApplying,
+} from '../lib/mobile-history.js';
+
+/**
+ * @param {string} label
+ * @param {string} name
+ * @param {string} value
+ * @param {{ type?: string, rows?: number, placeholder?: string, hidden?: boolean }} [opts]
+ * @returns {HTMLLabelElement}
+ */
+function field(label, name, value, opts = {}) {
+  const wrap = document.createElement('label');
+  wrap.className = 'mobile-network__field';
+  if (opts.hidden) wrap.hidden = true;
+  const span = document.createElement('span');
+  span.className = 'mobile-network__field-label';
+  span.textContent = label;
+  wrap.append(span);
+
+  if (opts.rows && opts.rows > 1) {
+    const ta = document.createElement('textarea');
+    ta.name = name;
+    ta.className = 'mobile-network__input';
+    ta.rows = opts.rows;
+    ta.value = value || '';
+    if (opts.placeholder) ta.placeholder = opts.placeholder;
+    wrap.append(ta);
+    return wrap;
+  }
+
+  const input = document.createElement('input');
+  input.type = opts.type || 'text';
+  input.name = name;
+  input.className = 'mobile-network__input';
+  input.value = value || '';
+  if (opts.placeholder) input.placeholder = opts.placeholder;
+  wrap.append(input);
+  return wrap;
+}
 
 /**
  * @param {object} c
@@ -18,10 +60,18 @@ function groupName(g) {
 
 /**
  * @param {object} g
+ * @returns {'community' | 'event'}
+ */
+function groupKind(g) {
+  return String(g?.kind || '').toLowerCase() === 'event' ? 'event' : 'community';
+}
+
+/**
+ * @param {object} g
  * @returns {string}
  */
 function groupKindLabel(g) {
-  return String(g?.kind || '').toLowerCase() === 'event' ? 'Event' : 'Community';
+  return groupKind(g) === 'event' ? 'Event' : 'Community';
 }
 
 /**
@@ -33,7 +83,73 @@ function memberCount(g) {
 }
 
 /**
- * Mobile Network Groups: list → members → contact deep links.
+ * Mobile-friendly discard prompt (replaces window.confirm).
+ * @returns {Promise<boolean>} true when the user chooses to discard
+ */
+function openDiscardSheet() {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'mobile-network__sheet-backdrop';
+    backdrop.setAttribute('role', 'presentation');
+
+    const sheet = document.createElement('div');
+    sheet.className = 'mobile-network__sheet';
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-modal', 'true');
+    sheet.setAttribute('aria-label', 'Discard changes');
+
+    const header = document.createElement('div');
+    header.className = 'mobile-network__sheet-head';
+    const title = document.createElement('h3');
+    title.className = 'mobile-network__sheet-title';
+    title.textContent = 'Discard unsaved changes?';
+    header.append(title);
+
+    const actions = document.createElement('div');
+    actions.className = 'mobile-groups__sheet-actions';
+
+    const keepBtn = document.createElement('button');
+    keepBtn.type = 'button';
+    keepBtn.className = 'mobile-network__selection-btn';
+    keepBtn.textContent = 'Keep editing';
+
+    const discardBtn = document.createElement('button');
+    discardBtn.type = 'button';
+    discardBtn.className = 'mobile-network__selection-btn mobile-network__selection-btn--primary';
+    discardBtn.textContent = 'Discard';
+
+    let settled = false;
+    /** @param {boolean} discard */
+    function finish(discard) {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener('keydown', onKey);
+      backdrop.remove();
+      resolve(discard);
+    }
+
+    /** @param {KeyboardEvent} e */
+    function onKey(e) {
+      if (e.key === 'Escape') finish(false);
+    }
+
+    keepBtn.addEventListener('click', () => finish(false));
+    discardBtn.addEventListener('click', () => finish(true));
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) finish(false);
+    });
+
+    actions.append(keepBtn, discardBtn);
+    sheet.append(header, actions);
+    backdrop.append(sheet);
+    document.body.append(backdrop);
+    document.addEventListener('keydown', onKey);
+    keepBtn.focus();
+  });
+}
+
+/**
+ * Mobile Network Groups: list → edit → members → contact deep links.
  * @param {HTMLElement | null} root
  */
 export function mountNetworkGroupsMobile(root) {
@@ -50,7 +166,22 @@ export function mountNetworkGroupsMobile(root) {
   search.placeholder = 'Search groups';
   search.autocomplete = 'off';
   search.setAttribute('aria-label', 'Search groups');
-  toolbar.append(search);
+
+  const listActions = document.createElement('div');
+  listActions.className = 'mobile-network__toolbar-actions';
+
+  const addGroupBtn = document.createElement('button');
+  addGroupBtn.type = 'button';
+  addGroupBtn.className = 'mobile-network__action';
+  addGroupBtn.textContent = 'Add group';
+
+  const addEventBtn = document.createElement('button');
+  addEventBtn.type = 'button';
+  addEventBtn.className = 'mobile-network__action';
+  addEventBtn.textContent = 'Add event';
+
+  listActions.append(addGroupBtn, addEventBtn);
+  toolbar.append(search, listActions);
 
   const listPane = document.createElement('div');
   listPane.className = 'mobile-network__list-pane';
@@ -76,6 +207,18 @@ export function mountNetworkGroupsMobile(root) {
   let view = 'list';
   /** @type {object | null} */
   let selectedGroup = null;
+  /** @type {boolean} */
+  let dirty = false;
+
+  /**
+   * @param {object} g
+   */
+  function upsertGroup(g) {
+    const idx = groups.findIndex((x) => x.id === g.id);
+    if (idx >= 0) groups[idx] = g;
+    else groups.unshift(g);
+    if (selectedGroup?.id === g.id) selectedGroup = g;
+  }
 
   /**
    * @param {string} q
@@ -104,6 +247,7 @@ export function mountNetworkGroupsMobile(root) {
   function showList() {
     view = 'list';
     selectedGroup = null;
+    dirty = false;
     detailPane.hidden = true;
     detailPane.replaceChildren();
     listPane.hidden = false;
@@ -113,19 +257,31 @@ export function mountNetworkGroupsMobile(root) {
   /**
    * @param {object} contact
    * @param {object} group
+   * @param {{ fromHistory?: boolean }} [opts]
    */
-  function showContact(contact, group) {
+  function showContact(contact, group, opts = {}) {
     view = 'contact';
     listPane.hidden = true;
     toolbar.hidden = true;
     detailPane.hidden = false;
     detailPane.replaceChildren();
 
+    if (!opts.fromHistory && !isMobileNavApplying()) {
+      pushMobileNav({
+        tab: 'groups',
+        pane: 'contact',
+        groupId: String(group.id),
+        contactId: String(contact.id),
+      });
+    }
+
     const back = document.createElement('button');
     back.type = 'button';
     back.className = 'mobile-network__back';
     back.textContent = `← ${groupName(group)}`;
-    back.addEventListener('click', () => showGroup(group));
+    back.addEventListener('click', () => {
+      mobileNavBack();
+    });
 
     const head = document.createElement('div');
     head.className = 'mobile-network__detail-head';
@@ -207,71 +363,285 @@ export function mountNetworkGroupsMobile(root) {
 
   /**
    * @param {object} group
+   * @param {{ fromHistory?: boolean }} [opts]
    */
-  function showGroup(group) {
+  function showGroup(group, opts = {}) {
     view = 'group';
     selectedGroup = group;
+    dirty = false;
     listPane.hidden = true;
     toolbar.hidden = true;
     detailPane.hidden = false;
     detailPane.replaceChildren();
 
+    if (!opts.fromHistory && !isMobileNavApplying()) {
+      pushMobileNav({ tab: 'groups', pane: 'group', groupId: String(group.id) });
+    }
+
+    /** @type {object} */
+    let current = group;
+
     const back = document.createElement('button');
     back.type = 'button';
     back.className = 'mobile-network__back';
     back.textContent = '← Groups';
-    back.addEventListener('click', () => {
-      showList();
-      renderList();
+    back.addEventListener('click', async () => {
+      if (dirty && !(await openDiscardSheet())) return;
+      mobileNavBack();
     });
 
-    const head = document.createElement('div');
-    head.className = 'mobile-network__detail-head';
-    const titles = document.createElement('div');
-    titles.className = 'mobile-network__detail-titles';
-    const nameEl = document.createElement('h2');
-    nameEl.className = 'mobile-network__detail-name';
-    nameEl.textContent = groupName(group);
-    const sub = document.createElement('p');
-    sub.className = 'mobile-network__detail-sub';
-    const bits = [groupKindLabel(group), `${memberCount(group)} member${memberCount(group) === 1 ? '' : 's'}`];
-    if (group.eventType) bits.push(String(group.eventType));
-    sub.textContent = bits.join(' · ');
-    titles.append(nameEl, sub);
-    head.append(titles);
+    const form = document.createElement('form');
+    form.className = 'mobile-network__form';
+    form.addEventListener('input', () => {
+      dirty = true;
+    });
+    form.addEventListener('change', () => {
+      dirty = true;
+    });
 
-    const desc = String(group.description || '').trim();
-    /** @type {HTMLElement[]} */
-    const blocks = [back, head];
-    if (desc) {
-      const descEl = document.createElement('p');
-      descEl.className = 'mobile-groups__desc';
-      descEl.textContent = desc;
-      blocks.push(descEl);
+    const nameField = field('Name', 'name', current.name || '');
+
+    const kindWrap = document.createElement('label');
+    kindWrap.className = 'mobile-network__field';
+    const kindLabel = document.createElement('span');
+    kindLabel.className = 'mobile-network__field-label';
+    kindLabel.textContent = 'Kind';
+    const kindSelect = document.createElement('select');
+    kindSelect.name = 'kind';
+    kindSelect.className = 'mobile-network__input';
+    for (const opt of [
+      { value: 'community', label: 'Community' },
+      { value: 'event', label: 'Event' },
+    ]) {
+      const o = document.createElement('option');
+      o.value = opt.value;
+      o.textContent = opt.label;
+      if (groupKind(current) === opt.value) o.selected = true;
+      kindSelect.append(o);
     }
+    kindWrap.append(kindLabel, kindSelect);
 
+    const eventTypeField = field('Event type', 'eventType', current.eventType || '', {
+      placeholder: 'e.g. dinner, festival, house party',
+      hidden: groupKind(current) !== 'event',
+    });
+
+    const descField = field('Description', 'description', current.description || '', { rows: 3 });
+
+    const kindNote = document.createElement('p');
+    kindNote.className = 'mobile-groups__desc';
+    function syncKindUi() {
+      const isEvent = kindSelect.value === 'event';
+      eventTypeField.hidden = !isEvent;
+      kindNote.textContent = isEvent
+        ? 'Event groups are friend lists for a specific occasion — they do not change Scene on people.'
+        : 'Community membership syncs each person’s Scene tag to match this group name.';
+    }
+    kindSelect.addEventListener('change', syncKindUi);
+    syncKindUi();
+
+    const saveRow = document.createElement('div');
+    saveRow.className = 'mobile-network__save-row';
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'submit';
+    saveBtn.className = 'mobile-network__save';
+    saveBtn.textContent = 'Save';
+    const saveStatus = document.createElement('p');
+    saveStatus.className = 'mobile-network__save-status';
+    saveStatus.hidden = true;
+    saveRow.append(saveBtn, saveStatus);
+
+    form.append(nameField, kindWrap, eventTypeField, descField, kindNote, saveRow);
+
+    const membersSection = document.createElement('div');
+    membersSection.className = 'mobile-network__section';
+    const membersHead = document.createElement('div');
+    membersHead.className = 'mobile-network__section-head';
     const membersLabel = document.createElement('h3');
     membersLabel.className = 'mobile-network__section-title';
     membersLabel.textContent = 'Members';
-    blocks.push(membersLabel);
+    membersHead.append(membersLabel);
+    membersSection.append(membersHead);
+
+    const memberStatus = document.createElement('p');
+    memberStatus.className = 'mobile-network__save-status';
+    memberStatus.hidden = true;
+    membersSection.append(memberStatus);
 
     const members = document.createElement('ul');
     members.className = 'mobile-network__list';
-    const ids = Array.isArray(group.memberIds) ? group.memberIds : [];
-    if (!ids.length) {
-      const empty = document.createElement('p');
-      empty.className = 'mobile-network__empty';
-      empty.textContent = 'No members yet.';
-      blocks.push(empty);
-    } else {
+
+    /** @type {Set<string>} */
+    const memberSet = new Set(Array.isArray(current.memberIds) ? current.memberIds.map(String) : []);
+
+    function showMemberStatus(msg, isErr = false) {
+      memberStatus.hidden = !msg;
+      memberStatus.textContent = msg || '';
+      memberStatus.classList.toggle('mobile-network__save-status--err', isErr);
+    }
+
+    /**
+     * @param {object} group
+     */
+    function applyMembership(group) {
+      if (!group) return;
+      current = group;
+      upsertGroup(current);
+      memberSet.clear();
+      for (const id of Array.isArray(current.memberIds) ? current.memberIds : []) {
+        memberSet.add(String(id));
+      }
+      paintMembers();
+      renderAddCandidates();
+    }
+
+    /**
+     * @param {object} c
+     */
+    function appendMemberRow(c) {
+      const li = document.createElement('li');
+      li.className = 'mobile-network__row mobile-groups__member-row';
+      const avatar = document.createElement('div');
+      avatar.className = 'mobile-network__avatar';
+      const avatarUrl = String(c.avatarUrl || '').trim();
+      if (avatarUrl) {
+        const img = document.createElement('img');
+        img.src = avatarUrl;
+        img.alt = '';
+        img.loading = 'lazy';
+        img.referrerPolicy = 'no-referrer';
+        avatar.append(img);
+      } else {
+        avatar.textContent = contactName(c).slice(0, 1).toUpperCase();
+      }
+      const body = document.createElement('div');
+      body.className = 'mobile-network__row-body';
+      const name = document.createElement('div');
+      name.className = 'mobile-network__row-name';
+      name.textContent = contactName(c);
+      const rowSub = document.createElement('div');
+      rowSub.className = 'mobile-network__row-sub';
+      const nick = String(c.nickname || '').trim();
+      const org = String(c.organizationName || c.org || '').trim();
+      const subText = [nick, org].filter(Boolean).join(' · ');
+      if (subText) rowSub.textContent = subText;
+      else rowSub.hidden = true;
+      body.append(name, rowSub);
+      const openContact = () => showContact(c, current);
+      avatar.addEventListener('click', openContact);
+      body.addEventListener('click', openContact);
+      const rmBtn = document.createElement('button');
+      rmBtn.type = 'button';
+      rmBtn.className = 'mobile-network__selection-btn';
+      rmBtn.textContent = 'Remove';
+      rmBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        rmBtn.disabled = true;
+        showMemberStatus('Removing…');
+        try {
+          const r = await fetch(`/api/network/groups/${encodeURIComponent(current.id)}/members`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contactIds: [c.id] }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+          applyMembership(data.group);
+          if (groupKind(current) === 'community') {
+            try {
+              const contactsRes = await fetch('/api/network/contacts', { cache: 'no-store' });
+              const contactsData = await contactsRes.json().catch(() => ({}));
+              if (contactsRes.ok && contactsData.ok !== false) {
+                contactMap = new Map();
+                for (const row of Array.isArray(contactsData.contacts) ? contactsData.contacts : []) {
+                  if (row?.id) contactMap.set(String(row.id), row);
+                }
+              }
+            } catch {
+              /* non-fatal */
+            }
+          }
+          showMemberStatus('Removed');
+          renderList();
+          setTimeout(() => {
+            if (memberStatus.textContent === 'Removed') memberStatus.hidden = true;
+          }, 1500);
+        } catch (err) {
+          showMemberStatus(`Remove failed: ${err?.message || err}`, true);
+          rmBtn.disabled = false;
+        }
+      });
+      li.append(avatar, body, rmBtn);
+      members.append(li);
+    }
+
+    function paintMembers() {
+      members.replaceChildren();
+      membersSection.querySelector('.mobile-network__empty')?.remove();
+      const ids = Array.isArray(current.memberIds) ? current.memberIds : [];
+      if (!ids.length) {
+        const empty = document.createElement('p');
+        empty.className = 'mobile-network__empty';
+        empty.textContent = 'No members yet — add people below.';
+        membersSection.append(empty);
+        return;
+      }
       const sorted = ids
         .map((id) => contactMap.get(String(id)) || { id, displayName: 'Unknown contact' })
         .sort((a, b) =>
           contactName(a).localeCompare(contactName(b), undefined, { sensitivity: 'base' }),
         );
-      for (const c of sorted) {
+      for (const c of sorted) appendMemberRow(c);
+    }
+
+    paintMembers();
+    membersSection.append(members);
+
+    const addSection = document.createElement('div');
+    addSection.className = 'mobile-network__section';
+    const addHead = document.createElement('div');
+    addHead.className = 'mobile-network__section-head';
+    const addTitle = document.createElement('h3');
+    addTitle.className = 'mobile-network__section-title';
+    addTitle.textContent = 'Add people';
+    addHead.append(addTitle);
+    const addSearch = document.createElement('input');
+    addSearch.type = 'search';
+    addSearch.className = 'mobile-network__search';
+    addSearch.placeholder = 'Search people to add…';
+    addSearch.autocomplete = 'off';
+    addSearch.setAttribute('aria-label', 'Search people to add');
+    const addList = document.createElement('ul');
+    addList.className = 'mobile-network__list';
+
+    function renderAddCandidates() {
+      addList.replaceChildren();
+      addSection.querySelector('.mobile-network__empty')?.remove();
+      const q = addSearch.value.trim().toLowerCase();
+      const candidates = [...contactMap.values()]
+        .filter((c) => c?.id && !memberSet.has(String(c.id)))
+        .filter((c) => {
+          if (!q) return true;
+          const hay = [c.displayName, c.nickname, c.org, c.organizationName]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          return hay.includes(q);
+        })
+        .sort((a, b) =>
+          contactName(a).localeCompare(contactName(b), undefined, { sensitivity: 'base' }),
+        )
+        .slice(0, 40);
+      if (!candidates.length) {
+        const empty = document.createElement('p');
+        empty.className = 'mobile-network__empty';
+        empty.textContent = q ? 'No matching people' : 'Everyone is already in this group';
+        addSection.append(empty);
+        return;
+      }
+      for (const c of candidates) {
         const li = document.createElement('li');
-        li.className = 'mobile-network__row';
+        li.className = 'mobile-network__row mobile-groups__member-row';
         const avatar = document.createElement('div');
         avatar.className = 'mobile-network__avatar';
         const avatarUrl = String(c.avatarUrl || '').trim();
@@ -290,22 +660,118 @@ export function mountNetworkGroupsMobile(root) {
         const name = document.createElement('div');
         name.className = 'mobile-network__row-name';
         name.textContent = contactName(c);
-        const rowSub = document.createElement('div');
-        rowSub.className = 'mobile-network__row-sub';
-        const nick = String(c.nickname || '').trim();
-        const org = String(c.organizationName || c.org || '').trim();
-        const subText = [nick, org].filter(Boolean).join(' · ');
-        if (subText) rowSub.textContent = subText;
-        else rowSub.hidden = true;
-        body.append(name, rowSub);
-        li.append(avatar, body);
-        li.addEventListener('click', () => showContact(c, group));
-        members.append(li);
+        body.append(name);
+        const addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'mobile-network__selection-btn mobile-network__selection-btn--primary';
+        addBtn.textContent = 'Add';
+        addBtn.addEventListener('click', async () => {
+          addBtn.disabled = true;
+          showMemberStatus(`Adding ${contactName(c)}…`);
+          try {
+            const r = await fetch(`/api/network/groups/${encodeURIComponent(current.id)}/members`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contactIds: [c.id] }),
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+            applyMembership(data.group);
+            if (groupKind(current) === 'community') {
+              try {
+                const contactsRes = await fetch('/api/network/contacts', { cache: 'no-store' });
+                const contactsData = await contactsRes.json().catch(() => ({}));
+                if (contactsRes.ok && contactsData.ok !== false) {
+                  contactMap = new Map();
+                  for (const row of Array.isArray(contactsData.contacts) ? contactsData.contacts : []) {
+                    if (row?.id) contactMap.set(String(row.id), row);
+                  }
+                }
+              } catch {
+                /* non-fatal */
+              }
+            }
+            showMemberStatus('Added');
+            renderList();
+            setTimeout(() => {
+              if (memberStatus.textContent === 'Added') memberStatus.hidden = true;
+            }, 1500);
+          } catch (err) {
+            showMemberStatus(`Add failed: ${err?.message || err}`, true);
+            addBtn.disabled = false;
+          }
+        });
+        li.append(avatar, body, addBtn);
+        addList.append(li);
       }
-      blocks.push(members);
     }
 
-    detailPane.append(...blocks);
+    addSearch.addEventListener('input', () => renderAddCandidates());
+    addSection.append(addHead, addSearch, addList);
+    renderAddCandidates();
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      saveBtn.disabled = true;
+      saveStatus.hidden = false;
+      saveStatus.textContent = 'Saving…';
+      saveStatus.classList.remove('mobile-network__save-status--err');
+      const prevKind = groupKind(current);
+      const prevName = String(current.name || '');
+      try {
+        const fd = new FormData(form);
+        const r = await fetch(`/api/network/groups/${encodeURIComponent(current.id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: String(fd.get('name') || '').trim(),
+            description: String(fd.get('description') || '').trim(),
+            kind: String(fd.get('kind') || 'community').trim(),
+            eventType: String(fd.get('eventType') || '').trim(),
+          }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || data.ok === false) {
+          throw new Error(data.error || `HTTP ${r.status}`);
+        }
+        current = data.group || current;
+        upsertGroup(current);
+        dirty = false;
+        saveStatus.textContent = 'Saved';
+        setTimeout(() => {
+          if (saveStatus.textContent === 'Saved') saveStatus.hidden = true;
+        }, 1500);
+        renderList();
+
+        const membersChangedScene =
+          (Array.isArray(current.memberIds) ? current.memberIds : []).length > 0
+          && (prevKind !== groupKind(current)
+            || (groupKind(current) === 'community'
+              && prevName.toLowerCase() !== String(current.name || '').toLowerCase()));
+        if (membersChangedScene) {
+          try {
+            const contactsRes = await fetch('/api/network/contacts', { cache: 'no-store' });
+            const contactsData = await contactsRes.json().catch(() => ({}));
+            if (contactsRes.ok && contactsData.ok !== false) {
+              contactMap = new Map();
+              for (const c of Array.isArray(contactsData.contacts) ? contactsData.contacts : []) {
+                if (c?.id) contactMap.set(String(c.id), c);
+              }
+            }
+          } catch {
+            /* non-fatal */
+          }
+        }
+        paintMembers();
+      } catch (err) {
+        saveStatus.textContent = `Save failed: ${err?.message || err}`;
+        saveStatus.classList.add('mobile-network__save-status--err');
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+
+    detailPane.append(back, form, membersSection, addSection);
   }
 
   function renderList() {
@@ -314,7 +780,7 @@ export function mountNetworkGroupsMobile(root) {
     status.hidden = true;
     if (!items.length) {
       status.hidden = false;
-      status.textContent = groups.length ? 'No matches.' : 'No groups yet.';
+      status.textContent = groups.length ? 'No matches.' : 'No groups yet — add one above.';
       return;
     }
 
@@ -339,13 +805,62 @@ export function mountNetworkGroupsMobile(root) {
       const sub = document.createElement('div');
       sub.className = 'mobile-network__row-sub';
       const n = memberCount(g);
-      sub.textContent = `${n} member${n === 1 ? '' : 's'}`;
+      const bits = [`${n} member${n === 1 ? '' : 's'}`];
+      if (g.eventType) bits.push(String(g.eventType));
+      sub.textContent = bits.join(' · ');
       body.append(name, sub);
       li.append(body);
       li.addEventListener('click', () => showGroup(g));
       list.append(li);
     }
   }
+
+  /**
+   * @param {'community' | 'event'} kind
+   */
+  async function createGroup(kind) {
+    addGroupBtn.disabled = true;
+    addEventBtn.disabled = true;
+    status.hidden = false;
+    status.textContent = 'Creating…';
+    try {
+      const r = await fetch('/api/network/groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: '', kind, eventType: '' }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false) {
+        throw new Error(data.error || `HTTP ${r.status}`);
+      }
+      const g = data.group;
+      if (!g?.id) throw new Error('create_failed');
+      upsertGroup(g);
+      status.hidden = true;
+      showGroup(g);
+      const nameInput = detailPane.querySelector('input[name="name"]');
+      if (nameInput instanceof HTMLInputElement) {
+        nameInput.focus();
+        nameInput.select();
+      }
+    } catch (e) {
+      status.hidden = false;
+      status.textContent = `Could not create group: ${e?.message || e}`;
+    } finally {
+      addGroupBtn.disabled = false;
+      addEventBtn.disabled = false;
+    }
+  }
+
+  addGroupBtn.addEventListener('click', () => {
+    if (view !== 'list') return;
+    void createGroup('community');
+  });
+
+  addEventBtn.addEventListener('click', () => {
+    if (view !== 'list') return;
+    void createGroup('event');
+  });
 
   search.addEventListener('input', () => {
     if (view !== 'list') return;
@@ -372,6 +887,10 @@ export function mountNetworkGroupsMobile(root) {
         if (c?.id) contactMap.set(String(c.id), c);
       }
       renderList();
+      const navState = history.state;
+      if (navState?.dashbirdMobile && navState.tab === 'groups' && navState.pane !== 'list') {
+        document.dispatchEvent(new CustomEvent('dashbird:mobile-nav', { detail: navState }));
+      }
     } catch (e) {
       status.hidden = false;
       status.textContent = `Could not load groups: ${e?.message || e}`;
@@ -379,4 +898,33 @@ export function mountNetworkGroupsMobile(root) {
   }
 
   void load();
+
+  document.addEventListener('dashbird:mobile-nav', (e) => {
+    const s = e.detail;
+    if (!s || s.tab !== 'groups') return;
+    if (s.pane === 'list') {
+      showList();
+      renderList();
+      return;
+    }
+    if (s.pane === 'group' && s.groupId) {
+      const g = groups.find((x) => String(x.id) === String(s.groupId));
+      if (g) showGroup(g, { fromHistory: true });
+      else {
+        showList();
+        renderList();
+      }
+      return;
+    }
+    if (s.pane === 'contact' && s.groupId && s.contactId) {
+      const g = groups.find((x) => String(x.id) === String(s.groupId));
+      const c = contactMap.get(String(s.contactId));
+      if (g && c) showContact(c, g, { fromHistory: true });
+      else if (g) showGroup(g, { fromHistory: true });
+      else {
+        showList();
+        renderList();
+      }
+    }
+  });
 }

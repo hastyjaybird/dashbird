@@ -3,6 +3,7 @@ import express from 'express';
 import {
   createPanelProject,
   createPanelTodo,
+  deletePanelProject,
   listPanelProjects,
   listPanelTodos,
   movePanelTodo,
@@ -139,6 +140,21 @@ router.patch('/projects/:id', async (req, res) => {
         : await updatePanelProject(id, patch);
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, project });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.delete('/projects/:id', async (req, res) => {
+  try {
+    const id = parseProjectId(req.params.id);
+    if (id == null) {
+      res.status(400).json({ ok: false, error: 'invalid_id' });
+      return;
+    }
+    await deletePanelProject(id);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true });
   } catch (e) {
     sendErr(e, res);
   }
