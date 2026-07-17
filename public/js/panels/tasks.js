@@ -1,4 +1,5 @@
 import { openRandomTaskPicker, openProjectLocationsTable } from '../lib/task-random-ui.js';
+import { buildTaskLocationSelect, fetchTaskRandomMeta } from '../lib/task-location-meta.js';
 
 /**
  * Main Tasks panel — browse Vikunja projects, add/complete tasks on Dashbird.
@@ -10,6 +11,8 @@ const PROJECT_LS_KEY = 'dashbird-tasks-project-id';
 const DONE_HIDE_MS = 3000;
 const DND_TASK_MIME = 'application/x-dashbird-task-id';
 const DND_PROJECT_MIME = 'application/x-dashbird-project-id';
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_PX = 10;
 
 export function mountTasks(root, config = {}) {
   root.replaceChildren();
@@ -28,11 +31,6 @@ export function mountTasks(root, config = {}) {
   randomBtn.className = 'tasks-panel__header-btn';
   randomBtn.textContent = 'Do Random Task';
 
-  const locationsBtn = document.createElement('button');
-  locationsBtn.type = 'button';
-  locationsBtn.className = 'tasks-panel__header-btn';
-  locationsBtn.textContent = 'Project locations';
-
   const openLink = document.createElement('a');
   openLink.className = 'tasks-panel__open';
   openLink.target = '_blank';
@@ -44,13 +42,12 @@ export function mountTasks(root, config = {}) {
   } else {
     openLink.hidden = true;
   }
-  headerActions.append(randomBtn, locationsBtn, openLink);
+  headerActions.append(randomBtn, openLink);
   header.append(headerActions);
 
   const vikunjaConfigured = config.vikunjaConfigured !== false;
   if (!vikunjaConfigured) {
     randomBtn.hidden = true;
-    locationsBtn.hidden = true;
   }
 
   const split = document.createElement('div');
@@ -82,7 +79,14 @@ export function mountTasks(root, config = {}) {
   addProjectBtn.textContent = 'Add';
 
   addProjectForm.append(addProjectInput, addProjectBtn);
-  projectsPane.append(projectsList, addProjectForm);
+
+  const locationsBtn = document.createElement('button');
+  locationsBtn.type = 'button';
+  locationsBtn.className = 'tasks-panel__projects-btn';
+  locationsBtn.textContent = 'Locations';
+  if (!vikunjaConfigured) locationsBtn.hidden = true;
+
+  projectsPane.append(projectsList, locationsBtn, addProjectForm);
 
   const detail = document.createElement('div');
   detail.className = 'tasks-panel__detail';
@@ -114,7 +118,17 @@ export function mountTasks(root, config = {}) {
   empty.hidden = true;
   empty.textContent = 'No open tasks in this project.';
 
-  detail.append(detailTitle, addForm, list, empty);
+  const detailFoot = document.createElement('div');
+  detailFoot.className = 'tasks-panel__detail-foot';
+  detailFoot.hidden = true;
+
+  const deleteProjectBtn = document.createElement('button');
+  deleteProjectBtn.type = 'button';
+  deleteProjectBtn.className = 'tasks-panel__delete';
+  deleteProjectBtn.textContent = 'Delete project';
+  detailFoot.append(deleteProjectBtn);
+
+  detail.append(detailTitle, addForm, list, empty, detailFoot);
   split.append(projectsPane, detail);
 
   const status = document.createElement('p');
@@ -123,6 +137,27 @@ export function mountTasks(root, config = {}) {
 
   wrap.append(header, split, status);
   root.append(wrap);
+
+  const moveOverlay = document.createElement('div');
+  moveOverlay.className = 'tasks-panel__move-overlay';
+  moveOverlay.hidden = true;
+  const moveDialog = document.createElement('div');
+  moveDialog.className = 'tasks-panel__move-dialog';
+  moveDialog.setAttribute('role', 'dialog');
+  moveDialog.setAttribute('aria-modal', 'true');
+  moveDialog.setAttribute('aria-label', 'Move task to project');
+  const moveTitle = document.createElement('p');
+  moveTitle.className = 'tasks-panel__move-title';
+  moveTitle.textContent = 'Move to project';
+  const moveList = document.createElement('div');
+  moveList.className = 'tasks-panel__move-list';
+  const moveCancel = document.createElement('button');
+  moveCancel.type = 'button';
+  moveCancel.className = 'tasks-panel__move-cancel';
+  moveCancel.textContent = 'Cancel';
+  moveDialog.append(moveTitle, moveList, moveCancel);
+  moveOverlay.append(moveDialog);
+  wrap.append(moveOverlay);
 
   /** @type {Array<{ id: number, title: string, position?: number }>} */
   let projects = [];
@@ -144,9 +179,19 @@ export function mountTasks(root, config = {}) {
   /** @type {Map<string, ReturnType<typeof setTimeout>>} */
   const pendingDone = new Map();
 
+  /** @type {{ byTaskId: Record<string, unknown>, byProjectId: Record<string, unknown> }} */
+  let taskRandomMeta = { byTaskId: {}, byProjectId: {} };
+
+  async function refreshTaskRandomMeta() {
+    taskRandomMeta = await fetchTaskRandomMeta(taskRandomMeta);
+    if (projectId != null && items.length) renderList();
+  }
+
 
   /** @type {string | null} */
   let highlightTaskId = null;
+  /** @type {string | null} */
+  let movingTaskId = null;
 
   /**
    * @param {{ id: string, projectId?: number | null }} task
@@ -213,6 +258,13 @@ export function mountTasks(root, config = {}) {
   function currentProjectTitle() {
     const p = projects.find((x) => x.id === projectId);
     return p?.title || 'Select a project';
+  }
+
+  function syncProjectDeleteUi() {
+    const title = projectId != null ? currentProjectTitle() : '';
+    detailFoot.hidden = projectId == null;
+    deleteProjectBtn.disabled = projectId == null;
+    deleteProjectBtn.setAttribute('aria-label', title ? `Delete ${title}` : 'Delete project');
   }
 
   function sortProjectsInPlace() {
@@ -320,6 +372,7 @@ export function mountTasks(root, config = {}) {
     editingProjectId = null;
     renderProjects();
     detailTitle.textContent = currentProjectTitle();
+    syncProjectDeleteUi();
 
     const cached = todosCache.get(id);
     if (cached) {
@@ -384,6 +437,72 @@ export function mountTasks(root, config = {}) {
     }
   }
 
+  /**
+   * @param {number} id
+   */
+  async function deleteProject(id) {
+    const title = projects.find((p) => p.id === id)?.title || 'Project';
+    const openCount =
+      projectId === id
+        ? items.length
+        : todosCache.has(id)
+          ? todosCache.get(id)?.length ?? 0
+          : null;
+    const msg =
+      openCount != null && openCount > 0
+        ? `Delete “${title}” and its ${openCount} open task${openCount === 1 ? '' : 's'}? This cannot be undone.`
+        : `Delete “${title}”? This cannot be undone.`;
+    if (!confirm(msg)) return;
+
+    deleteProjectBtn.disabled = true;
+    showStatus('Deleting…');
+
+    try {
+      const r = await fetch(`/api/vikunja/projects/${encodeURIComponent(String(id))}`, {
+        method: 'DELETE',
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) {
+        const err =
+          j.error === 'archive_project_protected'
+            ? 'The Archive project cannot be deleted.'
+            : j.error === 'not_found'
+              ? 'Project not found.'
+              : j.detail || j.error || `HTTP ${r.status}`;
+        throw new Error(err);
+      }
+
+      projects = projects.filter((p) => p.id !== id);
+      todosCache.delete(id);
+      try {
+        if (readSavedProjectId() === id) localStorage.removeItem(PROJECT_LS_KEY);
+      } catch {
+        /* ignore */
+      }
+
+      if (projectId === id) {
+        projectId = null;
+        items = [];
+        clearAllPending();
+        setWritable(false);
+        detailTitle.textContent = 'Select a project';
+        renderList();
+        empty.hidden = true;
+        const next = projects[0]?.id;
+        if (next != null) selectProject(next);
+        else syncProjectDeleteUi();
+      }
+
+      renderProjects();
+      showStatus('Project deleted.');
+    } catch (e) {
+      showStatus(`Could not delete project: ${e?.message || e}`, true);
+    } finally {
+      deleteProjectBtn.disabled = false;
+      syncProjectDeleteUi();
+    }
+  }
+
   async function createProject(title) {
     const r = await fetch('/api/vikunja/projects', {
       method: 'POST',
@@ -445,6 +564,42 @@ export function mountTasks(root, config = {}) {
       renderList();
       showStatus('Could not move task.', true);
     }
+  }
+
+  function hideMoveOverlay() {
+    moveOverlay.hidden = true;
+    movingTaskId = null;
+    wrap.classList.remove('tasks-panel--moving');
+  }
+
+  /**
+   * @param {string} taskId
+   */
+  function showMoveOverlay(taskId) {
+    movingTaskId = taskId;
+    moveList.replaceChildren();
+    const others = projects.filter((p) => p.id !== projectId);
+    if (!others.length) {
+      const empty = document.createElement('p');
+      empty.className = 'tasks-panel__move-empty muted';
+      empty.textContent = 'No other projects to move into.';
+      moveList.append(empty);
+    } else {
+      for (const p of others) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'tasks-panel__move-target';
+        btn.textContent = p.title;
+        btn.addEventListener('click', () => {
+          void moveTask(taskId, p.id);
+          hideMoveOverlay();
+        });
+        moveList.append(btn);
+      }
+    }
+    moveOverlay.hidden = false;
+    wrap.classList.add('tasks-panel--moving');
+    moveCancel.focus();
   }
 
   function renderProjects() {
@@ -609,7 +764,19 @@ export function mountTasks(root, config = {}) {
         renderProjects();
       });
 
-      row.append(handle, btn);
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'tasks-panel__project-delete';
+      delBtn.textContent = '×';
+      delBtn.setAttribute('aria-label', `Delete ${p.title}`);
+      delBtn.title = `Delete ${p.title}`;
+      delBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void deleteProject(p.id);
+      });
+
+      row.append(handle, btn, delBtn);
       li.append(row);
       projectsList.append(li);
     }
@@ -649,7 +816,7 @@ export function mountTasks(root, config = {}) {
     const handle = document.createElement('span');
     handle.className = 'tasks-panel__drag';
     handle.setAttribute('aria-hidden', 'true');
-    handle.title = 'Drag to another project';
+    handle.title = 'Drag to another project · double-click task text to pick';
     const grip = document.createElement('span');
     grip.className = 'tasks-panel__grip';
     handle.append(grip);
@@ -665,15 +832,37 @@ export function mountTasks(root, config = {}) {
     const text = document.createElement('span');
     text.className = 'tasks-panel__text';
     text.textContent = item.text;
+    text.title = 'Double-click to move to another project';
 
     label.append(cb, text);
-    row.append(handle, label);
+
+    const projectMeta =
+      projectId != null ? taskRandomMeta.byProjectId[String(projectId)] || null : null;
+    const taskMeta = taskRandomMeta.byTaskId[item.id] || null;
+    const locSelect = buildTaskLocationSelect({
+      taskId: item.id,
+      taskMeta,
+      projectMeta,
+      className: 'tasks-panel__loc-select',
+      onSaved: (meta) => {
+        taskRandomMeta = meta;
+      },
+    });
+    row.append(handle, label, locSelect);
     li.append(row);
 
     cb.addEventListener('change', () => {
       if (cb.checked) scheduleDone(item.id);
       else cancelDone(item.id);
     });
+
+    if (!item.done && !pendingDone.has(item.id)) {
+      text.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showMoveOverlay(item.id);
+      });
+    }
 
     li.addEventListener('dragstart', (e) => {
       if (item.done || pendingDone.has(item.id)) {
@@ -767,12 +956,14 @@ export function mountTasks(root, config = {}) {
       detail.classList.remove('tasks-panel__detail--loading');
       renderList();
       empty.hidden = true;
+      syncProjectDeleteUi();
       return;
     }
 
     const requestFor = projectId;
     const token = ++loadToken;
     detailTitle.textContent = currentProjectTitle();
+    syncProjectDeleteUi();
 
     const r = await fetch(`/api/vikunja/todos?projectId=${encodeURIComponent(String(projectId))}`, {
       cache: 'no-store',
@@ -859,6 +1050,7 @@ export function mountTasks(root, config = {}) {
     if (!projects.length) {
       projectId = null;
       renderProjects();
+      syncProjectDeleteUi();
       return;
     }
     const saved = preferredId ?? readSavedProjectId();
@@ -866,6 +1058,7 @@ export function mountTasks(root, config = {}) {
     projectId = match.id;
     saveProjectId(projectId);
     renderProjects();
+    syncProjectDeleteUi();
   }
 
   async function bootstrap() {
@@ -884,6 +1077,7 @@ export function mountTasks(root, config = {}) {
       readSavedProjectId() ??
       (j.defaultProjectId != null ? Number(j.defaultProjectId) : null);
     fillProjects(j.projects, preferred);
+    void refreshTaskRandomMeta();
     await loadTodos();
   }
 
@@ -903,6 +1097,11 @@ export function mountTasks(root, config = {}) {
   });
 
 
+  deleteProjectBtn.addEventListener('click', () => {
+    if (projectId == null) return;
+    void deleteProject(projectId);
+  });
+
   randomBtn.addEventListener('click', () => {
     openRandomTaskPicker({
       root: wrap,
@@ -915,7 +1114,26 @@ export function mountTasks(root, config = {}) {
   });
 
   locationsBtn.addEventListener('click', () => {
-    void openProjectLocationsTable({ root: wrap, projects });
+    void openProjectLocationsTable({
+      root: wrap,
+      projects,
+      onMetaChange: (meta) => {
+        taskRandomMeta = meta;
+        renderList();
+      },
+    });
+  });
+
+  moveCancel.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    hideMoveOverlay();
+  });
+  moveOverlay.addEventListener('click', (e) => {
+    if (e.target === moveOverlay) hideMoveOverlay();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !moveOverlay.hidden) hideMoveOverlay();
   });
 
   void bootstrap().catch(() => {

@@ -9,6 +9,7 @@ import {
   normalizeDuration,
   normalizeLocation,
   normalizeLocations,
+  normalizePriority,
   normalizeTimes,
   TASK_LOCATIONS,
 } from './task-random-enums.js';
@@ -33,10 +34,17 @@ function normalizeTaskMeta(raw) {
   const out = {};
   const diff = normalizeDifficulty(r.difficulty);
   if (diff) out.difficulty = diff;
+  const pri = normalizePriority(r.priority);
+  if (pri) out.priority = pri;
   const dur = normalizeDuration(r.duration);
   if (dur) out.duration = dur;
-  const locs = normalizeLocations(r.locations ?? r.location);
-  if (locs.length) out.locations = locs;
+  if (r.locationAny === true) out.locationAny = true;
+  if (r.location != null && r.location !== '') {
+    const loc = normalizeLocation(r.location);
+    if (loc) out.location = loc;
+  }
+  const locs = normalizeLocations(r.locations);
+  if (locs.length && !out.location && !out.locationAny) out.locations = locs;
   const times = normalizeTimes(r.times ?? r.time);
   if (times.length) out.times = times;
   return Object.keys(out).length ? out : null;
@@ -132,7 +140,7 @@ export function renderProjectLocationsMarkdown(projects, byProjectId) {
   const lines = [
     '# Task project locations',
     '',
-    'Default location tag applied to all open tasks in each Vikunja project.',
+    'Default location for tasks in each project (each task can override in the Tasks list).',
     'Edit the Location column, save the file; Dashbird reloads on next read.',
     '',
     `Allowed values: *(blank / any)* | ${TASK_LOCATIONS.join(' | ')}`,
@@ -205,15 +213,46 @@ export async function patchTaskMeta(taskId, patch, env = process.env) {
     if (d) next.difficulty = d;
     else delete next.difficulty;
   }
+  if (patch.priority !== undefined) {
+    const p = normalizePriority(patch.priority);
+    if (p) next.priority = p;
+    else delete next.priority;
+  }
   if (patch.duration !== undefined) {
     const d = normalizeDuration(patch.duration);
     if (d) next.duration = d;
     else delete next.duration;
   }
+  if (patch.inheritLocation === true) {
+    delete next.location;
+    delete next.locations;
+    delete next.locationAny;
+  }
+  if (patch.locationAny === true) {
+    next.locationAny = true;
+    delete next.location;
+    delete next.locations;
+  }
+  if (patch.location !== undefined) {
+    const loc =
+      patch.location == null || patch.location === '' ? null : normalizeLocation(patch.location);
+    if (loc) {
+      next.location = loc;
+      delete next.locationAny;
+      delete next.locations;
+    } else {
+      delete next.location;
+    }
+  }
   if (patch.locations !== undefined) {
     const locs = normalizeLocations(patch.locations);
-    if (locs.length) next.locations = locs;
-    else delete next.locations;
+    if (locs.length) {
+      next.locations = locs;
+      delete next.location;
+      delete next.locationAny;
+    } else {
+      delete next.locations;
+    }
   }
   if (patch.times !== undefined) {
     const times = normalizeTimes(patch.times);

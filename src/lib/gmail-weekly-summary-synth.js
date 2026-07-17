@@ -4,7 +4,7 @@
  * Rolling 10-day window; pinned items survive until unpinned (30s grace).
  * Open list is always chronological (newest first).
  */
-import { loadGmailWeeklySummaryCriteria } from './gmail-weekly-summary-criteria-store.js';
+import { loadGmailDailySummaryGuide } from './gmail-daily-summary-guide-store.js';
 import {
   fetchWeeklySummaryMail,
   gmailWeeklySummaryDays,
@@ -204,9 +204,10 @@ function extractJsonObject(content) {
 }
 
 /**
- * @param {{ lookFor: string, skip: string, blacklist: string }} criteria
+ * @param {string} guideMarkdown
  */
-function buildSystemPrompt(criteria) {
+function buildSystemPrompt(guideMarkdown) {
+  const guide = String(guideMarkdown || '').trim() || '(no ingestion guide configured)';
   return `You are Dashbird's daily inbox synthesizer for Jay.
 You do NOT return a filtered list of important emails.
 You return a short prose summary of recent mail PLUS durable action items / tasks derived from the mail.
@@ -238,9 +239,9 @@ Rules:
 - company: REQUIRED. Short org/brand making the request (e.g. "PayPal", "Experian", "Google"). Prefer the company over a person's name. Use the From header / body; never leave blank when identifiable.
 - detail: 1-2 short sentences. MUST name that company/org (who is asking) so the ask is never anonymous. Example: "PayPal: June statement is ready — log in to review."
 - Deduplicate: if the same company/sender sends multiple emails about the same ask, create ONE item and cite only the most recent message in sourceRefs. Do not list repeats. Distinct asks stay separate (e.g. two different workspace deletion reminders).
-- Look-for (prefer): ${criteria.lookFor || '(none)'}
-- Grey (only when not Look-for relevant): ${criteria.skip || '(none)'}
-- Blacklist (never create items for): ${criteria.blacklist || '(none)'}
+- Follow the email ingestion guide below when deciding which mail becomes items. Learned preference bullets override generic rules when they conflict.
+- Email ingestion guide:
+${guide}
 - deadline: ISO 8601 when an explicit date/time is clear; else null.
 - deadlineSource: "extracted" if you found a deadline; "response_48h" if the only urgency is that Jay needs to reply; else "none".
 - needsReply: true when the main ask is a response from Jay.
@@ -514,7 +515,7 @@ export async function runGmailWeeklySummaryScan(env = process.env, opts = {}) {
     const prev = await loadGmailWeeklySummary(env);
     const tz = scheduleTz(env);
     const scanYmd = gmailWeeklySummaryLocalParts(new Date(), tz).ymd;
-    const criteria = await loadGmailWeeklySummaryCriteria(env);
+    const guide = await loadGmailDailySummaryGuide(env);
     const mail = await fetchWeeklySummaryMail(env, { forceRefresh: forceMail });
 
     if (!mail.ok && !mail.messages?.length) {
@@ -550,7 +551,7 @@ export async function runGmailWeeklySummaryScan(env = process.env, opts = {}) {
     const chat = await openRouterChatJson(
       env,
       [
-        { role: 'system', content: buildSystemPrompt(criteria) },
+        { role: 'system', content: buildSystemPrompt(guide) },
         { role: 'user', content: buildUserPrompt(mail.messages) },
       ],
       { ignoreRateLimit: reason === 'manual' },

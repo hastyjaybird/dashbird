@@ -315,6 +315,9 @@ router.post('/random-task', async (req, res) => {
     const lon = Number(req.body?.lon);
     const device = String(req.body?.device || 'laptop');
     const excludeIds = Array.isArray(req.body?.excludeIds) ? req.body.excludeIds.map(String) : [];
+    const excludeProjectIds = Array.isArray(req.body?.excludeProjectIds)
+      ? req.body.excludeProjectIds.map(String)
+      : [];
     const [tasks, meta, context] = await Promise.all([
       listAllPanelTodos(),
       loadTaskRandomMeta(),
@@ -328,7 +331,12 @@ router.post('/random-task', async (req, res) => {
         process.env,
       ),
     ]);
-    const result = pickRandomTask(tasks, meta, { difficulty, duration, excludeIds }, context);
+    const result = pickRandomTask(
+      tasks,
+      meta,
+      { difficulty, duration, excludeIds, excludeProjectIds },
+      context,
+    );
     res.setHeader('Cache-Control', 'private, no-store');
     if (!result.task) {
       res.json({ ok: true, matched: false, poolSize: 0, context, message: 'No tasks match — try relaxing filters.' });

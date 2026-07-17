@@ -43,12 +43,15 @@ function wireCardChrome(root) {
 
   /** @type {HTMLElement | null} */
   let urgencyEl = null;
-  if (bar && heading && !bar.querySelector('.daily-summary__card-urgency')) {
+  if (bar && heading && !bar.querySelector('.daily-summary__card-head')) {
+    const head = document.createElement('div');
+    head.className = 'daily-summary__card-head';
     urgencyEl = document.createElement('span');
     urgencyEl.className = 'daily-summary__card-urgency daily-summary__urgency daily-summary__urgency--low';
     urgencyEl.setAttribute('role', 'img');
     urgencyEl.hidden = true;
-    bar.insertBefore(urgencyEl, heading);
+    head.append(urgencyEl, heading);
+    bar.insertBefore(head, bar.firstChild);
   } else if (bar) {
     urgencyEl = /** @type {HTMLElement | null} */ (bar.querySelector('.daily-summary__card-urgency'));
   }
@@ -182,30 +185,30 @@ function makeUrgencyIcon(level) {
 }
 
 /**
- * @param {{ title?: string, detail?: string, needsReply?: boolean }} item
+ * @param {{ title?: string, detail?: string, company?: string, needsReply?: boolean }} item
  * @param {'up' | 'down'} vibe
  */
-function suggestTopicLines(item, vibe) {
-  const lines = [];
+function suggestGuideAppendLocal(item, vibe) {
+  const company = String(item?.company || '').trim();
   const title = String(item?.title || '').trim();
-  const detail = String(item?.detail || '').trim();
-  if (title) lines.push(title.slice(0, 80));
-  if (item?.needsReply) lines.push('Anything waiting on my reply');
-  if (detail) {
-    const short = detail.replace(/\s+/g, ' ').trim().slice(0, 80);
-    if (short && !lines.some((l) => l.toLowerCase() === short.toLowerCase())) {
-      lines.push(short);
-    }
+  const detail = String(item?.detail || '').trim().replace(/\s+/g, ' ');
+  const from = company ? `From **${company}**` : 'Similar mail';
+
+  if (vibe === 'up') {
+    let line = `- ${from}: ${title || 'Important follow-up'}`;
+    if (detail) line += ` — ${detail.slice(0, 120)}`;
+    return line;
   }
-  if (vibe === 'down' && !lines.length) {
-    lines.push('FYI with no action needed');
-  }
-  return lines.slice(0, 4).join('\n');
+
+  let line = `- ${from}: ${title || 'FYI with no action needed'}`;
+  if (item?.needsReply === false) line += ' (no reply needed)';
+  else if (detail) line += ` — ${detail.slice(0, 80)}`;
+  return line;
 }
 
 /**
  * @param {HTMLElement} root
- * @param {{ title?: string, detail?: string, needsReply?: boolean }} item
+ * @param {{ title?: string, detail?: string, company?: string, needsReply?: boolean }} item
  * @param {'up' | 'down'} vibe
  * @param {() => void} onSaved
  */
@@ -214,7 +217,7 @@ function openPreferenceModal(root, item, vibe, onSaved) {
   const backdrop = document.createElement('div');
   backdrop.className = 'daily-summary__modal-backdrop';
   const modal = document.createElement('div');
-  modal.className = 'daily-summary__modal';
+  modal.className = 'daily-summary__modal daily-summary__modal--guide';
   modal.setAttribute('role', 'dialog');
   modal.setAttribute('aria-modal', 'true');
 
@@ -225,47 +228,25 @@ function openPreferenceModal(root, item, vibe, onSaved) {
   const hint = document.createElement('p');
   hint.className = 'daily-summary__modal-hint';
   hint.textContent = wantMore
-    ? 'Add topic/circumstance lines to Look for (one per line).'
-    : 'This item is dismissed. Add grey and/or black topic lines (one per line) so similar ones stay out.';
+    ? 'Append a line to the ingestion guide under “Prefer more like this”. Edit before saving.'
+    : 'This item is dismissed. Append a line under “Prefer less like this” so similar mail stays out.';
 
   const itemLabel = document.createElement('p');
   itemLabel.className = 'daily-summary__modal-item';
   itemLabel.textContent = item.title || 'Untitled item';
 
-  /** @type {HTMLTextAreaElement} */
-  let lookArea;
-  /** @type {HTMLTextAreaElement | null} */
-  let greyArea = null;
-  /** @type {HTMLTextAreaElement | null} */
-  let blackArea = null;
+  const sectionLabel = document.createElement('p');
+  sectionLabel.className = 'daily-summary__modal-section';
+  sectionLabel.textContent = wantMore
+    ? '### Prefer more like this'
+    : '### Prefer less like this';
 
-  const fields = document.createElement('div');
-  fields.className = 'daily-summary__modal-fields';
-
-  if (wantMore) {
-    lookArea = document.createElement('textarea');
-    lookArea.className = 'daily-summary__modal-textarea';
-    lookArea.rows = 5;
-    lookArea.placeholder = 'One topic or circumstance per line…';
-    lookArea.value = suggestTopicLines(item, vibe);
-    fields.append(lookArea);
-  } else {
-    lookArea = document.createElement('textarea');
-    const greyLabel = document.createElement('label');
-    greyLabel.textContent = 'Grey list';
-    greyArea = document.createElement('textarea');
-    greyArea.className = 'daily-summary__modal-textarea';
-    greyArea.rows = 3;
-    greyArea.placeholder = 'Soft exclude…';
-    greyArea.value = suggestTopicLines(item, vibe);
-    const blackLabel = document.createElement('label');
-    blackLabel.textContent = 'Black list';
-    blackArea = document.createElement('textarea');
-    blackArea.className = 'daily-summary__modal-textarea';
-    blackArea.rows = 3;
-    blackArea.placeholder = 'Always exclude…';
-    fields.append(greyLabel, greyArea, blackLabel, blackArea);
-  }
+  const appendArea = document.createElement('textarea');
+  appendArea.className = 'daily-summary__modal-textarea daily-summary__modal-textarea--guide';
+  appendArea.rows = 6;
+  appendArea.spellcheck = true;
+  appendArea.placeholder = 'Suggested line to append to data/gmail-daily-summary-guide.md…';
+  appendArea.value = suggestGuideAppendLocal(item, vibe);
 
   const msg = document.createElement('p');
   msg.className = 'daily-summary__modal-msg';
@@ -280,7 +261,7 @@ function openPreferenceModal(root, item, vibe, onSaved) {
   const save = document.createElement('button');
   save.type = 'button';
   save.className = 'daily-summary__btn daily-summary__btn--primary';
-  save.textContent = wantMore ? 'Add to Look for' : 'Save topics';
+  save.textContent = 'Append to guide';
 
   const close = () => backdrop.remove();
   cancel.addEventListener('click', close);
@@ -288,17 +269,10 @@ function openPreferenceModal(root, item, vibe, onSaved) {
     if (e.target === backdrop) close();
   });
   save.addEventListener('click', async () => {
-    const lookFor = wantMore ? lookArea.value : '';
-    const skip = wantMore ? '' : greyArea?.value || '';
-    const blacklist = wantMore ? '' : blackArea?.value || '';
-    if (wantMore && !String(lookFor).trim()) {
+    const append = String(appendArea.value || '').trim();
+    if (!append) {
       msg.hidden = false;
-      msg.textContent = 'Add at least one Look-for line.';
-      return;
-    }
-    if (!wantMore && !String(skip).trim() && !String(blacklist).trim()) {
-      msg.hidden = false;
-      msg.textContent = 'Add at least one grey or black line.';
+      msg.textContent = 'Add at least one line to append.';
       return;
     }
     save.disabled = true;
@@ -310,9 +284,7 @@ function openPreferenceModal(root, item, vibe, onSaved) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           vibe: wantMore ? 'up' : 'down',
-          lookFor,
-          skip,
-          blacklist,
+          append,
         }),
       });
       const j = await r.json().catch(() => ({}));
@@ -326,10 +298,11 @@ function openPreferenceModal(root, item, vibe, onSaved) {
   });
 
   actions.append(cancel, save);
-  modal.append(title, hint, itemLabel, fields, msg, actions);
+  modal.append(title, hint, itemLabel, sectionLabel, appendArea, msg, actions);
   backdrop.append(modal);
   document.body.append(backdrop);
-  (wantMore ? lookArea : greyArea)?.focus();
+  appendArea.focus();
+  appendArea.setSelectionRange(appendArea.value.length, appendArea.value.length);
 }
 
 /**
@@ -519,9 +492,15 @@ export function mountDailySummary(root) {
 
       const urgencyEl = makeUrgencyIcon(urgency);
 
+      const head = document.createElement('span');
+      head.className = 'daily-summary__summary-head';
+
       const title = document.createElement('span');
       title.className = 'daily-summary__summary-title';
       title.textContent = String(item.title || 'Untitled');
+
+      const rowActions = document.createElement('span');
+      rowActions.className = 'daily-summary__row-actions';
 
       const pin = document.createElement('button');
       pin.type = 'button';
@@ -560,7 +539,9 @@ export function mountDailySummary(root) {
         });
       });
 
-      row.append(urgencyEl, title, pin, dismiss);
+      rowActions.append(pin, dismiss);
+      head.append(urgencyEl, title);
+      row.append(head, rowActions);
 
       const body = document.createElement('div');
       body.className = 'daily-summary__item-body';
@@ -628,13 +609,15 @@ export function mountDailySummary(root) {
       down.title = 'See less like this (dismisses this item)';
       down.setAttribute('aria-label', 'See less like this');
       down.textContent = '👎';
-      up.addEventListener('click', () => openPreferenceModal(root, item, 'up', () => {}));
+      up.addEventListener('click', () =>
+        openPreferenceModal(root, item, 'up', () => showStatus('Appended to ingestion guide')),
+      );
       down.addEventListener('click', () => {
         down.disabled = true;
         up.disabled = true;
         void dismissItem(item)
           .then(() => {
-            openPreferenceModal(root, item, 'down', () => {});
+            openPreferenceModal(root, item, 'down', () => showStatus('Appended to ingestion guide'));
           })
           .catch((e) => {
             showStatus(String(e?.message || e), true);

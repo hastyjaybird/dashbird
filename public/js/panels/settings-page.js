@@ -2446,7 +2446,7 @@ function buildEventsFinderSourcesBlock(root) {
 }
 
 /**
- * Daily Summary topic rubrics (Look for / Grey / Black).
+ * Daily Summary email ingestion guide (markdown).
  * @param {HTMLElement} root
  */
 function buildGmailWeeklySummaryBlock(root) {
@@ -2459,77 +2459,42 @@ function buildGmailWeeklySummaryBlock(root) {
   const intro = document.createElement('p');
   intro.className = 'settings-page__intro';
   intro.textContent =
-    'Topic/circumstance rubrics for the main-page Daily Summary (jay.intake.box + julia.hasty). Scans every 30 minutes (plus one-time bootstrap). Rolling 10-day window — older items are deleted unless pinned; unpin waits 30s then deletes if past the window. Newest always on top. Look-for topics are preferred; grey soft-excludes; black always excludes. One topic or circumstance per line.';
+    'Markdown guide for what intake mail becomes action items (jay.intake.box + julia.hasty). Scans every 30 minutes. Rolling 10-day window — older items delete unless pinned. 👍/👎 on the main page append to Learned preferences. Template: docs/gmail-daily-summary-guide.md · live: data/gmail-daily-summary-guide.md';
   body.append(intro);
 
-  const lookLabel = document.createElement('label');
-  lookLabel.className = 'settings-page__modal-field-label';
-  lookLabel.htmlFor = 'settings-daily-summary-look';
-  lookLabel.textContent = 'Look for (whitelist topics)';
-  const lookArea = document.createElement('textarea');
-  lookArea.id = 'settings-daily-summary-look';
-  lookArea.className = 'settings-page__modal-textarea';
-  lookArea.rows = 5;
-  lookArea.spellcheck = true;
-
-  const skipLabel = document.createElement('label');
-  skipLabel.className = 'settings-page__modal-field-label';
-  skipLabel.htmlFor = 'settings-daily-summary-skip';
-  skipLabel.textContent = 'Grey list (soft exclude)';
-  const skipHint = document.createElement('p');
-  skipHint.className = 'settings-page__modal-field-hint';
-  skipHint.textContent = 'Down-rank or skip when not also Look-for relevant.';
-  const skipArea = document.createElement('textarea');
-  skipArea.id = 'settings-daily-summary-skip';
-  skipArea.className = 'settings-page__modal-textarea';
-  skipArea.rows = 4;
-  skipArea.spellcheck = true;
-
-  const blackLabel = document.createElement('label');
-  blackLabel.className = 'settings-page__modal-field-label';
-  blackLabel.htmlFor = 'settings-daily-summary-blacklist';
-  blackLabel.textContent = 'Black list (always exclude)';
-  const blackArea = document.createElement('textarea');
-  blackArea.id = 'settings-daily-summary-blacklist';
-  blackArea.className = 'settings-page__modal-textarea';
-  blackArea.rows = 4;
-  blackArea.spellcheck = true;
+  const guideLabel = document.createElement('label');
+  guideLabel.className = 'settings-page__modal-field-label';
+  guideLabel.htmlFor = 'settings-daily-summary-guide';
+  guideLabel.textContent = 'Ingestion guide (markdown)';
+  const guideArea = document.createElement('textarea');
+  guideArea.id = 'settings-daily-summary-guide';
+  guideArea.className = 'settings-page__modal-textarea settings-page__modal-textarea--guide';
+  guideArea.rows = 22;
+  guideArea.spellcheck = true;
 
   const actions = document.createElement('div');
   actions.className = 'settings-page__events-toolbar';
   const saveBtn = document.createElement('button');
   saveBtn.type = 'button';
   saveBtn.className = 'settings-page__rain-save';
-  saveBtn.textContent = 'Save rubrics';
+  saveBtn.textContent = 'Save guide';
   const status = document.createElement('p');
   status.className = 'settings-page__load-status';
   status.setAttribute('aria-live', 'polite');
   status.textContent = 'Loading…';
 
   actions.append(saveBtn);
-  body.append(
-    lookLabel,
-    lookArea,
-    skipLabel,
-    skipHint,
-    skipArea,
-    blackLabel,
-    blackArea,
-    actions,
-    status,
-  );
+  body.append(guideLabel, guideArea, actions, status);
   root.append(block);
 
   async function load() {
     status.className = 'settings-page__load-status';
     status.textContent = 'Loading…';
     try {
-      const r = await fetch('/api/gmail-daily-summary/criteria', { cache: 'no-store' });
+      const r = await fetch('/api/gmail-daily-summary/guide', { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
-      lookArea.value = String(j.criteria?.lookFor || '');
-      skipArea.value = String(j.criteria?.skip || '');
-      blackArea.value = String(j.criteria?.blacklist || '');
+      guideArea.value = String(j.guide || '');
       status.textContent = '';
       status.hidden = true;
     } catch (e) {
@@ -2545,20 +2510,14 @@ function buildGmailWeeklySummaryBlock(root) {
     status.className = 'settings-page__load-status';
     status.textContent = 'Saving…';
     try {
-      const r = await fetch('/api/gmail-daily-summary/criteria', {
+      const r = await fetch('/api/gmail-daily-summary/guide', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          lookFor: lookArea.value,
-          skip: skipArea.value,
-          blacklist: blackArea.value,
-        }),
+        body: JSON.stringify({ guide: guideArea.value }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
-      lookArea.value = String(j.criteria?.lookFor || lookArea.value);
-      skipArea.value = String(j.criteria?.skip || skipArea.value);
-      blackArea.value = String(j.criteria?.blacklist || blackArea.value);
+      guideArea.value = String(j.guide || guideArea.value);
       status.className = 'settings-page__load-status';
       status.textContent = 'Saved.';
     } catch (e) {

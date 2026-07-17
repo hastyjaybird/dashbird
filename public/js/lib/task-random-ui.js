@@ -3,8 +3,18 @@
  */
 import { getDevicePlace } from './device-location.js';
 import { isMobileView } from './view-mode.js';
+import {
+  patchBodyForTaskLocation,
+  projectDefaultLocationLabel,
+  TASK_LOCATION_OPTIONS,
+} from './task-location-meta.js';
 
 const DIFFICULTIES = [
+  { id: 'low', label: 'Low' },
+  { id: 'med', label: 'Med' },
+  { id: 'high', label: 'High' },
+];
+const PRIORITIES = [
   { id: 'low', label: 'Low' },
   { id: 'med', label: 'Med' },
   { id: 'high', label: 'High' },
@@ -33,11 +43,47 @@ const TIME_OPTIONS = [
 ];
 const TIME_LABELS = Object.fromEntries(TIME_OPTIONS.map((t) => [t.id, t.label]));
 
+const FIELD_LABELS = {
+  priority: 'Priority',
+  difficulty: 'Difficulty',
+  duration: 'Duration',
+  locations: 'Location',
+  times: 'When',
+};
+
+/**
+ * @param {Record<string, unknown> | null | undefined} taskMeta
+ * @param {Record<string, unknown> | null | undefined} projectMeta
+ */
+function hasEffectiveLocation(taskMeta, projectMeta) {
+  if (taskMeta?.locationAny) return true;
+  if (typeof taskMeta?.location === 'string' && taskMeta.location) return true;
+  if (Array.isArray(taskMeta?.locations) && taskMeta.locations.length) return true;
+  if (typeof projectMeta?.location === 'string' && projectMeta.location) return true;
+  return false;
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} taskMeta
+ * @param {Record<string, unknown> | null | undefined} projectMeta
+ */
+function missingFieldsForCard(taskMeta, projectMeta) {
+  /** @type {string[]} */
+  const missing = [];
+  if (!taskMeta?.priority) missing.push('priority');
+  if (!taskMeta?.difficulty) missing.push('difficulty');
+  if (!taskMeta?.duration) missing.push('duration');
+  if (!hasEffectiveLocation(taskMeta, projectMeta)) missing.push('locations');
+  if (!Array.isArray(taskMeta?.times) || !taskMeta.times.length) missing.push('times');
+  return missing;
+}
+
 /**
  * @param {HTMLElement} parent
  * @param {string} title
+ * @param {{ hideClose?: boolean }} [opts]
  */
-function makeModalShell(parent, title) {
+function makeModalShell(parent, title, opts = {}) {
   const backdrop = document.createElement('div');
   backdrop.className = 'tasks-random__backdrop';
   const modal = document.createElement('div');
@@ -49,12 +95,16 @@ function makeModalShell(parent, title) {
   const h2 = document.createElement('h2');
   h2.className = 'tasks-random__title';
   h2.textContent = title;
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button';
-  closeBtn.className = 'tasks-random__close';
-  closeBtn.textContent = '×';
-  closeBtn.setAttribute('aria-label', 'Close');
-  head.append(h2, closeBtn);
+  head.append(h2);
+  if (!opts.hideClose) {
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'tasks-random__close';
+    closeBtn.textContent = '×';
+    closeBtn.setAttribute('aria-label', 'Close');
+    head.append(closeBtn);
+    closeBtn.addEventListener('click', () => close());
+  }
   const body = document.createElement('div');
   body.className = 'tasks-random__body';
   modal.append(head, body);
@@ -68,7 +118,6 @@ function makeModalShell(parent, title) {
   function onKey(e) {
     if (e.key === 'Escape') close();
   }
-  closeBtn.addEventListener('click', close);
   backdrop.addEventListener('click', (e) => {
     if (e.target === backdrop) close();
   });
@@ -134,18 +183,176 @@ async function fetchContext() {
 }
 
 /**
+ * @param {{
+ *   body: HTMLElement,
+ *   data: Record<string, unknown>,
+ *   onHighlightTask?: (task: object) => void,
+ *   onDone?: (id: string) => void | Promise<void>,
+ *   onSkip: () => void,
+ *   onSkipProject: () => void,
+ *   closeCard: () => void,
+ * }} opts
+ */
+async function renderTaskCardModal(opts) {
+  const { body, data, onHighlightTask, onDone, onSkip, onSkipProject, closeCard } = opts;
+  body.replaceChildren();
+
+  if (!data?.matched || !data.task) {
+    const empty = document.createElement('p');
+    empty.className = 'tasks-random__empty muted';
+    empty.textContent = data?.message || 'No tasks match — try relaxing filters or tag more tasks.';
+    const actions = document.createElement('div');
+    actions.className = 'tasks-random__actions';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'tasks-random__secondary';
+    closeBtn.textContent = 'Close';
+    closeBtn.addEventListener('click', closeCard);
+    actions.append(closeBtn);
+    body.append(empty, actions);
+    return;
+  }
+
+  const taskMeta = data.meta || null;
+  const projectMeta = data.projectMeta || null;
+  const missingFields = missingFieldsForCard(taskMeta, projectMeta);
+
+  const card = document.createElement('div');
+  card.className = 'tasks-random__card';
+
+  const proj = document.createElement('p');
+  proj.className = 'tasks-random__card-project-head';
+  proj.textContent = data.task.projectTitle || 'Project';
+
+  const title = document.createElement('h3');
+  title.className = 'tasks-random__card-title';
+  title.textContent = data.task.text;
+
+  card.append(proj, title);
+
+  if (missingFields.length) {
+    const assignWrap = document.createElement('details');
+    assignWrap.className = 'tasks-random__assign-details';
+    assignWrap.open = true;
+    const assignSummary = document.createElement('summary');
+    assignSummary.className = 'tasks-random__assign-summary';
+    assignSummary.textContent = 'Set task attributes';
+    const assignRow = document.createElement('div');
+    assignRow.className = 'tasks-random__assign';
+
+    for (const field of missingFields) {
+      const group = document.createElement('div');
+      group.className = 'tasks-random__assign-group';
+      const fl = document.createElement('span');
+      fl.className = 'tasks-random__assign-field';
+      fl.textContent = FIELD_LABELS[field] || field;
+      group.append(fl);
+      const fieldOpts =
+        field === 'priority'
+          ? PRIORITIES
+          : field === 'difficulty'
+            ? DIFFICULTIES
+            : field === 'duration'
+              ? DURATIONS
+              : field === 'locations'
+                ? [
+                    {
+                      id: '__inherit__',
+                      label: `Default (${projectDefaultLocationLabel(projectMeta)})`,
+                    },
+                    { id: '__any__', label: 'Any location' },
+                    ...TASK_LOCATION_OPTIONS,
+                  ]
+                : TIME_OPTIONS;
+      for (const opt of fieldOpts) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'tasks-random__chip tasks-random__chip--sm';
+        b.textContent = opt.label;
+        b.addEventListener('click', async () => {
+          /** @type {Record<string, unknown>} */
+          const patch = {};
+          if (field === 'priority') patch.priority = opt.id;
+          else if (field === 'difficulty') patch.difficulty = opt.id;
+          else if (field === 'duration') patch.duration = opt.id;
+          else if (field === 'locations') Object.assign(patch, patchBodyForTaskLocation(opt.id));
+          else if (field === 'times') patch.times = [opt.id];
+          b.disabled = true;
+          try {
+            const r = await fetch(`/api/vikunja/todos/${encodeURIComponent(data.task.id)}/meta`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(patch),
+            });
+            if (!r.ok) throw new Error('save_failed');
+            const j = await r.json();
+            await renderTaskCardModal({
+              ...opts,
+              data: {
+                ...data,
+                meta: j.row || taskMeta,
+              },
+            });
+          } catch {
+            b.disabled = false;
+          }
+        });
+        group.append(b);
+      }
+      assignRow.append(group);
+    }
+
+    assignWrap.append(assignSummary, assignRow);
+    card.append(assignWrap);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'tasks-random__actions';
+  const skipBtn = document.createElement('button');
+  skipBtn.type = 'button';
+  skipBtn.className = 'tasks-random__secondary';
+  skipBtn.textContent = 'Skip';
+  const skipProjectBtn = document.createElement('button');
+  skipProjectBtn.type = 'button';
+  skipProjectBtn.className = 'tasks-random__secondary';
+  skipProjectBtn.textContent = 'Skip project';
+  const goBtn = document.createElement('button');
+  goBtn.type = 'button';
+  goBtn.className = 'tasks-random__secondary';
+  goBtn.textContent = 'Go to task';
+  const doneBtn = document.createElement('button');
+  doneBtn.type = 'button';
+  doneBtn.className = 'tasks-random__secondary';
+  doneBtn.textContent = 'Mark done';
+  actions.append(skipBtn, skipProjectBtn, goBtn, doneBtn);
+  card.append(actions);
+  body.append(card);
+
+  skipBtn.addEventListener('click', onSkip);
+  skipProjectBtn.addEventListener('click', onSkipProject);
+  goBtn.addEventListener('click', () => {
+    onHighlightTask?.(data.task);
+    closeCard();
+  });
+  doneBtn.addEventListener('click', async () => {
+    doneBtn.disabled = true;
+    await onDone?.(String(data.task.id));
+    closeCard();
+  });
+}
+
+/**
  * @param {{ root: HTMLElement, projects: Array<{ id: number, title: string }>, onHighlightTask?: (task: { id: string, projectId?: number | null }) => void, onDone?: (id: string) => void }} opts
  */
 export function openRandomTaskPicker(opts) {
-  const { root, projects, onHighlightTask, onDone } = opts;
-  const { body, close } = makeModalShell(root, 'Pick something to do');
+  const { root, onHighlightTask, onDone } = opts;
 
   /** @type {string | null} */
   let difficulty = null;
   /** @type {string | null} */
   let duration = null;
-  /** @type {string[]} */
-  const excludeIds = [];
+
+  const filterShell = makeModalShell(root, 'What can you do?');
 
   const contextEl = document.createElement('p');
   contextEl.className = 'tasks-random__context muted';
@@ -168,138 +375,47 @@ export function openRandomTaskPicker(opts) {
 
   filterWrap.append(diffRow, durRow);
 
-  const pickBtn = document.createElement('button');
-  pickBtn.type = 'button';
-  pickBtn.className = 'tasks-random__primary';
-  pickBtn.textContent = 'Pick a task';
+  const filterHint = document.createElement('p');
+  filterHint.className = 'tasks-random__hint muted';
+  filterHint.textContent = 'Optional — leave blank for any. Tap Go when ready.';
 
-  const status = document.createElement('p');
-  status.className = 'tasks-random__status';
-  status.hidden = true;
+  const filterActions = document.createElement('div');
+  filterActions.className = 'tasks-random__filter-actions';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'tasks-random__secondary';
+  cancelBtn.textContent = 'Cancel';
+  const goBtn = document.createElement('button');
+  goBtn.type = 'button';
+  goBtn.className = 'tasks-random__primary';
+  goBtn.textContent = 'Go';
+  filterActions.append(cancelBtn, goBtn);
 
-  const resultWrap = document.createElement('div');
-  resultWrap.className = 'tasks-random__result';
-  resultWrap.hidden = true;
-
-  body.append(contextEl, filterWrap, pickBtn, status, resultWrap);
+  filterShell.body.append(contextEl, filterWrap, filterHint, filterActions);
 
   void fetchContext().then((ctx) => {
     contextEl.textContent = ctx.label || 'Context ready';
   });
 
-  async function renderResult(data) {
-    resultWrap.replaceChildren();
-    resultWrap.hidden = false;
-    if (!data?.matched || !data.task) {
-      const p = document.createElement('p');
-      p.className = 'tasks-random__empty muted';
-      p.textContent = data?.message || 'No tasks match — try relaxing filters or tag more tasks.';
-      resultWrap.append(p);
-      return;
-    }
+  cancelBtn.addEventListener('click', () => filterShell.close());
 
-    const card = document.createElement('div');
-    card.className = 'tasks-random__card';
-    const title = document.createElement('h3');
-    title.className = 'tasks-random__card-title';
-    title.textContent = data.task.text;
-    const proj = document.createElement('p');
-    proj.className = 'tasks-random__card-project muted';
-    proj.textContent = data.task.projectTitle || 'Project';
-    card.append(title, proj);
+  goBtn.addEventListener('click', () => {
+    filterShell.close();
+    openTaskCardModal();
+  });
 
-    if (data.missingFields?.length) {
-      const missLab = document.createElement('p');
-      missLab.className = 'tasks-random__assign-label';
-      missLab.textContent = 'Tag this task (optional):';
-      card.append(missLab);
-      const assignRow = document.createElement('div');
-      assignRow.className = 'tasks-random__assign';
-      for (const field of data.missingFields) {
-        const group = document.createElement('div');
-        group.className = 'tasks-random__assign-group';
-        const fl = document.createElement('span');
-        fl.className = 'tasks-random__assign-field';
-        fl.textContent = field;
-        group.append(fl);
-        const opts =
-          field === 'difficulty'
-            ? DIFFICULTIES
-            : field === 'duration'
-              ? DURATIONS
-              : field === 'locations'
-                ? LOCATIONS.filter((l) => l.id)
-                : TIME_OPTIONS;
-        for (const opt of opts) {
-          const b = document.createElement('button');
-          b.type = 'button';
-          b.className = 'tasks-random__chip tasks-random__chip--sm';
-          b.textContent = opt.label;
-          b.addEventListener('click', async () => {
-            /** @type {Record<string, unknown>} */
-            const patch = {};
-            if (field === 'difficulty') patch.difficulty = opt.id;
-            else if (field === 'duration') patch.duration = opt.id;
-            else if (field === 'locations') patch.locations = [opt.id];
-            else if (field === 'times') patch.times = [opt.id];
-            const r = await fetch(`/api/vikunja/todos/${encodeURIComponent(data.task.id)}/meta`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(patch),
-            });
-            if (r.ok) {
-              b.classList.add('tasks-random__chip--on');
-              b.disabled = true;
-            }
-          });
-          group.append(b);
-        }
-        assignRow.append(group);
-      }
-      card.append(assignRow);
-    }
+  /** @type {string[]} */
+  const excludeIds = [];
+  /** @type {string[]} */
+  const excludeProjectIds = [];
 
-    const actions = document.createElement('div');
-    actions.className = 'tasks-random__actions';
-    const skipBtn = document.createElement('button');
-    skipBtn.type = 'button';
-    skipBtn.className = 'tasks-random__secondary';
-    skipBtn.textContent = 'Skip';
-    const goBtn = document.createElement('button');
-    goBtn.type = 'button';
-    goBtn.className = 'tasks-random__secondary';
-    goBtn.textContent = 'Go to task';
-    const doneBtn = document.createElement('button');
-    doneBtn.type = 'button';
-    doneBtn.className = 'tasks-random__secondary';
-    doneBtn.textContent = 'Mark done';
-    actions.append(skipBtn, goBtn, doneBtn);
-    card.append(actions);
-    resultWrap.append(card);
-
-    skipBtn.addEventListener('click', () => {
-      excludeIds.push(String(data.task.id));
-      void doPick();
-    });
-    goBtn.addEventListener('click', () => {
-      onHighlightTask?.(data.task);
-      close();
-    });
-    doneBtn.addEventListener('click', async () => {
-      doneBtn.disabled = true;
-      await onDone?.(String(data.task.id));
-      close();
-    });
-  }
-
-  async function doPick() {
-    pickBtn.disabled = true;
-    status.hidden = true;
+  async function fetchRandomTask() {
     const place = getDevicePlace();
     /** @type {Record<string, unknown>} */
     const bodyObj = {
       device: deviceKind(),
       excludeIds,
+      excludeProjectIds,
     };
     if (difficulty) bodyObj.difficulty = difficulty;
     if (duration) bodyObj.duration = duration;
@@ -308,38 +424,82 @@ export function openRandomTaskPicker(opts) {
       bodyObj.lon = place.lon;
     }
     if (place?.timeZone) bodyObj.timeZone = place.timeZone;
-    try {
-      const r = await fetch('/api/vikunja/random-task', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bodyObj),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.detail || j.error || 'pick_failed');
-      await renderResult(j);
-    } catch (e) {
-      status.hidden = false;
-      status.textContent = String(e?.message || e || 'Could not pick a task.');
-      status.classList.add('tasks-random__status--err');
-    } finally {
-      pickBtn.disabled = false;
-    }
+    const r = await fetch('/api/vikunja/random-task', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bodyObj),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || j.error || 'pick_failed');
+    return j;
   }
 
-  pickBtn.addEventListener('click', () => void doPick());
+  function openTaskCardModal() {
+    const cardShell = makeModalShell(root, 'Your task');
+    /** @type {string | null} */
+    let currentTaskId = null;
+    /** @type {number | null} */
+    let currentProjectId = null;
+
+    async function pickAndShow() {
+      const loading = document.createElement('p');
+      loading.className = 'tasks-random__status muted';
+      loading.textContent = 'Picking a task…';
+      cardShell.body.replaceChildren(loading);
+      try {
+        const j = await fetchRandomTask();
+        currentTaskId = j.task?.id != null ? String(j.task.id) : null;
+        currentProjectId =
+          j.task?.projectId != null && Number.isFinite(Number(j.task.projectId))
+            ? Number(j.task.projectId)
+            : null;
+        await renderTaskCardModal({
+          body: cardShell.body,
+          data: j,
+          onHighlightTask,
+          onDone,
+          closeCard: cardShell.close,
+          onSkip: () => {
+            if (currentTaskId) excludeIds.push(currentTaskId);
+            void pickAndShow();
+          },
+          onSkipProject: () => {
+            if (currentProjectId != null) excludeProjectIds.push(String(currentProjectId));
+            void pickAndShow();
+          },
+        });
+      } catch (e) {
+        cardShell.body.replaceChildren();
+        const err = document.createElement('p');
+        err.className = 'tasks-random__status tasks-random__status--err';
+        err.textContent = String(e?.message || e || 'Could not pick a task.');
+        const actions = document.createElement('div');
+        actions.className = 'tasks-random__actions';
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'tasks-random__secondary';
+        closeBtn.textContent = 'Close';
+        closeBtn.addEventListener('click', cardShell.close);
+        actions.append(closeBtn);
+        cardShell.body.append(err, actions);
+      }
+    }
+
+    void pickAndShow();
+  }
 }
 
 /**
- * @param {{ root: HTMLElement, projects: Array<{ id: number, title: string }> }} opts
+ * @param {{ root: HTMLElement, projects: Array<{ id: number, title: string }>, onMetaChange?: (meta: object) => void }} opts
  */
 export async function openProjectLocationsTable(opts) {
-  const { root, projects } = opts;
+  const { root, projects, onMetaChange } = opts;
   const { body, close } = makeModalShell(root, 'Project locations');
 
   const hint = document.createElement('p');
   hint.className = 'tasks-random__hint muted';
   hint.innerHTML =
-    'Default location for all tasks in each project. Also editable in <code>data/task-project-locations.md</code>.';
+    'Default location for tasks in each project (override per task in the list). Also editable in <code>data/task-project-locations.md</code>.';
 
   const docLink = document.createElement('a');
   docLink.className = 'tasks-random__doc-link';
@@ -410,6 +570,7 @@ export async function openProjectLocationsTable(opts) {
           if (!r.ok) throw new Error('save_failed');
           const j = await r.json();
           meta = j.meta || meta;
+          onMetaChange?.(meta);
           tr.classList.remove('tasks-random__row--saving');
           tr.classList.add('tasks-random__row--saved');
           setTimeout(() => tr.classList.remove('tasks-random__row--saved'), 800);
@@ -435,6 +596,7 @@ export async function openProjectLocationsTable(opts) {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'sync_failed');
       meta = j.meta || meta;
+      onMetaChange?.(meta);
       renderRows();
       status.hidden = false;
       status.textContent = 'Synced project list to markdown.';

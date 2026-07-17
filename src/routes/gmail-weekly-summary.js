@@ -4,11 +4,16 @@
  */
 import { Router } from 'express';
 import express from 'express';
+import path from 'node:path';
 import {
-  applyGmailWeeklySummaryPreference,
+  applyGmailDailySummaryGuidePreference,
+  gmailDailySummaryGuidePath,
+  loadGmailDailySummaryGuide,
   loadGmailWeeklySummaryCriteria,
+  saveGmailDailySummaryGuide,
   saveGmailWeeklySummaryCriteria,
-} from '../lib/gmail-weekly-summary-criteria-store.js';
+  suggestGuideAppend,
+} from '../lib/gmail-daily-summary-guide-store.js';
 import { gmailIntakeStatusSummary } from '../lib/events-finder-gmail.js';
 import {
   GMAIL_DAILY_SUMMARY_MAX_AGE_DAYS,
@@ -244,11 +249,46 @@ router.post('/items/:id/create-task', async (req, res) => {
   }
 });
 
+router.get('/guide', async (_req, res) => {
+  try {
+    const guide = await loadGmailDailySummaryGuide();
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({
+      ok: true,
+      guide,
+      path: path.relative(process.cwd(), gmailDailySummaryGuidePath()).replace(/\\/g, '/'),
+    });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.put('/guide', async (req, res) => {
+  try {
+    const guide = await saveGmailDailySummaryGuide(req.body?.guide ?? req.body?.markdown ?? '');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, guide });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
+router.post('/guide/suggest', async (req, res) => {
+  try {
+    const vibe = req.body?.vibe === 'down' ? 'down' : 'up';
+    const append = suggestGuideAppend(req.body?.item || {}, vibe);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, vibe, append });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
 router.get('/criteria', async (_req, res) => {
   try {
-    const criteria = await loadGmailWeeklySummaryCriteria();
+    const { guide } = await loadGmailWeeklySummaryCriteria();
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ ok: true, criteria });
+    res.json({ ok: true, criteria: { guide }, guide });
   } catch (e) {
     sendErr(e, res);
   }
@@ -256,9 +296,9 @@ router.get('/criteria', async (_req, res) => {
 
 router.put('/criteria', async (req, res) => {
   try {
-    const criteria = await saveGmailWeeklySummaryCriteria(req.body || {});
+    const { guide } = await saveGmailWeeklySummaryCriteria(req.body || {});
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ ok: true, criteria });
+    res.json({ ok: true, criteria: { guide }, guide });
   } catch (e) {
     sendErr(e, res);
   }
@@ -267,14 +307,15 @@ router.put('/criteria', async (req, res) => {
 router.post('/preference', async (req, res) => {
   try {
     const vibe = req.body?.vibe === 'down' ? 'down' : 'up';
-    const criteria = await applyGmailWeeklySummaryPreference({
-      vibe,
-      lookFor: req.body?.lookFor,
-      skip: req.body?.skip,
-      blacklist: req.body?.blacklist,
-    });
+    const append =
+      String(req.body?.append || '').trim()
+      || [req.body?.lookFor, req.body?.skip, req.body?.blacklist]
+        .map((v) => String(v || '').trim())
+        .filter(Boolean)
+        .join('\n');
+    const guide = await applyGmailDailySummaryGuidePreference({ vibe, append });
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ ok: true, criteria });
+    res.json({ ok: true, guide, criteria: { guide } });
   } catch (e) {
     sendErr(e, res);
   }

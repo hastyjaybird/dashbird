@@ -471,6 +471,31 @@ export function conferenceRecordToHeadsUp(record, now = new Date()) {
 }
 
 /**
+ * @param {object} record
+ * @param {Date} [now]
+ */
+export function conferenceRecordToWatchItem(record, now = new Date()) {
+  const base = conferenceRecordToHeadsUp(record, now);
+  const urlFound = Boolean(String(record.url || '').trim());
+  const hasPayload = Boolean(
+    record.eventStart || record.ticketPrice || record.notes || record.venue || record.city,
+  );
+  /** @type {'pending' | 'fetching' | 'fetched' | 'failed'} */
+  let dataFetched = 'pending';
+  if (record.researching) {
+    dataFetched = 'fetching';
+  } else if (record.researchedAt) {
+    dataFetched = record.error && !hasPayload && !urlFound ? 'failed' : 'fetched';
+  }
+  return {
+    ...base,
+    urlFound,
+    dataFetched,
+    displayActive: isConferenceHeadsUpActive(record, now),
+  };
+}
+
+/**
  * @param {string[]} watchlist
  * @param {Date} [now]
  * @param {NodeJS.ProcessEnv} [env]
@@ -479,7 +504,7 @@ export async function loadConferenceHeadsUp(watchlist, now = new Date(), env = p
   const names = normalizeConferenceWatchlist(watchlist);
   const store = await loadConferenceWatchlistStore(env);
   /** @type {object[]} */
-  const active = [];
+  const items = [];
   /** @type {string[]} */
   const needResearch = [];
 
@@ -488,7 +513,7 @@ export async function loadConferenceHeadsUp(watchlist, now = new Date(), env = p
     const rec = store.bySlug[slug];
     if (!rec) {
       needResearch.push(name);
-      active.push(conferenceRecordToHeadsUp({
+      items.push(conferenceRecordToWatchItem({
         slug,
         query: name,
         name,
@@ -497,9 +522,7 @@ export async function loadConferenceHeadsUp(watchlist, now = new Date(), env = p
       }, now));
       continue;
     }
-    if (isConferenceHeadsUpActive(rec, now)) {
-      active.push(conferenceRecordToHeadsUp(rec, now));
-    }
+    items.push(conferenceRecordToWatchItem(rec, now));
     const researchedAt = Date.parse(String(rec.researchedAt || ''));
     const stale = !Number.isFinite(researchedAt) || now.getTime() - researchedAt > RESEARCH_STALE_MS;
     const incomplete = !rec.url || !rec.eventStart;
@@ -509,7 +532,7 @@ export async function loadConferenceHeadsUp(watchlist, now = new Date(), env = p
     }
   }
 
-  return { active, needResearch, watchlist: names };
+  return { items, needResearch, watchlist: names };
 }
 
 /**

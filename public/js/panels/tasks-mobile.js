@@ -1,4 +1,13 @@
 import { openRandomTaskPicker, openProjectLocationsTable } from '../lib/task-random-ui.js';
+import {
+  buildMobileTaskLocationTrigger,
+  fetchTaskRandomMeta,
+  listTaskLocationOptions,
+  patchBodyForTaskLocation,
+  patchTaskRandomMeta,
+  taskHasLocationOverride,
+  taskLocationSelectValue,
+} from '../lib/task-location-meta.js';
 
 /**
  * Mobile Vikunja Tasks: project list → task detail (add / complete).
@@ -17,6 +26,8 @@ const PTR_THRESHOLD = 70;
 const PTR_MAX = 100;
 const DND_PROJECT_MIME = 'application/x-dashbird-project-id';
 const DND_TASK_MIME = 'application/x-dashbird-task-id';
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_PX = 10;
 
 /**
  * @param {string} className
@@ -31,6 +42,67 @@ function makeDragHandle(className, title) {
   grip.className = 'tasks-panel__grip';
   handle.append(grip);
   return handle;
+}
+
+/**
+ * Long-press on a task row opens the move-to-project picker.
+ * @param {HTMLElement} el
+ * @param {string} taskId
+ * @param {() => void} onLongPress
+ */
+function attachTaskLongPress(el, taskId, onLongPress) {
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let timer = null;
+  let startX = 0;
+  let startY = 0;
+  let triggered = false;
+
+  const clearTimer = () => {
+    if (timer != null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    el.classList.remove('mobile-tasks__task--press-hold');
+  };
+
+  el.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (e.target.closest('.mobile-tasks__task-drag')) return;
+    if (e.target.closest('.mobile-tasks__check')) return;
+    triggered = false;
+    startX = e.clientX;
+    startY = e.clientY;
+    clearTimer();
+    timer = setTimeout(() => {
+      timer = null;
+      triggered = true;
+      el.classList.add('mobile-tasks__task--press-hold');
+      if (typeof navigator.vibrate === 'function') navigator.vibrate(20);
+      onLongPress();
+    }, LONG_PRESS_MS);
+  });
+
+  el.addEventListener('pointermove', (e) => {
+    if (timer == null) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_PX) clearTimer();
+  });
+
+  el.addEventListener('pointerup', clearTimer);
+  el.addEventListener('pointercancel', clearTimer);
+  el.addEventListener('lostpointercapture', clearTimer);
+
+  el.addEventListener(
+    'click',
+    (e) => {
+      if (!triggered) return;
+      triggered = false;
+      e.preventDefault();
+      e.stopPropagation();
+    },
+    true,
+  );
 }
 
 /**
@@ -209,17 +281,11 @@ export function mountTasksMobile(root, config = {}) {
   randomBtn.className = 'mobile-tasks__header-btn';
   randomBtn.textContent = 'Random';
 
-  const locationsBtn = document.createElement('button');
-  locationsBtn.type = 'button';
-  locationsBtn.className = 'mobile-tasks__header-btn';
-  locationsBtn.textContent = 'Locations';
-
-  listHeadActions.append(listRefreshBtn, randomBtn, locationsBtn, openLink);
+  listHeadActions.append(listRefreshBtn, randomBtn, openLink);
 
   const vikunjaConfigured = config.vikunjaConfigured !== false;
   if (!vikunjaConfigured) {
     randomBtn.hidden = true;
-    locationsBtn.hidden = true;
   }
   listHead.append(listTitle, listHeadActions);
 
@@ -242,7 +308,13 @@ export function mountTasksMobile(root, config = {}) {
   addProjectBtn.textContent = 'Add';
   addProjectForm.append(addProjectInput, addProjectBtn);
 
-  listPane.append(listHead, projectsList, addProjectForm);
+  const locationsBtn = document.createElement('button');
+  locationsBtn.type = 'button';
+  locationsBtn.className = 'mobile-tasks__list-locations';
+  locationsBtn.textContent = 'Locations';
+  if (!vikunjaConfigured) locationsBtn.hidden = true;
+
+  listPane.append(listHead, projectsList, locationsBtn, addProjectForm);
 
   const detailPane = document.createElement('div');
   detailPane.className = 'mobile-tasks__detail-pane';
@@ -262,8 +334,134 @@ export function mountTasksMobile(root, config = {}) {
   moveTitle.textContent = 'Move to project';
   const moveList = document.createElement('div');
   moveList.className = 'mobile-tasks__move-list';
-  moveOverlay.append(moveTitle, moveList);
+  const moveCancel = document.createElement('button');
+  moveCancel.type = 'button';
+  moveCancel.className = 'mobile-tasks__move-cancel';
+  moveCancel.textContent = 'Cancel';
+  moveOverlay.append(moveTitle, moveList, moveCancel);
   root.append(moveOverlay);
+
+  const locationOverlay = document.createElement('div');
+  locationOverlay.className = 'mobile-tasks__loc-overlay';
+  locationOverlay.hidden = true;
+  const locationTitle = document.createElement('p');
+  locationTitle.className = 'mobile-tasks__loc-title';
+  locationTitle.textContent = 'Task location';
+  const locationList = document.createElement('div');
+  locationList.className = 'mobile-tasks__loc-list';
+  locationList.setAttribute('role', 'radiogroup');
+  locationList.setAttribute('aria-label', 'Task location');
+  const locationActions = document.createElement('div');
+  locationActions.className = 'mobile-tasks__loc-actions';
+  const locationOk = document.createElement('button');
+  locationOk.type = 'button';
+  locationOk.className = 'mobile-tasks__loc-ok';
+  locationOk.textContent = 'OK';
+  const locationCancel = document.createElement('button');
+  locationCancel.type = 'button';
+  locationCancel.className = 'mobile-tasks__loc-cancel';
+  locationCancel.textContent = 'Cancel';
+  locationActions.append(locationOk, locationCancel);
+  locationOverlay.append(locationTitle, locationList, locationActions);
+  root.append(locationOverlay);
+
+  /** @type {string | null} */
+  let locationTaskId = null;
+  /** @type {string | null} */
+  let locationPendingValue = null;
+  /** @type {string | null} */
+  let locationSavedValue = null;
+
+  /**
+   * @param {string} taskId
+   */
+  function showLocationOverlay(taskId) {
+    locationTaskId = taskId;
+    const taskMeta = taskRandomMeta.byTaskId[taskId] || null;
+    const projectMeta =
+      projectId != null ? taskRandomMeta.byProjectId[String(projectId)] || null : null;
+    locationSavedValue = taskLocationSelectValue(taskMeta, projectMeta);
+    locationPendingValue = locationSavedValue;
+
+    locationList.replaceChildren();
+    for (const opt of listTaskLocationOptions(projectMeta)) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'mobile-tasks__loc-option';
+      btn.dataset.value = opt.id;
+      btn.textContent = opt.label;
+      btn.setAttribute('role', 'radio');
+      btn.setAttribute('aria-checked', opt.id === locationPendingValue ? 'true' : 'false');
+      if (opt.id === locationPendingValue) btn.classList.add('mobile-tasks__loc-option--on');
+      btn.addEventListener('click', () => {
+        locationPendingValue = opt.id;
+        locationList.querySelectorAll('.mobile-tasks__loc-option').forEach((el) => {
+          const on = el instanceof HTMLElement && el.dataset.value === locationPendingValue;
+          el.classList.toggle('mobile-tasks__loc-option--on', on);
+          if (el instanceof HTMLElement) el.setAttribute('aria-checked', on ? 'true' : 'false');
+        });
+      });
+      locationList.append(btn);
+    }
+
+    locationOverlay.hidden = false;
+    root.classList.add('mobile-tasks--loc-picker');
+    if (!isMobileNavApplying() && projectId != null) {
+      pushMobileNav({
+        tab: 'tasks',
+        pane: 'project',
+        projectId,
+        overlay: 'task-location',
+      });
+    }
+  }
+
+  /**
+   * @param {boolean} [fromPop]
+   */
+  function hideLocationOverlay(fromPop = false) {
+    locationOverlay.hidden = true;
+    locationTaskId = null;
+    locationPendingValue = null;
+    locationSavedValue = null;
+    root.classList.remove('mobile-tasks--loc-picker');
+    if (!fromPop && history.state?.overlay === 'task-location') mobileNavBack();
+  }
+
+  locationCancel.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    hideLocationOverlay();
+  });
+
+  locationOk.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const taskId = locationTaskId;
+    const value = locationPendingValue;
+    const saved = locationSavedValue;
+    if (!taskId || value == null) {
+      hideLocationOverlay();
+      return;
+    }
+    if (value === saved) {
+      hideLocationOverlay();
+      return;
+    }
+    locationOk.disabled = true;
+    void patchTaskRandomMeta(taskId, patchBodyForTaskLocation(value))
+      .then((meta) => {
+        taskRandomMeta = meta;
+        if (view === 'detail' && projectId != null) renderDetailShell();
+        hideLocationOverlay();
+      })
+      .catch(() => {
+        showStatus('Could not save task location.', true);
+      })
+      .finally(() => {
+        locationOk.disabled = false;
+      });
+  });
 
   /** @type {Array<{ id: number, title: string, position?: number }>} */
   let projects = [];
@@ -276,6 +474,14 @@ export function mountTasksMobile(root, config = {}) {
   let view = 'list';
   /** @type {Map<string, ReturnType<typeof setTimeout>>} */
   const pendingDone = new Map();
+  /** @type {{ byTaskId: Record<string, unknown>, byProjectId: Record<string, unknown> }} */
+  let taskRandomMeta = { byTaskId: {}, byProjectId: {} };
+
+  async function refreshTaskRandomMeta() {
+    taskRandomMeta = await fetchTaskRandomMeta(taskRandomMeta);
+    if (view === 'detail' && projectId != null && items.length) renderDetailShell();
+  }
+
   let listRefreshing = false;
   let detailRefreshing = false;
   /** @type {number | null} */
@@ -538,13 +744,11 @@ export function mountTasksMobile(root, config = {}) {
     await loadTodos();
   }
 
-  async function deleteCurrentProject() {
-    if (projectId == null) return;
-    const id = projectId;
+  async function deleteProject(id) {
     const title = projectTitle(id);
-    const openCount = items.length;
+    const openCount = projectId === id ? items.length : null;
     const msg =
-      openCount > 0
+      openCount != null && openCount > 0
         ? `Delete “${title}” and its ${openCount} open task${openCount === 1 ? '' : 's'}? This cannot be undone.`
         : `Delete “${title}”? This cannot be undone.`;
     if (!confirm(msg)) return;
@@ -574,12 +778,16 @@ export function mountTasksMobile(root, config = {}) {
         /* ignore */
       }
       showStatus('Project deleted.');
-      showList();
-      renderProjects();
+      if (projectId === id) {
+        showList();
+      } else {
+        renderProjects();
+      }
       if (
         history.state?.dashbirdMobile &&
         history.state.tab === 'tasks' &&
-        history.state.pane === 'project'
+        history.state.pane === 'project' &&
+        history.state.projectId === id
       ) {
         history.replaceState(
           /** @type {import('../lib/mobile-history.js').MobileNavState} */ ({
@@ -594,6 +802,11 @@ export function mountTasksMobile(root, config = {}) {
       showStatus(`Could not delete project: ${e?.message || e}`, true);
       if (deleteBtn instanceof HTMLButtonElement) deleteBtn.disabled = false;
     }
+  }
+
+  async function deleteCurrentProject() {
+    if (projectId == null) return;
+    await deleteProject(projectId);
   }
 
   /**
@@ -612,6 +825,10 @@ export function mountTasksMobile(root, config = {}) {
     back.addEventListener('click', () => {
       if (!moveOverlay.hidden) {
         hideMoveOverlay();
+        return;
+      }
+      if (!locationOverlay.hidden) {
+        hideLocationOverlay();
         return;
       }
       mobileNavBack();
@@ -716,17 +933,27 @@ export function mountTasksMobile(root, config = {}) {
     const text = document.createElement('span');
     text.className = 'mobile-tasks__task-text';
     text.textContent = item.text;
+    text.title = 'Long-press to move to another project';
 
     label.append(cb, text);
     row.append(label);
-    li.append(row);
 
-    cb.addEventListener('change', () => {
-      if (cb.checked) scheduleDone(item.id);
-      else cancelDone(item.id);
-    });
+    const projectMeta =
+      projectId != null ? taskRandomMeta.byProjectId[String(projectId)] || null : null;
+    const taskMeta = taskRandomMeta.byTaskId[item.id] || null;
+    const locRow = document.createElement('div');
+    locRow.className = 'mobile-tasks__task-loc';
+    locRow.append(
+      buildMobileTaskLocationTrigger({
+        taskId: item.id,
+        taskMeta,
+        projectMeta,
+        onOpen: (id) => showLocationOverlay(id),
+      }),
+    );
 
     if (canDrag) {
+      attachTaskLongPress(li, item.id, () => showMoveOverlay(item.id));
       li.draggable = true;
       li.addEventListener('dragstart', (e) => {
         e.dataTransfer.effectAllowed = 'move';
@@ -741,6 +968,12 @@ export function mountTasksMobile(root, config = {}) {
       });
     }
 
+    cb.addEventListener('change', () => {
+      if (cb.checked) scheduleDone(item.id);
+      else cancelDone(item.id);
+    });
+
+    li.append(row, locRow);
     return li;
   }
 
@@ -923,11 +1156,24 @@ export function mountTasksMobile(root, config = {}) {
       const name = document.createElement('div');
       name.className = 'mobile-tasks__project-name';
       name.textContent = p.title;
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'mobile-tasks__project-delete';
+      delBtn.textContent = '×';
+      delBtn.setAttribute('aria-label', `Delete ${p.title}`);
+      delBtn.title = `Delete ${p.title}`;
+      delBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void deleteProject(p.id);
+      });
+
       const chevron = document.createElement('span');
       chevron.className = 'mobile-tasks__chevron';
       chevron.setAttribute('aria-hidden', 'true');
       chevron.textContent = '›';
-      li.append(handle, name, chevron);
+      li.append(handle, name, delBtn, chevron);
       li.addEventListener('click', () => {
         if (projectDragMoved) {
           projectDragMoved = false;
@@ -1096,6 +1342,7 @@ export function mountTasksMobile(root, config = {}) {
       );
       showStatus('');
       renderProjects();
+      void refreshTaskRandomMeta();
       const s = history.state;
       if (s?.dashbirdMobile && s.tab === 'tasks' && s.pane === 'project' && s.projectId != null) {
         document.dispatchEvent(new CustomEvent('dashbird:mobile-nav', { detail: s }));
@@ -1113,7 +1360,14 @@ export function mountTasksMobile(root, config = {}) {
   }
 
   attachPullToRefresh(root, async () => {
-    if (draggingProjectId != null || draggingTaskId != null || !moveOverlay.hidden) return;
+    if (
+      draggingProjectId != null ||
+      draggingTaskId != null ||
+      !moveOverlay.hidden ||
+      !locationOverlay.hidden
+    ) {
+      return;
+    }
     if (view === 'detail') await refreshTodos();
     else await refreshProjects();
   });
@@ -1233,7 +1487,20 @@ export function mountTasksMobile(root, config = {}) {
   });
 
   locationsBtn.addEventListener('click', () => {
-    void openProjectLocationsTable({ root, projects });
+    void openProjectLocationsTable({
+      root,
+      projects,
+      onMetaChange: (meta) => {
+        taskRandomMeta = meta;
+        if (view === 'detail' && projectId != null) renderDetailShell();
+      },
+    });
+  });
+
+  moveCancel.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    hideMoveOverlay();
   });
 
   void loadProjects();
@@ -1243,6 +1510,10 @@ export function mountTasksMobile(root, config = {}) {
     if (!s || s.tab !== 'tasks') return;
     if (s.overlay === 'task-move') {
       hideMoveOverlay(true);
+      return;
+    }
+    if (s.overlay === 'task-location') {
+      hideLocationOverlay(true);
       return;
     }
     if (s.pane === 'list') {

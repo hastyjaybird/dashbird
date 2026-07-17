@@ -620,38 +620,264 @@ export function mountEventsFinder(root) {
   conferenceToggle.type = 'button';
   conferenceToggle.className = 'events-finder__conferences-toggle';
   conferenceToggle.setAttribute('aria-expanded', 'false');
-  conferenceToggle.setAttribute('aria-controls', 'events-finder-conferences-panel');
+  conferenceToggle.setAttribute('aria-haspopup', 'dialog');
   conferenceToggle.textContent = 'Big conferences & festivals';
   conferenceToggle.title =
     'Track big events with ~2 month heads-up — finds the site, dates, ticket price, and early bird windows.';
 
-  const conferencePanel = document.createElement('div');
-  conferencePanel.id = 'events-finder-conferences-panel';
-  conferencePanel.className = 'events-finder__conferences-panel';
-  conferencePanel.hidden = true;
-
-  const conferenceHint = document.createElement('p');
-  conferenceHint.className = 'events-finder__conferences-hint muted';
-  conferenceHint.textContent =
-    'One name per line. Dashbird searches for the official site, event dates, ticket price, and early bird sale start/end.';
-
   const conferenceInput = document.createElement('textarea');
   conferenceInput.id = 'events-finder-conferences';
   conferenceInput.className = 'events-finder__conferences-input';
-  conferenceInput.rows = 4;
+  conferenceInput.hidden = true;
+  conferenceInput.tabIndex = -1;
+  conferenceInput.setAttribute('aria-hidden', 'true');
   conferenceInput.placeholder = 'e.g. open sauce';
   conferenceInput.spellcheck = true;
   conferenceInput.title = 'Conference or festival names to watch';
 
-  conferencePanel.append(conferenceHint, conferenceInput);
-  conferenceField.append(conferenceToggle, conferencePanel);
+  conferenceField.append(conferenceToggle, conferenceInput);
   filterPanel.append(conferenceField);
 
+  /** @type {HTMLElement | null} */
+  let conferencePopoutBackdrop = null;
+  /** @type {((e: KeyboardEvent) => void) | null} */
+  let conferencePopoutKeyHandler = null;
+  /** @type {HTMLElement | null} */
+  let conferencePopoutStatusList = null;
+
+  function closeConferencePopout() {
+    if (!conferencePopoutBackdrop) return;
+    if (conferencePopoutKeyHandler) {
+      document.removeEventListener('keydown', conferencePopoutKeyHandler);
+      conferencePopoutKeyHandler = null;
+    }
+    conferencePopoutBackdrop.remove();
+    conferencePopoutBackdrop = null;
+    conferencePopoutStatusList = null;
+    conferenceToggle.setAttribute('aria-expanded', 'false');
+    conferenceToggle.classList.remove('events-finder__conferences-toggle--open');
+  }
+
+  /**
+   * @param {{ title: string, body: HTMLElement, onClose?: () => void }} opts
+   */
+  function openConferencePopout(opts) {
+    if (conferencePopoutBackdrop) closeConferencePopout();
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'events-finder__conference-popout-backdrop';
+    const shell = document.createElement('div');
+    shell.className = 'events-finder__conference-popout';
+    shell.setAttribute('role', 'dialog');
+    shell.setAttribute('aria-modal', 'true');
+
+    const bar = document.createElement('div');
+    bar.className = 'events-finder__conference-popout-bar';
+    const title = document.createElement('h2');
+    title.className = 'events-finder__conference-popout-title';
+    title.textContent = opts.title;
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'events-finder__conference-popout-close';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.title = 'Close';
+    closeBtn.innerHTML =
+      '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M4 4l8 8M12 4l-8 8"/></svg>';
+    bar.append(title, closeBtn);
+
+    const body = document.createElement('div');
+    body.className = 'events-finder__conference-popout-body';
+    body.append(opts.body);
+
+    shell.append(bar, body);
+    backdrop.append(shell);
+    document.body.append(backdrop);
+    conferencePopoutBackdrop = backdrop;
+    conferenceToggle.setAttribute('aria-expanded', 'true');
+    conferenceToggle.classList.add('events-finder__conferences-toggle--open');
+
+    const finishClose = () => {
+      opts.onClose?.();
+      closeConferencePopout();
+    };
+    closeBtn.addEventListener('click', finishClose);
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) finishClose();
+    });
+    conferencePopoutKeyHandler = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        finishClose();
+      }
+    };
+    document.addEventListener('keydown', conferencePopoutKeyHandler);
+    closeBtn.focus();
+  }
+
+  function syncConferenceToggleLabel() {
+    const count = readConferenceWatchlistFromForm().length;
+    conferenceToggle.textContent =
+      count > 0
+        ? `Big conferences & festivals (${count})`
+        : 'Big conferences & festivals';
+  }
+
+  /**
+   * @param {object} item
+   * @returns {string}
+   */
+  function conferenceUrlStatusLabel(item) {
+    return item.urlFound ? 'Found' : 'Not found';
+  }
+
+  /**
+   * @param {object} item
+   * @returns {string}
+   */
+  function conferenceDataStatusLabel(item) {
+    switch (item.dataFetched) {
+      case 'fetching':
+        return 'Fetching…';
+      case 'fetched':
+        return 'Fetched';
+      case 'failed':
+        return 'Failed';
+      default:
+        return 'Pending';
+    }
+  }
+
+  /**
+   * @param {object} item
+   * @returns {string}
+   */
+  function conferenceDisplayStatusLabel(item) {
+    return item.displayActive ? 'Active' : 'Inactive';
+  }
+
+  /**
+   * @param {object} item
+   * @returns {HTMLElement}
+   */
+  function buildConferenceWatchStatusRow(item) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'events-finder__conference-status-row';
+    row.title = 'View details';
+
+    const name = document.createElement('span');
+    name.className = 'events-finder__conference-status-name';
+    name.textContent = String(item.title || item.query || 'Conference');
+
+    const status = document.createElement('span');
+    status.className = 'events-finder__conference-status-meta';
+    status.textContent = [
+      `URL ${conferenceUrlStatusLabel(item)}`,
+      `Data ${conferenceDataStatusLabel(item)}`,
+      `Display ${conferenceDisplayStatusLabel(item)}`,
+    ].join(' · ');
+
+    const summary = document.createElement('span');
+    summary.className = 'events-finder__conference-status-summary muted';
+    const bits = [String(item.whenLabel || '')];
+    if (item.earlyBirdLine) bits.push(String(item.earlyBirdLine));
+    else if (item.ticketPrice) bits.push(String(item.ticketPrice));
+    summary.textContent = bits.filter(Boolean).join(' · ');
+
+    row.append(name, status, summary);
+    row.addEventListener('click', () => openConferenceDetailPopout(item));
+    return row;
+  }
+
+  /**
+   * @param {object[]} items
+   * @param {HTMLElement} listEl
+   */
+  function paintConferenceWatchStatusList(items, listEl) {
+    listEl.replaceChildren();
+    if (!items.length) {
+      const empty = document.createElement('p');
+      empty.className = 'events-finder__conference-status-empty muted';
+      empty.textContent = 'No conferences tracked yet — add names below.';
+      listEl.append(empty);
+      return;
+    }
+    for (const item of items) {
+      listEl.append(buildConferenceWatchStatusRow(item));
+    }
+  }
+
+  /**
+   * @returns {object[]}
+   */
+  function conferenceWatchItemsFromPayload() {
+    const raw = lastEventsPayload?.conferenceWatchlistItems;
+    if (Array.isArray(raw)) return raw;
+    return [];
+  }
+
+  function refreshConferencePopoutIfOpen() {
+    if (!conferencePopoutStatusList) return;
+    paintConferenceWatchStatusList(conferenceWatchItemsFromPayload(), conferencePopoutStatusList);
+  }
+
+  function openConferenceWatchlistPopout() {
+    const wrap = document.createElement('div');
+    wrap.className = 'events-finder__conference-popout-manage';
+
+    const listHeading = document.createElement('p');
+    listHeading.className = 'events-finder__conference-popout-section-title';
+    listHeading.textContent = 'Tracked conferences';
+
+    const statusList = document.createElement('div');
+    statusList.className = 'events-finder__conference-status-list';
+    conferencePopoutStatusList = statusList;
+    paintConferenceWatchStatusList(conferenceWatchItemsFromPayload(), statusList);
+
+    const editHeading = document.createElement('p');
+    editHeading.className = 'events-finder__conference-popout-section-title';
+    editHeading.textContent = 'Add or edit names';
+
+    const hint = document.createElement('p');
+    hint.className = 'events-finder__conferences-hint muted';
+    hint.textContent =
+      'One name per line. Dashbird searches for the official site, event dates, ticket price, and early bird sale start/end.';
+
+    const area = document.createElement('textarea');
+    area.className = 'events-finder__conferences-input events-finder__conferences-input--popout';
+    area.rows = 8;
+    area.placeholder = 'e.g. open sauce';
+    area.spellcheck = true;
+    area.value = conferenceInput.value;
+
+    wrap.append(listHeading, statusList, editHeading, hint, area);
+
+    openConferencePopout({
+      title: 'Big conferences & festivals',
+      body: wrap,
+      onClose: () => {
+        conferenceInput.value = area.value;
+        conferencePopoutStatusList = null;
+        syncConferenceToggleLabel();
+      },
+    });
+
+    area.addEventListener('input', () => {
+      conferenceInput.value = area.value;
+      syncConferenceToggleLabel();
+      if (!filtersReady || applyingCriteria) return;
+      if (conferenceAutosaveTimer) clearTimeout(conferenceAutosaveTimer);
+      conferenceAutosaveTimer = setTimeout(() => {
+        conferenceAutosaveTimer = null;
+        void autosaveConferenceWatchlist();
+      }, FILTER_AUTOSAVE_MS);
+    });
+    area.focus();
+  }
+
   conferenceToggle.addEventListener('click', () => {
-    const open = conferencePanel.hidden;
-    conferencePanel.hidden = !open;
-    conferenceToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-    conferenceToggle.classList.toggle('events-finder__conferences-toggle--open', open);
+    if (conferencePopoutBackdrop) closeConferencePopout();
+    else openConferenceWatchlistPopout();
   });
 
   /** @type {ReturnType<typeof setTimeout> | null} */
@@ -1332,6 +1558,7 @@ export function mountEventsFinder(root) {
       });
       if (patch.conferenceWatchlist !== undefined) {
         conferenceInput.value = taste.conferenceWatchlist.join('\n');
+        syncConferenceToggleLabel();
       }
       if (data.filters?.earliestLocalTime) {
         timeInput.value = normalizeLocalTime(data.filters.earliestLocalTime) || data.filters.earliestLocalTime;
@@ -1970,39 +2197,39 @@ export function mountEventsFinder(root) {
 
   /**
    * @param {object} item
-   * @returns {HTMLElement}
    */
-  function buildConferenceHeadsUpCard(item) {
-    const card = document.createElement('article');
-    card.className = 'events-finder__card events-finder__card--conference-heads-up';
+  function openConferenceDetailPopout(item) {
     const eventUrl = String(item.url || '').trim();
+    const body = document.createElement('div');
+    body.className = 'events-finder__conference-detail';
 
     const badge = document.createElement('p');
     badge.className = 'events-finder__conference-badge';
     badge.textContent = '2-month heads-up';
 
-    const head = document.createElement('div');
-    head.className = 'events-finder__card-head';
-    const title = document.createElement(eventUrl ? 'a' : 'div');
-    title.className = 'events-finder__card-title';
+    const statusRow = document.createElement('p');
+    statusRow.className = 'events-finder__conference-detail-status';
+    statusRow.textContent = [
+      `URL ${conferenceUrlStatusLabel(item)}`,
+      `Data ${conferenceDataStatusLabel(item)}`,
+      `Display ${conferenceDisplayStatusLabel(item)}`,
+    ].join(' · ');
+
+    const title = document.createElement('h3');
+    title.className = 'events-finder__conference-detail-title';
     title.textContent = item.title || item.query || 'Conference';
-    if (eventUrl && title instanceof HTMLAnchorElement) {
-      title.href = eventUrl;
-      title.target = '_blank';
-      title.rel = 'noopener noreferrer';
-    }
-    head.append(title);
 
     const whenEl = document.createElement('p');
-    whenEl.className = 'events-finder__card-meta';
+    whenEl.className = 'events-finder__conference-detail-when';
     whenEl.textContent = String(item.whenLabel || 'Dates TBD');
 
-    const placeEl = document.createElement('p');
-    placeEl.className = 'events-finder__card-place';
+    body.append(badge, statusRow, title, whenEl);
+
     if (item.placeLabel) {
+      const placeEl = document.createElement('p');
+      placeEl.className = 'events-finder__conference-detail-place';
       placeEl.textContent = String(item.placeLabel);
-    } else {
-      placeEl.hidden = true;
+      body.append(placeEl);
     }
 
     const ticketEl = document.createElement('p');
@@ -2022,17 +2249,49 @@ export function mountEventsFinder(root) {
     } else {
       ticketEl.hidden = true;
     }
+    if (!ticketEl.hidden) body.append(ticketEl);
 
-    const notesEl = document.createElement('p');
-    notesEl.className = 'events-finder__card-desc muted';
-    if (item.notes && !item.researching) {
-      notesEl.textContent = String(item.notes).slice(0, 220);
-    } else {
-      notesEl.hidden = true;
+    if (item.earlyBirdStart || item.earlyBirdEnd) {
+      const eb = document.createElement('dl');
+      eb.className = 'events-finder__conference-detail-dates';
+      if (item.earlyBirdStart) {
+        const dt = document.createElement('dt');
+        dt.textContent = 'Early bird starts';
+        const dd = document.createElement('dd');
+        dd.textContent = String(item.earlyBirdStart);
+        eb.append(dt, dd);
+      }
+      if (item.earlyBirdEnd) {
+        const dt = document.createElement('dt');
+        dt.textContent = 'Early bird ends';
+        const dd = document.createElement('dd');
+        dd.textContent = String(item.earlyBirdEnd);
+        eb.append(dt, dd);
+      }
+      body.append(eb);
     }
 
-    card.append(badge, head, whenEl, placeEl, ticketEl, notesEl);
-    return card;
+    if (item.notes && !item.researching) {
+      const notesEl = document.createElement('p');
+      notesEl.className = 'events-finder__conference-detail-notes';
+      notesEl.textContent = String(item.notes);
+      body.append(notesEl);
+    }
+
+    if (eventUrl) {
+      const link = document.createElement('a');
+      link.className = 'events-finder__conference-detail-link';
+      link.href = eventUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = 'Official site';
+      body.append(link);
+    }
+
+    openConferencePopout({
+      title: String(item.title || item.query || 'Conference'),
+      body,
+    });
   }
 
   /**
@@ -2450,25 +2709,11 @@ export function mountEventsFinder(root) {
       });
     const events = showSkipped ? skippedList : mainEvents;
     lastFilteredEvents = events;
-    const conferenceHeadsUp = !showSkipped && Array.isArray(data.conferenceHeadsUp)
-      ? data.conferenceHeadsUp
-      : [];
     const gmail = data.sources?.gmail;
     const facebook = data.sources?.facebook;
     const hadCards = listEl.querySelector('.events-finder__card') != null;
     listEl.replaceChildren();
-    if (conferenceHeadsUp.length) {
-      const section = document.createElement('div');
-      section.className = 'events-finder__heads-up';
-      const heading = document.createElement('p');
-      heading.className = 'events-finder__heads-up-title';
-      heading.textContent = 'Big conferences & festivals';
-      section.append(heading);
-      for (const item of conferenceHeadsUp) {
-        section.append(buildConferenceHeadsUpCard(item));
-      }
-      listEl.append(section);
-    }
+    refreshConferencePopoutIfOpen();
     if (data.ingestPending === true && !showSkipped) {
       const updating = document.createElement('p');
       updating.className = 'events-finder__stub events-finder__updating muted';
@@ -2476,10 +2721,6 @@ export function mountEventsFinder(root) {
       listEl.append(updating);
     }
     if (!events.length) {
-      if (conferenceHeadsUp.length) {
-        if (mapBackdrop) syncMap([], data);
-        return;
-      }
       if ((opts.fromCache || data.ingestPending || dateReloadPending) && !showSkipped) {
         if (dateReloadPending) {
           // Ensure catalog reload catches up when UI dates aren't in this payload yet.
@@ -2801,6 +3042,7 @@ export function mountEventsFinder(root) {
       applyGoogleCalendarConfig(data.googleCalendar);
       syncShowSkippedButton();
       conferenceInput.value = (taste.conferenceWatchlist || []).join('\n');
+      syncConferenceToggleLabel();
 
       const miles = data.filters?.maxMiles;
       milesInput.value = miles == null || miles === '' ? '25' : String(miles);

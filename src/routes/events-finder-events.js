@@ -755,7 +755,7 @@ router.get('/', async (req, res) => {
       geo,
       availableCities,
       ingestWindow: eventsIngestWindowDays(process.env, { scrape: criteria.scrape }),
-      conferenceHeadsUp: conferenceHeadsUpPack.active,
+      conferenceWatchlistItems: conferenceHeadsUpPack.items,
       conferenceWatchlist: conferenceHeadsUpPack.watchlist,
       events: filtered,
       skippedEvents: skippedFeed,

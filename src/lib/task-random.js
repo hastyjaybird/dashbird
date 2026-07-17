@@ -13,6 +13,7 @@ import {
   TIME_LABELS,
   normalizeDifficulty,
   normalizeDuration,
+  PRIORITY_WEIGHT,
 } from './task-random-enums.js';
 
 const HOME_RADIUS_MI = 100 / 1760;
@@ -141,6 +142,8 @@ export async function resolveTaskContext(opts = {}, env = process.env) {
 }
 
 export function effectiveTaskLocations(taskMeta, projectMeta) {
+  if (taskMeta?.locationAny) return [];
+  if (taskMeta?.location) return [taskMeta.location];
   if (taskMeta?.locations?.length) return taskMeta.locations;
   if (projectMeta?.location) return [projectMeta.location];
   return [];
@@ -177,6 +180,7 @@ export function taskMatchesRandomFilters(taskMeta, projectMeta, filters, context
 
 export function missingTaskMetaFields(taskMeta, projectMeta) {
   const missing = [];
+  if (!taskMeta?.priority) missing.push('priority');
   if (!taskMeta?.difficulty) missing.push('difficulty');
   if (!taskMeta?.duration) missing.push('duration');
   if (!effectiveTaskLocations(taskMeta, projectMeta).length) missing.push('locations');
@@ -184,16 +188,39 @@ export function missingTaskMetaFields(taskMeta, projectMeta) {
   return missing;
 }
 
+/**
+ * @param {Array<{ id: string }>} pool
+ * @param {import('./task-random-meta-store.js').TaskRandomMeta['byTaskId']} byTaskId
+ */
+function pickWeightedTask(pool, byTaskId) {
+  if (pool.length === 1) return pool[0];
+  let total = 0;
+  const weights = pool.map((t) => {
+    const pri = byTaskId[String(t.id)]?.priority;
+    const w = pri && PRIORITY_WEIGHT[pri] ? PRIORITY_WEIGHT[pri] : 1;
+    total += w;
+    return w;
+  });
+  let roll = Math.random() * total;
+  for (let i = 0; i < pool.length; i++) {
+    roll -= weights[i];
+    if (roll <= 0) return pool[i];
+  }
+  return pool[pool.length - 1];
+}
+
 export function pickRandomTask(tasks, meta, filters, context) {
   const exclude = new Set((filters.excludeIds || []).map((x) => String(x)));
+  const excludeProjects = new Set((filters.excludeProjectIds || []).map((x) => String(x)));
   const pool = tasks.filter((t) => {
     if (exclude.has(String(t.id))) return false;
+    if (t.projectId != null && excludeProjects.has(String(t.projectId))) return false;
     const taskMeta = meta.byTaskId[String(t.id)] || null;
     const projectMeta = t.projectId != null ? meta.byProjectId[String(t.projectId)] || null : null;
     return taskMatchesRandomFilters(taskMeta, projectMeta, filters, context);
   });
   if (!pool.length) return { task: null, poolSize: 0 };
-  const task = pool[Math.floor(Math.random() * pool.length)];
+  const task = pickWeightedTask(pool, meta.byTaskId);
   const taskMeta = meta.byTaskId[String(task.id)] || null;
   const projectMeta = task.projectId != null ? meta.byProjectId[String(task.projectId)] || null : null;
   return {
