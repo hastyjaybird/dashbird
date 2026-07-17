@@ -1,6 +1,11 @@
 import { contactActions } from '../lib/contact-deep-links.js';
 import { formatContactBirthday } from '../lib/network-birthday.js';
 import {
+  CONTACT_REGION_IN_BAY,
+  CONTACT_REGION_OUT,
+  contactRegionAttribute,
+} from '../lib/network-contact-region.js';
+import {
   pushMobileNav,
   mobileNavBack,
   isMobileNavApplying,
@@ -19,6 +24,19 @@ const RELATIONSHIP_STATUSES = [
 ];
 
 const RATINGS = ['Fan', 'Hot', 'Warm', 'Cold'];
+
+const REGION_FILTER_OPTIONS = [CONTACT_REGION_IN_BAY, CONTACT_REGION_OUT];
+
+/** Default mobile people filters on first load (cleared filters = All). */
+const DEFAULT_MOBILE_PEOPLE_FILTERS = {
+  kinds: ['friend', 'organizer'],
+  hasTasks: [],
+  relationships: ['Cultivating', 'Meta', 'Inner Circle', 'Collaborator', 'Family'],
+  statuses: ['Fan', 'Hot', 'Warm'],
+  regions: [CONTACT_REGION_IN_BAY],
+  hidePaused: true,
+  hideFormer: true,
+};
 
 const METHOD_LABELS = {
   phone: 'Phone',
@@ -313,7 +331,7 @@ export function mountNetworkContactsMobile(root) {
     RELATIONSHIP_STATUSES,
   );
   const statusFilter = makeFilterMultiSelect('Status', 'filter-status', RATINGS);
-  const locationFilter = makeFilterMultiSelect('Location', 'filter-location', []);
+  const regionFilter = makeFilterMultiSelect('Region', 'filter-region', REGION_FILTER_OPTIONS);
   const kindFilter = makeFilterMultiSelect('Type', 'filter-kind', [
     { value: 'friend', label: 'Friend' },
     { value: 'organizer', label: 'Organizer' },
@@ -336,7 +354,7 @@ export function mountNetworkContactsMobile(root) {
     kindFilter.wrapEl,
     relationshipFilter.wrapEl,
     statusFilter.wrapEl,
-    locationFilter.wrapEl,
+    regionFilter.wrapEl,
     hasTaskFilter.wrapEl,
     defaultFilters,
   );
@@ -385,15 +403,7 @@ export function mountNetworkContactsMobile(root) {
   const selectedContactIds = new Set();
   let dirty = false;
 
-  let peopleFilters = {
-    kinds: [],
-    hasTasks: [],
-    relationships: [],
-    statuses: [],
-    locations: [],
-    hidePaused: true,
-    hideFormer: true,
-  };
+  let peopleFilters = { ...DEFAULT_MOBILE_PEOPLE_FILTERS };
 
   function syncPeopleFiltersFromUi() {
     peopleFilters = {
@@ -401,42 +411,21 @@ export function mountNetworkContactsMobile(root) {
       hasTasks: hasTaskFilter.getSelected(),
       relationships: relationshipFilter.getSelected(),
       statuses: statusFilter.getSelected(),
-      locations: locationFilter.getSelected(),
+      regions: regionFilter.getSelected(),
       hidePaused: hidePausedFilter.cb.checked,
       hideFormer: hideFormerFilter.cb.checked,
     };
   }
 
-  /** @type {string} */
-  let locationOptionsKey = '';
-
-  /**
-   * @param {object[]} [list]
-   * @returns {string[]}
-   */
-  function collectLocationOptions(list = contacts) {
-    /** @type {Map<string, string>} */
-    const seen = new Map();
-    for (const c of list || []) {
-      const loc = String(c?.location || '')
-        .replace(/\s+/g, ' ')
-        .trim();
-      if (!loc) continue;
-      const key = loc.toLowerCase();
-      if (!seen.has(key)) seen.set(key, loc);
-    }
-    return [...seen.values()].sort((a, b) =>
-      a.localeCompare(b, undefined, { sensitivity: 'base' }),
-    );
-  }
-
-  function refreshLocationFilterOptions() {
-    const opts = collectLocationOptions();
-    const key = opts.join('\0');
-    if (key === locationOptionsKey) return;
-    locationOptionsKey = key;
-    locationFilter.setOptions(opts);
-    locationFilter.setSelected(peopleFilters.locations);
+  function applyDefaultPeopleFiltersToUi() {
+    peopleFilters = { ...DEFAULT_MOBILE_PEOPLE_FILTERS };
+    kindFilter.setSelected(peopleFilters.kinds);
+    hasTaskFilter.setSelected(peopleFilters.hasTasks);
+    relationshipFilter.setSelected(peopleFilters.relationships);
+    statusFilter.setSelected(peopleFilters.statuses);
+    regionFilter.setSelected(peopleFilters.regions);
+    hidePausedFilter.cb.checked = peopleFilters.hidePaused !== false;
+    hideFormerFilter.cb.checked = peopleFilters.hideFormer !== false;
   }
 
   /**
@@ -467,13 +456,9 @@ export function mountNetworkContactsMobile(root) {
       if (peopleFilters.statuses.length) {
         if (!peopleFilters.statuses.includes(String(c.rating || ''))) return false;
       }
-      if (peopleFilters.locations.length) {
-        const loc = String(c.location || '')
-          .replace(/\s+/g, ' ')
-          .trim()
-          .toLowerCase();
-        const want = new Set(peopleFilters.locations.map((l) => l.toLowerCase()));
-        if (!want.has(loc)) return false;
+      if (peopleFilters.regions.length) {
+        const region = contactRegionAttribute(c);
+        if (!peopleFilters.regions.includes(region)) return false;
       }
       return true;
     });
@@ -1030,7 +1015,6 @@ export function mountNetworkContactsMobile(root) {
   }
 
   function renderList() {
-    refreshLocationFilterOptions();
     list.replaceChildren();
     const items = filtered(search.value);
     status.hidden = true;
@@ -1105,7 +1089,7 @@ export function mountNetworkContactsMobile(root) {
   hasTaskFilter.onChange(onFilterChange);
   relationshipFilter.onChange(onFilterChange);
   statusFilter.onChange(onFilterChange);
-  locationFilter.onChange(onFilterChange);
+  regionFilter.onChange(onFilterChange);
   hidePausedFilter.cb.addEventListener('change', onFilterChange);
   hideFormerFilter.cb.addEventListener('change', onFilterChange);
   document.addEventListener('pointerdown', (e) => {
@@ -1207,6 +1191,7 @@ export function mountNetworkContactsMobile(root) {
     }
   }
 
+  applyDefaultPeopleFiltersToUi();
   void load();
 
   document.addEventListener('dashbird:mobile-nav', (e) => {

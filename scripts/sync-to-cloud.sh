@@ -4,8 +4,8 @@
 #   CLOUD_HOST=root@YOUR_SERVER_IP ./scripts/sync-to-cloud.sh
 # Optional:
 #   CLOUD_DIR=/opt/dashbird
-#   SYNC_DATA=0          # skip data/ (code-only deploy)
-#   SYNC_ENV=0           # skip .env
+#   SYNC_DATA=1          # also rsync data/ + public/data bookmarks/notes
+#   SYNC_ENV=1           # push local .env to the server
 #   COMPOSE_FILE=docker-compose.cloud.yml
 set -euo pipefail
 
@@ -13,8 +13,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST="${CLOUD_HOST:?Set CLOUD_HOST=root@your-server-ip}"
 REMOTE_DIR="${CLOUD_DIR:-/opt/dashbird}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.cloud.yml}"
-SYNC_DATA="${SYNC_DATA:-1}"
-SYNC_ENV="${SYNC_ENV:-1}"
+SYNC_DATA="${SYNC_DATA:-0}"
+SYNC_ENV="${SYNC_ENV:-0}"
 
 RSYNC_CODE=(rsync -avz --delete
   --exclude node_modules

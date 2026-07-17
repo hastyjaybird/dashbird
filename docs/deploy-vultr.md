@@ -104,9 +104,13 @@ Keep LAN offline or read-only for a few days as fallback.
 
 ## Code-only deploys (after cutover)
 
+Default — no flags needed:
+
 ```bash
-CLOUD_HOST=root@YOUR_VULTR_IP SYNC_DATA=0 ./scripts/sync-to-cloud.sh
+CLOUD_HOST=root@YOUR_VULTR_IP ./scripts/sync-to-cloud.sh
 ```
+
+To also push personal `data/` (tool PNGs, network DB, etc.): `SYNC_DATA=1 ./scripts/sync-to-cloud.sh`
 
 ## New tool screenshots (Playwright)
 
