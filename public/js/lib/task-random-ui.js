@@ -1,13 +1,7 @@
 /**
  * Do Random Task picker + project locations table.
  */
-import { getDevicePlace } from './device-location.js';
-import { detectMobileDevice, isMobileView } from './view-mode.js';
-import {
-  patchBodyForTaskLocation,
-  projectDefaultLocationLabel,
-  TASK_LOCATION_OPTIONS,
-} from './task-location-meta.js';
+import { TASK_LOCATION_OPTIONS } from './task-location-meta.js';
 
 const DIFFICULTIES = [
   { id: 'low', label: 'Low' },
@@ -20,27 +14,22 @@ const PRIORITIES = [
   { id: 'high', label: 'High' },
 ];
 const DURATIONS = [
-  { id: '5m', label: '5 min' },
-  { id: '15m', label: '15 min' },
+  { id: '10m', label: '<10 min' },
   { id: '30m', label: '30 min' },
   { id: '1hr+', label: '1 hr+' },
 ];
 const LOCATIONS = [
   { id: '', label: 'Any' },
   { id: 'home', label: 'Home' },
-  { id: 'out', label: 'Out and about' },
   { id: 'makerfarm', label: 'Maker Farm' },
+  { id: 'out', label: 'Out and about' },
   { id: 'laptop', label: 'Laptop only' },
   { id: 'phone', label: 'Phone ok' },
 ];
 const DIFFICULTY_LABELS = Object.fromEntries(DIFFICULTIES.map((d) => [d.id, d.label]));
 const DURATION_LABELS = Object.fromEntries(DURATIONS.map((d) => [d.id, d.label]));
 const LOCATION_LABELS = Object.fromEntries(LOCATIONS.filter((l) => l.id).map((l) => [l.id, l.label]));
-const TIME_OPTIONS = [
-  { id: 'weekday_9_5', label: 'Weekday 9–5' },
-  { id: 'afterhours', label: 'After hours' },
-  { id: 'weekend', label: 'Weekend' },
-];
+const TIME_OPTIONS = [{ id: 'weekday_9_5', label: 'Weekday 9–5' }];
 const TIME_LABELS = Object.fromEntries(TIME_OPTIONS.map((t) => [t.id, t.label]));
 
 const FIELD_LABELS = {
@@ -63,17 +52,25 @@ function fieldOptionsForAssign(field, taskMeta, projectMeta) {
   if (field === 'difficulty') return DIFFICULTIES;
   if (field === 'duration') return DURATIONS;
   if (field === 'locations') {
-    return [
-      {
-        id: '__inherit__',
-        label: `Default (${projectDefaultLocationLabel(projectMeta)})`,
-      },
-      { id: '__any__', label: 'Any location' },
-      ...TASK_LOCATION_OPTIONS,
-    ];
+    return [{ id: '__any__', label: 'Any location' }, ...TASK_LOCATION_OPTIONS];
   }
   if (field === 'times') return [{ id: '__any__', label: 'Any time' }, ...TIME_OPTIONS];
   return [];
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} taskMeta
+ * @param {Record<string, unknown> | null | undefined} projectMeta
+ * @returns {string | null}
+ */
+function resolvedLocationAssignValue(taskMeta, projectMeta) {
+  if (taskMeta?.locationAny) return '__any__';
+  if (typeof taskMeta?.location === 'string' && taskMeta.location) return taskMeta.location;
+  if (Array.isArray(taskMeta?.locations) && taskMeta.locations.length) {
+    return String(taskMeta.locations[0]);
+  }
+  if (typeof projectMeta?.location === 'string' && projectMeta.location) return projectMeta.location;
+  return null;
 }
 
 /**
@@ -86,14 +83,7 @@ function currentAssignFieldValue(field, taskMeta, projectMeta) {
   if (field === 'priority') return typeof taskMeta?.priority === 'string' ? taskMeta.priority : null;
   if (field === 'difficulty') return typeof taskMeta?.difficulty === 'string' ? taskMeta.difficulty : null;
   if (field === 'duration') return typeof taskMeta?.duration === 'string' ? taskMeta.duration : null;
-  if (field === 'locations') {
-    if (taskMeta?.locationAny) return '__any__';
-    if (typeof taskMeta?.location === 'string' && taskMeta.location) return taskMeta.location;
-    if (Array.isArray(taskMeta?.locations) && taskMeta.locations.length) {
-      return String(taskMeta.locations[0]);
-    }
-    return hasEffectiveLocation(taskMeta, projectMeta) ? '__inherit__' : null;
-  }
+  if (field === 'locations') return resolvedLocationAssignValue(taskMeta, projectMeta);
   if (field === 'times') {
     if (taskMeta?.timeAny) return '__any__';
     if (Array.isArray(taskMeta?.times) && taskMeta.times.length) return String(taskMeta.times[0]);
@@ -140,7 +130,6 @@ function assignSummaryEntries(taskMeta, projectMeta) {
     else if (field === 'duration') label = DURATIONS.find((o) => o.id === id)?.label || id;
     else if (field === 'locations') {
       if (id === '__any__') label = 'Any location';
-      else if (id === '__inherit__') label = `Default (${projectDefaultLocationLabel(projectMeta)})`;
       else label = TASK_LOCATION_OPTIONS.find((o) => o.id === id)?.label || LOCATION_LABELS[id] || id;
     } else if (field === 'times') {
       if (id === '__any__') label = 'Any time';
@@ -163,18 +152,12 @@ function appendAssignFields(assignRow, fields, taskMeta, projectMeta, data, opts
   for (const field of fields) {
     const group = document.createElement('div');
     group.className = 'tasks-random__assign-group';
-    if (field === 'times') group.classList.add('tasks-random__assign-group--times');
     const fl = document.createElement('span');
     fl.className = 'tasks-random__assign-field';
     fl.textContent = FIELD_LABELS[field] || field;
-    group.append(fl);
-    /** @type {HTMLElement} */
-    let chipContainer = group;
-    if (field === 'times') {
-      chipContainer = document.createElement('div');
-      chipContainer.className = 'tasks-random__assign-chips';
-      group.append(chipContainer);
-    }
+    const chipContainer = document.createElement('div');
+    chipContainer.className = 'tasks-random__assign-chips';
+    group.append(fl, chipContainer);
     const selected = currentAssignFieldValue(field, taskMeta, projectMeta);
     for (const opt of fieldOptionsForAssign(field, taskMeta, projectMeta)) {
       const b = document.createElement('button');
@@ -191,7 +174,10 @@ function appendAssignFields(assignRow, fields, taskMeta, projectMeta, data, opts
         if (field === 'priority') patch.priority = opt.id;
         else if (field === 'difficulty') patch.difficulty = opt.id;
         else if (field === 'duration') patch.duration = opt.id;
-        else if (field === 'locations') Object.assign(patch, patchBodyForTaskLocation(opt.id));
+        else if (field === 'locations') {
+          if (opt.id === '__any__') Object.assign(patch, { locationAny: true });
+          else Object.assign(patch, { location: opt.id });
+        }
         else if (field === 'times') {
           if (opt.id === '__any__') patch.timeAny = true;
           else patch.times = [opt.id];
@@ -209,7 +195,7 @@ function appendAssignFields(assignRow, fields, taskMeta, projectMeta, data, opts
             ...opts,
             data: {
               ...data,
-              meta: j.row || taskMeta,
+              meta: Object.hasOwn(j, 'row') ? j.row : taskMeta,
             },
           });
         } catch {
@@ -309,10 +295,10 @@ function makeModalShell(parent, title, opts = {}) {
  * @param {HTMLElement} row
  * @param {string} label
  * @param {Array<{ id: string, label: string }>} options
- * @param {string | null} selected
- * @param {(id: string | null) => void} onPick
+ * @param {() => string[]} getSelected
+ * @param {(ids: string[]) => void} onChange
  */
-function chipRow(row, label, options, getSelected, onPick) {
+function multiselectChipRow(row, label, options, getSelected, onChange) {
   const lab = document.createElement('p');
   lab.className = 'tasks-random__row-label';
   lab.textContent = label;
@@ -320,9 +306,21 @@ function chipRow(row, label, options, getSelected, onPick) {
   const chips = document.createElement('div');
   chips.className = 'tasks-random__chips';
   function syncChips() {
-    const sel = getSelected();
+    const selected = new Set(getSelected());
     for (const c of chips.querySelectorAll('.tasks-random__chip')) {
-      c.classList.toggle('tasks-random__chip--on', c.dataset.id === (sel ?? ''));
+      const on = selected.has(c.dataset.id || '');
+      c.classList.toggle('tasks-random__chip--on', on);
+      if (c.dataset.field && c.dataset.id) {
+        c.classList.remove(
+          'tasks-random__chip--priority-low',
+          'tasks-random__chip--priority-med',
+          'tasks-random__chip--priority-high',
+          'tasks-random__chip--effort-low',
+          'tasks-random__chip--effort-med',
+          'tasks-random__chip--effort-high',
+        );
+        if (on) applyLevelTone(c, c.dataset.field, c.dataset.id);
+      }
     }
   }
   for (const opt of options) {
@@ -331,20 +329,18 @@ function chipRow(row, label, options, getSelected, onPick) {
     btn.className = 'tasks-random__chip';
     btn.textContent = opt.label;
     btn.dataset.id = opt.id;
+    if (opt.field) btn.dataset.field = opt.field;
     btn.addEventListener('click', () => {
-      const cur = getSelected();
-      const next = cur === opt.id ? null : opt.id;
-      onPick(next);
+      const selected = new Set(getSelected());
+      if (selected.has(opt.id)) selected.delete(opt.id);
+      else selected.add(opt.id);
+      onChange([...selected]);
       syncChips();
     });
     chips.append(btn);
   }
   syncChips();
   row.append(chips);
-}
-
-function deviceKind() {
-  return isMobileView() || detectMobileDevice() ? 'phone' : 'laptop';
 }
 
 /**
@@ -567,31 +563,71 @@ async function renderTaskCardModal(opts) {
  * @param {{ root: HTMLElement, projects: Array<{ id: number, title: string }>, onHighlightTask?: (task: { id: string, projectId?: number | null }) => void, onDone?: (id: string, projectId?: number | null) => void, onTextChange?: (id: string, text: string, projectId?: number | null) => void }} opts
  */
 export function openRandomTaskPicker(opts) {
-  const { root, onHighlightTask, onDone, onTextChange } = opts;
+  const { root, onDone, onTextChange } = opts;
 
-  /** @type {string | null} */
-  let difficulty = null;
-  /** @type {string | null} */
-  let duration = null;
+  /** @type {string[]} */
+  let priorities = [];
+  /** @type {string[]} */
+  let difficulties = [];
+  /** @type {string[]} */
+  let durations = [];
+  /** @type {string[]} */
+  let locations = [];
+  /** @type {string[]} */
+  let times = [];
 
   const filterShell = makeModalShell(root, 'Random Task Options');
 
   const filterWrap = document.createElement('div');
   filterWrap.className = 'tasks-random__filters';
 
+  const hint = document.createElement('p');
+  hint.className = 'tasks-random__hint muted';
+  hint.textContent = 'Pick any combination below. Leave a row empty to allow all values for that attribute.';
+
+  const priorityRow = document.createElement('div');
+  priorityRow.className = 'tasks-random__filter-row';
+  multiselectChipRow(
+    priorityRow,
+    'Priority',
+    PRIORITIES.map((o) => ({ ...o, field: 'priority' })),
+    () => priorities,
+    (ids) => {
+      priorities = ids;
+    },
+  );
+
   const diffRow = document.createElement('div');
   diffRow.className = 'tasks-random__filter-row';
-  chipRow(diffRow, 'Difficulty', DIFFICULTIES, () => difficulty, (id) => {
-    difficulty = id;
-  });
+  multiselectChipRow(
+    diffRow,
+    'Effort',
+    DIFFICULTIES.map((o) => ({ ...o, field: 'difficulty' })),
+    () => difficulties,
+    (ids) => {
+      difficulties = ids;
+    },
+  );
 
   const durRow = document.createElement('div');
   durRow.className = 'tasks-random__filter-row';
-  chipRow(durRow, 'Duration', DURATIONS, () => duration, (id) => {
-    duration = id;
+  multiselectChipRow(durRow, 'Duration', DURATIONS, () => durations, (ids) => {
+    durations = ids;
   });
 
-  filterWrap.append(diffRow, durRow);
+  const locRow = document.createElement('div');
+  locRow.className = 'tasks-random__filter-row';
+  multiselectChipRow(locRow, 'Location', TASK_LOCATION_OPTIONS, () => locations, (ids) => {
+    locations = ids;
+  });
+
+  const timeRow = document.createElement('div');
+  timeRow.className = 'tasks-random__filter-row';
+  multiselectChipRow(timeRow, 'When', TIME_OPTIONS, () => times, (ids) => {
+    times = ids;
+  });
+
+  filterWrap.append(hint, priorityRow, diffRow, durRow, locRow, timeRow);
 
   const filterActions = document.createElement('div');
   filterActions.className = 'tasks-random__filter-actions';
@@ -620,20 +656,16 @@ export function openRandomTaskPicker(opts) {
   const excludeProjectIds = [];
 
   async function fetchRandomTask() {
-    const place = getDevicePlace();
     /** @type {Record<string, unknown>} */
     const bodyObj = {
-      device: deviceKind(),
       excludeIds,
       excludeProjectIds,
     };
-    if (difficulty) bodyObj.difficulty = difficulty;
-    if (duration) bodyObj.duration = duration;
-    if (place && Number.isFinite(place.lat) && Number.isFinite(place.lon)) {
-      bodyObj.lat = place.lat;
-      bodyObj.lon = place.lon;
-    }
-    if (place?.timeZone) bodyObj.timeZone = place.timeZone;
+    if (priorities.length) bodyObj.priorities = priorities;
+    if (difficulties.length) bodyObj.difficulties = difficulties;
+    if (durations.length) bodyObj.durations = durations;
+    if (locations.length) bodyObj.locations = locations;
+    if (times.length) bodyObj.times = times;
     const r = await fetch('/api/vikunja/random-task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

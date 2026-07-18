@@ -67,6 +67,13 @@ data/web-catalog.json.tmp
 # Atomic-write leftovers (foo.json.<pid>.<ts>.tmp) — Cursor treats *.json* as JSON and nags
 data/*.tmp
 data/dev-notes.md
+data/dev-requests/*
+!data/dev-requests/.gitkeep
+data/keep-notes/*
+!data/keep-notes/.gitkeep
+data/dev-requests.db
+data/dev-requests.db-wal
+data/dev-requests.db-shm
 public/data/telegram-events/
 # Local Vikunja SQLite + uploads + bootstrap credentials
 data/vikunja/

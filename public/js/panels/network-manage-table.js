@@ -1,5 +1,6 @@
 import { collectSceneOptions, joinSceneTokens } from '../lib/network-scenes.js';
 import { formatContactBirthday } from '../lib/network-birthday.js';
+import { NETWORK_LABELS } from '../lib/network-labels.js';
 
 /**
  * Manage contacts — spreadsheet table with column filters, cell selection,
@@ -404,7 +405,7 @@ const COLUMNS = [
   strCol('department', 'Department', { default: false }),
   {
     key: 'alignedActivities',
-    label: 'Aligned activities',
+    label: NETWORK_LABELS.activities,
     default: false,
     get: (c) => listJoin(c.alignedActivities, '\n'),
     set: (_c, v) => ({ alignedActivities: listSplit(v, /\n+/) }),
@@ -984,6 +985,7 @@ export function mountNetworkManageTable(root, opts) {
    * @param {string} [skipKey]
    */
   function contactPassesFilters(contact, skipKey) {
+    if (contact?.intakeReviewed === false) return true;
     for (const [key, f] of filters) {
       if (key === skipKey) continue;
       if (!filterIsActive(key)) continue;
@@ -1008,6 +1010,14 @@ export function mountNetworkManageTable(root, opts) {
     if (col) {
       const dir = effectiveSort.dir === 'desc' ? -1 : 1;
       rows = [...rows].sort((a, b) => {
+        const aNew = a.intakeReviewed === false;
+        const bNew = b.intakeReviewed === false;
+        if (aNew !== bNew) return aNew ? -1 : 1;
+        if (aNew) {
+          const aAt = String(a.createdAt || '');
+          const bAt = String(b.createdAt || '');
+          if (aAt !== bAt) return bAt.localeCompare(aAt);
+        }
         const av = col.get(a).toLowerCase();
         const bv = col.get(b).toLowerCase();
         if (av < bv) return -1 * dir;
@@ -3058,6 +3068,13 @@ export function mountNetworkManageTable(root, opts) {
             name.className = 'network-manage__name';
             name.textContent = val || 'Untitled';
             nameWrap.append(name);
+            if (c.intakeReviewed === false) {
+              const badge = document.createElement('span');
+              badge.className = 'network-crm__new-intake network-manage__new-intake';
+              badge.title = 'New from Telegram';
+              badge.setAttribute('aria-label', 'New from Telegram');
+              nameWrap.append(badge);
+            }
             if (c.enrichment?.needsReview) {
               const badge = document.createElement('span');
               badge.className = 'network-crm__enrich-review network-manage__enrich-review';

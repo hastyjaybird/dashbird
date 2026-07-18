@@ -32,6 +32,7 @@ import {
   cropImageRegion,
   extractContactHintsFromText,
   heuristicTelegramImageClassify,
+  looksLikeFlyerPerformerLineup,
   parseTelegramTypeOverride,
 } from './telegram-message-classify.js';
 import { createPanelTodo } from './vikunja-client.js';
@@ -99,6 +100,17 @@ const pendingAlbums = new Map();
 
 /** Wait after last album photo before parsing (ms). */
 const ALBUM_DEBOUNCE_MS = 1500;
+
+/**
+ * True for events the user deliberately sent via the Telegram intake bot.
+ * These bypass taste/geo/attendance filters in the feed — only date filters apply.
+ * @param {{ source?: unknown, id?: unknown }} [event]
+ */
+export function isTelegramIntakeEvent(event) {
+  if (String(event?.source || '').trim().toLowerCase() === 'telegram') return true;
+  const id = String(event?.id || '').trim();
+  return id.startsWith('telegram:');
+}
 
 /**
  * @param {NodeJS.ProcessEnv} [env]
@@ -558,7 +570,7 @@ function formatIngestReply(event) {
   const invited =
     clean(/** @type {{ invitedBy?: unknown }} */ (event).invitedBy)
     || clean(/** @type {{ raw?: { invitedBy?: unknown } }} */ (event).raw?.invitedBy);
-  const bits = [`Ingested: ${title}`, `When: ${when}`];
+  const bits = [`Event saved: ${title}`, `When: ${when}`];
   if (invited) bits.push(`Invited by: ${invited}`);
   if (clean(event.venue)) bits.push(`Where: ${clean(event.venue)}`);
   return bits.join('\n');
@@ -1348,6 +1360,34 @@ export async function processTelegramEventMessage(message, env = process.env, op
         || classified?.reason === 'heuristic_caption_guest_list'
         || (Array.isArray(classified?.contacts) && classified.contacts.length >= 1))
     ) {
+      let routeAsEvent =
+        looksLikeFlyerPerformerLineup(classified?.contacts)
+        || Boolean(clean(classified?.eventName));
+      if (!routeAsEvent) {
+        try {
+          const mime = file.mimeType || 'image/jpeg';
+          const probe = await parseInviteImage(
+            {
+              mimeType: mime.startsWith('image/') ? mime : 'image/jpeg',
+              base64: file.buffer.toString('base64'),
+              caption: caption || text,
+            },
+            env,
+            { defaultImageUrl: null },
+          );
+          routeAsEvent = Boolean(probe.ok && probe.event && clean(probe.event.start));
+        } catch (e) {
+          console.warn('[telegram-events] guest_list event probe failed', e?.message || e);
+        }
+      }
+      if (routeAsEvent) {
+        return ingestTelegramEventFromMessage(message, env, {
+          photoId: fileId,
+          caption,
+          text,
+          notifyUser,
+        });
+      }
       return ingestTelegramGuestListFromImage(message, file, env, {
         caption: caption || text,
         classified,

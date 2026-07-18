@@ -1,6 +1,7 @@
 import { openRandomTaskPicker, openProjectLocationsTable } from '../lib/task-random-ui.js';
 import { fetchTaskRandomMeta } from '../lib/task-location-meta.js';
 import { onTaskCreated } from '../lib/task-bridge.js';
+import { TASKS_LABELS } from '../lib/network-labels.js';
 
 /**
  * Main Tasks panel — browse Vikunja projects, add/complete tasks on Dashbird.
@@ -30,13 +31,13 @@ export function mountTasks(root, config = {}) {
   const randomBtn = document.createElement('button');
   randomBtn.type = 'button';
   randomBtn.className = 'tasks-panel__header-btn';
-  randomBtn.textContent = 'Random Task';
+  randomBtn.textContent = TASKS_LABELS.random;
 
   const openLink = document.createElement('a');
   openLink.className = 'tasks-panel__open';
   openLink.target = '_blank';
   openLink.rel = 'noopener noreferrer';
-  openLink.textContent = 'Open Vikunja';
+  openLink.textContent = TASKS_LABELS.openTaskManager;
   const publicUrl = String(config.vikunjaPublicUrl || '').trim();
   if (publicUrl) {
     openLink.href = publicUrl;
@@ -61,7 +62,7 @@ export function mountTasks(root, config = {}) {
   const projectsList = document.createElement('ul');
   projectsList.className = 'tasks-panel__projects-list';
   projectsList.setAttribute('role', 'listbox');
-  projectsList.setAttribute('aria-label', 'Vikunja projects');
+  projectsList.setAttribute('aria-label', 'Projects');
 
   const addProjectForm = document.createElement('form');
   addProjectForm.className = 'tasks-panel__add-project';
@@ -123,11 +124,33 @@ export function mountTasks(root, config = {}) {
   detailFoot.className = 'tasks-panel__detail-foot';
   detailFoot.hidden = true;
 
-  const deleteProjectBtn = document.createElement('button');
-  deleteProjectBtn.type = 'button';
-  deleteProjectBtn.className = 'tasks-panel__delete';
-  deleteProjectBtn.textContent = 'Delete project';
-  detailFoot.append(deleteProjectBtn);
+  const editProjectBtn = document.createElement('button');
+  editProjectBtn.type = 'button';
+  editProjectBtn.className = 'tasks-panel__project-edit';
+  editProjectBtn.textContent = 'Edit';
+  editProjectBtn.setAttribute('aria-haspopup', 'menu');
+  editProjectBtn.setAttribute('aria-expanded', 'false');
+
+  const projectEditMenu = document.createElement('div');
+  projectEditMenu.className = 'tasks-panel__project-menu';
+  projectEditMenu.hidden = true;
+  projectEditMenu.setAttribute('role', 'menu');
+
+  const renameProjectMenuBtn = document.createElement('button');
+  renameProjectMenuBtn.type = 'button';
+  renameProjectMenuBtn.className = 'tasks-panel__project-menu-item';
+  renameProjectMenuBtn.textContent = 'Rename project…';
+  renameProjectMenuBtn.setAttribute('role', 'menuitem');
+
+  const deleteProjectMenuBtn = document.createElement('button');
+  deleteProjectMenuBtn.type = 'button';
+  deleteProjectMenuBtn.className =
+    'tasks-panel__project-menu-item tasks-panel__project-menu-item--danger';
+  deleteProjectMenuBtn.textContent = 'Delete project…';
+  deleteProjectMenuBtn.setAttribute('role', 'menuitem');
+
+  projectEditMenu.append(renameProjectMenuBtn, deleteProjectMenuBtn);
+  detailFoot.append(editProjectBtn, projectEditMenu);
 
   detail.append(detailTitle, addForm, list, empty, detailFoot);
   split.append(projectsPane, detail);
@@ -146,7 +169,19 @@ export function mountTasks(root, config = {}) {
   moveDialog.className = 'tasks-panel__move-dialog';
   moveDialog.setAttribute('role', 'dialog');
   moveDialog.setAttribute('aria-modal', 'true');
-  moveDialog.setAttribute('aria-label', 'Move task to project');
+  moveDialog.setAttribute('aria-label', 'Edit task');
+  const moveRenameLabel = document.createElement('label');
+  moveRenameLabel.className = 'tasks-panel__move-rename-label';
+  const moveRenameText = document.createElement('span');
+  moveRenameText.className = 'tasks-panel__move-title';
+  moveRenameText.textContent = 'Task name';
+  const moveRenameInput = document.createElement('input');
+  moveRenameInput.type = 'text';
+  moveRenameInput.className = 'tasks-panel__input tasks-panel__move-rename';
+  moveRenameInput.maxLength = 280;
+  moveRenameInput.autocomplete = 'off';
+  moveRenameInput.setAttribute('aria-label', 'Task name');
+  moveRenameLabel.append(moveRenameText, moveRenameInput);
   const moveTitle = document.createElement('p');
   moveTitle.className = 'tasks-panel__move-title';
   moveTitle.textContent = 'Move to project';
@@ -156,7 +191,7 @@ export function mountTasks(root, config = {}) {
   moveCancel.type = 'button';
   moveCancel.className = 'tasks-panel__move-cancel';
   moveCancel.textContent = 'Cancel';
-  moveDialog.append(moveTitle, moveList, moveCancel);
+  moveDialog.append(moveRenameLabel, moveTitle, moveList, moveCancel);
   moveOverlay.append(moveDialog);
   wrap.append(moveOverlay);
 
@@ -295,11 +330,19 @@ export function mountTasks(root, config = {}) {
     return p?.title || 'Select a project';
   }
 
-  function syncProjectDeleteUi() {
+  function closeProjectEditMenu() {
+    projectEditMenu.hidden = true;
+    editProjectBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  function syncProjectEditUi() {
     const title = projectId != null ? currentProjectTitle() : '';
     detailFoot.hidden = projectId == null;
-    deleteProjectBtn.disabled = projectId == null;
-    deleteProjectBtn.setAttribute('aria-label', title ? `Delete ${title}` : 'Delete project');
+    editProjectBtn.disabled = projectId == null;
+    renameProjectMenuBtn.disabled = projectId == null;
+    deleteProjectMenuBtn.disabled = projectId == null;
+    editProjectBtn.setAttribute('aria-label', title ? `Edit ${title}` : 'Edit project');
+    if (projectId == null) closeProjectEditMenu();
   }
 
   function sortProjectsInPlace() {
@@ -407,7 +450,7 @@ export function mountTasks(root, config = {}) {
     editingProjectId = null;
     renderProjects();
     detailTitle.textContent = currentProjectTitle();
-    syncProjectDeleteUi();
+    syncProjectEditUi();
 
     const cached = todosCache.get(id);
     if (cached) {
@@ -489,7 +532,10 @@ export function mountTasks(root, config = {}) {
         : `Delete “${title}”? This cannot be undone.`;
     if (!confirm(msg)) return;
 
-    deleteProjectBtn.disabled = true;
+    editProjectBtn.disabled = true;
+    renameProjectMenuBtn.disabled = true;
+    deleteProjectMenuBtn.disabled = true;
+    closeProjectEditMenu();
     showStatus('Deleting…');
 
     try {
@@ -530,7 +576,7 @@ export function mountTasks(root, config = {}) {
         empty.hidden = true;
         const next = projects[0]?.id;
         if (next != null) selectProject(next);
-        else syncProjectDeleteUi();
+        else syncProjectEditUi();
       }
 
       renderProjects();
@@ -538,8 +584,7 @@ export function mountTasks(root, config = {}) {
     } catch (e) {
       showStatus(`Could not delete project: ${e?.message || e}`, true);
     } finally {
-      deleteProjectBtn.disabled = false;
-      syncProjectDeleteUi();
+      syncProjectEditUi();
     }
   }
 
@@ -614,9 +659,48 @@ export function mountTasks(root, config = {}) {
 
   /**
    * @param {string} taskId
+   * @param {string} text
+   */
+  async function renameTask(taskId, text) {
+    const next = text.trim();
+    if (!next) return false;
+    const prev = items.find((it) => it.id === taskId)?.text;
+    if (prev === next) return true;
+    updateTaskTextLocally(taskId, next);
+    try {
+      const r = await fetch(`/api/vikunja/todos/${encodeURIComponent(taskId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: next }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      showStatus('');
+      return true;
+    } catch {
+      if (prev != null) updateTaskTextLocally(taskId, prev);
+      showStatus('Could not rename task.', true);
+      return false;
+    }
+  }
+
+  /**
+   * @param {string} taskId
+   */
+  async function commitMoveOverlayRename(taskId) {
+    const next = moveRenameInput.value.trim();
+    const prev = items.find((it) => it.id === taskId)?.text || '';
+    if (!next || next === prev) return true;
+    return renameTask(taskId, next);
+  }
+
+  /**
+   * @param {string} taskId
    */
   function showMoveOverlay(taskId) {
     movingTaskId = taskId;
+    const task = items.find((it) => it.id === taskId);
+    moveRenameInput.value = task?.text || '';
     moveList.replaceChildren();
     const others = projects.filter((p) => p.id !== projectId);
     if (!others.length) {
@@ -631,15 +715,21 @@ export function mountTasks(root, config = {}) {
         btn.className = 'tasks-panel__move-target';
         btn.textContent = p.title;
         btn.addEventListener('click', () => {
-          void moveTask(taskId, p.id);
-          hideMoveOverlay();
+          void (async () => {
+            if (!(await commitMoveOverlayRename(taskId))) return;
+            void moveTask(taskId, p.id);
+            hideMoveOverlay();
+          })();
         });
         moveList.append(btn);
       }
     }
     moveOverlay.hidden = false;
     wrap.classList.add('tasks-panel--moving');
-    moveCancel.focus();
+    queueMicrotask(() => {
+      moveRenameInput.focus();
+      moveRenameInput.select();
+    });
   }
 
   function renderProjects() {
@@ -856,7 +946,7 @@ export function mountTasks(root, config = {}) {
     const handle = document.createElement('span');
     handle.className = 'tasks-panel__drag';
     handle.setAttribute('aria-hidden', 'true');
-    handle.title = 'Drag to another project · double-click task text to pick';
+    handle.title = 'Drag to another project · double-click task text to edit or move';
     const grip = document.createElement('span');
     grip.className = 'tasks-panel__grip';
     handle.append(grip);
@@ -872,7 +962,7 @@ export function mountTasks(root, config = {}) {
     const text = document.createElement('span');
     text.className = 'tasks-panel__text';
     text.textContent = item.text;
-    text.title = 'Double-click to move to another project';
+    text.title = 'Double-click to rename or move to another project';
 
     label.append(cb, text);
 
@@ -1025,14 +1115,14 @@ export function mountTasks(root, config = {}) {
       detail.classList.remove('tasks-panel__detail--loading');
       renderList();
       empty.hidden = true;
-      syncProjectDeleteUi();
+      syncProjectEditUi();
       return;
     }
 
     const requestFor = projectId;
     const token = ++loadToken;
     detailTitle.textContent = currentProjectTitle();
-    syncProjectDeleteUi();
+    syncProjectEditUi();
 
     const r = await fetch(`/api/vikunja/todos?projectId=${encodeURIComponent(String(projectId))}`, {
       cache: 'no-store',
@@ -1119,7 +1209,7 @@ export function mountTasks(root, config = {}) {
     if (!projects.length) {
       projectId = null;
       renderProjects();
-      syncProjectDeleteUi();
+      syncProjectEditUi();
       return;
     }
     const saved = preferredId ?? readSavedProjectId();
@@ -1127,7 +1217,7 @@ export function mountTasks(root, config = {}) {
     projectId = match.id;
     saveProjectId(projectId);
     renderProjects();
-    syncProjectDeleteUi();
+    syncProjectEditUi();
   }
 
   async function bootstrap() {
@@ -1166,9 +1256,33 @@ export function mountTasks(root, config = {}) {
   });
 
 
-  deleteProjectBtn.addEventListener('click', () => {
+  editProjectBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (projectId == null || editProjectBtn.disabled) return;
+    const open = projectEditMenu.hidden;
+    closeProjectEditMenu();
+    if (open) {
+      projectEditMenu.hidden = false;
+      editProjectBtn.setAttribute('aria-expanded', 'true');
+    }
+  });
+
+  renameProjectMenuBtn.addEventListener('click', () => {
+    closeProjectEditMenu();
+    if (projectId == null) return;
+    editingProjectId = projectId;
+    renderProjects();
+  });
+
+  deleteProjectMenuBtn.addEventListener('click', () => {
+    closeProjectEditMenu();
     if (projectId == null) return;
     void deleteProject(projectId);
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!(e.target instanceof Node) || detailFoot.contains(e.target)) return;
+    closeProjectEditMenu();
   });
 
   randomBtn.addEventListener('click', () => {
@@ -1195,6 +1309,13 @@ export function mountTasks(root, config = {}) {
     });
   });
 
+  moveRenameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && movingTaskId) {
+      e.preventDefault();
+      void commitMoveOverlayRename(movingTaskId);
+    }
+  });
+
   moveCancel.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1205,6 +1326,7 @@ export function mountTasks(root, config = {}) {
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !moveOverlay.hidden) hideMoveOverlay();
+    if (e.key === 'Escape' && !projectEditMenu.hidden) closeProjectEditMenu();
   });
 
   onTaskCreated(ingestExternalTask);

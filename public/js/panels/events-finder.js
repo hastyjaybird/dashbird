@@ -333,11 +333,23 @@ function tasteLineMatchesClient(hay, line) {
 }
 
 /**
+ * Deliberate Telegram intake — only date filters should hide these in the feed.
+ * @param {object} ev
+ * @returns {boolean}
+ */
+function isTelegramIntakeEvent(ev) {
+  if (String(ev?.source || '').trim().toLowerCase() === 'telegram') return true;
+  const id = String(ev?.id || '').trim();
+  return id.startsWith('telegram:');
+}
+
+/**
  * @param {object} event
  * @param {{ lookFor?: string, skip?: string, blacklist?: string } | null | undefined} criteria
  * @returns {boolean}
  */
 function eventPassesTasteClient(event, criteria) {
+  if (isTelegramIntakeEvent(event)) return true;
   if (!criteria) return true;
   const hay = eventHaystackClient(event);
   const lookFor = parseTasteLinesClient(criteria.lookFor);
@@ -369,6 +381,7 @@ function applyTasteToEventsPayload(data, criteria) {
   );
   const events = (Array.isArray(data.events) ? data.events : []).filter((ev) => {
     const id = String(ev?.id || '').trim();
+    if (isTelegramIntakeEvent(ev)) return true;
     if (id && calAdded.has(id)) return false;
     return eventPassesTasteClient(ev, criteria);
   });
@@ -407,6 +420,7 @@ const SOURCE_LABELS = {
   luma: 'Luma',
   partiful: 'Partiful',
   secretparty: 'Secret Party',
+  telegram: 'Telegram',
   public: 'Web',
 };
 
@@ -2640,6 +2654,7 @@ export function mountEventsFinder(root) {
      * @returns {boolean}
      */
     function passesCity(ev) {
+      if (isTelegramIntakeEvent(ev)) return true;
       if (allChecked) return true;
       return selected.has(eventCityLabel(ev).toLowerCase());
     }
@@ -2666,7 +2681,8 @@ export function mountEventsFinder(root) {
      * @returns {boolean}
      */
     function passesDateTime(ev) {
-      if (!selectedDates.size && earliestMins == null) return true;
+      const telegramIntake = isTelegramIntakeEvent(ev);
+      if (!selectedDates.size && (telegramIntake || earliestMins == null)) return true;
       const local = eventLocalDayAndMinutes(ev?.start);
       if (selectedDates.size) {
         // While some selected days are still loading, keep showing days we already have.
@@ -2676,7 +2692,7 @@ export function mountEventsFinder(root) {
             : selectedDates;
         if (!local?.day || !activeDates.has(local.day)) return false;
       }
-      if (earliestMins != null && local?.minutes != null && local.minutes < earliestMins) {
+      if (!telegramIntake && earliestMins != null && local?.minutes != null && local.minutes < earliestMins) {
         return false;
       }
       return true;
@@ -2686,6 +2702,7 @@ export function mountEventsFinder(root) {
       .filter(passesCity)
       .filter(passesDateTime)
       .filter((ev) => {
+        if (isTelegramIntakeEvent(ev)) return true;
         // Never show skipped in the main feed, even if a stale payload still lists them.
         const skippedPool = [
           ...(Array.isArray(data.skippedEvents) ? data.skippedEvents : []),

@@ -6,6 +6,14 @@
 import { beginWaitCursor, endWaitCursor } from '../lib/wait-cursor.js';
 import { formatContactLastContact } from '../lib/network-last-contact.js';
 import { formatContactBirthday } from '../lib/network-birthday.js';
+import { compareContactSearchNameRank } from '../lib/network-contact-search.js';
+import {
+  CONTACT_REGION_IN_BAY,
+  CONTACT_REGION_OUT,
+  contactRegionAttribute,
+} from '../lib/network-contact-region.js';
+import { NETWORK_LABELS } from '../lib/network-labels.js';
+import { collectContactLocationOptions } from '../lib/network-people-filters.js';
 import {
   collectSceneOptions,
   joinSceneTokens,
@@ -18,7 +26,7 @@ import {
   warmNetworkPages,
 } from '../lib/network-prefetch.js';
 import { mountNetworkManageTable } from './network-manage-table.js?v=family-type-1';
-import { openGroupKindDialog } from '../lib/network-group-kind-dialog.js?v=group-kind-9';
+import { NETWORK_LABELS } from '../lib/network-labels.js';
 import { openPickContactDialog } from '../lib/network-add-contacts-dialog.js?v=pick-contact-1';
 import {
   fetchHowWeMetSuggestion,
@@ -189,7 +197,7 @@ export function mountNetworkUi(root) {
   const addGroupBtn = document.createElement('button');
   addGroupBtn.type = 'button';
   addGroupBtn.className = 'network-crm__btn';
-  addGroupBtn.textContent = 'Add group';
+  addGroupBtn.textContent = NETWORK_LABELS.createEventOnly;
 
   const deleteGroupBtn = document.createElement('button');
   deleteGroupBtn.type = 'button';
@@ -223,7 +231,7 @@ export function mountNetworkUi(root) {
   const startGroupSelBtn = document.createElement('button');
   startGroupSelBtn.type = 'button';
   startGroupSelBtn.className = 'network-crm__btn network-crm__btn--primary';
-  startGroupSelBtn.textContent = 'Start group';
+  startGroupSelBtn.textContent = 'Start event group';
 
   const addToGroupBtn = document.createElement('button');
   addToGroupBtn.type = 'button';
@@ -424,6 +432,10 @@ export function mountNetworkUi(root) {
     'Cold',
   ]);
   const locationFilter = makeFilterMultiSelect('Location', 'filter-location', []);
+  const regionFilter = makeFilterMultiSelect('Region', 'filter-region', [
+    CONTACT_REGION_IN_BAY,
+    CONTACT_REGION_OUT,
+  ]);
   const hasTaskFilter = makeFilterMultiSelect('Has task', 'filter-has-task', [
     { value: 'yes', label: 'Yes' },
     { value: 'no', label: 'No' },
@@ -532,6 +544,14 @@ export function mountNetworkUi(root) {
   /** Cap contacts/companies list + detail just above the browser bottom. */
   function syncWorkbenchToViewport() {
     if (!wrap.classList.contains('network-crm--fill')) return;
+    if (groupsContactOpen) {
+      if (!detail.isConnected || detail.hidden) return;
+      const pagePad = 12;
+      const top = detail.getBoundingClientRect().top;
+      const avail = Math.floor(window.innerHeight - top - pagePad);
+      detail.style.maxHeight = `${Math.max(120, avail)}px`;
+      return;
+    }
     if (list.hidden || !managePane.hidden) return;
     if (!list.isConnected) return;
     const pagePad = 12;
@@ -647,6 +667,7 @@ export function mountNetworkUi(root) {
     relationshipFilter.setSelected(peopleFilters.relationships);
     statusFilter.setSelected(peopleFilters.statuses);
     locationFilter.setSelected(peopleFilters.locations);
+    regionFilter.setSelected(peopleFilters.regions);
     hidePausedFilter.cb.checked = peopleFilters.hidePaused !== false;
     hideFormerFilter.cb.checked = peopleFilters.hideFormer !== false;
     if (typeof query === 'string') search.value = query;
@@ -657,6 +678,8 @@ export function mountNetworkUi(root) {
   let contactAttrsExpanded = false;
   /** Manage tab: detail pane only after double-clicking a row */
   let manageDetailOpen = false;
+  /** Groups tab: full contact card in the shared detail pane (same as Contacts). */
+  let groupsContactOpen = false;
   /** Bumps when detail pane is remounted; cancels stale in-flight saves */
   let detailGeneration = 0;
   const MAX_UNDO = 25;
@@ -756,6 +779,7 @@ export function mountNetworkUi(root) {
       avatarUrl: c.avatarUrl || null,
       avatarSourceUrl: c.avatarSourceUrl || null,
       enrichment: enrichmentToPutBody(c.enrichment),
+      intakeReviewed: c.intakeReviewed !== false,
       source: c.source || 'manual',
     };
   }
@@ -824,6 +848,7 @@ export function mountNetworkUi(root) {
     const onContacts = onPeople && peopleSubTab === 'contacts';
     const onManage = onPeople && peopleSubTab === 'manage';
     const onGroups = onPeople && peopleSubTab === 'groups';
+    const onGroupsContact = onGroups && groupsContactOpen;
 
     peopleSubTabs.hidden = !onPeople;
     contactsSubTab.classList.toggle('network-crm__subtab--active', onContacts);
@@ -848,6 +873,7 @@ export function mountNetworkUi(root) {
       'network-crm__layout--manage-table-only',
       onManage && !manageDetailOpen,
     );
+    layout.classList.toggle('network-crm__layout--groups-contact', onGroupsContact);
     layout.classList.toggle('network-crm__layout--companies', view === 'companies');
     if (onManage && !manageDetailOpen) {
       detail.hidden = true;
@@ -871,6 +897,7 @@ export function mountNetworkUi(root) {
     const onContacts = onPeople && peopleSubTab === 'contacts';
     const onManage = onPeople && peopleSubTab === 'manage';
     const onGroups = onPeople && peopleSubTab === 'groups';
+    const onGroupsContact = onGroups && groupsContactOpen;
     const onPeopleWorkbench = onContacts || onManage;
     peopleTab.classList.toggle('network-crm__tab--active', onPeople);
     companiesTab.classList.toggle('network-crm__tab--active', onCompanies);
@@ -887,8 +914,9 @@ export function mountNetworkUi(root) {
     companyActions.hidden = !onCompanies;
     groupActions.hidden = !onGroups;
     peopleFilterBar.hidden = !onPeopleWorkbench;
-    mainPane.hidden = onGroups;
+    mainPane.hidden = onGroups && !groupsContactOpen;
     groupsPane.hidden = !onGroups;
+    wrap.classList.toggle('network-crm--groups-contact', onGroupsContact);
     wrap.classList.toggle('network-crm--fill', onContacts || onManage || onGroups || onCompanies);
     if (!onPeopleWorkbench) bulkPanel.hidden = true;
     syncPeopleSubView();
@@ -910,7 +938,7 @@ export function mountNetworkUi(root) {
     peopleDefaultActions.hidden = selecting;
     peopleSelectionActions.hidden = !selecting;
     const count = n ? ` (${n})` : '';
-    startGroupSelBtn.textContent = `Start group${count}`;
+    startGroupSelBtn.textContent = `Start event group${count}`;
     addToGroupBtn.textContent = `Add to group${count}`;
     mergeBtn.textContent = n >= 2 ? `Merge (${n})` : 'Merge';
     mergeBtn.disabled = n < 2;
@@ -928,7 +956,9 @@ export function mountNetworkUi(root) {
     const onPeopleDetail =
       view === 'people'
       && Boolean(selectedId)
-      && (peopleSubTab === 'contacts' || (peopleSubTab === 'manage' && manageDetailOpen));
+      && (peopleSubTab === 'contacts'
+        || (peopleSubTab === 'manage' && manageDetailOpen)
+        || (peopleSubTab === 'groups' && groupsContactOpen));
     const leavingPeopleDetail =
       onPeopleDetail
       && (next !== 'people' || nextPeopleSub !== peopleSubTab);
@@ -937,9 +967,15 @@ export function mountNetworkUi(root) {
 
     view = next;
     if (next === 'people' && opts.peopleSubTab) {
+      if (opts.peopleSubTab !== 'groups' && peopleSubTab === 'groups') {
+        groupsContactOpen = false;
+        groupsUiApi?.setDetailPaneHidden?.(false);
+      }
       peopleSubTab = opts.peopleSubTab;
     } else if (next === 'companies') {
       peopleSubTab = 'contacts';
+      groupsContactOpen = false;
+      groupsUiApi?.setDetailPaneHidden?.(false);
     }
     persistWorkbenchState();
     syncTabs();
@@ -1038,6 +1074,10 @@ export function mountNetworkUi(root) {
       selectGroupId: opts.selectGroupId || null,
     });
     if (peopleSubTab === next) manageDetailOpen = false;
+    if (next !== 'groups') {
+      groupsContactOpen = false;
+      groupsUiApi?.setDetailPaneHidden?.(false);
+    }
   }
 
   function ensureManageTable() {
@@ -1116,24 +1156,8 @@ export function mountNetworkUi(root) {
    * @param {object[]} [list]
    * @returns {string[]}
    */
-  function collectLocationOptions(list = contacts) {
-    /** @type {Map<string, string>} */
-    const seen = new Map();
-    for (const c of list || []) {
-      const loc = String(c?.location || '')
-        .replace(/\s+/g, ' ')
-        .trim();
-      if (!loc) continue;
-      const key = loc.toLowerCase();
-      if (!seen.has(key)) seen.set(key, loc);
-    }
-    return [...seen.values()].sort((a, b) =>
-      a.localeCompare(b, undefined, { sensitivity: 'base' }),
-    );
-  }
-
   function refreshLocationFilterOptions() {
-    const opts = collectLocationOptions();
+    const opts = collectContactLocationOptions(contacts);
     const key = opts.join('\0');
     if (key === locationOptionsKey) return;
     locationOptionsKey = key;
@@ -1143,6 +1167,8 @@ export function mountNetworkUi(root) {
 
   function filteredByPeopleFilters(list = contacts) {
     return list.filter((c) => {
+      // New Telegram intakes stay visible until reviewed, regardless of filters.
+      if (c.intakeReviewed === false) return true;
       if (peopleFilters.kinds.length) {
         const kinds = Array.isArray(c.kinds) ? c.kinds.map((k) => String(k).toLowerCase()) : [];
         const want = peopleFilters.kinds.map((k) => k.toLowerCase());
@@ -1180,6 +1206,7 @@ export function mountNetworkUi(root) {
   function filtered() {
     const q = query.trim().toLowerCase();
     const items = filteredByPeopleFilters().filter((c) => {
+      if (c.intakeReviewed === false) return true;
       if (!q) return true;
       const hay = [
         c.displayName,
@@ -1214,9 +1241,16 @@ export function mountNetworkUi(root) {
         .toLowerCase();
       return hay.includes(q);
     });
-    // Pin cards with the enrich-needs-review indicator to the top until opened;
-    // otherwise keep A→Z by display name (same within the review group).
+    // Pin new Telegram intakes first, then enrich-needs-review, then A→Z.
     return items.sort((a, b) => {
+      const aNew = a.intakeReviewed === false;
+      const bNew = b.intakeReviewed === false;
+      if (aNew !== bNew) return aNew ? -1 : 1;
+      if (aNew) {
+        const aAt = String(a.createdAt || '');
+        const bAt = String(b.createdAt || '');
+        if (aAt !== bAt) return bAt.localeCompare(aAt);
+      }
       const aReview = Boolean(a.enrichment?.needsReview);
       const bReview = Boolean(b.enrichment?.needsReview);
       if (aReview !== bReview) return aReview ? -1 : 1;
@@ -1225,9 +1259,7 @@ export function mountNetworkUi(root) {
         const bAt = String(b.enrichment?.enrichedAt || '');
         if (aAt !== bAt) return bAt.localeCompare(aAt);
       }
-      return String(a.displayName || '').localeCompare(String(b.displayName || ''), undefined, {
-        sensitivity: 'base',
-      });
+      return compareContactSearchNameRank(a, b, q);
     });
   }
 
@@ -1883,6 +1915,13 @@ export function mountNetworkUi(root) {
       const avWrap = document.createElement('div');
       avWrap.className = 'network-crm__row-avatar';
       avWrap.append(av);
+      if (c.intakeReviewed === false) {
+        const badge = document.createElement('span');
+        badge.className = 'network-crm__new-intake';
+        badge.title = 'New from Telegram';
+        badge.setAttribute('aria-label', 'New from Telegram');
+        avWrap.append(badge);
+      }
       if (c.enrichment?.needsReview) {
         const badge = document.createElement('span');
         badge.className = 'network-crm__enrich-review';
@@ -1997,12 +2036,18 @@ export function mountNetworkUi(root) {
     syncPeopleSubView();
   }
 
-  /**
-   * Clear the persistent "enrichment needs review" flag after the card is viewed.
-   * Survives refresh/restart until then.
-   * @param {string} contactId
-   * @param {{ remount?: boolean }} [opts]
-   */
+  function hideGroupsContactDetail() {
+    if (!groupsContactOpen) return;
+    if (!confirmLeaveUnsaved()) return;
+    groupsContactOpen = false;
+    detailDirty = false;
+    detailGeneration += 1;
+    detail.replaceChildren();
+    detail.innerHTML = '<p class="muted">Select a person</p>';
+    groupsUiApi?.setDetailPaneHidden?.(false);
+    syncTabs();
+  }
+
   function acknowledgeEnrichNeedsReview(contactId, opts = {}) {
     const idx = contacts.findIndex((x) => x.id === contactId);
     if (idx < 0) return;
@@ -2032,11 +2077,44 @@ export function mountNetworkUi(root) {
   }
 
   /**
+   * Clear the "new from Telegram" flag after the card is viewed or marked reviewed.
+   * @param {string} contactId
+   * @param {{ remount?: boolean, skipRenderList?: boolean }} [opts]
+   */
+  function acknowledgeIntakeReview(contactId, opts = {}) {
+    const idx = contacts.findIndex((x) => x.id === contactId);
+    if (idx < 0) return;
+    const c = contacts[idx];
+    if (c?.intakeReviewed !== false) return;
+    contacts[idx] = { ...c, intakeReviewed: true };
+    if (!opts.skipRenderList) renderList();
+    void fetch(`/api/network/contacts/${encodeURIComponent(contactId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ intakeReviewed: true }),
+    })
+      .then(async (r) => {
+        const j = await r.json().catch(() => ({}));
+        if (j?.ok && j.contact) {
+          const i = contacts.findIndex((x) => x.id === j.contact.id);
+          if (i >= 0) contacts[i] = j.contact;
+          if (opts.remount && selectedId === j.contact.id && !detailDirty) {
+            renderDetail(j.contact);
+          }
+        }
+      })
+      .catch(() => {
+        // Local clear already applied; next load restores until retry succeeds.
+      });
+  }
+
+  /**
    * @param {string} id
    */
   function isViewingContactDetail(id) {
     if (view !== 'people' || selectedId !== id) return false;
     if (peopleSubTab === 'manage') return manageDetailOpen;
+    if (peopleSubTab === 'groups') return groupsContactOpen;
     return peopleSubTab === 'contacts';
   }
 
@@ -2059,9 +2137,13 @@ export function mountNetworkUi(root) {
     selectedId = id;
     detailDirty = false;
     const hadReview = Boolean(contacts.find((x) => x.id === id)?.enrichment?.needsReview);
+    const hadNewIntake = contacts.find((x) => x.id === id)?.intakeReviewed === false;
     // Clear review badge when Jay opens/views the card (unless enrich just remounted it).
     if (hadReview && !opts.keepEnrichReview) {
       acknowledgeEnrichNeedsReview(id, { skipRenderList: true });
+    }
+    if (hadNewIntake) {
+      acknowledgeIntakeReview(id, { skipRenderList: true });
     }
     const c = contacts.find((x) => x.id === id);
     renderList();
@@ -2078,12 +2160,23 @@ export function mountNetworkUi(root) {
    */
   async function openContactDetail(id) {
     if (!id) return;
-    if (view === 'companies' || peopleSubTab === 'groups') {
+    if (view === 'companies') {
       detailDirty = false;
       manageDetailOpen = false;
+      groupsContactOpen = false;
       selectedId = id;
       await setView('people', { peopleSubTab: 'contacts' });
-      // Force remount — company/group detail still had a form in the pane.
+      // Force remount — company detail still had a form in the pane.
+      selectContact(id, { force: true });
+      return;
+    }
+    if (peopleSubTab === 'groups') {
+      detailDirty = false;
+      manageDetailOpen = false;
+      groupsContactOpen = true;
+      selectedId = id;
+      groupsUiApi?.setDetailPaneHidden?.(true);
+      syncTabs();
       selectContact(id, { force: true });
       return;
     }
@@ -2144,6 +2237,18 @@ export function mountNetworkUi(root) {
         '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5.5 2.5 11 8l-5.5 5.5-.9-.9L9.2 8 4.6 3.4z"/></svg>';
       hideBtn.addEventListener('click', () => {
         hideManageDetail();
+      });
+      head.append(hideBtn);
+    } else if (peopleSubTab === 'groups' && groupsContactOpen) {
+      const hideBtn = document.createElement('button');
+      hideBtn.type = 'button';
+      hideBtn.className = 'network-crm__detail-hide';
+      hideBtn.setAttribute('aria-label', 'Back to group');
+      hideBtn.title = 'Back to group';
+      hideBtn.innerHTML =
+        '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5.5 2.5 11 8l-5.5 5.5-.9-.9L9.2 8 4.6 3.4z"/></svg>';
+      hideBtn.addEventListener('click', () => {
+        hideGroupsContactDetail();
       });
       head.append(hideBtn);
     }
@@ -2210,11 +2315,27 @@ export function mountNetworkUi(root) {
     titles.append(h);
     head.append(titles);
 
-    /** @type {HTMLElement | null} */
-    let reviewBanner = null;
+    /** @type {HTMLElement[]} */
+    const reviewBanners = [];
+    if (current.intakeReviewed === false) {
+      const intakeBanner = document.createElement('div');
+      intakeBanner.className = 'network-crm__new-intake-banner';
+      const reviewText = document.createElement('span');
+      reviewText.textContent = 'New contact from Telegram';
+      const reviewBtn = document.createElement('button');
+      reviewBtn.type = 'button';
+      reviewBtn.className = 'network-crm__btn';
+      reviewBtn.textContent = 'Mark reviewed';
+      reviewBtn.title = 'Clear the new badge (also clears when you Save)';
+      reviewBtn.addEventListener('click', () => {
+        acknowledgeIntakeReview(current.id, { remount: true });
+      });
+      intakeBanner.append(reviewText, reviewBtn);
+      reviewBanners.push(intakeBanner);
+    }
     if (current.enrichment?.needsReview) {
-      reviewBanner = document.createElement('div');
-      reviewBanner.className = 'network-crm__enrich-review-banner';
+      const enrichBanner = document.createElement('div');
+      enrichBanner.className = 'network-crm__enrich-review-banner';
       const reviewText = document.createElement('span');
       reviewText.textContent = 'Last enrichment needs review';
       const reviewBtn = document.createElement('button');
@@ -2225,7 +2346,8 @@ export function mountNetworkUi(root) {
       reviewBtn.addEventListener('click', () => {
         acknowledgeEnrichNeedsReview(current.id, { remount: true });
       });
-      reviewBanner.append(reviewText, reviewBtn);
+      enrichBanner.append(reviewText, reviewBtn);
+      reviewBanners.push(enrichBanner);
     }
 
     /** @type {HTMLElement[]} */
@@ -2597,7 +2719,7 @@ export function mountNetworkUi(root) {
       ...Object.values(channelFieldsByMethod),
     ]);
 
-    const orgField = field('Organization', 'org', c.org || '');
+    const orgField = field(NETWORK_LABELS.organization, 'org', c.org || '');
     if (c.orgId) {
       const link = document.createElement('button');
       link.type = 'button';
@@ -2905,7 +3027,7 @@ export function mountNetworkUi(root) {
         );
         contactAttrsExpanded = true;
         attrsPanel.hidden = false;
-        toggleAttrs.textContent = 'Fewer attributes';
+        toggleAttrs.textContent = NETWORK_LABELS.hideHidden;
         toggleAttrs.setAttribute('aria-expanded', 'true');
       } catch (err) {
         showStatus(String(err?.message || err), true);
@@ -2925,7 +3047,7 @@ export function mountNetworkUi(root) {
       field('Role', 'title', c.title),
       field('Department', 'department', c.department || ''),
       field('Address', 'address', c.address || '', { rows: 2 }),
-      field('Aliases (comma-separated)', 'aliases', (c.aliases || []).join(', ')),
+      field(NETWORK_LABELS.aliases, 'aliases', (c.aliases || []).join(', ')),
       urlsField,
       field('How we met', 'howWeMet', c.howWeMet || '', { rows: 3 }),
       field('Private Notes', 'notes', c.notes || '', { rows: 3 }),
@@ -2950,12 +3072,16 @@ export function mountNetworkUi(root) {
     const toggleAttrs = document.createElement('button');
     toggleAttrs.type = 'button';
     toggleAttrs.className = 'network-crm__btn network-crm__btn--attrs';
-    toggleAttrs.textContent = contactAttrsExpanded ? 'Fewer attributes' : 'More attributes';
+    toggleAttrs.textContent = contactAttrsExpanded
+      ? NETWORK_LABELS.hideHidden
+      : NETWORK_LABELS.showHidden;
     toggleAttrs.setAttribute('aria-expanded', contactAttrsExpanded ? 'true' : 'false');
     toggleAttrs.addEventListener('click', () => {
       contactAttrsExpanded = !contactAttrsExpanded;
       attrsPanel.hidden = !contactAttrsExpanded;
-      toggleAttrs.textContent = contactAttrsExpanded ? 'Fewer attributes' : 'More attributes';
+      toggleAttrs.textContent = contactAttrsExpanded
+        ? NETWORK_LABELS.hideHidden
+        : NETWORK_LABELS.showHidden;
       toggleAttrs.setAttribute('aria-expanded', contactAttrsExpanded ? 'true' : 'false');
       if (contactAttrsExpanded && !sharedEmailsState.loaded && !sharedEmailsState.loading) {
         loadSharedEmails();
@@ -2979,7 +3105,7 @@ export function mountNetworkUi(root) {
         }
         row.append(
           jog,
-          field('Location', 'location', c.location || ''),
+          field(NETWORK_LABELS.location, 'location', c.location || ''),
           birthdayField,
         );
         return row;
@@ -3115,12 +3241,10 @@ export function mountNetworkUi(root) {
         renderTasks();
         return wrap;
       })(),
-      field(
-        'Aligned activities (one per line)',
-        'alignedActivities',
-        (c.alignedActivities || []).join('\n'),
-        { rows: 4 },
-      ),
+      field(NETWORK_LABELS.activities, 'alignedActivities', (c.alignedActivities || []).join('\n'), {
+        rows: 4,
+        placeholder: NETWORK_LABELS.activitiesPlaceholder,
+      }),
       moreChannels,
       field('Bio', 'bio', c.bio || '', { rows: 3 }),
       toggleAttrs,
@@ -3274,6 +3398,9 @@ export function mountNetworkUi(root) {
               ...enrichmentToPutBody(current.enrichment),
               needsReview: false,
             };
+          }
+          if (!opts.fromUndo && current.intakeReviewed === false) {
+            body.intakeReviewed = true;
           }
           const r = await fetch(`/api/network/contacts/${encodeURIComponent(priorId)}`, {
             method: 'PUT',
@@ -3592,7 +3719,7 @@ export function mountNetworkUi(root) {
       }
     });
 
-    detail.append(head, ...(reviewBanner ? [reviewBanner] : []), ...mergeBanners, form);
+    detail.append(head, ...reviewBanners, ...mergeBanners, form);
 
     // #region agent log
     (() => {
@@ -5104,7 +5231,7 @@ export function mountNetworkUi(root) {
       field('Partner / channel relationships', 'partnerRelationships', o.partnerRelationships || '', { rows: 2 }),
       field('Next step', 'nextStep', o.nextStep || '', { rows: 2 }),
       field('Summary (freeform words for LLM search)', 'summary', o.summary || '', { rows: 2 }),
-      field('Aliases (comma-separated)', 'aliases', (o.aliases || []).join(', ')),
+      field(NETWORK_LABELS.aliases, 'aliases', (o.aliases || []).join(', ')),
       field('URLs (one per line)', 'urls', (o.urls || []).join('\n'), { rows: 2 }),
       field('Account ID', 'accountIdDisplay', o.id || '', { readonly: true }),
     );
@@ -5122,12 +5249,16 @@ export function mountNetworkUi(root) {
     const toggleAttrs = document.createElement('button');
     toggleAttrs.type = 'button';
     toggleAttrs.className = 'network-crm__btn network-crm__btn--attrs';
-    toggleAttrs.textContent = orgAttrsExpanded ? 'Fewer attributes' : 'More attributes';
+    toggleAttrs.textContent = orgAttrsExpanded
+      ? NETWORK_LABELS.hideHidden
+      : NETWORK_LABELS.showHidden;
     toggleAttrs.setAttribute('aria-expanded', orgAttrsExpanded ? 'true' : 'false');
     toggleAttrs.addEventListener('click', () => {
       orgAttrsExpanded = !orgAttrsExpanded;
       attrsPanel.hidden = !orgAttrsExpanded;
-      toggleAttrs.textContent = orgAttrsExpanded ? 'Fewer attributes' : 'More attributes';
+      toggleAttrs.textContent = orgAttrsExpanded
+        ? NETWORK_LABELS.hideHidden
+        : NETWORK_LABELS.showHidden;
       toggleAttrs.setAttribute('aria-expanded', orgAttrsExpanded ? 'true' : 'false');
     });
 
@@ -5486,7 +5617,7 @@ export function mountNetworkUi(root) {
       return;
     }
     const [{ mountNetworkGroupsUi }, prefetched] = await Promise.all([
-      import('./network-groups-ui.js?v=hide-paused-former-1'),
+      import('./network-groups-ui.js?v=member-bulk-2'),
       takeGroupsPrefetch().catch(() => groupsCache),
     ]);
     if (Array.isArray(prefetched)) groupsCache = prefetched;
@@ -5503,8 +5634,10 @@ export function mountNetworkUi(root) {
         void setPeopleSubTab('contacts');
       },
       onOpenContact: (id) => {
-        selectedId = id;
-        void setPeopleSubTab('contacts');
+        void openContactDetail(id);
+      },
+      onGroupFocus: () => {
+        hideGroupsContactDetail();
       },
       onToolbarSync: () => {
         syncGroupToolbar();
@@ -5560,25 +5693,17 @@ export function mountNetworkUi(root) {
   startGroupSelBtn.addEventListener('click', async () => {
     const ids = [...selectedContactIds];
     if (!ids.length) return;
-    const kind = await openGroupKindDialog({
-      title: `Group kind for ${ids.length} people`,
-    });
-    if (kind == null) {
-      showStatus('Cancelled');
-      return;
-    }
-    showStatus('Creating group…');
+    showStatus('Creating event group…');
     try {
       const r = await fetch('/api/network/groups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: '', kind, eventType: '', memberIds: ids }),
+        body: JSON.stringify({ name: '', kind: 'event', eventType: '', memberIds: ids }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'create_failed');
       selectedContactIds.clear();
       syncSelectionActions();
-      if (kind === 'community') await refreshContactsQuiet();
       renderList();
       showStatus('Created — fill in optional details');
       await setPeopleSubTab('groups', { selectGroupId: j.group?.id || null });
@@ -5602,9 +5727,8 @@ export function mountNetworkUi(root) {
       }
       const labels = groups
         .map((g, i) => {
-          const kind = g.kind === 'event' ? 'Event' : 'Community';
-          const typeBit = g.kind === 'event' && g.eventType ? ` · ${g.eventType}` : '';
-          return `${i + 1}. [${kind}${typeBit}] ${g.name || 'Untitled'} (${(g.memberIds || []).length})`;
+          const kind = g.kind === 'event' ? NETWORK_LABELS.event : NETWORK_LABELS.scene;
+          return `${i + 1}. [${kind}] ${g.name || 'Untitled'} (${(g.memberIds || []).length})`;
         })
         .join('\n');
       const pick = prompt(`Add ${ids.length} contact(s) to which group?\n${labels}\n\nEnter number:`);
@@ -5908,6 +6032,7 @@ export function mountNetworkUi(root) {
       relationships: relationshipFilter.getSelected(),
       statuses: statusFilter.getSelected(),
       locations: locationFilter.getSelected(),
+      regions: regionFilter.getSelected(),
       hidePaused: Boolean(hidePausedFilter.cb.checked),
       hideFormer: Boolean(hideFormerFilter.cb.checked),
     };
@@ -5920,6 +6045,7 @@ export function mountNetworkUi(root) {
   relationshipFilter.onChange(syncPeopleFiltersFromUi);
   statusFilter.onChange(syncPeopleFiltersFromUi);
   locationFilter.onChange(syncPeopleFiltersFromUi);
+  regionFilter.onChange(syncPeopleFiltersFromUi);
   hidePausedFilter.cb.addEventListener('change', syncPeopleFiltersFromUi);
   hideFormerFilter.cb.addEventListener('change', syncPeopleFiltersFromUi);
   document.addEventListener('click', closeOpenFilterMenu);
@@ -5984,6 +6110,7 @@ export function mountNetworkUi(root) {
           relationships: asFilterList(pf.relationships ?? pf.relationship),
           statuses: asFilterList(pf.statuses ?? pf.status),
           locations: asFilterList(pf.locations ?? pf.location),
+          regions: asFilterList(pf.regions ?? pf.region),
           // Always default on every refresh; Manage can uncheck for the session.
           hidePaused: true,
           hideFormer: true,

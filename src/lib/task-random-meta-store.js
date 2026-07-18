@@ -10,6 +10,7 @@ import {
   normalizeLocation,
   normalizeLocations,
   normalizePriority,
+  normalizeTime,
   normalizeTimes,
   TASK_LOCATIONS,
 } from './task-random-enums.js';
@@ -26,6 +27,25 @@ export function taskProjectLocationsMdPath(env = process.env) {
   const override = String(env.TASK_PROJECT_LOCATIONS_MD_PATH || '').trim();
   if (override) return path.isAbsolute(override) ? override : path.join(PKG_ROOT, override);
   return path.join(PKG_ROOT, 'data/task-project-locations.md');
+}
+
+function isLegacyTimeToken(raw) {
+  const s = String(raw || '').trim().toLowerCase().replace(/\s+/g, '_');
+  return s === 'weekend' || s === 'afterhours' || s === 'after_hours' || s === 'evening';
+}
+
+function taskMetaNeedsMigration(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  const r = raw;
+  const dur = String(r.duration || '').trim().toLowerCase();
+  if (dur === '5m' || dur === '15m') return true;
+  const times = Array.isArray(r.times) ? r.times : r.time != null ? [r.time] : [];
+  return times.some(isLegacyTimeToken);
+}
+
+function metaNeedsMigration(raw) {
+  const taskRaw = raw?.byTaskId && typeof raw.byTaskId === 'object' ? raw.byTaskId : {};
+  return Object.values(taskRaw).some(taskMetaNeedsMigration);
 }
 
 function normalizeTaskMeta(raw) {
@@ -46,8 +66,12 @@ function normalizeTaskMeta(raw) {
   const locs = normalizeLocations(r.locations);
   if (locs.length && !out.location && !out.locationAny) out.locations = locs;
   if (r.timeAny === true) out.timeAny = true;
+  const rawTimes = Array.isArray(r.times) ? r.times : r.time != null ? [r.time] : [];
+  const hadLegacyOnlyTime =
+    rawTimes.length > 0 && rawTimes.every(isLegacyTimeToken) && !rawTimes.some((t) => normalizeTime(t));
   const times = normalizeTimes(r.times ?? r.time);
-  if (times.length && !out.timeAny) out.times = times;
+  if (hadLegacyOnlyTime) out.timeAny = true;
+  else if (times.length && !out.timeAny) out.times = times;
   return Object.keys(out).length ? out : null;
 }
 
@@ -85,8 +109,12 @@ export function normalizeTaskRandomMeta(raw) {
 
 export async function loadTaskRandomMeta(env = process.env) {
   try {
-    const raw = await fs.readFile(taskRandomMetaJsonPath(env), 'utf8');
-    return normalizeTaskRandomMeta(JSON.parse(raw));
+    const target = taskRandomMetaJsonPath(env);
+    const rawText = await fs.readFile(target, 'utf8');
+    const parsed = JSON.parse(rawText);
+    const meta = normalizeTaskRandomMeta(parsed);
+    if (metaNeedsMigration(parsed)) await writeTaskRandomMeta(meta, env);
+    return meta;
   } catch {
     const fromMd = await parseProjectLocationsMarkdown(env);
     if (Object.keys(fromMd.byProjectId).length) {

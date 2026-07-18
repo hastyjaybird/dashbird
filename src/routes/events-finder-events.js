@@ -56,6 +56,7 @@ import {
   loadConferenceHeadsUp,
   scheduleConferenceWatchlistResearch,
 } from '../lib/events-finder-conference-watchlist.js';
+import { isTelegramIntakeEvent } from '../lib/events-finder-telegram.js';
 
 const router = Router();
 
@@ -456,37 +457,51 @@ router.get('/', async (req, res) => {
     let calendarHidden = 0;
     // Apply full browse filters including cities (client also mirrors city checks).
     const filtersBase = { ...(criteria.filters || {}) };
+    /** Date-only filters for deliberate Telegram intake (skip geo/taste/attendance/time). */
+    const telegramDateFilters = {
+      dates: filtersBase.dates,
+      dateFrom: filtersBase.dateFrom,
+      dateTo: filtersBase.dateTo,
+    };
+
     for (const event of deduped) {
       const eventId = String(event?.id || '').trim();
-      // Skipped events never enter the main feed — regardless of filter/taste changes.
-      const skipMatch = findSkippedEventMatch(event, skippedIndex);
-      if (skipMatch) {
-        const mapCoords = resolveEventLatLon(event);
-        skippedFeed.push(
-          withEventPrice({
-            ...event,
-            city: eventCityLabel(event),
-            lat: mapCoords?.lat ?? null,
-            lon: mapCoords?.lon ?? null,
-            distanceMiles: null,
-            cityMatch: null,
-            tasteScore: 0,
-            matchedLookFor: [],
-            skipped: true,
-            skippedAt: skipMatch.skippedAt || null,
-          }),
-        );
-        continue;
+      const telegramIntake = isTelegramIntakeEvent(event);
+
+      if (!telegramIntake) {
+        // Skipped events never enter the main feed — regardless of filter/taste changes.
+        const skipMatch = findSkippedEventMatch(event, skippedIndex);
+        if (skipMatch) {
+          const mapCoords = resolveEventLatLon(event);
+          skippedFeed.push(
+            withEventPrice({
+              ...event,
+              city: eventCityLabel(event),
+              lat: mapCoords?.lat ?? null,
+              lon: mapCoords?.lon ?? null,
+              distanceMiles: null,
+              cityMatch: null,
+              tasteScore: 0,
+              matchedLookFor: [],
+              skipped: true,
+              skippedAt: skipMatch.skippedAt || null,
+            }),
+          );
+          continue;
+        }
+        if (eventId && calendarAdded.has(eventId)) {
+          calendarHidden += 1;
+          continue;
+        }
+        if (eventMatchesGoogleCalendar(event, calendarOccupancy.keys, timeZone)) {
+          calendarHidden += 1;
+          continue;
+        }
       }
-      if (eventId && calendarAdded.has(eventId)) {
-        calendarHidden += 1;
-        continue;
-      }
-      if (eventMatchesGoogleCalendar(event, calendarOccupancy.keys, timeZone)) {
-        calendarHidden += 1;
-        continue;
-      }
-      const gate = eventPassesFeedFilters(event, filtersBase, home, { timeZone });
+
+      const gate = telegramIntake
+        ? eventPassesFeedFilters(event, telegramDateFilters, home, { timeZone })
+        : eventPassesFeedFilters(event, filtersBase, home, { timeZone });
       // #region agent log
       {
         const t = `${event?.title || ''} ${event?.url || ''}`.toLowerCase();
@@ -533,7 +548,9 @@ router.get('/', async (req, res) => {
       }
       // #endregion
       if (!gate.ok) continue;
-      const taste = scoreEventTaste(event, criteria);
+      const taste = telegramIntake
+        ? { ok: true, score: 1, matchedLookFor: ['telegram'] }
+        : scoreEventTaste(event, criteria);
       if (!taste.ok) {
         tasteSkipped += 1;
         continue;
@@ -552,6 +569,7 @@ router.get('/', async (req, res) => {
             matchedLookFor: taste.matchedLookFor,
             skipped: false,
             skippedAt: null,
+            telegramIntake,
           }),
         );
       }

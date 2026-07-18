@@ -1,17 +1,17 @@
 /** @typedef {'low' | 'med' | 'high'} TaskDifficulty */
 /** @typedef {'low' | 'med' | 'high'} TaskPriority */
-/** @typedef {'5m' | '15m' | '30m' | '1hr+'} TaskDuration */
+/** @typedef {'10m' | '30m' | '1hr+'} TaskDuration */
 /** @typedef {'home' | 'out' | 'makerfarm' | 'laptop' | 'phone'} TaskLocation */
-/** @typedef {'weekday_9_5' | 'afterhours' | 'weekend'} TaskTime */
+/** @typedef {'weekday_9_5'} TaskTime */
 
 export const TASK_DIFFICULTIES = /** @type {const} */ (['low', 'med', 'high']);
 export const TASK_PRIORITIES = /** @type {const} */ (['low', 'med', 'high']);
-export const TASK_DURATIONS = /** @type {const} */ (['5m', '15m', '30m', '1hr+']);
-export const TASK_LOCATIONS = /** @type {const} */ (['home', 'out', 'makerfarm', 'laptop', 'phone']);
-export const TASK_TIMES = /** @type {const} */ (['weekday_9_5', 'afterhours', 'weekend']);
+export const TASK_DURATIONS = /** @type {const} */ (['10m', '30m', '1hr+']);
+export const TASK_LOCATIONS = /** @type {const} */ (['home', 'makerfarm', 'out', 'laptop', 'phone']);
+export const TASK_TIMES = /** @type {const} */ (['weekday_9_5']);
 
 /** @type {Record<TaskDuration, number>} */
-export const DURATION_TIER = { '5m': 1, '15m': 2, '30m': 3, '1hr+': 4 };
+export const DURATION_TIER = { '10m': 1, '30m': 2, '1hr+': 3 };
 
 /** @type {Record<TaskLocation, string>} */
 export const LOCATION_LABELS = {
@@ -33,13 +33,11 @@ export const PRIORITY_LABELS = { low: 'Low', med: 'Med', high: 'High' };
 export const PRIORITY_WEIGHT = { low: 1, med: 2, high: 5 };
 
 /** @type {Record<TaskDuration, string>} */
-export const DURATION_LABELS = { '5m': '5 min', '15m': '15 min', '30m': '30 min', '1hr+': '1 hr+' };
+export const DURATION_LABELS = { '10m': '<10 min', '30m': '30 min', '1hr+': '1 hr+' };
 
 /** @type {Record<TaskTime, string>} */
 export const TIME_LABELS = {
   weekday_9_5: 'Weekday 9–5',
-  afterhours: 'After hours ok',
-  weekend: 'Weekend',
 };
 
 export function normalizeDifficulty(raw) {
@@ -57,6 +55,8 @@ export function normalizePriority(raw) {
 export function normalizeDuration(raw) {
   const s = String(raw || '').trim().toLowerCase().replace(/\s+/g, '');
   if (s === '1h+' || s === '1hr' || s === '60m') return '1hr+';
+  if (s === '5m') return '10m';
+  if (s === '15m') return '30m';
   return TASK_DURATIONS.includes(/** @type {TaskDuration} */ (s)) ? /** @type {TaskDuration} */ (s) : null;
 }
 
@@ -85,7 +85,6 @@ export function normalizeLocations(raw) {
 export function normalizeTime(raw) {
   const s = String(raw || '').trim().toLowerCase().replace(/\s+/g, '_');
   if (s === 'weekday' || s === 'weekday_9-5' || s === '9-5' || s === 'business') return 'weekday_9_5';
-  if (s === 'afterhours' || s === 'after_hours' || s === 'evening') return 'afterhours';
   return TASK_TIMES.includes(/** @type {TaskTime} */ (s)) ? /** @type {TaskTime} */ (s) : null;
 }
 

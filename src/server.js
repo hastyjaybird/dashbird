@@ -73,6 +73,8 @@ import eventsFinderTelegramRouter from './routes/events-finder-telegram.js';
 import gmailWeeklySummaryRouter from './routes/gmail-weekly-summary.js';
 import networkRouter from './routes/network.js';
 import devNotesRouter from './routes/dev-notes.js';
+import devRequestsRouter from './routes/dev-requests.js';
+import keepNotesRouter from './routes/keep-notes.js';
 import devAgentLogRouter from './routes/dev-agent-log.js';
 import trustedDeviceAuthRouter, {
   deviceBindHandler,
@@ -184,6 +186,8 @@ app.use('/api/tool-library', toolLibraryRouter);
 app.use('/api/local-news', localNewsRouter);
 app.use('/api/web-catalog', webCatalogRouter);
 app.use('/api/dev-notes', devNotesRouter);
+app.use('/api/dev-requests', devRequestsRouter);
+app.use('/api/keep-notes', keepNotesRouter);
 app.use('/api/dev-agent-log', devAgentLogRouter);
 
 

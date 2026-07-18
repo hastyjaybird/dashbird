@@ -43,8 +43,6 @@ export function deviceBindHandler(req, res) {
 }
 
 function renderDeviceBindPage(deviceId) {
-  const devUrl = 'http://127.0.0.1:8788/';
-  const prodUrl = 'https://dashbird.duckdns.org/';
   const safeId = String(deviceId || '').replace(/[<>&"]/g, '');
   return `<!DOCTYPE html>
 <html lang="en">
@@ -58,18 +56,6 @@ function renderDeviceBindPage(deviceId) {
     <header class="topbar glass" role="banner">
       <div class="topbar__head">
         <span class="brand">dashbird</span>
-      </div>
-      <div class="topbar__end">
-        <div class="topbar__env-links" aria-label="Dashboard environments">
-          <div class="topbar__env-link">
-            <span class="topbar__env-link-label">production link</span>
-            <a class="topbar__env-link-url" href="${prodUrl}" rel="noopener noreferrer">dashbird.duckdns.org</a>
-          </div>
-          <div class="topbar__env-link">
-            <span class="topbar__env-link-label">developer link</span>
-            <a class="topbar__env-link-url" href="${devUrl}" rel="noopener noreferrer">127.0.0.1:8788</a>
-          </div>
-        </div>
       </div>
     </header>
     <main class="device-bind-page">

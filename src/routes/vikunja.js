@@ -24,7 +24,7 @@ import {
   saveProjectLocationsMarkdown,
   syncProjectLocationsMarkdown,
 } from '../lib/task-random-meta-store.js';
-import { pickRandomTask, resolveTaskContext } from '../lib/task-random.js';
+import { parseRandomTaskFilters, pickRandomTask } from '../lib/task-random.js';
 
 const router = Router();
 router.use(express.json({ limit: '32kb' }));
@@ -298,67 +298,34 @@ router.post('/project-locations/sync', async (_req, res) => {
   }
 });
 
-router.get('/task-context', async (req, res) => {
-  try {
-    const lat = Number(req.query.lat);
-    const lon = Number(req.query.lon);
-    const device = String(req.query.device || 'laptop');
-    const context = await resolveTaskContext(
-      {
-        lat: Number.isFinite(lat) ? lat : null,
-        lon: Number.isFinite(lon) ? lon : null,
-        device,
-        timeZone: req.query.timeZone,
-      },
-      process.env,
-    );
-    res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ ok: true, context });
-  } catch (e) {
-    sendErr(e, res);
-  }
-});
-
 router.post('/random-task', async (req, res) => {
   try {
-    const difficulty = req.body?.difficulty ?? null;
-    const duration = req.body?.duration ?? null;
-    const lat = Number(req.body?.lat);
-    const lon = Number(req.body?.lon);
-    const device = String(req.body?.device || 'laptop');
-    const excludeIds = Array.isArray(req.body?.excludeIds) ? req.body.excludeIds.map(String) : [];
-    const excludeProjectIds = Array.isArray(req.body?.excludeProjectIds)
-      ? req.body.excludeProjectIds.map(String)
-      : [];
-    const [tasks, meta, context] = await Promise.all([
-      listAllPanelTodos(),
-      loadTaskRandomMeta(),
-      resolveTaskContext(
-        {
-          lat: Number.isFinite(lat) ? lat : null,
-          lon: Number.isFinite(lon) ? lon : null,
-          device,
-          timeZone: req.body?.timeZone,
-        },
-        process.env,
-      ),
-    ]);
-    const result = pickRandomTask(
-      tasks,
-      meta,
-      { difficulty, duration, excludeIds, excludeProjectIds },
-      context,
-    );
+    const filters = parseRandomTaskFilters(req.body || {});
+    const [tasks, meta] = await Promise.all([listAllPanelTodos(), loadTaskRandomMeta()]);
+    const result = pickRandomTask(tasks, meta, filters);
     res.setHeader('Cache-Control', 'private, no-store');
     if (!result.task) {
-      res.json({ ok: true, matched: false, poolSize: 0, context, message: 'No tasks match — try relaxing filters.' });
+      const skipped = filters.excludeIds?.length ?? 0;
+      const msg =
+        skipped > 0
+          ? `No tasks left — you skipped or finished ${skipped} task${skipped === 1 ? '' : 's'}.`
+          : 'No tasks match — try relaxing filters.';
+      res.json({
+        ok: true,
+        matched: false,
+        poolSize: 0,
+        totalOpen: result.totalOpen ?? tasks.length,
+        filters,
+        message: msg,
+      });
       return;
     }
     res.json({
       ok: true,
       matched: true,
-      context,
+      filters,
       poolSize: result.poolSize,
+      totalOpen: result.totalOpen ?? tasks.length,
       task: result.task,
       meta: result.meta,
       projectMeta: result.projectMeta,

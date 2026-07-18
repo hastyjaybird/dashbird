@@ -8,23 +8,32 @@ import {
 
 const MOBILE_TAB_KEY = 'dashbirdMobileTab';
 /** Bump when any mobile panel module changes (cache-bust dynamic imports). */
-const MOBILE_PANELS_V = 'mobile-panels-20260716-7';
+const MOBILE_PANELS_V = 'mobile-panels-20260717-4';
 
 /**
- * @returns {'network' | 'events' | 'groups' | 'tasks'}
+ * @returns {import('../lib/mobile-history.js').MobileTab}
  */
 function loadTab() {
   try {
     const t = localStorage.getItem(MOBILE_TAB_KEY);
-    if (t === 'network' || t === 'events' || t === 'groups' || t === 'tasks') return t;
+    if (
+      t === 'notes' ||
+      t === 'network' ||
+      t === 'events' ||
+      t === 'groups' ||
+      t === 'tasks' ||
+      t === 'gmail'
+    ) {
+      return t;
+    }
   } catch {
     /* ignore */
   }
-  return 'network';
+  return 'notes';
 }
 
 /**
- * @param {'network' | 'events' | 'groups' | 'tasks'} tab
+ * @param {import('../lib/mobile-history.js').MobileTab} tab
  */
 function saveTab(tab) {
   try {
@@ -35,13 +44,15 @@ function saveTab(tab) {
 }
 
 /**
- * Lean mobile shell: Tasks | Events | Contacts | Groups.
+ * Lean mobile shell: Notes | Tasks | Mail | Events | Contacts | Groups.
  * @param {{
  *   tabsRoot?: HTMLElement | null,
+ *   notesRoot?: HTMLElement | null,
  *   networkRoot?: HTMLElement | null,
  *   eventsRoot?: HTMLElement | null,
  *   groupsRoot?: HTMLElement | null,
  *   tasksRoot?: HTMLElement | null,
+ *   gmailRoot?: HTMLElement | null,
  * }} mounts
  */
 export function mountMobileShell(mounts = {}) {
@@ -49,20 +60,54 @@ export function mountMobileShell(mounts = {}) {
   if (page) page.hidden = false;
 
   const tabsRoot = mounts.tabsRoot || document.getElementById('mount-mobile-tabs');
+  const notesRoot = mounts.notesRoot || document.getElementById('mount-mobile-notes');
   const networkRoot = mounts.networkRoot || document.getElementById('mount-mobile-network');
   const eventsRoot = mounts.eventsRoot || document.getElementById('mount-mobile-events');
   const groupsRoot = mounts.groupsRoot || document.getElementById('mount-mobile-groups');
   const tasksRoot = mounts.tasksRoot || document.getElementById('mount-mobile-tasks');
-  if (!tabsRoot || !networkRoot || !eventsRoot || !groupsRoot || !tasksRoot) return;
+  const gmailRoot = mounts.gmailRoot || document.getElementById('mount-mobile-gmail');
+  if (
+    !tabsRoot ||
+    !notesRoot ||
+    !networkRoot ||
+    !eventsRoot ||
+    !groupsRoot ||
+    !tasksRoot ||
+    !gmailRoot
+  ) {
+    return;
+  }
 
   tabsRoot.replaceChildren();
   tabsRoot.classList.add('mobile-shell__tabs');
 
   let tab = loadTab();
+  let notesMounted = false;
   let networkMounted = false;
   let eventsMounted = false;
   let groupsMounted = false;
   let tasksMounted = false;
+  let gmailMounted = false;
+
+  const notesBtn = document.createElement('button');
+  notesBtn.type = 'button';
+  notesBtn.className = 'mobile-shell__tab';
+  notesBtn.textContent = 'Notes';
+
+  const tasksBtn = document.createElement('button');
+  tasksBtn.type = 'button';
+  tasksBtn.className = 'mobile-shell__tab';
+  tasksBtn.textContent = 'Tasks';
+
+  const gmailBtn = document.createElement('button');
+  gmailBtn.type = 'button';
+  gmailBtn.className = 'mobile-shell__tab';
+  gmailBtn.textContent = 'Mail';
+
+  const eventsBtn = document.createElement('button');
+  eventsBtn.type = 'button';
+  eventsBtn.className = 'mobile-shell__tab';
+  eventsBtn.textContent = 'Events';
 
   const networkBtn = document.createElement('button');
   networkBtn.type = 'button';
@@ -74,31 +119,45 @@ export function mountMobileShell(mounts = {}) {
   groupsBtn.className = 'mobile-shell__tab';
   groupsBtn.textContent = 'Groups';
 
-  const eventsBtn = document.createElement('button');
-  eventsBtn.type = 'button';
-  eventsBtn.className = 'mobile-shell__tab';
-  eventsBtn.textContent = 'Events';
-
-  const tasksBtn = document.createElement('button');
-  tasksBtn.type = 'button';
-  tasksBtn.className = 'mobile-shell__tab';
-  tasksBtn.textContent = 'Tasks';
-
-  tabsRoot.append(tasksBtn, eventsBtn, networkBtn, groupsBtn);
+  tabsRoot.append(notesBtn, tasksBtn, gmailBtn, eventsBtn, networkBtn, groupsBtn);
 
   function syncTabs() {
-    networkBtn.classList.toggle('mobile-shell__tab--active', tab === 'network');
-    eventsBtn.classList.toggle('mobile-shell__tab--active', tab === 'events');
-    groupsBtn.classList.toggle('mobile-shell__tab--active', tab === 'groups');
+    notesBtn.classList.toggle('mobile-shell__tab--active', tab === 'notes');
     tasksBtn.classList.toggle('mobile-shell__tab--active', tab === 'tasks');
-    networkBtn.setAttribute('aria-pressed', tab === 'network' ? 'true' : 'false');
-    eventsBtn.setAttribute('aria-pressed', tab === 'events' ? 'true' : 'false');
-    groupsBtn.setAttribute('aria-pressed', tab === 'groups' ? 'true' : 'false');
+    gmailBtn.classList.toggle('mobile-shell__tab--active', tab === 'gmail');
+    eventsBtn.classList.toggle('mobile-shell__tab--active', tab === 'events');
+    networkBtn.classList.toggle('mobile-shell__tab--active', tab === 'network');
+    groupsBtn.classList.toggle('mobile-shell__tab--active', tab === 'groups');
+    notesBtn.setAttribute('aria-pressed', tab === 'notes' ? 'true' : 'false');
     tasksBtn.setAttribute('aria-pressed', tab === 'tasks' ? 'true' : 'false');
-    networkRoot.hidden = tab !== 'network';
-    eventsRoot.hidden = tab !== 'events';
-    groupsRoot.hidden = tab !== 'groups';
+    gmailBtn.setAttribute('aria-pressed', tab === 'gmail' ? 'true' : 'false');
+    eventsBtn.setAttribute('aria-pressed', tab === 'events' ? 'true' : 'false');
+    networkBtn.setAttribute('aria-pressed', tab === 'network' ? 'true' : 'false');
+    groupsBtn.setAttribute('aria-pressed', tab === 'groups' ? 'true' : 'false');
+    notesRoot.hidden = tab !== 'notes';
     tasksRoot.hidden = tab !== 'tasks';
+    gmailRoot.hidden = tab !== 'gmail';
+    eventsRoot.hidden = tab !== 'events';
+    networkRoot.hidden = tab !== 'network';
+    groupsRoot.hidden = tab !== 'groups';
+  }
+
+  async function ensureNotes() {
+    if (notesMounted) return;
+    notesMounted = true;
+    notesRoot.replaceChildren();
+    const status = document.createElement('p');
+    status.className = 'mobile-shell__status';
+    status.textContent = 'Loading notes…';
+    notesRoot.append(status);
+    try {
+      const { mountKeepNotes } = await import(`./keep-notes.js?v=${MOBILE_PANELS_V}`);
+      notesRoot.replaceChildren();
+      mountKeepNotes(notesRoot);
+    } catch (e) {
+      status.textContent = `Notes failed: ${e?.message || e}`;
+      notesMounted = false;
+    }
   }
 
   async function ensureNetwork() {
@@ -180,22 +239,43 @@ export function mountMobileShell(mounts = {}) {
     }
   }
 
+  async function ensureGmail() {
+    if (gmailMounted) return;
+    gmailMounted = true;
+    gmailRoot.replaceChildren();
+    const status = document.createElement('p');
+    status.className = 'mobile-shell__status';
+    status.textContent = 'Loading mail…';
+    gmailRoot.append(status);
+    try {
+      const { mountGmailSummaryMobile } = await import(
+        `./gmail-summary-mobile.js?v=${MOBILE_PANELS_V}`
+      );
+      mountGmailSummaryMobile(gmailRoot);
+    } catch (e) {
+      status.textContent = `Mail failed: ${e?.message || e}`;
+      gmailMounted = false;
+    }
+  }
+
   /**
-   * @param {'network' | 'events' | 'groups' | 'tasks'} next
+   * @param {import('../lib/mobile-history.js').MobileTab} next
    * @param {{ fromHistory?: boolean }} [opts]
    */
   async function setTab(next, opts = {}) {
     tab = next;
     saveTab(tab);
     syncTabs();
-    if (tab === 'network') await ensureNetwork();
+    if (tab === 'notes') await ensureNotes();
+    else if (tab === 'network') await ensureNetwork();
     else if (tab === 'groups') await ensureGroups();
     else if (tab === 'tasks') await ensureTasks();
+    else if (tab === 'gmail') await ensureGmail();
     else await ensureEvents();
   }
 
   /**
-   * @param {'network' | 'events' | 'groups' | 'tasks'} next
+   * @param {import('../lib/mobile-history.js').MobileTab} next
    */
   function onTabClick(next) {
     if (isMobileNavApplying()) return;
@@ -223,10 +303,28 @@ export function mountMobileShell(mounts = {}) {
     }),
   );
 
-  networkBtn.addEventListener('click', () => onTabClick('network'));
-  eventsBtn.addEventListener('click', () => onTabClick('events'));
-  groupsBtn.addEventListener('click', () => onTabClick('groups'));
+  notesBtn.addEventListener('click', () => onTabClick('notes'));
   tasksBtn.addEventListener('click', () => onTabClick('tasks'));
+  gmailBtn.addEventListener('click', () => onTabClick('gmail'));
+  eventsBtn.addEventListener('click', () => onTabClick('events'));
+  networkBtn.addEventListener('click', () => onTabClick('network'));
+  groupsBtn.addEventListener('click', () => onTabClick('groups'));
+
+  document.addEventListener('dashbird:mobile-goto', (e) => {
+    const d = e.detail;
+    if (!d?.tab) return;
+    const frame = {
+      tab: d.tab,
+      pane: d.pane || 'list',
+      contactId: d.contactId,
+      groupId: d.groupId,
+      projectId: d.projectId,
+    };
+    pushMobileNav(/** @type {import('../lib/mobile-history.js').MobileNavState} */ (frame));
+    void setTab(d.tab).then(() => {
+      document.dispatchEvent(new CustomEvent('dashbird:mobile-nav', { detail: frame }));
+    });
+  });
 
   void setTab(tab);
 }

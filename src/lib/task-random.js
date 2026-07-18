@@ -1,146 +1,19 @@
 /**
- * Random task picker: context resolution + filter + pick.
+ * Random task picker: user-chosen attribute filters + weighted pick.
  */
-import { haversineMiles } from './dashboard-geo.js';
-import { geocodeAddress } from './geocode-address.js';
-import { resolveDashboardWeatherLatLon } from './hero-weather-location.js';
-import { loadRainAlertAddress } from './rain-alert-address-store.js';
 import {
-  DURATION_TIER,
   DIFFICULTY_LABELS,
   DURATION_LABELS,
+  DURATION_TIER,
   LOCATION_LABELS,
   TIME_LABELS,
   normalizeDifficulty,
   normalizeDuration,
+  normalizeLocation,
+  normalizePriority,
+  normalizeTime,
   PRIORITY_WEIGHT,
 } from './task-random-enums.js';
-
-const HOME_RADIUS_MI = 100 / 1760;
-const MAKERFARM_RADIUS_MI = 150 / 1609.344;
-
-/** @type {{ lat: number, lon: number } | null} */
-let cachedMakerfarm = null;
-
-async function resolveMakerfarmCoords(env = process.env) {
-  if (cachedMakerfarm) return cachedMakerfarm;
-  const latRaw = Number(env.TASK_MAKERFARM_LAT);
-  const lonRaw = Number(env.TASK_MAKERFARM_LON);
-  if (Number.isFinite(latRaw) && Number.isFinite(lonRaw)) {
-    cachedMakerfarm = { lat: latRaw, lon: lonRaw };
-    return cachedMakerfarm;
-  }
-  const geo = await geocodeAddress('Bay Area Maker Farm, Alameda, CA');
-  if (geo && Number.isFinite(geo.lat) && Number.isFinite(geo.lon)) {
-    cachedMakerfarm = { lat: geo.lat, lon: geo.lon };
-    return cachedMakerfarm;
-  }
-  return null;
-}
-
-async function resolveHomeCoords(env = process.env) {
-  try {
-    const addr = await loadRainAlertAddress();
-    const geo = await geocodeAddress(addr);
-    if (geo && Number.isFinite(geo.lat) && Number.isFinite(geo.lon)) {
-      return { lat: geo.lat, lon: geo.lon };
-    }
-  } catch {
-    /* fall through */
-  }
-  const hero = await resolveDashboardWeatherLatLon(env);
-  if (Number.isFinite(hero.lat) && Number.isFinite(hero.lon)) {
-    return { lat: hero.lat, lon: hero.lon };
-  }
-  return null;
-}
-
-function resolvePlaceKind(lat, lon, home, makerfarm) {
-  if (home && haversineMiles(lat, lon, home.lat, home.lon) <= HOME_RADIUS_MI) return 'home';
-  if (makerfarm && haversineMiles(lat, lon, makerfarm.lat, makerfarm.lon) <= MAKERFARM_RADIUS_MI) {
-    return 'makerfarm';
-  }
-  return 'out';
-}
-
-function resolveTimeKind(timeZone) {
-  const tz = String(timeZone || 'America/Los_Angeles').trim() || 'America/Los_Angeles';
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    weekday: 'short',
-    hour: 'numeric',
-    hour12: false,
-  }).formatToParts(now);
-  const weekday = parts.find((p) => p.type === 'weekday')?.value || '';
-  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? NaN);
-  const isWeekend = weekday === 'Sat' || weekday === 'Sun';
-  if (isWeekend) return 'weekend';
-  if (Number.isFinite(hour) && hour >= 9 && hour < 17) return 'weekday_9_5';
-  return 'afterhours';
-}
-
-export async function resolveTaskContext(opts = {}, env = process.env) {
-  const deviceRaw = String(opts.device || 'laptop').trim().toLowerCase();
-  const device = deviceRaw === 'phone' || deviceRaw === 'mobile' ? 'phone' : 'laptop';
-  const timeZone =
-    String(opts.timeZone || env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim()
-    || 'America/Los_Angeles';
-  const home = await resolveHomeCoords(env);
-  const makerfarm = await resolveMakerfarmCoords(env);
-
-  let lat = Number(opts.lat);
-  let lon = Number(opts.lon);
-  let placeKind = 'home';
-  let gps = false;
-
-  if (Number.isFinite(lat) && Number.isFinite(lon) && (Math.abs(lat) > 1e-6 || Math.abs(lon) > 1e-6)) {
-    gps = true;
-    placeKind = resolvePlaceKind(lat, lon, home, makerfarm);
-  } else if (home) {
-    lat = home.lat;
-    lon = home.lon;
-    placeKind = 'home';
-  }
-
-  const allowedLocations = [];
-  if (placeKind === 'home') {
-    allowedLocations.push('home', 'phone');
-    if (device === 'laptop') allowedLocations.push('laptop');
-  } else if (placeKind === 'makerfarm') {
-    allowedLocations.push('makerfarm', 'phone');
-  } else {
-    allowedLocations.push('out', 'phone');
-  }
-  if (device === 'laptop' && !allowedLocations.includes('laptop')) allowedLocations.push('laptop');
-
-  const timeKind = resolveTimeKind(timeZone);
-  const allowedTimes = [];
-  if (timeKind === 'weekend') {
-    allowedTimes.push('weekend', 'afterhours');
-  } else if (timeKind === 'weekday_9_5') {
-    allowedTimes.push('weekday_9_5');
-  } else {
-    allowedTimes.push('afterhours');
-  }
-
-  const placeLabels = { home: 'Home', makerfarm: 'Maker Farm', out: 'Out and about' };
-
-  return {
-    device,
-    gps,
-    placeKind,
-    timeKind,
-    timeZone,
-    allowedLocations: [...new Set(allowedLocations)],
-    allowedTimes,
-    label: [
-      placeLabels[placeKind],
-      TIME_LABELS[timeKind] || timeKind,
-      device === 'phone' ? 'Phone' : 'Laptop',
-    ].join(' · '),
-  };
-}
 
 export function effectiveTaskLocations(taskMeta, projectMeta) {
   if (taskMeta?.locationAny) return [];
@@ -161,33 +34,75 @@ function overlaps(have, allowed) {
 }
 
 /**
- * True when the task is tagged for laptop only (not phone-ok / home / etc.).
- * @param {Record<string, unknown> | null | undefined} taskMeta
- * @param {Record<string, unknown> | null | undefined} projectMeta
+ * @param {unknown} raw
+ * @param {(value: unknown) => string | null} [normalizer]
+ * @returns {string[]}
  */
-function isLaptopOnlyTask(taskMeta, projectMeta) {
-  const locs = effectiveTaskLocations(taskMeta, projectMeta);
-  return locs.length > 0 && locs.every((loc) => loc === 'laptop');
+export function normalizeFilterArray(raw, normalizer) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw) {
+    const value = normalizer ? normalizer(item) : String(item || '').trim();
+    if (value && !out.includes(value)) out.push(value);
+  }
+  return out;
 }
 
-export function taskMatchesRandomFilters(taskMeta, projectMeta, filters, context) {
-  if (filters.difficulty) {
-    const want = normalizeDifficulty(filters.difficulty);
-    if (want && taskMeta?.difficulty && taskMeta.difficulty !== want) return false;
+/**
+ * @param {Record<string, unknown>} body
+ */
+export function parseRandomTaskFilters(body = {}) {
+  const priorities = normalizeFilterArray(body.priorities, normalizePriority);
+  const difficulties = normalizeFilterArray(body.difficulties, normalizeDifficulty);
+  const durations = normalizeFilterArray(body.durations, normalizeDuration);
+  const locations = normalizeFilterArray(body.locations, normalizeLocation);
+  const times = normalizeFilterArray(body.times, normalizeTime);
+
+  if (!difficulties.length && body.difficulty != null) {
+    const one = normalizeDifficulty(body.difficulty);
+    if (one) difficulties.push(one);
   }
-  if (filters.duration) {
-    const budget = normalizeDuration(filters.duration);
-    if (budget && taskMeta?.duration) {
+  if (!durations.length && body.duration != null) {
+    const one = normalizeDuration(body.duration);
+    if (one) durations.push(one);
+  }
+
+  return {
+    priorities,
+    difficulties,
+    durations,
+    locations,
+    times,
+    excludeIds: Array.isArray(body.excludeIds) ? body.excludeIds.map(String) : [],
+    excludeProjectIds: Array.isArray(body.excludeProjectIds)
+      ? body.excludeProjectIds.map(String)
+      : [],
+  };
+}
+
+export function taskMatchesRandomFilters(taskMeta, projectMeta, filters) {
+  if (filters.priorities?.length) {
+    if (taskMeta?.priority && !filters.priorities.includes(taskMeta.priority)) return false;
+  }
+  if (filters.difficulties?.length) {
+    if (taskMeta?.difficulty && !filters.difficulties.includes(taskMeta.difficulty)) return false;
+  }
+  if (filters.durations?.length) {
+    if (taskMeta?.duration) {
       const taskTier = DURATION_TIER[taskMeta.duration];
-      const budgetTier = DURATION_TIER[budget];
-      if (taskTier > budgetTier) return false;
+      if (Number.isFinite(taskTier)) {
+        const fitsBudget = filters.durations.some((d) => {
+          const budgetTier = DURATION_TIER[d];
+          return Number.isFinite(budgetTier) && taskTier <= budgetTier;
+        });
+        if (!fitsBudget) return false;
+      }
     }
   }
-  if (context.device === 'phone' && isLaptopOnlyTask(taskMeta, projectMeta)) return false;
   const locs = effectiveTaskLocations(taskMeta, projectMeta);
-  if (!overlaps(locs, context.allowedLocations)) return false;
+  if (filters.locations?.length && locs.length && !overlaps(locs, filters.locations)) return false;
   const times = effectiveTaskTimes(taskMeta);
-  if (!overlaps(times, context.allowedTimes)) return false;
+  if (filters.times?.length && times.length && !overlaps(times, filters.times)) return false;
   return true;
 }
 
@@ -222,7 +137,7 @@ function pickWeightedTask(pool, byTaskId) {
   return pool[pool.length - 1];
 }
 
-export function pickRandomTask(tasks, meta, filters, context) {
+export function pickRandomTask(tasks, meta, filters) {
   const exclude = new Set((filters.excludeIds || []).map((x) => String(x)));
   const excludeProjects = new Set((filters.excludeProjectIds || []).map((x) => String(x)));
   const pool = tasks.filter((t) => {
@@ -230,15 +145,16 @@ export function pickRandomTask(tasks, meta, filters, context) {
     if (t.projectId != null && excludeProjects.has(String(t.projectId))) return false;
     const taskMeta = meta.byTaskId[String(t.id)] || null;
     const projectMeta = t.projectId != null ? meta.byProjectId[String(t.projectId)] || null : null;
-    return taskMatchesRandomFilters(taskMeta, projectMeta, filters, context);
+    return taskMatchesRandomFilters(taskMeta, projectMeta, filters);
   });
-  if (!pool.length) return { task: null, poolSize: 0 };
+  if (!pool.length) return { task: null, poolSize: 0, totalOpen: tasks.length };
   const task = pickWeightedTask(pool, meta.byTaskId);
   const taskMeta = meta.byTaskId[String(task.id)] || null;
   const projectMeta = task.projectId != null ? meta.byProjectId[String(task.projectId)] || null : null;
   return {
     task,
     poolSize: pool.length,
+    totalOpen: tasks.length,
     meta: taskMeta,
     projectMeta,
     missingFields: missingTaskMetaFields(taskMeta, projectMeta),

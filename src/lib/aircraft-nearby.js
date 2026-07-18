@@ -536,18 +536,40 @@ async function fetchCommunityAdsbNearby(lat, lon, distNm) {
 }
 
 /**
- * @param {Date} [now]
+ * Resolve watch point: explicit lat/lon (mobile GPS) or rain-alert address geocode.
+ * @param {{ lat?: number | string | null, lon?: number | string | null }} [watchOpts]
  */
-export async function fetchAircraftNearbyLive(now = new Date()) {
-  if (String(process.env.SKY_AIRCRAFT_NEARBY || '').trim() === '0') {
-    return { ok: true, disabled: true, aircraft: [] };
+async function resolveWatchPoint(watchOpts = {}) {
+  const lat = Number(watchOpts.lat);
+  const lon = Number(watchOpts.lon);
+  if (Number.isFinite(lat) && Number.isFinite(lon)) {
+    return { lat, lon, source: 'coords' };
   }
 
   const address = await loadRainAlertAddress();
   const geo = await geocodeAddress(address);
   if (!geo) {
-    return { ok: true, geocodeError: true, address, aircraft: [] };
+    return { geocodeError: true, address };
   }
+  return { lat: geo.lat, lon: geo.lon, address, source: 'address' };
+}
+
+/**
+ * @param {Date} [now]
+ * @param {{ lat?: number | string | null, lon?: number | string | null }} [watchOpts]
+ */
+export async function fetchAircraftNearbyLive(now = new Date(), watchOpts = {}) {
+  if (String(process.env.SKY_AIRCRAFT_NEARBY || '').trim() === '0') {
+    return { ok: true, disabled: true, aircraft: [] };
+  }
+
+  const point = await resolveWatchPoint(watchOpts);
+  if (point.geocodeError) {
+    return { ok: true, geocodeError: true, address: point.address, aircraft: [] };
+  }
+
+  const geo = { lat: point.lat, lon: point.lon };
+  const address = point.address || null;
 
   const radiusMi = (() => {
     const raw = process.env.AIRCRAFT_WATCH_RADIUS_MI;
@@ -653,6 +675,7 @@ export async function fetchAircraftNearbyLive(now = new Date()) {
     ok: true,
     address,
     geo,
+    watchSource: point.source,
     radiusMi,
     fetchRadiusNm,
     feedCount: rows.length,

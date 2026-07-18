@@ -1,5 +1,13 @@
 import { beginWaitCursor, endWaitCursor } from '../lib/wait-cursor.js';
-import { openGroupKindDialog } from '../lib/network-group-kind-dialog.js?v=group-kind-9';
+import {
+  createGroupKindIconEl,
+  groupKind,
+  groupKindLabel,
+  groupSectionLabel,
+  isEventGroup,
+  isSceneGroup,
+} from '../lib/network-group-kind.js?v=scene-ux-1';
+import { NETWORK_LABELS } from '../lib/network-labels.js';
 import {
   findExactDisplayNameMatch,
   openExactNameConflictDialog,
@@ -9,6 +17,7 @@ import {
   fetchHowWeMetSuggestion,
   howWeMetStatusBit,
 } from '../lib/network-how-we-met-suggest.js?v=how-we-met-1';
+import { compareContactSearchNameRank } from '../lib/network-contact-search.js';
 
 /**
  * Network groups management screen.
@@ -23,6 +32,7 @@ import {
  *   embedded?: boolean,
  *   onClose?: () => void,
  *   onOpenContact?: (id: string) => void,
+ *   onGroupFocus?: () => void,
  *   onContactsChanged?: () => Promise<void> | void,
  *   onToolbarSync?: () => void,
  * }} opts
@@ -37,7 +47,7 @@ import {
  * }}
  */
 export function mountNetworkGroupsUi(root, opts) {
-  const { onOpenContact } = opts;
+  const { onOpenContact, onGroupFocus } = opts;
   const embedded = Boolean(opts.embedded);
   /** @type {object[]} */
   let contacts = Array.isArray(opts.contacts) ? opts.contacts : [];
@@ -155,15 +165,48 @@ export function mountNetworkGroupsUi(root, opts) {
     return contactMap.get(id) || null;
   }
 
-  function groupKind(g) {
-    return g?.kind === 'event' ? 'event' : 'community';
+  /**
+   * @param {string} id
+   * @param {string} [label]
+   */
+  function contactOpenBtn(id, label) {
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'network-crm__link-btn';
+    link.textContent = label ?? contactName(id);
+    link.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onOpenContact?.(id);
+    });
+    return link;
   }
 
-  function groupKindLabel(g) {
-    return groupKind(g) === 'event' ? 'Event' : 'Community';
+  /**
+   * @param {HTMLElement} avatar
+   * @param {string} id
+   */
+  function wireAvatarOpenContact(avatar, id) {
+    if (!id || !onOpenContact) return;
+    avatar.classList.add('network-crm__avatar--open');
+    avatar.tabIndex = 0;
+    avatar.setAttribute('role', 'button');
+    avatar.setAttribute('aria-label', `Open ${contactName(id)}`);
+    avatar.title = 'Open contact';
+    const open = () => onOpenContact(id);
+    avatar.addEventListener('click', open);
+    avatar.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        open();
+      }
+    });
   }
 
-  function invalidateMemberCache() {
+  function groupIconEl(g) {
+    return createGroupKindIconEl(g);
+  }
+
+  function avatarEl(contact) {
     cachedMemberIds = null;
   }
 
@@ -216,20 +259,7 @@ export function mountNetworkGroupsUi(root, opts) {
     return `${names.join(', ')}${more}`;
   }
 
-  function groupIconEl(g) {
-    const box = document.createElement('div');
-    box.className = 'network-crm__avatar';
-    const initials = String(g.name || '?')
-      .split(/\s+/)
-      .slice(0, 2)
-      .map((p) => p[0] || '')
-      .join('')
-      .toUpperCase();
-    box.textContent = initials || '?';
-    return box;
-  }
-
-  function avatarEl(contact) {
+  function invalidateMemberCache() {
     const box = document.createElement('div');
     box.className = 'network-crm__avatar network-crm__avatar--sm';
     if (contact?.avatarUrl) {
@@ -309,11 +339,7 @@ export function mountNetworkGroupsUi(root, opts) {
       const sub = document.createElement('div');
       sub.className = 'network-crm__row-sub muted';
       const n = (g.memberIds || []).length;
-      const kindBit =
-        groupKind(g) === 'event' && g.eventType
-          ? `Event · ${g.eventType}`
-          : groupKindLabel(g);
-      sub.textContent = `${kindBit} · ${n} member${n === 1 ? '' : 's'} · ${memberNamesPreview(g)}`;
+      sub.textContent = `${groupKindLabel(g)} · ${n} member${n === 1 ? '' : 's'} · ${memberNamesPreview(g)}`;
       meta.append(name, sub);
       li.append(groupIconEl(g), meta);
       li.addEventListener('click', () => selectGroup(g.id));
@@ -347,7 +373,7 @@ export function mountNetworkGroupsUi(root, opts) {
     if (!groups.length) {
       const empty = document.createElement('li');
       empty.className = 'network-crm__empty muted';
-      empty.textContent = 'No groups yet — add a community or event group';
+      empty.textContent = NETWORK_LABELS.noGroupsYet;
       list.append(empty);
       syncColumnsToViewport();
       return;
@@ -363,8 +389,8 @@ export function mountNetworkGroupsUi(root, opts) {
     }
     const communities = visible.filter((g) => groupKind(g) === 'community');
     const events = visible.filter((g) => groupKind(g) === 'event');
-    appendGroupSection('Communities', communities);
-    appendGroupSection('Events', events);
+    appendGroupSection(groupSectionLabel('community'), communities);
+    appendGroupSection(groupSectionLabel('event'), events);
     syncColumnsToViewport();
   }
 
@@ -383,6 +409,7 @@ export function mountNetworkGroupsUi(root, opts) {
    * @param {string} id
    */
   function selectGroup(id) {
+    onGroupFocus?.();
     selectedId = id;
     detailActions = null;
     refreshOpenDetail = null;
@@ -412,7 +439,7 @@ export function mountNetworkGroupsUi(root, opts) {
     headEl.textContent = `Ungrouped people (${people.length})`;
     const note = document.createElement('p');
     note.className = 'muted network-groups__kind-note';
-    note.textContent = 'People who are not members of any community or event group.';
+    note.textContent = 'People who are not members of any Scene or event group.';
 
     const search = document.createElement('input');
     search.type = 'search';
@@ -436,11 +463,7 @@ export function mountNetworkGroupsUi(root, opts) {
             .toLowerCase();
           return hay.includes(q);
         })
-        .sort((a, b) =>
-          String(a.displayName || '').localeCompare(String(b.displayName || ''), undefined, {
-            sensitivity: 'base',
-          }),
-        );
+        .sort((a, b) => compareContactSearchNameRank(a, b, q));
       if (!filtered.length) {
         const empty = document.createElement('p');
         empty.className = 'muted';
@@ -455,14 +478,15 @@ export function mountNetworkGroupsUi(root, opts) {
       for (const c of filtered) {
         const row = document.createElement('div');
         row.className = 'network-groups__member';
-        row.append(avatarEl(c));
-        const link = document.createElement('button');
-        link.type = 'button';
-        link.className = 'network-crm__link-btn';
-        link.textContent = c.nickname
-          ? `${c.displayName || 'Untitled'} (${c.nickname})`
-          : c.displayName || 'Untitled';
-        link.addEventListener('click', () => onOpenContact?.(c.id));
+        const avatar = avatarEl(c);
+        wireAvatarOpenContact(avatar, c.id);
+        row.append(avatar);
+        const link = contactOpenBtn(
+          c.id,
+          c.nickname
+            ? `${c.displayName || 'Untitled'} (${c.nickname})`
+            : c.displayName || 'Untitled',
+        );
 
         const addWrap = document.createElement('div');
         addWrap.className = 'network-groups__ungrouped-add';
@@ -513,6 +537,7 @@ export function mountNetworkGroupsUi(root, opts) {
     const gen = ++detailGeneration;
     /** @type {object} */
     let current = g;
+    const readOnly = isSceneGroup(g);
     detail.replaceChildren();
 
     const form = document.createElement('form');
@@ -538,46 +563,15 @@ export function mountNetworkGroupsUi(root, opts) {
       input.name = name;
       input.className = 'network-crm__input';
       input.required = false;
+      if (opts.readOnly) input.readOnly = true;
       if (opts.placeholder) input.placeholder = opts.placeholder;
       wrapEl.append(span, input);
       return wrapEl;
     }
 
-    const kindField = document.createElement('label');
-    kindField.className = 'network-crm__field';
-    const kindSpan = document.createElement('span');
-    kindSpan.textContent = 'Kind';
-    const kindSelect = document.createElement('select');
-    kindSelect.name = 'kind';
-    kindSelect.className = 'network-crm__input';
-    for (const opt of [
-      { value: 'community', label: 'Community (updates Scene on people)' },
-      { value: 'event', label: 'Event (friends grouping only)' },
-    ]) {
-      const o = document.createElement('option');
-      o.value = opt.value;
-      o.textContent = opt.label;
-      if (groupKind(current) === opt.value) o.selected = true;
-      kindSelect.append(o);
-    }
-    kindField.append(kindSpan, kindSelect);
-
-    const eventTypeField = field('Event type', 'eventType', current.eventType || '', {
-      placeholder: 'e.g. dinner, festival, house party',
-      hidden: groupKind(current) !== 'event',
-    });
-
     const kindNote = document.createElement('p');
     kindNote.className = 'muted network-groups__kind-note';
-    function syncKindUi() {
-      const isEvent = kindSelect.value === 'event';
-      eventTypeField.hidden = !isEvent;
-      kindNote.textContent = isEvent
-        ? 'Event groups are just friend lists for a specific occasion — they do not change Scene (or any other) attributes on people.'
-        : 'Community membership syncs each person’s Scene tag to match this group name.';
-    }
-    kindSelect.addEventListener('change', syncKindUi);
-    syncKindUi();
+    kindNote.textContent = readOnly ? NETWORK_LABELS.sceneGroupNote : NETWORK_LABELS.eventGroupNote;
 
     const topActions = document.createElement('div');
     topActions.className = 'network-crm__actions network-groups__top-actions';
@@ -587,14 +581,18 @@ export function mountNetworkGroupsUi(root, opts) {
     analyzeBtn.textContent = 'Analyze commonalities';
     topActions.append(analyzeBtn);
 
-    form.append(
-      field('Name', 'name', current.name),
-      kindField,
-      eventTypeField,
-      field('Description', 'description', current.description || '', { rows: 3 }),
-      kindNote,
-      topActions,
-    );
+    if (readOnly) {
+      const head = document.createElement('div');
+      head.className = 'network-groups__scene-head';
+      head.append(createGroupKindIconEl(g), document.createTextNode(' '));
+      const title = document.createElement('h3');
+      title.className = 'network-groups__scene-title';
+      title.textContent = g.name || 'Untitled scene';
+      head.append(title);
+      form.append(head, kindNote, topActions);
+    } else {
+      form.append(field('Name', 'name', current.name), kindNote, topActions);
+    }
 
     const peopleCols = document.createElement('div');
     peopleCols.className = 'network-groups__people-cols';
@@ -604,13 +602,166 @@ export function mountNetworkGroupsUi(root, opts) {
     const membersTitle = document.createElement('div');
     membersTitle.className = 'network-crm__checks-label';
     membersTitle.textContent = 'Members';
-    membersBox.append(membersTitle);
+
+    const memberBulk = document.createElement('div');
+    memberBulk.className = 'network-groups__member-bulk';
+
+    const selectAllWrap = document.createElement('label');
+    selectAllWrap.className = 'network-crm__check network-groups__member-select-all';
+    const selectAllCb = document.createElement('input');
+    selectAllCb.type = 'checkbox';
+    selectAllCb.setAttribute('aria-label', 'Select all members');
+    selectAllWrap.append(selectAllCb, document.createTextNode(' Select all'));
+
+    const bulkActions = document.createElement('div');
+    bulkActions.className = 'network-crm__bulk-actions network-groups__member-bulk-actions';
+
+    const bulkRemoveBtn = document.createElement('button');
+    bulkRemoveBtn.type = 'button';
+    bulkRemoveBtn.className = 'network-crm__btn network-crm__btn--tiny';
+    bulkRemoveBtn.textContent = 'Remove selected';
+    bulkRemoveBtn.disabled = true;
+
+    const moveSelect = document.createElement('select');
+    moveSelect.className = 'network-crm__input network-groups__move-select';
+    moveSelect.setAttribute('aria-label', 'Move selected members to group');
+
+    const bulkMoveBtn = document.createElement('button');
+    bulkMoveBtn.type = 'button';
+    bulkMoveBtn.className = 'network-crm__btn network-crm__btn--tiny';
+    bulkMoveBtn.textContent = 'Move to group';
+    bulkMoveBtn.disabled = true;
+
+    bulkActions.append(bulkRemoveBtn, moveSelect, bulkMoveBtn);
+    memberBulk.append(selectAllWrap, bulkActions);
+    membersBox.append(membersTitle, memberBulk);
+    if (readOnly) memberBulk.hidden = true;
 
     const memberList = document.createElement('div');
     memberList.className = 'network-groups__member-list';
     /** @type {string[]} */
     let memberIds = [...(g.memberIds || [])];
     const memberSet = new Set(memberIds);
+    /** @type {Set<string>} */
+    const selectedMemberIds = new Set();
+
+    function fillMoveGroupOptions() {
+      moveSelect.replaceChildren();
+      const blank = document.createElement('option');
+      blank.value = '';
+      blank.textContent = 'Move to…';
+      moveSelect.append(blank);
+      for (const og of groups) {
+        if (og.id === g.id) continue;
+        const o = document.createElement('option');
+        o.value = og.id;
+        o.textContent = `${og.name || 'Untitled'} (${groupKindLabel(og)})`;
+        moveSelect.append(o);
+      }
+      moveSelect.disabled = !groups.some((og) => og.id !== g.id);
+    }
+
+    function syncMemberBulkUi() {
+      const n = selectedMemberIds.size;
+      bulkRemoveBtn.disabled = n === 0;
+      bulkMoveBtn.disabled = n === 0 || !moveSelect.value;
+      if (!memberIds.length) {
+        selectAllCb.checked = false;
+        selectAllCb.indeterminate = false;
+        selectAllCb.disabled = true;
+        return;
+      }
+      selectAllCb.disabled = false;
+      selectAllCb.checked = n > 0 && n === memberIds.length;
+      selectAllCb.indeterminate = n > 0 && n < memberIds.length;
+    }
+
+    fillMoveGroupOptions();
+    moveSelect.addEventListener('change', syncMemberBulkUi);
+
+    selectAllCb.addEventListener('change', () => {
+      selectedMemberIds.clear();
+      if (selectAllCb.checked) {
+        for (const id of memberIds) selectedMemberIds.add(id);
+      }
+      for (const row of memberList.querySelectorAll('[data-member-id]')) {
+        const cb = row.querySelector('input[type="checkbox"]');
+        if (cb instanceof HTMLInputElement) cb.checked = selectAllCb.checked;
+      }
+      syncMemberBulkUi();
+    });
+
+    /**
+     * @param {string[]} ids
+     */
+    async function removeMembers(ids) {
+      if (!ids.length) return;
+      showStatus(`Removing ${ids.length}…`);
+      const r = await fetch(`/api/network/groups/${encodeURIComponent(g.id)}/members`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactIds: ids }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'remove_failed');
+      for (const id of ids) selectedMemberIds.delete(id);
+      applyMembership(j.group);
+      if (groupKind(current) === 'community') await pullLatestContacts();
+      showStatus(`Removed ${ids.length}`);
+      syncMemberBulkUi();
+    }
+
+    bulkRemoveBtn.addEventListener('click', async () => {
+      const ids = [...selectedMemberIds];
+      if (!ids.length) return;
+      if (!confirm(`Remove ${ids.length} member${ids.length === 1 ? '' : 's'} from this group?`)) return;
+      bulkRemoveBtn.disabled = true;
+      try {
+        await removeMembers(ids);
+      } catch (err) {
+        showStatus(String(err?.message || err), true);
+        syncMemberBulkUi();
+      }
+    });
+
+    bulkMoveBtn.addEventListener('click', async () => {
+      const targetId = moveSelect.value;
+      const ids = [...selectedMemberIds];
+      if (!targetId || !ids.length) return;
+      bulkMoveBtn.disabled = true;
+      showStatus(`Moving ${ids.length}…`);
+      try {
+        const addRes = await fetch(`/api/network/groups/${encodeURIComponent(targetId)}/members`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contactIds: ids }),
+        });
+        const addJson = await addRes.json();
+        if (!addJson.ok) throw new Error(addJson.error || 'move_add_failed');
+        upsertGroup(addJson.group);
+
+        const rmRes = await fetch(`/api/network/groups/${encodeURIComponent(g.id)}/members`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contactIds: ids }),
+        });
+        const rmJson = await rmRes.json();
+        if (!rmJson.ok) throw new Error(rmJson.error || 'move_remove_failed');
+
+        for (const id of ids) selectedMemberIds.delete(id);
+        applyMembership(rmJson.group);
+        const sceneRefresh =
+          groupKind(current) === 'community'
+          || groupKind(addJson.group) === 'community';
+        if (sceneRefresh) await pullLatestContacts();
+        moveSelect.value = '';
+        showStatus(`Moved ${ids.length}`);
+        syncMemberBulkUi();
+      } catch (err) {
+        showStatus(String(err?.message || err), true);
+        syncMemberBulkUi();
+      }
+    });
 
     /**
      * @param {string} id
@@ -620,46 +771,41 @@ export function mountNetworkGroupsUi(root, opts) {
       const row = document.createElement('div');
       row.className = 'network-groups__member';
       row.dataset.memberId = id;
-      row.append(avatarEl(person));
-      const link = document.createElement('button');
-      link.type = 'button';
-      link.className = 'network-crm__link-btn';
-      link.textContent = contactName(id);
-      link.addEventListener('click', () => onOpenContact?.(id));
-      const rm = document.createElement('button');
-      rm.type = 'button';
-      rm.className = 'network-crm__btn network-crm__btn--tiny';
-      rm.textContent = 'Remove';
-      rm.addEventListener('click', async () => {
-        rm.disabled = true;
-        showStatus('Removing…');
-        try {
-          const r = await fetch(`/api/network/groups/${encodeURIComponent(g.id)}/members`, {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contactIds: [id] }),
-          });
-          const j = await r.json();
-          if (!j.ok) throw new Error(j.error || 'remove_failed');
-          applyMembership(j.group);
-          if (groupKind(current) === 'community') await pullLatestContacts();
-          showStatus('Removed');
-        } catch (err) {
-          showStatus(String(err?.message || err), true);
-          rm.disabled = false;
-        }
-      });
-      row.append(link, rm);
+      if (!readOnly) {
+        const checkWrap = document.createElement('label');
+        checkWrap.className = 'network-crm__check network-groups__member-check';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = selectedMemberIds.has(id);
+        cb.setAttribute('aria-label', `Select ${contactName(id)}`);
+        cb.addEventListener('change', () => {
+          if (cb.checked) selectedMemberIds.add(id);
+          else selectedMemberIds.delete(id);
+          syncMemberBulkUi();
+        });
+        checkWrap.append(cb);
+        row.append(checkWrap);
+      }
+      const avatar = avatarEl(person);
+      wireAvatarOpenContact(avatar, id);
+      const link = contactOpenBtn(id);
+      row.append(avatar, link);
       memberList.append(row);
     }
 
     function paintMemberList() {
       memberList.replaceChildren();
+      for (const id of [...selectedMemberIds]) {
+        if (!memberSet.has(id)) selectedMemberIds.delete(id);
+      }
       if (!memberIds.length) {
         const p = document.createElement('p');
         p.className = 'muted';
-        p.textContent = 'No members yet — add people on the right.';
+        p.textContent = readOnly
+          ? 'No contacts with this Scene tag yet.'
+          : 'No members yet — add people on the right.';
         memberList.append(p);
+        syncMemberBulkUi();
         return;
       }
       const first = memberIds.slice(0, MEMBER_PAINT_CHUNK);
@@ -669,7 +815,10 @@ export function mountNetworkGroupsUi(root, opts) {
         requestAnimationFrame(() => {
           if (gen !== detailGeneration) return;
           for (const id of rest) appendMemberRow(id);
+          syncMemberBulkUi();
         });
+      } else {
+        syncMemberBulkUi();
       }
     }
 
@@ -719,11 +868,7 @@ export function mountNetworkGroupsUi(root, opts) {
             .toLowerCase();
           return hay.includes(q);
         })
-        .sort((a, b) =>
-          String(a.displayName || '').localeCompare(String(b.displayName || ''), undefined, {
-            sensitivity: 'base',
-          }),
-        )
+        .sort((a, b) => compareContactSearchNameRank(a, b, q))
         .slice(0, 40);
       if (!candidates.length) {
         const empty = document.createElement('p');
@@ -744,16 +889,16 @@ export function mountNetworkGroupsUi(root, opts) {
       for (const c of candidates) {
         const row = document.createElement('div');
         row.className = 'network-groups__member';
-        row.append(avatarEl(c));
-        const name = document.createElement('span');
-        name.className = 'network-groups__member-name';
-        name.append(document.createTextNode(c.displayName || 'Untitled'));
-        if (c.nickname) {
-          const nick = document.createElement('span');
-          nick.className = 'muted';
-          nick.textContent = ` ${c.nickname}`;
-          name.append(nick);
-        }
+        const avatar = avatarEl(c);
+        wireAvatarOpenContact(avatar, c.id);
+        row.append(avatar);
+        const name = contactOpenBtn(
+          c.id,
+          c.nickname
+            ? `${c.displayName || 'Untitled'} (${c.nickname})`
+            : c.displayName || 'Untitled',
+        );
+        name.classList.add('network-groups__member-name');
         const addPersonBtn = document.createElement('button');
         addPersonBtn.type = 'button';
         addPersonBtn.className = 'network-crm__btn network-crm__btn--tiny';
@@ -875,25 +1020,24 @@ export function mountNetworkGroupsUi(root, opts) {
     });
 
     addPanel.append(addLabel, addSearch, addNewContactsBtn, addList);
-    peopleCols.append(membersBox, addPanel);
-    // Defer candidate list so the group form + members paint first.
-    requestAnimationFrame(() => {
-      if (gen !== detailGeneration) return;
-      renderAddCandidates();
-    });
+    peopleCols.append(membersBox);
+    if (!readOnly) {
+      peopleCols.append(addPanel);
+      requestAnimationFrame(() => {
+        if (gen !== detailGeneration) return;
+        renderAddCandidates();
+      });
+    }
 
     const toolsBox = document.createElement('div');
     toolsBox.className = 'network-groups__tools';
 
-    const ingest = document.createElement('div');
-    ingest.className = 'network-crm__bulk network-groups__tools-ingest';
-    const ingestHint =
-      groupKind(g) === 'community'
-        ? 'Ingest people (one name per line — creates cards, adds to group, and sets Scene)'
-        : 'Ingest people (one name per line — creates cards + adds to this event group; does not set Scene)';
-    ingest.innerHTML = `
+    if (!readOnly) {
+      const ingest = document.createElement('div');
+      ingest.className = 'network-crm__bulk network-groups__tools-ingest';
+      ingest.innerHTML = `
       <label class="network-crm__field network-crm__field--full">
-        <span>${ingestHint}</span>
+        <span>Ingest people (one name per line — creates cards + adds to this event group; does not set Scene)</span>
         <textarea class="network-crm__input" data-ingest rows="4" placeholder="Alex Chen&#10;Jordan Lee"></textarea>
       </label>
     `;
@@ -923,6 +1067,8 @@ export function mountNetworkGroupsUi(root, opts) {
       }
     });
     ingest.append(ingestBtn);
+    toolsBox.append(ingest);
+    }
 
     const commonBox = document.createElement('div');
     commonBox.className = 'network-groups__analysis';
@@ -966,9 +1112,23 @@ export function mountNetworkGroupsUi(root, opts) {
       for (const s of suggestions) {
         const row = document.createElement('div');
         row.className = 'network-groups__member';
-        const label = document.createElement('span');
-        label.textContent = `${s.displayName || contactName(s.contactId)} (${Math.round((s.score || 0) * 100)}%) — ${s.reason || ''}`;
-        row.append(label);
+        if (s.contactId) {
+          const avatar = avatarEl(contactById(s.contactId));
+          wireAvatarOpenContact(avatar, s.contactId);
+          row.append(avatar);
+          const link = contactOpenBtn(
+            s.contactId,
+            s.displayName || contactName(s.contactId),
+          );
+          const meta = document.createElement('span');
+          meta.className = 'muted';
+          meta.textContent = ` (${Math.round((s.score || 0) * 100)}%) — ${s.reason || ''}`;
+          row.append(link, meta);
+        } else {
+          const label = document.createElement('span');
+          label.textContent = `${s.displayName || 'Unknown'} (${Math.round((s.score || 0) * 100)}%) — ${s.reason || ''}`;
+          row.append(label);
+        }
         if (s.contactId) {
           const add = document.createElement('button');
           add.type = 'button';
@@ -986,26 +1146,27 @@ export function mountNetworkGroupsUi(root, opts) {
               const j = await r.json();
               if (!j.ok) throw new Error(j.error || 'add_failed');
               applyMembership(j.group);
-              if (groupKind(current) === 'community') await pullLatestContacts();
+              if (isSceneGroup(current)) await pullLatestContacts();
               showStatus('Added');
             } catch (err) {
               showStatus(String(err?.message || err), true);
               add.disabled = false;
             }
           });
-          row.append(add);
+          if (!readOnly) row.append(add);
         }
         suggestBox.append(row);
       }
     }
 
-    toolsBox.append(ingest, commonBox, suggestBox);
+    toolsBox.append(commonBox, suggestBox);
     form.append(peopleCols, toolsBox);
 
     let saveInFlight = false;
     let dirtyWhileSaving = false;
 
     async function persistGroup() {
+      if (readOnly) return;
       if (gen !== detailGeneration) {
         showStatus('Detail refreshed — try Save again');
         return;
@@ -1029,9 +1190,7 @@ export function mountNetworkGroupsUi(root, opts) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               name: String(fd.get('name') || '').trim(),
-              description: String(fd.get('description') || '').trim(),
-              kind: String(fd.get('kind') || 'community').trim(),
-              eventType: String(fd.get('eventType') || '').trim(),
+              kind: 'event',
             }),
           });
           const j = await r.json();
@@ -1063,6 +1222,7 @@ export function mountNetworkGroupsUi(root, opts) {
     }
 
     async function deleteGroup() {
+      if (readOnly) return;
       if (!confirm(`Delete group ${g.name || ''}?`)) return;
       try {
         const wasCommunity = groupKind(g) === 'community';
@@ -1086,11 +1246,13 @@ export function mountNetworkGroupsUi(root, opts) {
       }
     }
 
-    detailActions = {
-      save: persistGroup,
-      delete: deleteGroup,
-      saving: () => saveInFlight,
-    };
+    detailActions = readOnly
+      ? null
+      : {
+          save: persistGroup,
+          delete: deleteGroup,
+          saving: () => saveInFlight,
+        };
     notifyToolbar();
 
     form.addEventListener('submit', async (e) => {
@@ -1195,17 +1357,12 @@ export function mountNetworkGroupsUi(root, opts) {
   }
 
   async function createGroup() {
-    const kind = await openGroupKindDialog({ title: 'Group kind' });
-    if (kind == null) {
-      showStatus('Cancelled');
-      return;
-    }
     showStatus('Creating…');
     try {
       const r = await fetch('/api/network/groups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: '', kind, eventType: '' }),
+        body: JSON.stringify({ name: '', kind: 'event', eventType: '' }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'create_failed');
@@ -1231,7 +1388,9 @@ export function mountNetworkGroupsUi(root, opts) {
   }
 
   function canEditSelected() {
-    return Boolean(detailActions && selectedId && selectedId !== UNGROUPED_ID);
+    if (!detailActions || !selectedId || selectedId === UNGROUPED_ID) return false;
+    const g = groups.find((x) => x.id === selectedId);
+    return Boolean(g && isEventGroup(g));
   }
 
   async function saveSelected() {

@@ -2,6 +2,8 @@
  * Dialogs for adding new contacts to a network group from a name list.
  */
 
+import { compareContactSearchNameRank } from './network-contact-search.js';
+
 /**
  * @param {{ title?: string, hint?: string, placeholder?: string }} [opts]
  * @returns {Promise<string[] | null>}
@@ -361,11 +363,7 @@ export function openPickContactDialog(opts = {}) {
           if (!q) return true;
           return contactHay(c).includes(q);
         })
-        .sort((a, b) =>
-          String(a.displayName || '').localeCompare(String(b.displayName || ''), undefined, {
-            sensitivity: 'base',
-          }),
-        )
+        .sort((a, b) => compareContactSearchNameRank(a, b, q))
         .slice(0, 40);
       if (!matches.length) {
         const empty = document.createElement('p');

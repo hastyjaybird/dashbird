@@ -202,10 +202,6 @@ function makeUrgencyIcon(level) {
   return el;
 }
 
-const GUIDE_MORE_HEADING = '### Prefer more like this';
-const GUIDE_LESS_HEADING = '### Prefer less like this';
-const GUIDE_DRAFT_PENDING_LABEL = 'Drafting guidelines with AI';
-
 /**
  * @param {string} sectionKey
  */
@@ -215,28 +211,30 @@ function clampSeeMoreSection(sectionKey) {
 }
 
 /**
+ * What changes on future refreshes — not how thumbs/guide storage works.
+ * @param {'up' | 'down'} vibe
+ * @param {string} [sectionKey]
+ */
+function guideBehaviorExplainer(vibe, sectionKey) {
+  if (vibe === 'down') {
+    return (
+      'Next refresh should show fewer items matching this pattern. '
+      + 'Repeated 👎 on similar mail tightens the filter (Soft skip at 3×, Never show at 5×).'
+    );
+  }
+  if (clampSeeMoreSection(sectionKey) === 'show_these') {
+    return 'Next refresh is more likely to surface matching mail as action items.';
+  }
+  return 'Next refresh will rank similar mail higher in Daily Summary.';
+}
+
+/**
  * @param {string} sectionKey
  */
 function guideSaveMessageUp(sectionKey) {
   return clampSeeMoreSection(sectionKey) === 'show_these'
     ? 'Saved under Show these'
     : 'Saved under Prefer more';
-}
-
-/** @type {Record<string, string>} */
-const GUIDE_SECTION_HEADINGS = {
-  show_these: '## Show these (important)',
-  soft_skip: '## Soft skip',
-  never_show: '## Never show',
-  prefer_more: GUIDE_MORE_HEADING,
-  prefer_less: GUIDE_LESS_HEADING,
-};
-
-/**
- * @param {string} sectionKey
- */
-function guideHeadingForSection(sectionKey) {
-  return GUIDE_SECTION_HEADINGS[String(sectionKey || '').trim()] || GUIDE_MORE_HEADING;
 }
 
 /**
@@ -252,166 +250,6 @@ function guideEscalationMessage(escalation) {
     return `Saved — ${n}× similar 👎, promoted to Soft skip`;
   }
   return n > 1 ? `Saved under Prefer less (${n}× similar)` : 'Saved under Prefer less';
-}
-
-/**
- * @param {string} guide
- * @param {string} heading
- * @param {string} appendText
- */
-function appendToGuideSectionLocal(guide, heading, appendText) {
-  const lines = String(appendText || '')
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean);
-  if (!lines.length) return guide;
-
-  const text = String(guide || '');
-  const idx = text.indexOf(heading);
-  if (idx < 0) {
-    const suffix = lines.map((l) => (l.startsWith('-') ? l : `- ${l}`)).join('\n');
-    return `${text.trimEnd()}\n\n${heading}\n\n${suffix}\n`;
-  }
-
-  const afterHeading = idx + heading.length;
-  const rest = text.slice(afterHeading);
-  const nextSection = rest.search(/\n(?:##|###)\s+/);
-  const sectionEnd = nextSection >= 0 ? afterHeading + nextSection : text.length;
-  const sectionBody = text.slice(afterHeading, sectionEnd);
-  const existing = new Set(
-    sectionBody
-      .split('\n')
-      .map((l) => l.trim().replace(/^-\s*/, '').toLowerCase())
-      .filter(Boolean),
-  );
-
-  const additions = [];
-  for (const line of lines) {
-    const bullet = line.startsWith('-') ? line : `- ${line}`;
-    const key = bullet.replace(/^-\s*/, '').trim().toLowerCase();
-    if (!key || existing.has(key)) continue;
-    existing.add(key);
-    additions.push(bullet);
-  }
-  if (!additions.length) return text;
-
-  const insertAt = sectionEnd;
-  const prefix = text.slice(0, insertAt).replace(/\s*$/, '');
-  const suffix = text.slice(insertAt);
-  const block = `\n${additions.join('\n')}`;
-  return `${prefix}${block}${suffix.startsWith('\n') ? '' : '\n'}${suffix}`.replace(/\n{3,}/g, '\n\n');
-}
-
-/**
- * @param {{
- *   guide?: string,
- *   path?: string,
- *   onSaved?: () => void,
- * }} [opts]
- */
-async function openGuideEditorModal(opts = {}) {
-  const backdrop = document.createElement('div');
-  backdrop.className = 'daily-summary__modal-backdrop daily-summary__modal-backdrop--guide-full';
-  const modal = document.createElement('div');
-  modal.className = 'daily-summary__modal daily-summary__modal--guide-full';
-  modal.setAttribute('role', 'dialog');
-  modal.setAttribute('aria-modal', 'true');
-
-  const title = document.createElement('h3');
-  title.className = 'daily-summary__modal-title';
-  title.textContent = 'Email ingestion guide';
-
-  const hint = document.createElement('p');
-  hint.className = 'daily-summary__modal-hint';
-  hint.textContent = 'Edit the full markdown guide used when synthesizing Daily Summary items.';
-
-  const pathLabel = document.createElement('p');
-  pathLabel.className = 'daily-summary__modal-section';
-  pathLabel.textContent = opts.path || 'data/gmail-daily-summary-guide.md';
-
-  const guideArea = document.createElement('textarea');
-  guideArea.className = 'daily-summary__modal-textarea daily-summary__modal-textarea--guide-full';
-  guideArea.spellcheck = true;
-  guideArea.value = String(opts.guide || '');
-
-  const msg = document.createElement('p');
-  msg.className = 'daily-summary__modal-msg';
-  msg.hidden = true;
-
-  const actions = document.createElement('div');
-  actions.className = 'daily-summary__modal-actions daily-summary__modal-actions--split';
-  const cancel = document.createElement('button');
-  cancel.type = 'button';
-  cancel.className = 'daily-summary__btn';
-  cancel.textContent = 'Cancel';
-  const save = document.createElement('button');
-  save.type = 'button';
-  save.className = 'daily-summary__btn daily-summary__btn--primary';
-  save.textContent = 'Save guide';
-
-  const close = () => backdrop.remove();
-  cancel.addEventListener('click', close);
-  backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop) close();
-  });
-
-  if (!opts.guide) {
-    msg.hidden = false;
-    msg.textContent = 'Loading guide…';
-    try {
-      const r = await fetch('/api/gmail-daily-summary/guide', { cache: 'no-store' });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.ok === false) throw new Error(j.error || 'load_failed');
-      guideArea.value = String(j.guide || '');
-      pathLabel.textContent = String(j.path || pathLabel.textContent);
-      msg.hidden = true;
-    } catch (e) {
-      msg.textContent = String(e?.message || e || 'Could not load guide');
-      save.disabled = true;
-    }
-  }
-
-  save.addEventListener('click', async () => {
-    save.disabled = true;
-    msg.hidden = false;
-    msg.textContent = 'Saving…';
-    try {
-      const r = await fetch('/api/gmail-daily-summary/guide', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guide: guideArea.value }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.ok === false) throw new Error(j.error || 'save_failed');
-      guideArea.value = String(j.guide || guideArea.value);
-      close();
-      opts.onSaved?.();
-    } catch (e) {
-      msg.textContent = String(e?.message || e || 'Could not save');
-      save.disabled = false;
-    }
-  });
-
-  actions.append(cancel, save);
-  modal.append(title, hint, pathLabel, guideArea, msg, actions);
-  backdrop.append(modal);
-  document.body.append(backdrop);
-  guideArea.focus();
-}
-
-/**
- * @returns {HTMLSpanElement}
- */
-function makeChaseDotsEl() {
-  const dots = document.createElement('span');
-  dots.className = 'daily-summary__chase-dots';
-  dots.setAttribute('aria-hidden', 'true');
-  for (let i = 0; i < 3; i += 1) {
-    const d = document.createElement('span');
-    d.textContent = '.';
-    dots.append(d);
-  }
-  return dots;
 }
 
 /**
@@ -433,9 +271,9 @@ function isNetworkFetchError(err) {
  */
 function networkErrorLabel(err) {
   if (isNetworkFetchError(err)) {
-    return 'Could not reach Dashbird (server may be restarting). Edit the draft below or try again.';
+    return 'Could not reach Dashbird (server may be restarting). Edit the line below or try again.';
   }
-  return String(err?.message || err || 'Could not draft guide update');
+  return String(err?.message || err || 'Could not save guide update');
 }
 
 /**
@@ -463,85 +301,49 @@ async function fetchJsonWithRetry(url, init, retries = 2) {
 }
 
 /**
- * @param {HTMLTextAreaElement} textarea
- * @param {string} pendingLabel
- */
-function wrapPendingTextarea(textarea, pendingLabel) {
-  const shell = document.createElement('div');
-  shell.className = 'daily-summary__modal-field-shell daily-summary__modal-field-shell--loading';
-  const pending = document.createElement('div');
-  pending.className = 'daily-summary__modal-field-pending';
-  pending.setAttribute('role', 'status');
-  pending.setAttribute('aria-live', 'polite');
-  const labelEl = document.createElement('span');
-  labelEl.className = 'daily-summary__modal-pending-label';
-  labelEl.textContent = pendingLabel;
-  pending.append(labelEl, makeChaseDotsEl());
-  textarea.disabled = true;
-  textarea.setAttribute('aria-busy', 'true');
-  shell.append(textarea, pending);
-  return {
-    shell,
-    setLoading(on) {
-      shell.classList.toggle('daily-summary__modal-field-shell--loading', on);
-      textarea.disabled = on;
-      if (on) textarea.setAttribute('aria-busy', 'true');
-      else textarea.removeAttribute('aria-busy');
-    },
-  };
-}
-
-/**
  * @param {HTMLElement} root
  * @param {{ title?: string, detail?: string, company?: string, needsReply?: boolean }} item
+ * @param {'up' | 'down'} vibe
  * @param {() => void} onSaved
  * @param {(msg: string, isErr?: boolean) => void} showStatus
  */
-function openSeeLessModal(root, item, onSaved, showStatus) {
+function openPreferenceFeedbackModal(root, item, vibe, onSaved, showStatus) {
   const backdrop = document.createElement('div');
   backdrop.className = 'daily-summary__modal-backdrop';
   const modal = document.createElement('div');
-  modal.className = 'daily-summary__modal daily-summary__modal--guide daily-summary__modal--see-less';
+  modal.className = 'daily-summary__modal daily-summary__modal--guide daily-summary__modal--feedback';
   modal.setAttribute('role', 'dialog');
   modal.setAttribute('aria-modal', 'true');
 
   const title = document.createElement('h3');
   title.className = 'daily-summary__modal-title';
-  title.textContent = 'See less like this?';
+  title.textContent = vibe === 'down' ? 'Less like this?' : 'More like this?';
 
   const itemLabel = document.createElement('p');
   itemLabel.className = 'daily-summary__modal-item';
   itemLabel.textContent = item.title || 'Untitled item';
 
-  const rationale = document.createElement('p');
-  rationale.className = 'daily-summary__modal-rationale';
-  rationale.hidden = true;
+  let saveSection = vibe === 'down' ? 'prefer_less' : 'prefer_more';
+
+  const explainer = document.createElement('p');
+  explainer.className = 'daily-summary__modal-explainer';
+  explainer.textContent = guideBehaviorExplainer(vibe, saveSection);
 
   const lineLabel = document.createElement('label');
   lineLabel.className = 'daily-summary__modal-field-label';
-  lineLabel.textContent = 'Guide line to append';
+  lineLabel.textContent = 'Pattern to match';
 
   const lineArea = document.createElement('textarea');
   lineArea.className = 'daily-summary__modal-textarea daily-summary__modal-textarea--guide';
-  lineArea.rows = 5;
+  lineArea.rows = 3;
   lineArea.spellcheck = true;
-  lineArea.placeholder = '';
-  const lineShell = wrapPendingTextarea(lineArea, GUIDE_DRAFT_PENDING_LABEL);
 
   const msg = document.createElement('p');
   msg.className = 'daily-summary__modal-msg';
   msg.hidden = true;
 
   const actions = document.createElement('div');
-  actions.className = 'daily-summary__modal-actions daily-summary__modal-actions--split';
-  const editFull = document.createElement('button');
-  editFull.type = 'button';
-  editFull.className = 'daily-summary__btn daily-summary__btn--ghost daily-summary__modal-edit-full';
-  editFull.textContent = 'Edit full guide';
-  editFull.title = 'Open data/gmail-daily-summary-guide.md';
-  editFull.disabled = true;
-  const actionRight = document.createElement('div');
-  actionRight.className = 'daily-summary__modal-actions-right';
+  actions.className = 'daily-summary__modal-actions';
   const cancel = document.createElement('button');
   cancel.type = 'button';
   cancel.className = 'daily-summary__btn';
@@ -552,116 +354,14 @@ function openSeeLessModal(root, item, onSaved, showStatus) {
   save.textContent = 'Save to guide';
   save.disabled = true;
 
+  const syncExplainer = () => {
+    explainer.textContent = guideBehaviorExplainer(vibe, saveSection);
+  };
+
   const close = () => backdrop.remove();
   cancel.addEventListener('click', close);
   backdrop.addEventListener('click', (e) => {
     if (e.target === backdrop) close();
-  });
-
-  const finishSuggestLoading = () => {
-    lineShell.setLoading(false);
-    editFull.disabled = false;
-  };
-
-  /**
-   * @param {{ review?: string, proposedLines?: string, append?: string }} j
-   */
-  const applySuggestResponse = (j) => {
-    const review = String(j.review || '').trim();
-    if (review) {
-      rationale.textContent = review;
-      rationale.hidden = false;
-    }
-    lineArea.value = String(j.proposedLines || j.append || '').trim();
-  };
-
-  const loadSuggestion = async () => {
-    modal.setAttribute('aria-busy', 'true');
-    msg.hidden = true;
-    const payload = { vibe: 'down', item };
-    let gotDraft = false;
-
-    try {
-      const quick = await fetchJsonWithRetry(
-        '/api/gmail-daily-summary/guide/suggest',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...payload, skipLlm: true }),
-        },
-        1,
-      );
-      applySuggestResponse(quick);
-      gotDraft = true;
-      msg.hidden = true;
-      msg.textContent = '';
-    } catch {
-      /* quick draft unavailable */
-    }
-
-    try {
-      const full = await fetchJsonWithRetry(
-        '/api/gmail-daily-summary/guide/suggest',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        },
-        2,
-      );
-      applySuggestResponse(full);
-      finishSuggestLoading();
-      modal.removeAttribute('aria-busy');
-      if (full.source === 'heuristic' && full.llmError) {
-        msg.textContent = 'LLM unavailable — using a local draft. Edit before saving.';
-        msg.hidden = false;
-      } else {
-        msg.hidden = true;
-        msg.textContent = '';
-      }
-      save.disabled = false;
-      lineArea.focus();
-    } catch (e) {
-      finishSuggestLoading();
-      modal.removeAttribute('aria-busy');
-      save.disabled = false;
-      if (gotDraft) {
-        msg.textContent = 'Could not reach AI — local draft shown. Edit before saving.';
-        msg.hidden = false;
-        lineArea.focus();
-        return;
-      }
-      msg.textContent = networkErrorLabel(e);
-      rationale.hidden = false;
-      rationale.textContent =
-        'Could not load a suggestion. Describe the mail pattern you want in the guide line below.';
-      lineArea.value = '- FYI or automated notices that do not need a reply or decision';
-      lineArea.focus();
-    }
-  };
-
-  editFull.addEventListener('click', async () => {
-    editFull.disabled = true;
-    msg.hidden = false;
-    msg.textContent = 'Loading guide…';
-    try {
-      const heading = GUIDE_LESS_HEADING;
-      const append = String(lineArea.value || '').trim();
-      const r = await fetch('/api/gmail-daily-summary/guide', { cache: 'no-store' });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.ok === false) throw new Error(j.error || 'load_failed');
-      let guide = String(j.guide || '');
-      if (append) guide = appendToGuideSectionLocal(guide, heading, append);
-      close();
-      await openGuideEditorModal({
-        guide,
-        path: String(j.path || ''),
-        onSaved: () => showStatus('Guide saved'),
-      });
-    } catch (e) {
-      msg.textContent = String(e?.message || e || 'Could not load guide');
-      editFull.disabled = false;
-    }
   });
 
   save.addEventListener('click', async () => {
@@ -679,13 +379,16 @@ function openSeeLessModal(root, item, onSaved, showStatus) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          vibe: 'down',
+          vibe,
+          section: vibe === 'up' ? saveSection : undefined,
           append,
           item,
         }),
       }, 1);
       close();
-      showStatus(guideEscalationMessage(j.escalation));
+      showStatus(
+        vibe === 'down' ? guideEscalationMessage(j.escalation) : guideSaveMessageUp(saveSection),
+      );
       onSaved();
     } catch (e) {
       msg.textContent = networkErrorLabel(e);
@@ -693,226 +396,36 @@ function openSeeLessModal(root, item, onSaved, showStatus) {
     }
   });
 
-  actionRight.append(cancel, save);
-  actions.append(editFull, actionRight);
-  modal.append(title, itemLabel, rationale, lineLabel, lineShell.shell, msg, actions);
+  actions.append(cancel, save);
+  modal.append(title, itemLabel, explainer, lineLabel, lineArea, msg, actions);
   backdrop.append(modal);
   document.body.append(backdrop);
-  void loadSuggestion();
-}
 
-/**
- * @param {HTMLElement} root
- * @param {{ title?: string, detail?: string, company?: string, needsReply?: boolean }} item
- * @param {() => void} onSaved
- * @param {(msg: string, isErr?: boolean) => void} showStatus
- */
-function openSeeMoreModal(root, item, onSaved, showStatus) {
-  const backdrop = document.createElement('div');
-  backdrop.className = 'daily-summary__modal-backdrop';
-  const modal = document.createElement('div');
-  modal.className = 'daily-summary__modal daily-summary__modal--guide daily-summary__modal--see-less';
-  modal.setAttribute('role', 'dialog');
-  modal.setAttribute('aria-modal', 'true');
-
-  const title = document.createElement('h3');
-  title.className = 'daily-summary__modal-title';
-  title.textContent = 'See more like this?';
-
-  const itemLabel = document.createElement('p');
-  itemLabel.className = 'daily-summary__modal-item';
-  itemLabel.textContent = item.title || 'Untitled item';
-
-  const rationale = document.createElement('p');
-  rationale.className = 'daily-summary__modal-rationale';
-  rationale.hidden = true;
-
-  const lineLabel = document.createElement('label');
-  lineLabel.className = 'daily-summary__modal-field-label';
-  lineLabel.textContent = 'Guide line to append';
-
-  const lineArea = document.createElement('textarea');
-  lineArea.className = 'daily-summary__modal-textarea daily-summary__modal-textarea--guide';
-  lineArea.rows = 5;
-  lineArea.spellcheck = true;
-  lineArea.placeholder = '';
-  const lineShell = wrapPendingTextarea(lineArea, GUIDE_DRAFT_PENDING_LABEL);
-
-  const msg = document.createElement('p');
-  msg.className = 'daily-summary__modal-msg';
-  msg.hidden = true;
-
-  const actions = document.createElement('div');
-  actions.className = 'daily-summary__modal-actions daily-summary__modal-actions--split';
-  const editFull = document.createElement('button');
-  editFull.type = 'button';
-  editFull.className = 'daily-summary__btn daily-summary__btn--ghost daily-summary__modal-edit-full';
-  editFull.textContent = 'Edit full guide';
-  editFull.title = 'Open data/gmail-daily-summary-guide.md';
-  editFull.disabled = true;
-  const actionRight = document.createElement('div');
-  actionRight.className = 'daily-summary__modal-actions-right';
-  const cancel = document.createElement('button');
-  cancel.type = 'button';
-  cancel.className = 'daily-summary__btn';
-  cancel.textContent = 'Cancel';
-  const save = document.createElement('button');
-  save.type = 'button';
-  save.className = 'daily-summary__btn daily-summary__btn--primary';
-  save.textContent = 'Save to guide';
-  save.disabled = true;
-
-  let saveSection = 'prefer_more';
-
-  const close = () => backdrop.remove();
-  cancel.addEventListener('click', close);
-  backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop) close();
-  });
-
-  const finishSuggestLoading = () => {
-    lineShell.setLoading(false);
-    editFull.disabled = false;
-  };
-
-  /**
-   * @param {{ review?: string, section?: string, proposedLines?: string, append?: string }} j
-   */
-  const applySuggestResponse = (j) => {
-    const review = String(j.review || '').trim();
-    if (review) {
-      rationale.textContent = review;
-      rationale.hidden = false;
-    }
-    saveSection = clampSeeMoreSection(j.section);
-    lineArea.value = String(j.proposedLines || j.append || '').trim();
-  };
-
-  const loadSuggestion = async () => {
-    modal.setAttribute('aria-busy', 'true');
-    msg.hidden = true;
-    const payload = { vibe: 'up', item };
-    let gotDraft = false;
-
+  void (async () => {
     try {
-      const quick = await fetchJsonWithRetry(
+      const j = await fetchJsonWithRetry(
         '/api/gmail-daily-summary/guide/suggest',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...payload, skipLlm: true }),
+          body: JSON.stringify({ vibe, item, skipLlm: true }),
         },
         1,
       );
-      applySuggestResponse(quick);
-      gotDraft = true;
-      msg.hidden = true;
-      msg.textContent = '';
+      saveSection = vibe === 'down' ? 'prefer_less' : clampSeeMoreSection(j.section);
+      lineArea.value = String(j.proposedLines || j.append || '').trim();
+      syncExplainer();
+      save.disabled = false;
+      lineArea.focus();
     } catch {
-      /* quick draft unavailable */
-    }
-
-    try {
-      const full = await fetchJsonWithRetry(
-        '/api/gmail-daily-summary/guide/suggest',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        },
-        2,
-      );
-      applySuggestResponse(full);
-      finishSuggestLoading();
-      modal.removeAttribute('aria-busy');
-      if (full.source === 'heuristic' && full.llmError) {
-        msg.textContent = 'LLM unavailable — using a local draft. Edit before saving.';
-        msg.hidden = false;
-      } else {
-        msg.hidden = true;
-        msg.textContent = '';
-      }
+      lineArea.value =
+        vibe === 'down'
+          ? '- FYI or automated notices that do not need a reply or decision'
+          : '- Important follow-ups that deserve a dedicated action item';
       save.disabled = false;
       lineArea.focus();
-    } catch (e) {
-      finishSuggestLoading();
-      modal.removeAttribute('aria-busy');
-      save.disabled = false;
-      if (gotDraft) {
-        msg.textContent = 'Could not reach AI — local draft shown. Edit before saving.';
-        msg.hidden = false;
-        lineArea.focus();
-        return;
-      }
-      msg.textContent = networkErrorLabel(e);
-      rationale.hidden = false;
-      rationale.textContent =
-        'Could not load a suggestion. Describe the mail pattern you want in the guide line below.';
-      lineArea.value = '- Important follow-ups that deserve a dedicated action item';
-      lineArea.focus();
     }
-  };
-
-  editFull.addEventListener('click', async () => {
-    editFull.disabled = true;
-    msg.hidden = false;
-    msg.textContent = 'Loading guide…';
-    try {
-      const heading = guideHeadingForSection(saveSection);
-      const append = String(lineArea.value || '').trim();
-      const r = await fetch('/api/gmail-daily-summary/guide', { cache: 'no-store' });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.ok === false) throw new Error(j.error || 'load_failed');
-      let guide = String(j.guide || '');
-      if (append) guide = appendToGuideSectionLocal(guide, heading, append);
-      close();
-      await openGuideEditorModal({
-        guide,
-        path: String(j.path || ''),
-        onSaved: () => showStatus('Guide saved'),
-      });
-    } catch (e) {
-      msg.textContent = String(e?.message || e || 'Could not load guide');
-      editFull.disabled = false;
-    }
-  });
-
-  save.addEventListener('click', async () => {
-    const append = String(lineArea.value || '').trim();
-    if (!append) {
-      msg.hidden = false;
-      msg.textContent = 'Add a guide line to append.';
-      return;
-    }
-    save.disabled = true;
-    msg.hidden = false;
-    msg.textContent = 'Saving…';
-    try {
-      await fetchJsonWithRetry('/api/gmail-daily-summary/preference', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          vibe: 'up',
-          section: saveSection,
-          append,
-          item,
-        }),
-      }, 1);
-      close();
-      showStatus(guideSaveMessageUp(saveSection));
-      onSaved();
-    } catch (e) {
-      msg.textContent = networkErrorLabel(e);
-      save.disabled = false;
-    }
-  });
-
-  actionRight.append(cancel, save);
-  actions.append(editFull, actionRight);
-  modal.append(title, itemLabel, rationale, lineLabel, lineShell.shell, msg, actions);
-  backdrop.append(modal);
-  document.body.append(backdrop);
-  void loadSuggestion();
+  })();
 }
 
 /**
@@ -923,11 +436,7 @@ function openSeeMoreModal(root, item, onSaved, showStatus) {
  * @param {(msg: string, isErr?: boolean) => void} showStatus
  */
 function openPreferenceModal(root, item, vibe, onSaved, showStatus) {
-  if (vibe === 'down') {
-    openSeeLessModal(root, item, onSaved, showStatus);
-    return;
-  }
-  openSeeMoreModal(root, item, onSaved, showStatus);
+  openPreferenceFeedbackModal(root, item, vibe, onSaved, showStatus);
 }
 
 /**

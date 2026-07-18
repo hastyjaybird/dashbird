@@ -253,6 +253,17 @@ function normalizeSkipTitleFuzzyKey(title) {
 }
 
 /**
+ * Deliberate Telegram intake — only date filters should hide these in the feed.
+ * @param {object} ev
+ * @returns {boolean}
+ */
+function isTelegramIntakeEvent(ev) {
+  if (String(ev?.source || '').trim().toLowerCase() === 'telegram') return true;
+  const id = String(ev?.id || '').trim();
+  return id.startsWith('telegram:');
+}
+
+/**
  * @param {object} event
  * @param {object[]} skipped
  * @returns {boolean}
@@ -1460,19 +1471,21 @@ export function mountEventsFinderMobile(root) {
      * @returns {boolean}
      */
     function passesClientFilters(ev) {
-      if (!allChecked && !selected.has(eventCityLabel(ev).toLowerCase())) return false;
-      if (!selectedDates.size && earliestMins == null) return true;
+      const telegramIntake = isTelegramIntakeEvent(ev);
+      if (!telegramIntake && !allChecked && !selected.has(eventCityLabel(ev).toLowerCase())) return false;
+      if (!selectedDates.size && (telegramIntake || earliestMins == null)) return true;
       const local = eventLocalDayAndMinutes(ev?.start);
       if (selectedDates.size) {
         if (!local?.day || !selectedDates.has(local.day)) return false;
       }
-      if (earliestMins != null) {
+      if (!telegramIntake && earliestMins != null) {
         if (local == null || local.minutes < earliestMins) return false;
       }
       return true;
     }
 
     const mainEvents = (Array.isArray(data?.events) ? data.events : []).filter((ev) => {
+      if (isTelegramIntakeEvent(ev)) return true;
       const skippedPool = [
         ...(Array.isArray(data?.skippedEvents) ? data.skippedEvents : []),
         ...(Array.isArray(taste?.skippedEvents) ? taste.skippedEvents : []),

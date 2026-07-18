@@ -3,8 +3,8 @@
  */
 export const TASK_LOCATION_OPTIONS = [
   { id: 'home', label: 'Home' },
-  { id: 'out', label: 'Out and about' },
   { id: 'makerfarm', label: 'Maker Farm' },
+  { id: 'out', label: 'Out and about' },
   { id: 'laptop', label: 'Laptop only' },
   { id: 'phone', label: 'Phone ok' },
 ];
@@ -46,14 +46,15 @@ export function taskLocationSelectValue(taskMeta, projectMeta) {
   if (Array.isArray(taskMeta?.locations) && taskMeta.locations.length) {
     return String(taskMeta.locations[0]);
   }
-  return '__inherit__';
+  if (typeof projectMeta?.location === 'string' && projectMeta.location) return projectMeta.location;
+  return '__any__';
 }
 
 /**
  * @param {string} value
+ * @param {Record<string, unknown> | null | undefined} [projectMeta]
  */
-export function patchBodyForTaskLocation(value) {
-  if (value === '__inherit__') return { inheritLocation: true };
+export function patchBodyForTaskLocation(value, projectMeta) {
   if (value === '__any__') return { locationAny: true };
   return { location: value };
 }
@@ -97,9 +98,6 @@ export async function patchTaskRandomMeta(taskId, patch) {
  */
 export function taskLocationDisplayLabel(taskMeta, projectMeta) {
   const value = taskLocationSelectValue(taskMeta, projectMeta);
-  if (value === '__inherit__') {
-    return `Default (${projectDefaultLocationLabel(projectMeta)})`;
-  }
   if (value === '__any__') return 'Any location';
   return TASK_LOCATION_LABELS[value] || value;
 }
@@ -108,14 +106,7 @@ export function taskLocationDisplayLabel(taskMeta, projectMeta) {
  * @param {Record<string, unknown> | null | undefined} projectMeta
  */
 export function listTaskLocationOptions(projectMeta) {
-  return [
-    {
-      id: '__inherit__',
-      label: `Default (${projectDefaultLocationLabel(projectMeta)})`,
-    },
-    { id: '__any__', label: 'Any location' },
-    ...TASK_LOCATION_OPTIONS,
-  ];
+  return [{ id: '__any__', label: 'Any location' }, ...TASK_LOCATION_OPTIONS];
 }
 
 /**
@@ -156,11 +147,6 @@ export function buildTaskLocationSelect(opts) {
   sel.title = 'Task location (default unless changed)';
   sel.setAttribute('aria-label', 'Task location');
 
-  const inherit = document.createElement('option');
-  inherit.value = '__inherit__';
-  inherit.textContent = `Default (${projectDefaultLocationLabel(projectMeta)})`;
-  sel.append(inherit);
-
   const anyOpt = document.createElement('option');
   anyOpt.value = '__any__';
   anyOpt.textContent = 'Any location';
@@ -181,7 +167,7 @@ export function buildTaskLocationSelect(opts) {
   sel.addEventListener('change', () => {
     const prev = sel.value;
     sel.disabled = true;
-    void patchTaskRandomMeta(taskId, patchBodyForTaskLocation(sel.value))
+    void patchTaskRandomMeta(taskId, patchBodyForTaskLocation(sel.value, projectMeta))
       .then((meta) => {
         const row = meta.byTaskId?.[taskId];
         sel.classList.toggle('tasks-loc-select--override', taskHasLocationOverride(row));

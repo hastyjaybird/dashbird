@@ -1,5 +1,306 @@
 {
-  "byTaskId": {},
+  "byTaskId": {
+    "97": {
+      "difficulty": "high",
+      "priority": "high",
+      "duration": "1hr+",
+      "location": "laptop",
+      "timeAny": true
+    },
+    "99": {
+      "difficulty": "low",
+      "priority": "high",
+      "duration": "10m",
+      "location": "phone",
+      "timeAny": true
+    },
+    "102": {
+      "difficulty": "low",
+      "priority": "high",
+      "duration": "10m",
+      "location": "phone",
+      "timeAny": true
+    },
+    "103": {
+      "difficulty": "low",
+      "priority": "low",
+      "duration": "10m",
+      "location": "phone",
+      "timeAny": true
+    },
+    "104": {
+      "difficulty": "high",
+      "priority": "med",
+      "duration": "1hr+",
+      "location": "out",
+      "timeAny": true
+    },
+    "106": {
+      "difficulty": "med",
+      "priority": "low",
+      "duration": "1hr+",
+      "location": "laptop",
+      "times": [
+        "weekday_9_5"
+      ]
+    },
+    "107": {
+      "difficulty": "high",
+      "priority": "high",
+      "duration": "1hr+",
+      "location": "laptop",
+      "timeAny": true
+    },
+    "108": {
+      "difficulty": "med",
+      "priority": "low",
+      "duration": "30m",
+      "location": "laptop",
+      "times": [
+        "weekday_9_5"
+      ]
+    },
+    "109": {
+      "difficulty": "high",
+      "priority": "high",
+      "duration": "1hr+",
+      "location": "laptop",
+      "timeAny": true
+    },
+    "111": {
+      "difficulty": "low",
+      "priority": "med",
+      "duration": "10m",
+      "location": "phone",
+      "timeAny": true
+    },
+    "113": {
+      "difficulty": "med",
+      "priority": "low",
+      "duration": "1hr+",
+      "location": "laptop",
+      "timeAny": true
+    },
+    "121": {
+      "difficulty": "high",
+      "priority": "high",
+      "duration": "1hr+",
+      "location": "laptop",
+      "timeAny": true
+    },
+    "122": {
+      "difficulty": "med",
+      "priority": "low",
+      "duration": "30m",
+      "timeAny": true
+    },
+    "125": {
+      "difficulty": "high",
+      "priority": "med",
+      "duration": "1hr+",
+      "location": "makerfarm",
+      "timeAny": true
+    },
+    "126": {
+      "difficulty": "high",
+      "priority": "low",
+      "duration": "1hr+",
+      "timeAny": true
+    },
+    "127": {
+      "difficulty": "high",
+      "priority": "med",
+      "duration": "1hr+",
+      "times": [
+        "weekday_9_5"
+      ]
+    },
+    "128": {
+      "difficulty": "med",
+      "priority": "low",
+      "duration": "1hr+",
+      "times": [
+        "weekday_9_5"
+      ]
+    },
+    "129": {
+      "difficulty": "high",
+      "priority": "low",
+      "duration": "30m",
+      "timeAny": true
+    },
+    "130": {
+      "difficulty": "low",
+      "priority": "high",
+      "duration": "1hr+",
+      "times": [
+        "weekday_9_5"
+      ]
+    },
+    "132": {
+      "difficulty": "med",
+      "priority": "low",
+      "duration": "10m",
+      "location": "home",
+      "timeAny": true
+    },
+    "135": {
+      "difficulty": "high",
+      "priority": "med",
+      "duration": "30m",
+      "locationAny": true,
+      "timeAny": true
+    },
+    "136": {
+      "difficulty": "high",
+      "priority": "med",
+      "duration": "30m",
+      "locationAny": true,
+      "timeAny": true
+    },
+    "137": {
+      "difficulty": "high",
+      "priority": "med",
+      "duration": "30m",
+      "locationAny": true,
+      "timeAny": true
+    },
+    "138": {
+      "difficulty": "high",
+      "priority": "med",
+      "duration": "1hr+",
+      "locationAny": true,
+      "timeAny": true
+    },
+    "139": {
+      "difficulty": "high",
+      "priority": "high",
+      "duration": "1hr+",
+      "locationAny": true,
+      "timeAny": true
+    },
+    "140": {
+      "difficulty": "high",
+      "priority": "med",
+      "duration": "1hr+",
+      "locationAny": true,
+      "timeAny": true
+    },
+    "141": {
+      "difficulty": "high",
+      "priority": "high",
+      "duration": "1hr+",
+      "location": "makerfarm",
+      "timeAny": true
+    },
+    "168": {
+      "difficulty": "high",
+      "priority": "low",
+      "duration": "1hr+",
+      "location": "laptop",
+      "timeAny": true
+    },
+    "169": {
+      "difficulty": "high",
+      "priority": "low",
+      "duration": "30m",
+      "location": "laptop",
+      "timeAny": true
+    },
+    "170": {
+      "difficulty": "high",
+      "priority": "med",
+      "duration": "30m",
+      "location": "laptop",
+      "timeAny": true
+    },
+    "171": {
+      "difficulty": "high",
+      "priority": "high",
+      "duration": "1hr+",
+      "location": "laptop",
+      "timeAny": true
+    },
+    "172": {
+      "difficulty": "high",
+      "priority": "low",
+      "duration": "1hr+",
+      "location": "laptop",
+      "timeAny": true
+    },
+    "174": {
+      "difficulty": "med",
+      "priority": "med",
+      "duration": "30m",
+      "location": "makerfarm",
+      "timeAny": true
+    },
+    "175": {
+      "difficulty": "high",
+      "priority": "low",
+      "duration": "1hr+",
+      "location": "home",
+      "timeAny": true
+    },
+    "176": {
+      "difficulty": "high",
+      "priority": "low",
+      "duration": "1hr+",
+      "location": "home",
+      "timeAny": true
+    },
+    "177": {
+      "difficulty": "med",
+      "priority": "high",
+      "duration": "30m",
+      "location": "phone",
+      "timeAny": true
+    },
+    "178": {
+      "difficulty": "high",
+      "priority": "high",
+      "duration": "30m",
+      "location": "laptop",
+      "timeAny": true
+    },
+    "193": {
+      "difficulty": "med",
+      "priority": "med",
+      "duration": "30m",
+      "location": "laptop",
+      "times": [
+        "weekday_9_5"
+      ]
+    },
+    "194": {
+      "difficulty": "high",
+      "priority": "low",
+      "duration": "1hr+",
+      "times": [
+        "weekday_9_5"
+      ]
+    },
+    "210": {
+      "difficulty": "low",
+      "priority": "low",
+      "duration": "10m",
+      "location": "phone",
+      "timeAny": true
+    },
+    "220": {
+      "location": "out"
+    },
+    "227": {
+      "difficulty": "high",
+      "priority": "med",
+      "duration": "1hr+",
+      "location": "out",
+      "timeAny": true
+    },
+    "241": {
+      "location": "out"
+    }
+  },
   "byProjectId": {
     "1": {
       "notes": "catch-all"
@@ -8,7 +309,7 @@
       "location": "home"
     },
     "30": {
-      "location": "out"
+      "location": "phone"
     },
     "31": {
       "location": "laptop"
@@ -37,10 +338,13 @@
       "notes": "all tasks on-site"
     },
     "40": {
-      "location": "out"
+      "location": "laptop"
     },
     "41": {
-      "location": "out"
+      "location": "laptop"
+    },
+    "42": {
+      "location": "makerfarm"
     },
     "48": {
       "location": "laptop"
@@ -49,7 +353,7 @@
       "location": "phone"
     },
     "50": {
-      "location": "home"
+      "location": "out"
     }
   }
 }

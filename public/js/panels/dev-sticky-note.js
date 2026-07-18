@@ -1,10 +1,11 @@
 /**
- * Floating DEV NOTES sticky — same behavior as climate-dash DevStickyNote.
- * Per-page localStorage; Export appends tasks to data/dev-notes.md for Cursor agents.
+ * Floating DEV REQUEST panel — structured change requests for Cursor agents.
+ * Saves to data/dev-requests/<folder>/ with optional screenshots.
  */
 import { loadDevSticky, saveDevSticky } from '../lib/dev-sticky-storage.js';
+import { buildDevRequestForm } from '../lib/dev-request-form.js';
 
-const NOTE_WIDTH = 240;
+const PANEL_WIDTH = 280;
 const HEADER_HEIGHT = 28;
 const LS_PAGE_KEY = 'dashbirdPage';
 
@@ -22,7 +23,7 @@ function currentPageId() {
 }
 
 function defaultPosition() {
-  return clampPosition(window.innerWidth - NOTE_WIDTH - 24, 96);
+  return clampPosition(window.innerWidth - PANEL_WIDTH - 24, 96);
 }
 
 /**
@@ -30,7 +31,7 @@ function defaultPosition() {
  * @param {number} y
  */
 function clampPosition(x, y) {
-  const maxX = Math.max(8, window.innerWidth - NOTE_WIDTH - 8);
+  const maxX = Math.max(8, window.innerWidth - PANEL_WIDTH - 8);
   const maxY = Math.max(56, window.innerHeight - HEADER_HEIGHT - 48);
   return {
     x: Math.max(8, Math.min(x, maxX)),
@@ -54,15 +55,10 @@ function saveSticky(pageId, state) {
 }
 
 function chevronSvg(collapsed) {
-  // climate-dash: ChevronRight when collapsed, ChevronDown when open
   if (collapsed) {
     return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>`;
   }
   return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`;
-}
-
-function uploadSvg() {
-  return `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>`;
 }
 
 /**
@@ -74,9 +70,6 @@ export function mountDevStickyNote() {
   let pageId = currentPageId();
   /** @type {import('../lib/dev-sticky-storage.js').DevStickyState} */
   let state = loadSticky(pageId);
-  let exporting = false;
-  /** @type {string | null} */
-  let toast = null;
   /** @type {ReturnType<typeof setTimeout> | null} */
   let toastTimer = null;
 
@@ -85,9 +78,9 @@ export function mountDevStickyNote() {
 
   const root = document.createElement('div');
   root.id = 'dashbird-dev-sticky';
-  root.className = 'dev-sticky-note';
+  root.className = 'dev-sticky-note dev-sticky-note--requests';
   root.setAttribute('role', 'complementary');
-  root.setAttribute('aria-label', 'Dev notes');
+  root.setAttribute('aria-label', 'Dev requests');
   document.body.append(root);
 
   const header = document.createElement('div');
@@ -97,7 +90,7 @@ export function mountDevStickyNote() {
   dragHandle.className = 'dev-sticky-note__drag';
   const title = document.createElement('span');
   title.className = 'dev-sticky-note__title';
-  title.textContent = 'DEV NOTES';
+  title.textContent = 'DEV REQUEST';
   dragHandle.append(title);
 
   const collapseBtn = document.createElement('button');
@@ -109,31 +102,27 @@ export function mountDevStickyNote() {
   const body = document.createElement('div');
   body.className = 'dev-sticky-note__body';
 
-  const textarea = document.createElement('textarea');
-  textarea.className = 'dev-sticky-note__textarea';
-  textarea.placeholder = 'Changes & ideas for this page…';
-  textarea.spellcheck = true;
+  const hint = document.createElement('p');
+  hint.className = 'dev-sticky-note__hint';
+  hint.textContent = 'Saved to data/dev-requests/ for Cursor agents.';
 
-  const footer = document.createElement('div');
-  footer.className = 'dev-sticky-note__footer';
-
-  const exportBtn = document.createElement('button');
-  exportBtn.type = 'button';
-  exportBtn.className = 'dev-sticky-note__export';
-  exportBtn.innerHTML = `${uploadSvg()}<span>Export</span>`;
-
-  footer.append(exportBtn);
-  body.append(textarea, footer);
+  const form = buildDevRequestForm({
+    platform: 'desktop',
+    onSubmit: (result) => {
+      if (result?.ok === false) {
+        showToast(result.error || 'Submit failed', false);
+        return;
+      }
+      showToast('Saved to dev-requests inbox', true);
+    },
+  });
 
   const toastEl = document.createElement('div');
   toastEl.className = 'dev-sticky-note__toast';
   toastEl.hidden = true;
 
+  body.append(hint, form);
   root.append(header, body, toastEl);
-
-  function flushSave(id = pageId) {
-    saveSticky(id, state);
-  }
 
   function persist() {
     saveSticky(pageId, state);
@@ -142,46 +131,38 @@ export function mountDevStickyNote() {
   function applyLayout() {
     root.style.left = `${state.x}px`;
     root.style.top = `${state.y}px`;
+    root.style.width = `${PANEL_WIDTH}px`;
     root.classList.toggle('dev-sticky-note--collapsed', state.collapsed);
     body.hidden = state.collapsed;
     header.classList.toggle('dev-sticky-note__header--collapsed', state.collapsed);
-    collapseBtn.setAttribute('aria-label', state.collapsed ? 'Expand notes' : 'Collapse notes');
+    collapseBtn.setAttribute('aria-label', state.collapsed ? 'Expand dev request' : 'Collapse dev request');
     collapseBtn.innerHTML = chevronSvg(state.collapsed);
   }
 
-  function applyContent() {
-    if (textarea.value !== state.content) textarea.value = state.content;
-    const empty = !state.content.trim();
-    exportBtn.disabled = exporting || empty;
-    exportBtn.classList.toggle('dev-sticky-note__export--busy', exporting);
-    const label = exportBtn.querySelector('span');
-    if (label) label.textContent = exporting ? 'Exporting…' : 'Export';
-  }
-
-  function showToast(msg) {
-    toast = msg;
+  /**
+   * @param {string} msg
+   * @param {boolean} ok
+   */
+  function showToast(msg, ok) {
     toastEl.hidden = false;
     toastEl.textContent = msg;
-    toastEl.classList.toggle('dev-sticky-note__toast--ok', msg.startsWith('Exported'));
-    toastEl.classList.toggle('dev-sticky-note__toast--err', !msg.startsWith('Exported'));
+    toastEl.classList.toggle('dev-sticky-note__toast--ok', ok);
+    toastEl.classList.toggle('dev-sticky-note__toast--err', !ok);
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => {
-      toast = null;
       toastEl.hidden = true;
     }, 4000);
   }
 
   function switchPage(nextId) {
     if (nextId === pageId) return;
-    flushSave(pageId);
+    saveSticky(pageId, state);
     pageId = nextId;
     state = loadSticky(pageId);
     applyLayout();
-    applyContent();
   }
 
   applyLayout();
-  applyContent();
 
   collapseBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -190,41 +171,7 @@ export function mountDevStickyNote() {
     applyLayout();
   });
 
-  textarea.addEventListener('input', () => {
-    state = { ...state, content: textarea.value };
-    persist();
-    applyContent();
-  });
-
-  exportBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
   collapseBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
-
-  exportBtn.addEventListener('click', async () => {
-    if (exporting || !state.content.trim()) return;
-    exporting = true;
-    applyContent();
-    try {
-      const r = await fetch('/api/dev-notes/export', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pageId, content: state.content }),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok || !data.ok) {
-        showToast(data.error || 'Export failed');
-        return;
-      }
-      state = { ...state, content: '' };
-      persist();
-      applyContent();
-      showToast(`Exported to ${data.title || 'dev notes'}`);
-    } catch (e) {
-      showToast(String(e?.message || e || 'Export failed'));
-    } finally {
-      exporting = false;
-      applyContent();
-    }
-  });
 
   dragHandle.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
@@ -260,14 +207,13 @@ export function mountDevStickyNote() {
   dragHandle.addEventListener('pointerup', endDrag);
   dragHandle.addEventListener('pointercancel', endDrag);
 
-  window.addEventListener('pagehide', () => flushSave());
+  window.addEventListener('pagehide', () => saveSticky(pageId, state));
   window.addEventListener('resize', () => {
     state = { ...state, ...clampPosition(state.x, state.y) };
     persist();
     applyLayout();
   });
 
-  // Follow dashbird page tabs.
   window.addEventListener('storage', (e) => {
     if (e.key === LS_PAGE_KEY && e.newValue) switchPage(currentPageId());
   });

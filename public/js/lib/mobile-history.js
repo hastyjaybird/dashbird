@@ -3,7 +3,7 @@
  * so OS back returns to the previous Dashbird view instead of leaving the app.
  */
 
-/** @typedef {'network' | 'events' | 'groups' | 'tasks'} MobileTab */
+/** @typedef {'notes' | 'network' | 'events' | 'groups' | 'tasks' | 'gmail'} MobileTab */
 
 /**
  * @typedef {object} MobileNavState

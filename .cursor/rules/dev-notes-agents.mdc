@@ -1,16 +1,19 @@
 ---
-description: Resolve Dashbird floating DEV NOTES — spin up one agent per exported task
+description: Resolve Dashbird dev requests — spin up one agent per open item
 alwaysApply: true
 ---
 
-# Dashbird DEV NOTES → agents
+# Dashbird dev requests → agents
 
-When the user asks to spin up agents for each task, resolve DEV NOTES, or work through sticky / exported change requests:
+When the user asks to spin up agents for each task, resolve dev requests, or work through structured change requests from desktop/mobile:
 
-1. Read `data/dev-notes.md` (also available via `GET /api/dev-notes`). If missing or empty, say so and stop.
-2. Treat each unchecked markdown task (`- [ ] …`) as one unit of work. Group by `## …` section when present; ignore HTML comments and metadata lines (`Page:`, `Exported:`).
-3. Launch one Task subagent **per open task** (parallel when independent). Each agent gets the task text, page context from the section (`main` / `house-hunter` / `settings`), and instruction to implement and verify on that Dashbird screen.
-4. After a task is done, mark it checked (`- [x] …`) in `data/dev-notes.md` (or `PUT /api/dev-notes` with the updated markdown). Do not delete sections until the user asks to clear resolved notes.
-5. Summarize what each agent did; call out any tasks that failed or need Jay.
+1. Read `data/dev-requests/inbox.md` (also `GET /api/dev-requests`). If missing or empty, say so and stop.
+2. Treat each unchecked markdown task (`- [ ] …`) as one unit of work, grouped by priority (`## High`, `## Med`, etc.).
+3. For each item, open its folder under `data/dev-requests/<folder>/` — read `request.json` and any screenshot PNG/JPG in that folder.
+4. Launch one Task subagent **per open request** (parallel when independent). Each agent gets title, body, area, platform, priority, and screenshot paths.
+5. After a request is done, mark it via `PATCH /api/dev-requests/:id` with `{ "status": "done" }` (regenerates `inbox.md`). Do not delete folders until the user asks to clear resolved items.
+6. Summarize what each agent did; call out any requests that failed or need Jay.
 
-Draft notes still on the floating sticky (not yet Exported) live only in browser localStorage (`dashbird-dev-sticky:*`) — ask Jay to hit **Export** on the sticky first if the file is empty.
+**Vikunja** (`/api/vikunja`) is for personal todos and task-location meta — not for dev/feature change requests. Use the dev-requests queue for agent-facing UX work.
+
+Legacy `data/dev-notes.md` (old sticky Export flow) is deprecated; new requests go through the DEV REQUEST panel (desktop) or Dev FAB (mobile).

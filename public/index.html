@@ -57,11 +57,11 @@
               var pm = document.getElementById('page-mobile');
               if (!pm) return;
               pm.hidden = false;
-              var net = document.getElementById('mount-mobile-network');
-              if (net) {
-                net.hidden = false;
-                if (!net.childElementCount) {
-                  net.innerHTML = '<p class="mobile-shell__status">Loading…</p>';
+              var notes = document.getElementById('mount-mobile-notes');
+              if (notes) {
+                notes.hidden = false;
+                if (!notes.childElementCount) {
+                  notes.innerHTML = '<p class="mobile-shell__status">Loading…</p>';
                 }
               }
             });
@@ -84,7 +84,7 @@
         } catch (e) {}
       })();
     </script>
-    <link rel="stylesheet" href="/styles.css?v=mobile-panels-20260716-4" />
+    <link rel="stylesheet" href="/styles.css?v=mobile-panels-20260717-4" />
     <!-- Instant search: no modules — Enter opens a new tab before app.js loads. -->
     <script>
       window.__dashbirdSearch = (function () {
@@ -172,20 +172,16 @@
         <nav id="mount-page-tabs" class="topbar__tabs-mount" aria-label="Dashboard pages"></nav>
       </div>
       <div class="topbar__end">
-        <div class="topbar__env-links" aria-label="Dashboard environments">
-          <div class="topbar__env-link">
-            <span class="topbar__env-link-label">production link</span>
-            <a class="topbar__env-link-url" href="https://dashbird.duckdns.org/" rel="noopener noreferrer">dashbird.duckdns.org</a>
-          </div>
-          <div class="topbar__env-link">
-            <span class="topbar__env-link-label">developer link</span>
-            <a class="topbar__env-link-url" href="http://127.0.0.1:8788/" rel="noopener noreferrer">127.0.0.1:8788</a>
-          </div>
-        </div>
         <div
           id="mount-topbar-context"
           class="topbar__context"
           aria-label="Current location (live GPS when allowed, else server default)"
+        ></div>
+        <div
+          id="mount-topbar-aircraft"
+          class="topbar__aircraft"
+          hidden
+          aria-label="Nearby aircraft"
         ></div>
         <div
           id="mount-view-mode"
@@ -198,10 +194,12 @@
     <div id="page-mobile" class="page-view page-view--mobile" hidden>
       <main class="mobile-shell" aria-label="Mobile">
         <nav id="mount-mobile-tabs" class="mobile-shell__tabs" aria-label="Mobile pages"></nav>
+        <div id="mount-mobile-notes" class="mobile-shell__pane" hidden></div>
         <div id="mount-mobile-network" class="mobile-shell__pane" hidden></div>
         <div id="mount-mobile-events" class="mobile-shell__pane" hidden></div>
         <div id="mount-mobile-groups" class="mobile-shell__pane" hidden></div>
         <div id="mount-mobile-tasks" class="mobile-shell__pane" hidden></div>
+        <div id="mount-mobile-gmail" class="mobile-shell__pane" hidden></div>
       </main>
     </div>
 
@@ -425,14 +423,14 @@
           </div>
 
           <div class="row row--stack">
-            <div class="row row--tasks-news">
+            <div class="row row--tasks-keep">
               <section class="panel panel--glass panel--tasks" aria-labelledby="h-tasks">
                 <h2 id="h-tasks">Tasks</h2>
                 <div id="mount-tasks" class="panel__body tasks-body"></div>
               </section>
-              <section class="panel panel--glass panel--main-news" aria-labelledby="h-main-news">
-                <h2 id="h-main-news">News</h2>
-                <div id="mount-main-news" class="panel__body main-news-body"></div>
+              <section class="panel panel--glass panel--keep-notes" aria-labelledby="h-keep-notes">
+                <h2 id="h-keep-notes">Notes</h2>
+                <div id="mount-keep-notes" class="panel__body keep-notes-body"></div>
               </section>
             </div>
             <section class="panel panel--glass panel--calendar" aria-labelledby="h-calendar">

@@ -1,10 +1,14 @@
 import { contactActions } from '../lib/contact-deep-links.js';
 import { formatContactBirthday } from '../lib/network-birthday.js';
+import { compareContactSearchNameRank } from '../lib/network-contact-search.js';
+import { formatContactLastContact } from '../lib/network-last-contact.js';
 import {
   CONTACT_REGION_IN_BAY,
   CONTACT_REGION_OUT,
   contactRegionAttribute,
 } from '../lib/network-contact-region.js';
+import { NETWORK_LABELS } from '../lib/network-labels.js';
+import { collectContactLocationOptions } from '../lib/network-people-filters.js';
 import {
   pushMobileNav,
   mobileNavBack,
@@ -25,6 +29,11 @@ const RELATIONSHIP_STATUSES = [
 
 const RATINGS = ['Fan', 'Hot', 'Warm', 'Cold'];
 
+const SENSITIVITY_OPTIONS = ['Down', 'Situational', 'Proper'];
+
+/** Session flag: contact detail hidden attributes panel open */
+let contactHiddenExpanded = false;
+
 const REGION_FILTER_OPTIONS = [CONTACT_REGION_IN_BAY, CONTACT_REGION_OUT];
 
 /** Default mobile people filters on first load (cleared filters = All). */
@@ -34,6 +43,7 @@ const DEFAULT_MOBILE_PEOPLE_FILTERS = {
   relationships: ['Cultivating', 'Meta', 'Inner Circle', 'Collaborator', 'Family'],
   statuses: ['Fan', 'Hot', 'Warm'],
   regions: [CONTACT_REGION_IN_BAY],
+  locations: [],
   hidePaused: true,
   hideFormer: true,
 };
@@ -331,6 +341,7 @@ export function mountNetworkContactsMobile(root) {
     RELATIONSHIP_STATUSES,
   );
   const statusFilter = makeFilterMultiSelect('Status', 'filter-status', RATINGS);
+  const locationFilter = makeFilterMultiSelect('Location', 'filter-location', []);
   const regionFilter = makeFilterMultiSelect('Region', 'filter-region', REGION_FILTER_OPTIONS);
   const kindFilter = makeFilterMultiSelect('Type', 'filter-kind', [
     { value: 'friend', label: 'Friend' },
@@ -354,6 +365,7 @@ export function mountNetworkContactsMobile(root) {
     kindFilter.wrapEl,
     relationshipFilter.wrapEl,
     statusFilter.wrapEl,
+    locationFilter.wrapEl,
     regionFilter.wrapEl,
     hasTaskFilter.wrapEl,
     defaultFilters,
@@ -404,6 +416,16 @@ export function mountNetworkContactsMobile(root) {
   let dirty = false;
 
   let peopleFilters = { ...DEFAULT_MOBILE_PEOPLE_FILTERS };
+  let locationOptionsKey = '';
+
+  function refreshLocationFilterOptions() {
+    const opts = collectContactLocationOptions(contacts);
+    const key = opts.join('\0');
+    if (key === locationOptionsKey) return;
+    locationOptionsKey = key;
+    locationFilter.setOptions(opts);
+    locationFilter.setSelected(peopleFilters.locations);
+  }
 
   function syncPeopleFiltersFromUi() {
     peopleFilters = {
@@ -411,6 +433,7 @@ export function mountNetworkContactsMobile(root) {
       hasTasks: hasTaskFilter.getSelected(),
       relationships: relationshipFilter.getSelected(),
       statuses: statusFilter.getSelected(),
+      locations: locationFilter.getSelected(),
       regions: regionFilter.getSelected(),
       hidePaused: hidePausedFilter.cb.checked,
       hideFormer: hideFormerFilter.cb.checked,
@@ -423,6 +446,7 @@ export function mountNetworkContactsMobile(root) {
     hasTaskFilter.setSelected(peopleFilters.hasTasks);
     relationshipFilter.setSelected(peopleFilters.relationships);
     statusFilter.setSelected(peopleFilters.statuses);
+    locationFilter.setSelected(peopleFilters.locations);
     regionFilter.setSelected(peopleFilters.regions);
     hidePausedFilter.cb.checked = peopleFilters.hidePaused !== false;
     hideFormerFilter.cb.checked = peopleFilters.hideFormer !== false;
@@ -434,6 +458,7 @@ export function mountNetworkContactsMobile(root) {
    */
   function filteredByPeopleFilters(listIn = contacts) {
     return listIn.filter((c) => {
+      if (c.intakeReviewed === false) return true;
       if (peopleFilters.kinds.length) {
         const kinds = Array.isArray(c.kinds) ? c.kinds.map((k) => String(k).toLowerCase()) : [];
         const want = peopleFilters.kinds.map((k) => k.toLowerCase());
@@ -456,6 +481,14 @@ export function mountNetworkContactsMobile(root) {
       if (peopleFilters.statuses.length) {
         if (!peopleFilters.statuses.includes(String(c.rating || ''))) return false;
       }
+      if (peopleFilters.locations.length) {
+        const loc = String(c.location || '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLowerCase();
+        const want = new Set(peopleFilters.locations.map((l) => l.toLowerCase()));
+        if (!want.has(loc)) return false;
+      }
       if (peopleFilters.regions.length) {
         const region = contactRegionAttribute(c);
         if (!peopleFilters.regions.includes(region)) return false;
@@ -473,30 +506,43 @@ export function mountNetworkContactsMobile(root) {
       .trim()
       .toLowerCase();
     const base = filteredByPeopleFilters();
-    if (!needle) return base;
-    return base.filter((c) => {
-      const ch = c.channels || {};
-      const hay = [
-        c.displayName,
-        c.nickname,
-        c.firstName,
-        c.lastName,
-        c.memoryJog,
-        c.org,
-        c.location,
-        c.bio,
-        ch.email,
-        ch.phone,
-        ch.whatsapp,
-        ch.signal,
-        ch.messenger,
-        ch.linkedin,
-        ch.other,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return hay.includes(needle);
+    const items = !needle
+      ? base
+      : base.filter((c) => {
+          if (c.intakeReviewed === false) return true;
+          const ch = c.channels || {};
+          const hay = [
+            c.displayName,
+            c.nickname,
+            c.firstName,
+            c.lastName,
+            c.memoryJog,
+            c.org,
+            c.location,
+            c.bio,
+            ch.email,
+            ch.phone,
+            ch.whatsapp,
+            ch.signal,
+            ch.messenger,
+            ch.linkedin,
+            ch.other,
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          return hay.includes(needle);
+        });
+    return items.sort((a, b) => {
+      const aNew = a.intakeReviewed === false;
+      const bNew = b.intakeReviewed === false;
+      if (aNew !== bNew) return aNew ? -1 : 1;
+      if (aNew) {
+        const aAt = String(a.createdAt || '');
+        const bAt = String(b.createdAt || '');
+        if (aAt !== bAt) return bAt.localeCompare(aAt);
+      }
+      return compareContactSearchNameRank(a, b, needle);
     });
   }
 
@@ -567,8 +613,7 @@ export function mountNetworkContactsMobile(root) {
       }
 
       for (const g of groups) {
-        const kind = g.kind === 'event' ? 'Event' : 'Community';
-        const typeBit = g.kind === 'event' && g.eventType ? ` · ${g.eventType}` : '';
+        const kind = g.kind === 'event' ? NETWORK_LABELS.event : NETWORK_LABELS.scene;
         const memberCount = Array.isArray(g.memberIds) ? g.memberIds.length : 0;
         const li = document.createElement('li');
         const btn = document.createElement('button');
@@ -579,7 +624,7 @@ export function mountNetworkContactsMobile(root) {
         name.textContent = g.name || 'Untitled';
         const meta = document.createElement('span');
         meta.className = 'mobile-network__sheet-option-meta';
-        meta.textContent = `[${kind}${typeBit}] · ${memberCount} member${memberCount === 1 ? '' : 's'}`;
+        meta.textContent = `[${kind}] · ${memberCount} member${memberCount === 1 ? '' : 's'}`;
         btn.append(name, meta);
         btn.addEventListener('click', () => finish(g));
         li.append(btn);
@@ -605,6 +650,11 @@ export function mountNetworkContactsMobile(root) {
    */
   function buildBody(form, current) {
     const fd = new FormData(form);
+    const splitCsv = (v) =>
+      String(v || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
     const kindsSel = ['friend', 'organizer', 'business', 'family'].filter(
       (k) => form.querySelector(`[name="kind-${k}"]`)?.checked,
     );
@@ -623,18 +673,29 @@ export function mountNetworkContactsMobile(root) {
       displayName: String(fd.get('displayName') || '').trim(),
       nickname: String(fd.get('nickname') || '').trim(),
       memoryJog: String(fd.get('memoryJog') || '').trim().slice(0, 80),
+      title: String(fd.get('title') || '').trim(),
       org: String(fd.get('org') || '').trim(),
       kinds: kindsSel.length ? kindsSel : ['friend'],
+      hasKids: Boolean(form.querySelector('[name="hasKids"]')?.checked),
       location: String(fd.get('location') || '').trim(),
+      address: String(fd.get('address') || '').trim(),
       relationshipStatus: String(fd.get('relationshipStatus') || '').trim(),
+      aliases: splitCsv(fd.get('aliases')),
+      department: String(fd.get('department') || '').trim(),
       rating: String(fd.get('rating') || '').trim(),
+      sensitivity: String(fd.get('sensitivity') || '').trim(),
       tasks,
       bio: String(fd.get('bio') || '').trim(),
+      howWeMet: String(fd.get('howWeMet') || '').trim(),
+      relationshipSummary: String(fd.get('relationshipSummary') || '').trim(),
+      networkCircles: String(fd.get('networkCircles') || '').trim(),
+      notes: String(fd.get('notes') || '').trim(),
       alignedActivities: String(fd.get('alignedActivities') || '')
         .split(/\n+/)
         .map((s) => s.trim())
         .filter(Boolean),
       preferredContactMethods: prefs,
+      lastContactAt: String(fd.get('lastContactAt') || '').trim(),
       birthday: String(fd.get('birthday') || '').trim(),
       channels: {
         email: String(fd.get('email') ?? current.channels?.email ?? '').trim() || null,
@@ -649,9 +710,36 @@ export function mountNetworkContactsMobile(root) {
           String(fd.get('messenger') ?? current.channels?.messenger ?? '').trim() || null,
         linkedin: String(fd.get('linkedin') ?? current.channels?.linkedin ?? '').trim() || null,
         other: String(fd.get('other') ?? current.channels?.other ?? '').trim() || null,
-        urls: Array.isArray(current.channels?.urls) ? [...current.channels.urls] : [],
+        urls: String(fd.get('urls') ?? (current.channels?.urls || []).join('\n') ?? '')
+          .split(/\n+/)
+          .map((s) => s.trim())
+          .filter(Boolean),
       },
     };
+  }
+
+  /**
+   * @param {string} contactId
+   */
+  function acknowledgeIntakeReview(contactId) {
+    const idx = contacts.findIndex((x) => x.id === contactId);
+    if (idx < 0) return;
+    const row = contacts[idx];
+    if (row?.intakeReviewed !== false) return;
+    contacts[idx] = { ...row, intakeReviewed: true };
+    void fetch(`/api/network/contacts/${encodeURIComponent(contactId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ intakeReviewed: true }),
+    })
+      .then(async (r) => {
+        const j = await r.json().catch(() => ({}));
+        if (j?.ok && j.contact) {
+          const i = contacts.findIndex((x) => x.id === j.contact.id);
+          if (i >= 0) contacts[i] = j.contact;
+        }
+      })
+      .catch(() => {});
   }
 
   /**
@@ -661,6 +749,11 @@ export function mountNetworkContactsMobile(root) {
   function showDetail(c, opts = {}) {
     selectedId = c.id;
     dirty = false;
+    contactHiddenExpanded = false;
+    if (c.intakeReviewed === false) {
+      acknowledgeIntakeReview(c.id);
+      c = { ...c, intakeReviewed: true };
+    }
     listPane.hidden = true;
     toolbar.hidden = true;
     selectionBar.hidden = true;
@@ -930,6 +1023,71 @@ export function mountNetworkContactsMobile(root) {
     tasksWrap.append(tasksLabel, addInput, taskList);
     renderTasks();
 
+    const contactUrls = [
+      ...new Set(
+        [...(current.channels?.urls || []), ...(current.enrichment?.sources || [])].filter(Boolean),
+      ),
+    ];
+
+    const hasKidsBox = document.createElement('div');
+    hasKidsBox.className = 'mobile-network__checks';
+    const hasKidsLab = document.createElement('label');
+    hasKidsLab.className = 'mobile-network__check';
+    const hasKidsCb = document.createElement('input');
+    hasKidsCb.type = 'checkbox';
+    hasKidsCb.name = 'hasKids';
+    hasKidsCb.checked = Boolean(current.hasKids);
+    hasKidsLab.append(hasKidsCb, document.createTextNode(' Have kids'));
+    hasKidsBox.append(hasKidsLab);
+
+    const lastContactField = field('Last contact', 'lastContactAt', formatContactLastContact(current), {
+      placeholder: 'e.g. yesterday, 4/5/26, last month',
+    });
+    if (current.lastContactChannel) {
+      const hint = document.createElement('p');
+      hint.className = 'mobile-network__field-hint';
+      hint.textContent = `via ${current.lastContactChannel}`;
+      lastContactField.append(hint);
+    }
+
+    const hiddenPanel = document.createElement('div');
+    hiddenPanel.className = 'mobile-network__hidden-panel';
+    hiddenPanel.hidden = !contactHiddenExpanded;
+    hiddenPanel.append(
+      field('Bio', 'bio', current.bio || '', { rows: 3 }),
+      lastContactField,
+      hasKidsBox,
+      field('Role', 'title', current.title || ''),
+      field('Department', 'department', current.department || ''),
+      field('Address', 'address', current.address || '', { rows: 2 }),
+      field(NETWORK_LABELS.aliases, 'aliases', (current.aliases || []).join(', ')),
+      field('URLs', 'urls', contactUrls.join('\n'), {
+        rows: 3,
+        placeholder: 'One per line',
+      }),
+      field('How we met', 'howWeMet', current.howWeMet || '', { rows: 3 }),
+      field('Private notes', 'notes', current.notes || '', { rows: 3 }),
+      field('Relationship summary', 'relationshipSummary', current.relationshipSummary || '', {
+        rows: 3,
+      }),
+    );
+
+    const toggleHidden = document.createElement('button');
+    toggleHidden.type = 'button';
+    toggleHidden.className = 'mobile-network__toggle-hidden';
+    toggleHidden.textContent = contactHiddenExpanded
+      ? NETWORK_LABELS.hideHidden
+      : NETWORK_LABELS.showHidden;
+    toggleHidden.setAttribute('aria-expanded', contactHiddenExpanded ? 'true' : 'false');
+    toggleHidden.addEventListener('click', () => {
+      contactHiddenExpanded = !contactHiddenExpanded;
+      hiddenPanel.hidden = !contactHiddenExpanded;
+      toggleHidden.textContent = contactHiddenExpanded
+        ? NETWORK_LABELS.hideHidden
+        : NETWORK_LABELS.showHidden;
+      toggleHidden.setAttribute('aria-expanded', contactHiddenExpanded ? 'true' : 'false');
+    });
+
     form.append(
       sectionPref,
       field('Name', 'displayName', current.displayName || ''),
@@ -938,22 +1096,29 @@ export function mountNetworkContactsMobile(root) {
         placeholder: '1–2 words to remember who',
         maxLength: 80,
       }),
-      field('Location', 'location', current.location || ''),
+      field(NETWORK_LABELS.location, 'location', current.location || ''),
       field('Birthday', 'birthday', formatContactBirthday(current), {
         placeholder: 'e.g. March 15',
       }),
-      field('Company', 'org', current.org || ''),
+      field(NETWORK_LABELS.organization, 'org', current.org || ''),
       field('Relationship', 'relationshipStatus', current.relationshipStatus || '', {
         options: relationshipOptions,
       }),
       field('Status', 'rating', current.rating || '', { options: RATINGS }),
+      field('Sensitivity', 'sensitivity', current.sensitivity || '', {
+        options: SENSITIVITY_OPTIONS,
+      }),
+      field('Scene', 'networkCircles', current.networkCircles || '', {
+        placeholder: 'Comma-separated scenes',
+      }),
       kindsBox,
       tasksWrap,
-      field('Bio', 'bio', current.bio || '', { rows: 3 }),
-      field('Interests', 'alignedActivities', (current.alignedActivities || []).join('\n'), {
+      field(NETWORK_LABELS.activities, 'alignedActivities', (current.alignedActivities || []).join('\n'), {
         rows: 3,
-        placeholder: 'One per line',
+        placeholder: NETWORK_LABELS.activitiesPlaceholder,
       }),
+      toggleHidden,
+      hiddenPanel,
     );
 
     const saveRow = document.createElement('div');
@@ -976,6 +1141,9 @@ export function mountNetworkContactsMobile(root) {
       saveStatus.classList.remove('mobile-network__save-status--err');
       try {
         const body = buildBody(form, current);
+        if (current.intakeReviewed === false) {
+          body.intakeReviewed = true;
+        }
         const r = await fetch(`/api/network/contacts/${encodeURIComponent(current.id)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -1041,6 +1209,8 @@ export function mountNetworkContactsMobile(root) {
         syncSelectionUi();
       });
 
+      const avatarWrap = document.createElement('div');
+      avatarWrap.className = 'mobile-network__avatar-wrap';
       const avatar = document.createElement('div');
       avatar.className = 'mobile-network__avatar';
       const avatarUrl = String(c.avatarUrl || '').trim();
@@ -1054,6 +1224,14 @@ export function mountNetworkContactsMobile(root) {
       } else {
         avatar.textContent = contactName(c).slice(0, 1).toUpperCase();
       }
+      avatarWrap.append(avatar);
+      if (c.intakeReviewed === false) {
+        const badge = document.createElement('span');
+        badge.className = 'network-crm__new-intake';
+        badge.title = 'New from Telegram';
+        badge.setAttribute('aria-label', 'New from Telegram');
+        avatarWrap.append(badge);
+      }
       const body = document.createElement('div');
       body.className = 'mobile-network__row-body';
       const name = document.createElement('div');
@@ -1065,7 +1243,7 @@ export function mountNetworkContactsMobile(root) {
       if (subText) subEl.textContent = subText;
       else subEl.hidden = true;
       body.append(name, subEl);
-      li.append(check, avatar, body);
+      li.append(check, avatarWrap, body);
       li.addEventListener('click', (e) => {
         if (e.target instanceof Element && e.target.closest('.mobile-network__row-select')) return;
         showDetail(c);
@@ -1089,6 +1267,7 @@ export function mountNetworkContactsMobile(root) {
   hasTaskFilter.onChange(onFilterChange);
   relationshipFilter.onChange(onFilterChange);
   statusFilter.onChange(onFilterChange);
+  locationFilter.onChange(onFilterChange);
   regionFilter.onChange(onFilterChange);
   hidePausedFilter.cb.addEventListener('change', onFilterChange);
   hideFormerFilter.cb.addEventListener('change', onFilterChange);
@@ -1142,6 +1321,7 @@ export function mountNetworkContactsMobile(root) {
             contacts.sort((a, b) =>
               contactName(a).localeCompare(contactName(b), undefined, { sensitivity: 'base' }),
             );
+            refreshLocationFilterOptions();
           }
         } catch {
           /* keep existing contacts */
@@ -1175,6 +1355,7 @@ export function mountNetworkContactsMobile(root) {
       contacts.sort((a, b) =>
         contactName(a).localeCompare(contactName(b), undefined, { sensitivity: 'base' }),
       );
+      refreshLocationFilterOptions();
       renderList();
       const navState = history.state;
       if (

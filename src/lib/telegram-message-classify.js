@@ -139,9 +139,9 @@ Rules:
 - linkedin_screenshot: LinkedIn profile (or similar professional directory) screenshot.
 - social_screenshot: Instagram / X / Facebook / About page / other social profile screenshot of a person.
 - headshot: portrait / selfie / headshot of a person with little other CRM text (still extract name from caption if present).
-- guest_list: RSVP / going / invitee / attendee list screenshot (Partiful, Luma, Eventbrite, Facebook, Secret Party, Meetup, spreadsheet, etc.) showing multiple people. Put every readable person into "contacts" (cap 40). Set eventName when the event title is visible. contact may mirror the first person or be null.
+- guest_list: RSVP / going / invitee / attendee list screenshot (Partiful, Luma, Eventbrite, Facebook, Secret Party, Meetup, spreadsheet, etc.) showing multiple people who were invited or are attending. Put every readable person into "contacts" (cap 40). Set eventName when the event title is visible. contact may mirror the first person or be null.
 - company_logo: primarily a company logo / brand mark / wordmark (optionally with company name), not a person.
-- event_flyer: party/meetup/show invite flyer or event page screenshot (poster/details — not a roster of names). Prefer guest_list when the screenshot is mainly a list of attendees/invitees.
+- event_flyer: party/meetup/show invite flyer or event page screenshot (poster/details — not a roster of names). Use event_flyer when a date/time is visible, even if DJs, bands, or performers are listed. DJ / artist / band lineups on a poster are NOT guest_list — leave contacts empty and set eventName to the event title when visible. Prefer guest_list only when the screenshot is mainly a roster of invitees/attendees (platform UI or spreadsheet), not performers on a flyer.
 - other: anything else (receipts, random photos) — prefer other over guessing event_flyer.
 - hasHeadshot: true when a clear photo of the person's face is visible (card photo, LinkedIn avatar, portrait). For guest_list, set per-row hasHeadshot/headshotCrop on contacts[]; top-level hasHeadshot only if a single dominant face.
 - headshotCrop / logoCrop: normalized 0-1 fractions of the full image (x,y = top-left; w,h = size). Prefer a tight square-ish crop around the face or logo, but keep each edge at least ~0.06 of the image so small marks still crop. Null when not visible.
@@ -699,6 +699,37 @@ export async function classifyTelegramMessage(text, env = process.env) {
 }
 
 /**
+ * DJ / band / performer credits on an event poster — not an RSVP guest list.
+ * @param {unknown} contacts
+ * @returns {boolean}
+ */
+export function looksLikeFlyerPerformerLineup(contacts) {
+  const list = (Array.isArray(contacts) ? contacts : []).filter((c) => c?.displayName);
+  if (list.length < 2) return false;
+  const performerish = list.filter((c) => {
+    const name = String(c.displayName || '').trim();
+    const notes = String(c.notes || '').trim();
+    if (/^dj[\s.]/i.test(name) || /^dj$/i.test(name)) return true;
+    if (/\b(vs\.|b2b|live set|house|techno|darkwave|electronic|hyperpop|groove|cumbia|tribal|hardgroove|tech house)\b/i.test(
+      notes,
+    )) {
+      return true;
+    }
+    // Stage names + short genre blurbs (not CRM contact notes).
+    if (
+      name.split(/\s+/).length <= 3
+      && notes
+      && notes.length <= 80
+      && !/\b(met|phone|email|@|linkedin|http)\b/i.test(notes)
+    ) {
+      return true;
+    }
+    return false;
+  });
+  return performerish.length >= Math.max(2, Math.ceil(list.length * 0.5));
+}
+
+/**
  * Vision classify a Telegram photo: event flyer vs CRM card/screenshot/logo/guest list.
  * @param {string} dataUrl
  * @param {string} [caption]
@@ -819,9 +850,14 @@ export async function classifyTelegramImage(dataUrl, caption = '', env = process
     if (finalKind === 'guest_list' && !contacts.length && contact?.displayName) {
       contacts = [contact];
     }
-    // Multi-name lists mislabeled as flyer/other → treat as guest_list.
-    if (contacts.length >= 2 && (finalKind === 'other' || finalKind === 'event_flyer')) {
+    // Multi-name lists mislabeled as other → treat as guest_list.
+    // Never demote event_flyer — DJ/band lineups on posters are not attendee lists.
+    if (contacts.length >= 2 && finalKind === 'other' && !looksLikeFlyerPerformerLineup(contacts)) {
       finalKind = 'guest_list';
+    }
+    if (finalKind === 'guest_list' && looksLikeFlyerPerformerLineup(contacts)) {
+      finalKind = 'event_flyer';
+      contacts = [];
     }
 
     return {

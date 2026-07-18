@@ -39,6 +39,28 @@ import {
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
+function sceneGroupReadonlyError(action) {
+  const err = new Error(
+    action === 'create'
+      ? 'Scene groups are created automatically from contact Scene tags'
+      : 'Scene groups are read-only — edit Scene on contacts instead',
+  );
+  err.code = 'scene_group_readonly';
+  return err;
+}
+
+/**
+ * @param {object | null | undefined} group
+ * @param {object | null | undefined} [patch]
+ */
+function assertSceneGroupMutable(group, patch = null) {
+  if (!group || group.kind !== 'community') return;
+  if (!patch) throw sceneGroupReadonlyError('mutate');
+  const keys = Object.keys(patch).filter((k) => patch[k] !== undefined);
+  const allowed = new Set(['commonalities', 'suggestions']);
+  if (keys.some((k) => !allowed.has(k))) throw sceneGroupReadonlyError('mutate');
+}
+
 export { RUNWAY_HOUSE_GROUP_ID, SAM_CONTACT_ID, SAM_LEVAC_LEVEY_ID, JULIA_CONTACT_ID };
 
 /**
@@ -237,7 +259,7 @@ export async function rebuildCommunityGroupsFromScenes(env = process.env) {
   const { groups: prior } = await loadNetworkGroups(env);
   const priorIds = prior.map((g) => g.id).filter(Boolean);
   if (priorIds.length) {
-    await deleteGroups(priorIds, env, { stripScenes: false });
+    await deleteGroups(priorIds, env, { stripScenes: false, allowSceneDelete: true });
   }
 
   const { contacts } = await loadNetworkContacts(env);
@@ -301,7 +323,7 @@ export async function rebuildCommunityGroupsFromScenes(env = process.env) {
       kind: 'community',
       memberIds,
       description: 'Runway House network circle.',
-      source: 'manual',
+      source: 'scene-rebuild',
       createdAt: now,
       updatedAt: now,
     });
@@ -461,6 +483,12 @@ export async function addGroup(group, env = process.env) {
     err.code = 'invalid_group';
     throw err;
   }
+  if (normalized.kind === 'community') {
+    const src = String(group?.source || normalized.source || '').trim();
+    if (!['scene-sync', 'scene-rebuild'].includes(src)) {
+      throw sceneGroupReadonlyError('create');
+    }
+  }
   upsertGroupRow(openNetworkDb(env), normalized);
   if (normalized.kind === 'community' && (normalized.memberIds || []).length) {
     await syncCommunityMembership(normalized, normalized.memberIds, 'add', env);
@@ -476,6 +504,7 @@ export async function addGroup(group, env = process.env) {
 export async function updateGroup(id, patch, env = process.env) {
   const prev = await getGroupById(id, env);
   if (!prev) return null;
+  assertSceneGroupMutable(prev, patch);
   const merged = {
     ...prev,
     ...(patch && typeof patch === 'object' ? patch : {}),
@@ -526,6 +555,14 @@ export async function deleteGroups(ids, env = process.env, opts = {}) {
   );
   if (!want.length) return { deleted: 0 };
   const stripScenes = opts.stripScenes !== false;
+  const allowSceneDelete = opts.allowSceneDelete === true;
+
+  if (!allowSceneDelete) {
+    for (const id of want) {
+      const group = await getGroupById(id, env);
+      if (group?.kind === 'community') throw sceneGroupReadonlyError('delete');
+    }
+  }
 
   if (stripScenes) {
     for (const id of want) {
@@ -614,6 +651,7 @@ export async function ingestPeopleIntoGroup(groupId, names, env = process.env) {
     err.code = 'not_found';
     throw err;
   }
+  if (group.kind === 'community') throw sceneGroupReadonlyError('mutate');
 
   /** @type {string[]} */
   let list = [];

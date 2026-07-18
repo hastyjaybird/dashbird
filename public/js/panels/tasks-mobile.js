@@ -11,6 +11,7 @@ import {
   mobileNavBack,
   isMobileNavApplying,
 } from '../lib/mobile-history.js';
+import { TASKS_LABELS } from '../lib/network-labels.js';
 
 const PROJECT_LS_KEY = 'dashbird-tasks-project-id';
 const DONE_HIDE_MS = 3000;
@@ -37,7 +38,7 @@ function makeDragHandle(className, title) {
 }
 
 /**
- * Long-press on a task row opens the move-to-project picker.
+ * Long-press on a task row opens rename + move-to-project picker.
  * @param {HTMLElement} el
  * @param {string} taskId
  * @param {() => void} onLongPress
@@ -255,25 +256,20 @@ export function mountTasksMobile(root, config = {}) {
   listTitle.textContent = 'Projects';
   const listHeadActions = document.createElement('div');
   listHeadActions.className = 'mobile-tasks__head-actions';
-  const listRefreshBtn = document.createElement('button');
-  listRefreshBtn.type = 'button';
-  listRefreshBtn.className = 'mobile-tasks__refresh';
-  listRefreshBtn.textContent = 'Refresh';
-  listRefreshBtn.setAttribute('aria-label', 'Refresh projects');
   const openLink = document.createElement('a');
   openLink.className = 'mobile-tasks__open';
   openLink.target = '_blank';
   openLink.rel = 'noopener noreferrer';
-  openLink.textContent = 'Vikunja';
+  openLink.textContent = TASKS_LABELS.openTaskManager;
   const publicUrl = String(config.vikunjaPublicUrl || '').trim();
   if (publicUrl) openLink.href = publicUrl;
   else openLink.hidden = true;
   const randomBtn = document.createElement('button');
   randomBtn.type = 'button';
   randomBtn.className = 'mobile-tasks__header-btn';
-  randomBtn.textContent = 'Random';
+  randomBtn.textContent = TASKS_LABELS.random;
 
-  listHeadActions.append(listRefreshBtn, randomBtn, openLink);
+  listHeadActions.append(randomBtn, openLink);
 
   const vikunjaConfigured = config.vikunjaConfigured !== false;
   if (!vikunjaConfigured) {
@@ -321,6 +317,19 @@ export function mountTasksMobile(root, config = {}) {
   const moveOverlay = document.createElement('div');
   moveOverlay.className = 'mobile-tasks__move-overlay';
   moveOverlay.hidden = true;
+  const moveRenameLabel = document.createElement('label');
+  moveRenameLabel.className = 'mobile-tasks__move-rename-label';
+  const moveRenameText = document.createElement('span');
+  moveRenameText.className = 'mobile-tasks__move-title';
+  moveRenameText.textContent = 'Task name';
+  const moveRenameInput = document.createElement('input');
+  moveRenameInput.type = 'text';
+  moveRenameInput.className = 'mobile-tasks__input mobile-tasks__move-rename';
+  moveRenameInput.maxLength = 280;
+  moveRenameInput.autocomplete = 'off';
+  moveRenameInput.enterKeyHint = 'done';
+  moveRenameInput.setAttribute('aria-label', 'Task name');
+  moveRenameLabel.append(moveRenameText, moveRenameInput);
   const moveTitle = document.createElement('p');
   moveTitle.className = 'mobile-tasks__move-title';
   moveTitle.textContent = 'Move to project';
@@ -330,7 +339,7 @@ export function mountTasksMobile(root, config = {}) {
   moveCancel.type = 'button';
   moveCancel.className = 'mobile-tasks__move-cancel';
   moveCancel.textContent = 'Cancel';
-  moveOverlay.append(moveTitle, moveList, moveCancel);
+  moveOverlay.append(moveRenameLabel, moveTitle, moveList, moveCancel);
   root.append(moveOverlay);
 
   /** @type {Array<{ id: number, title: string, position?: number }>} */
@@ -521,8 +530,47 @@ export function mountTasksMobile(root, config = {}) {
 
   /**
    * @param {string} taskId
+   * @param {string} text
+   */
+  async function renameTask(taskId, text) {
+    const next = text.trim();
+    if (!next) return false;
+    const prev = items.find((it) => it.id === taskId)?.text;
+    if (prev === next) return true;
+    updateTaskTextLocally(taskId, next);
+    try {
+      const r = await fetch(`/api/vikunja/todos/${encodeURIComponent(taskId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: next }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      showStatus('');
+      return true;
+    } catch {
+      if (prev != null) updateTaskTextLocally(taskId, prev);
+      showStatus('Could not rename task.', true);
+      return false;
+    }
+  }
+
+  /**
+   * @param {string} taskId
+   */
+  async function commitMoveOverlayRename(taskId) {
+    const next = moveRenameInput.value.trim();
+    const prev = items.find((it) => it.id === taskId)?.text || '';
+    if (!next || next === prev) return true;
+    return renameTask(taskId, next);
+  }
+
+  /**
+   * @param {string} taskId
    */
   function showMoveOverlay(taskId) {
+    const task = items.find((it) => it.id === taskId);
+    moveRenameInput.value = task?.text || '';
     moveList.replaceChildren();
     const others = projects.filter((p) => p.id !== projectId);
     if (!others.length) {
@@ -538,8 +586,11 @@ export function mountTasksMobile(root, config = {}) {
         btn.dataset.projectId = String(p.id);
         btn.textContent = p.title;
         btn.addEventListener('click', () => {
-          void moveTask(taskId, p.id);
-          hideMoveOverlay();
+          void (async () => {
+            if (!(await commitMoveOverlayRename(taskId))) return;
+            void moveTask(taskId, p.id);
+            hideMoveOverlay();
+          })();
         });
         moveList.append(btn);
       }
@@ -556,6 +607,10 @@ export function mountTasksMobile(root, config = {}) {
         overlay: 'task-move',
       });
     }
+    queueMicrotask(() => {
+      moveRenameInput.focus();
+      moveRenameInput.select();
+    });
   }
 
   function hideMoveOverlay(fromPop = false) {
@@ -623,8 +678,6 @@ export function mountTasksMobile(root, config = {}) {
         : `Delete “${title}”? This cannot be undone.`;
     if (!confirm(msg)) return;
 
-    const deleteBtn = detailPane.querySelector('.mobile-tasks__delete');
-    if (deleteBtn instanceof HTMLButtonElement) deleteBtn.disabled = true;
     showStatus('Deleting…');
 
     try {
@@ -675,8 +728,109 @@ export function mountTasksMobile(root, config = {}) {
       }
     } catch (e) {
       showStatus(`Could not delete project: ${e?.message || e}`, true);
-      if (deleteBtn instanceof HTMLButtonElement) deleteBtn.disabled = false;
     }
+  }
+
+  /**
+   * @param {number} id
+   * @param {string} title
+   */
+  async function renameProject(id, title) {
+    const idx = projects.findIndex((p) => p.id === id);
+    const prevTitle = idx >= 0 ? projects[idx].title : '';
+    if (idx >= 0) projects[idx] = { ...projects[idx], title };
+    renderProjects();
+    const head = detailPane.querySelector('.mobile-tasks__detail-title');
+    if (projectId === id && head) head.textContent = title;
+
+    try {
+      const r = await fetch(`/api/vikunja/projects/${encodeURIComponent(String(id))}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false || !j.project) throw new Error(j.error || `HTTP ${r.status}`);
+      const i = projects.findIndex((p) => p.id === id);
+      if (i >= 0) {
+        projects[i] = {
+          id: j.project.id,
+          title: j.project.title,
+          position: Number(j.project.position) || projects[i].position || id,
+        };
+      }
+      renderProjects();
+      const nextHead = detailPane.querySelector('.mobile-tasks__detail-title');
+      if (projectId === id && nextHead) nextHead.textContent = projectTitle(id);
+      showStatus('');
+      return true;
+    } catch {
+      if (idx >= 0) projects[idx] = { ...projects[idx], title: prevTitle };
+      renderProjects();
+      const revertHead = detailPane.querySelector('.mobile-tasks__detail-title');
+      if (projectId === id && revertHead) revertHead.textContent = prevTitle;
+      showStatus('Could not rename project.', true);
+      return false;
+    }
+  }
+
+  function beginMobileProjectRename() {
+    if (projectId == null) return;
+    const head = detailPane.querySelector('.mobile-tasks__detail-title');
+    if (!(head instanceof HTMLElement)) return;
+    const id = projectId;
+    const prev = projectTitle(id);
+
+    const form = document.createElement('form');
+    form.className = 'mobile-tasks__rename-form';
+    form.setAttribute('aria-label', 'Rename project');
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'mobile-tasks__input mobile-tasks__detail-rename';
+    input.value = prev;
+    input.maxLength = 120;
+    input.autocomplete = 'off';
+    input.enterKeyHint = 'done';
+    input.setAttribute('aria-label', 'Project name');
+
+    form.append(input);
+    head.replaceWith(form);
+    input.focus();
+    input.select();
+
+    let committed = false;
+    const finish = (save) => {
+      if (committed) return;
+      committed = true;
+      const next = input.value.trim();
+      const restore = (title) => {
+        const h2 = document.createElement('h2');
+        h2.className = 'mobile-tasks__detail-title';
+        h2.textContent = title;
+        if (form.isConnected) form.replaceWith(h2);
+      };
+      if (save && next && next !== prev) {
+        void renameProject(id, next).then((ok) => {
+          restore(ok ? next : prev);
+        });
+      } else {
+        restore(prev);
+      }
+    };
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      finish(true);
+    });
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        finish(false);
+      }
+    });
+    input.addEventListener('blur', () => finish(true));
   }
 
   async function deleteCurrentProject() {
@@ -705,14 +859,7 @@ export function mountTasksMobile(root, config = {}) {
       mobileNavBack();
     });
 
-    const detailRefreshBtn = document.createElement('button');
-    detailRefreshBtn.type = 'button';
-    detailRefreshBtn.className = 'mobile-tasks__refresh';
-    detailRefreshBtn.textContent = 'Refresh';
-    detailRefreshBtn.setAttribute('aria-label', 'Refresh tasks');
-    detailRefreshBtn.addEventListener('click', () => void refreshTodos());
-
-    detailHead.append(back, detailRefreshBtn);
+    detailHead.append(back);
 
     const head = document.createElement('h2');
     head.className = 'mobile-tasks__detail-title';
@@ -748,13 +895,63 @@ export function mountTasksMobile(root, config = {}) {
 
     const detailFoot = document.createElement('div');
     detailFoot.className = 'mobile-tasks__detail-foot';
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'mobile-tasks__project-edit';
+    editBtn.textContent = 'Edit';
+    editBtn.setAttribute('aria-haspopup', 'menu');
+    editBtn.setAttribute('aria-expanded', 'false');
+    editBtn.setAttribute(
+      'aria-label',
+      projectId != null ? `Edit ${projectTitle(projectId)}` : 'Edit project',
+    );
+
+    const editMenu = document.createElement('div');
+    editMenu.className = 'mobile-tasks__project-menu';
+    editMenu.hidden = true;
+    editMenu.setAttribute('role', 'menu');
+
+    const renameBtn = document.createElement('button');
+    renameBtn.type = 'button';
+    renameBtn.className = 'mobile-tasks__project-menu-item';
+    renameBtn.textContent = 'Rename project…';
+    renameBtn.setAttribute('role', 'menuitem');
+
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
-    deleteBtn.className = 'mobile-tasks__delete';
-    deleteBtn.textContent = 'Delete project';
-    deleteBtn.setAttribute('aria-label', `Delete ${projectId != null ? projectTitle(projectId) : 'project'}`);
-    deleteBtn.addEventListener('click', () => void deleteCurrentProject());
-    detailFoot.append(deleteBtn);
+    deleteBtn.className = 'mobile-tasks__project-menu-item mobile-tasks__project-menu-item--danger';
+    deleteBtn.textContent = 'Delete project…';
+    deleteBtn.setAttribute('role', 'menuitem');
+
+    editMenu.append(renameBtn, deleteBtn);
+
+    const closeEditMenu = () => {
+      editMenu.hidden = true;
+      editBtn.setAttribute('aria-expanded', 'false');
+    };
+
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = editMenu.hidden;
+      closeEditMenu();
+      if (open) {
+        editMenu.hidden = false;
+        editBtn.setAttribute('aria-expanded', 'true');
+      }
+    });
+
+    renameBtn.addEventListener('click', () => {
+      closeEditMenu();
+      beginMobileProjectRename();
+    });
+
+    deleteBtn.addEventListener('click', () => {
+      closeEditMenu();
+      void deleteCurrentProject();
+    });
+
+    detailFoot.append(editBtn, editMenu);
 
     detailPane.append(detailHead, head, addForm, list, empty, detailFoot);
 
@@ -804,7 +1001,7 @@ export function mountTasksMobile(root, config = {}) {
     const text = document.createElement('span');
     text.className = 'mobile-tasks__task-text';
     text.textContent = item.text;
-    text.title = 'Long-press to move to another project';
+    text.title = 'Long-press to rename or move to another project';
 
     label.append(cb, text);
     row.append(label);
@@ -1162,33 +1359,25 @@ export function mountTasksMobile(root, config = {}) {
   async function refreshProjects() {
     if (listRefreshing) return;
     listRefreshing = true;
-    listRefreshBtn.disabled = true;
     showStatus('Refreshing…');
     try {
       await loadProjects();
     } finally {
       listRefreshing = false;
-      listRefreshBtn.disabled = false;
     }
   }
 
   async function refreshTodos() {
     if (detailRefreshing || projectId == null || view !== 'detail') return;
     detailRefreshing = true;
-    const btn = detailPane.querySelector('.mobile-tasks__refresh');
-    if (btn instanceof HTMLButtonElement) btn.disabled = true;
     showStatus('Refreshing…');
     try {
       await loadProjects();
       if (view === 'detail' && projectId != null) await loadTodos();
     } finally {
       detailRefreshing = false;
-      const refreshBtn = detailPane.querySelector('.mobile-tasks__refresh');
-      if (refreshBtn instanceof HTMLButtonElement) refreshBtn.disabled = false;
     }
   }
-
-  listRefreshBtn.addEventListener('click', () => void refreshProjects());
 
   async function loadProjects() {
     try {
@@ -1319,7 +1508,12 @@ export function mountTasksMobile(root, config = {}) {
     const taskId = draggingTaskId;
     const targetProjectId = moveTargetProjectId;
     hideMoveOverlay();
-    if (taskId && targetProjectId != null) void moveTask(taskId, targetProjectId);
+    if (taskId && targetProjectId != null) {
+      void (async () => {
+        if (!(await commitMoveOverlayRename(taskId))) return;
+        void moveTask(taskId, targetProjectId);
+      })();
+    }
   }
 
   detailPane.addEventListener('pointerup', finishTaskPointerDrag);
@@ -1344,7 +1538,12 @@ export function mountTasksMobile(root, config = {}) {
     highlightMoveTarget(e.clientX, e.clientY);
     const targetProjectId = moveTargetProjectId;
     hideMoveOverlay();
-    if (taskId && targetProjectId != null) void moveTask(taskId, targetProjectId);
+    if (taskId && targetProjectId != null) {
+      void (async () => {
+        if (!(await commitMoveOverlayRename(taskId))) return;
+        void moveTask(taskId, targetProjectId);
+      })();
+    }
   });
 
 
@@ -1370,6 +1569,13 @@ export function mountTasksMobile(root, config = {}) {
         taskRandomMeta = meta;
       },
     });
+  });
+
+  moveRenameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && draggingTaskId) {
+      e.preventDefault();
+      void commitMoveOverlayRename(draggingTaskId);
+    }
   });
 
   moveCancel.addEventListener('click', (e) => {

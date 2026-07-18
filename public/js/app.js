@@ -221,16 +221,18 @@ async function mainMobile() {
 
   const [{ mountViewModeToggle }, { mountMobileShell }] = await Promise.all([
     import('./panels/view-mode-toggle.js'),
-    import('./panels/mobile-shell.js?v=mobile-panels-20260716-4'),
+    import('./panels/mobile-shell.js?v=mobile-panels-20260717-4'),
   ]);
 
   mountViewModeToggle(document.getElementById('mount-view-mode'));
   mountMobileShell({
     tabsRoot: document.getElementById('mount-mobile-tabs'),
+    notesRoot: document.getElementById('mount-mobile-notes'),
     networkRoot: document.getElementById('mount-mobile-network'),
     eventsRoot: document.getElementById('mount-mobile-events'),
     groupsRoot: document.getElementById('mount-mobile-groups'),
     tasksRoot: document.getElementById('mount-mobile-tasks'),
+    gmailRoot: document.getElementById('mount-mobile-gmail'),
   });
 
   /* Still paint zip / TZ when config is available (next to the view icons). */
@@ -243,11 +245,19 @@ async function mainMobile() {
           if (place) renderTopbarContext(topbarEl, place);
         });
         subscribeDevicePlace((place) => renderTopbarContext(topbarEl, place));
+        const { mountMobileAircraftHeader } = await import('./lib/mobile-aircraft-header.js');
+        mountMobileAircraftHeader(document.getElementById('mount-topbar-aircraft'));
       } catch (e) {
         console.error('Mobile location context failed:', e);
       }
     })
     .catch(() => {});
+
+  void import('./panels/dev-request-mobile.js')
+    .then(({ mountDevRequestMobile }) => {
+      mountDevRequestMobile();
+    })
+    .catch((e) => console.error('Dev request mobile mount failed:', e));
 
   markPriorityReady();
   markDeferredReady();
@@ -305,11 +315,11 @@ async function mainDesktop() {
     })
     .catch((e) => console.error('Tasks mount failed:', e));
 
-  void import('./panels/local-news.js')
-    .then(({ mountMainNewsFeed }) => {
-      mountMainNewsFeed(document.getElementById('mount-main-news'));
+  void import('./panels/keep-notes.js')
+    .then(({ mountKeepNotes }) => {
+      mountKeepNotes(document.getElementById('mount-keep-notes'));
     })
-    .catch((e) => console.error('Main news mount failed:', e));
+    .catch((e) => console.error('Keep notes mount failed:', e));
 
   void import('./panels/dev-sticky-note.js')
     .then(({ mountDevStickyNote }) => {

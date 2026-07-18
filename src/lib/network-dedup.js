@@ -788,6 +788,7 @@ export function buildMergedContact(keep, drop, opts = {}) {
       needsReview: Boolean(keep.enrichment?.needsReview || drop.enrichment?.needsReview),
       lastMode: preferStr(keep.enrichment?.lastMode, drop.enrichment?.lastMode) || null,
     },
+    intakeReviewed: keep.intakeReviewed !== false && drop.intakeReviewed !== false,
     createdAt: keep.createdAt || drop.createdAt,
     updatedAt: new Date().toISOString(),
     source: keep.source || drop.source || 'manual',
