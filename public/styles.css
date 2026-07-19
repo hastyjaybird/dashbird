@@ -10460,6 +10460,10 @@ button.network-crm__person-name--link:hover {
   gap: 0.35rem;
 }
 
+.keep-notes__compose-actions[hidden] {
+  display: none !important;
+}
+
 .keep-notes__scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -10663,6 +10667,10 @@ button.network-crm__person-name--link:hover {
   justify-content: center;
   padding: 4rem 1rem 1rem;
   background: rgba(4, 8, 16, 0.55);
+}
+
+.keep-notes__overlay[hidden] {
+  display: none !important;
 }
 
 .keep-notes__editor {

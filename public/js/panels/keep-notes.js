@@ -42,6 +42,7 @@ export function mountKeepNotes(root) {
   composeSave.textContent = 'Add';
 
   composeActions.append(composeClose, composeSave);
+  composeTitle.hidden = true;
   compose.append(composeTitle, composeBody, composeActions);
 
   const scroll = document.createElement('div');
