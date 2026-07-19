@@ -670,15 +670,39 @@ export function mountTasksMobile(root, config = {}) {
   }
 
   async function deleteProject(id) {
-    const title = projectTitle(id);
-    const openCount = projectId === id ? items.length : null;
-    const msg =
-      openCount != null && openCount > 0
-        ? `Delete “${title}” and its ${openCount} open task${openCount === 1 ? '' : 's'}? This cannot be undone.`
-        : `Delete “${title}”? This cannot be undone.`;
-    if (!confirm(msg)) return;
+    const idx = projects.findIndex((p) => p.id === id);
+    if (idx < 0) return;
+    const removed = projects[idx];
+    const wasSelected = projectId === id;
 
-    showStatus('Deleting…');
+    // Remove from the list immediately; revert only if the server delete fails.
+    projects = projects.filter((p) => p.id !== id);
+    try {
+      if (readSavedProjectId() === id) localStorage.removeItem(PROJECT_LS_KEY);
+    } catch {
+      /* ignore */
+    }
+    if (wasSelected) {
+      showList();
+    } else {
+      renderProjects();
+    }
+    if (
+      history.state?.dashbirdMobile &&
+      history.state.tab === 'tasks' &&
+      history.state.pane === 'project' &&
+      history.state.projectId === id
+    ) {
+      history.replaceState(
+        /** @type {import('../lib/mobile-history.js').MobileNavState} */ ({
+          dashbirdMobile: true,
+          tab: 'tasks',
+          pane: 'list',
+        }),
+        '',
+      );
+    }
+    showStatus('');
 
     try {
       const r = await fetch(`/api/vikunja/projects/${encodeURIComponent(String(id))}`, {
@@ -699,34 +723,11 @@ export function mountTasksMobile(root, config = {}) {
                   : j.detail || j.error || `HTTP ${r.status}`;
         throw new Error(err);
       }
-      projects = projects.filter((p) => p.id !== id);
-      try {
-        if (readSavedProjectId() === id) localStorage.removeItem(PROJECT_LS_KEY);
-      } catch {
-        /* ignore */
-      }
-      showStatus('Project deleted.');
-      if (projectId === id) {
-        showList();
-      } else {
-        renderProjects();
-      }
-      if (
-        history.state?.dashbirdMobile &&
-        history.state.tab === 'tasks' &&
-        history.state.pane === 'project' &&
-        history.state.projectId === id
-      ) {
-        history.replaceState(
-          /** @type {import('../lib/mobile-history.js').MobileNavState} */ ({
-            dashbirdMobile: true,
-            tab: 'tasks',
-            pane: 'list',
-          }),
-          '',
-        );
-      }
     } catch (e) {
+      // Restore the row so the list stays in sync with Vikunja.
+      projects.push(removed);
+      sortProjectsInPlace();
+      renderProjects();
       showStatus(`Could not delete project: ${e?.message || e}`, true);
     }
   }

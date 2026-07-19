@@ -106,8 +106,11 @@ function gmailCacheFresh(cache, fingerprint, env = process.env) {
   return Number.isFinite(age) && age >= 0 && age < gmailEventsCacheTtlMs(env);
 }
 
+// Wider net so we don't miss events that arrive from marketing senders (no invite
+// keyword, sender not a platform domain) but carry a platform link in the body.
+// Downstream parsing + enrichment + window filter still gate what becomes an event.
 const DEFAULT_QUERY =
-  'newer_than:35d (filename:ics OR subject:(invite OR invitation OR RSVP OR event OR meetup OR "you\'re invited" OR "join us") OR from:(partiful.com OR secretparty.io OR lu.ma OR eventbrite.com OR meetup.com OR facebookmail.com OR metamail.com OR facebook.com))';
+  'newer_than:35d (filename:ics OR subject:(invite OR invitation OR RSVP OR event OR meetup OR "you\'re invited" OR "join us" OR "you\'re going" OR going OR attend OR attendance OR ticket OR tickets OR register OR registration OR "save the date") OR from:(partiful.com OR secretparty.io OR lu.ma OR eventbrite.com OR meetup.com OR facebookmail.com OR metamail.com OR facebook.com) OR "luma.com" OR "lu.ma" OR "eventbrite.com" OR "partiful.com" OR "secretparty.io" OR "meetup.com")';
 
 /**
  * Public event / invite links. Facebook: /events/{id}, page hosted tabs, group events.
@@ -1014,31 +1017,36 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
   return events;
 }
 
+/** Platforms whose public event pages expose JSON-LD / title+time we can enrich from. */
+const ENRICHABLE_SOURCES = new Set(['eventbrite', 'luma', 'partiful', 'meetup']);
+
 /**
+ * Whether a Gmail-derived event can be improved by fetching its platform page
+ * (fills a missing start/venue/city, or resolves a thin Eventbrite tracker URL).
  * @param {object} event
  * @returns {boolean}
  */
-function gmailEventNeedsEventbriteEnrich(event) {
+function gmailEventNeedsPageEnrich(event) {
   if (!event) return false;
-  const source = String(event.source || '').toLowerCase();
   const url = String(event.url || '');
   const rawUrls = Array.isArray(event.raw?.urls) ? event.raw.urls : [];
   const candidates = [url, ...rawUrls].filter(Boolean);
-  const eb = candidates.some((u) => isEventbriteHost(u)) || source === 'eventbrite';
-  if (!eb) return false;
-  const thinUrl = !candidates.some((u) => isEventbriteEventUrl(u));
-  const missingPlace = !event.venue || !event.city;
+  const source = sourceFromPlatformUrls(candidates, String(event.source || '').toLowerCase());
+  if (!ENRICHABLE_SOURCES.has(source)) return false;
   const missingStart = !event.start;
+  const missingPlace = !event.venue || !event.city;
   const weakStart =
     event.start
     && /T00:00:00\.000Z$/.test(String(event.start))
     && !event.end;
-  return thinUrl || missingPlace || missingStart || weakStart;
+  const thinEbUrl = source === 'eventbrite' && !candidates.some((u) => isEventbriteEventUrl(u));
+  return missingStart || missingPlace || weakStart || thinEbUrl;
 }
 
 /**
- * Resolve clicks.eventbrite.com → /e/… and fill venue/city/start from the public page.
- * Keeps Gmail event ids stable for upsert.
+ * Fill missing start/venue/city (and canonical URL) from a platform's public page.
+ * Handles Eventbrite (incl. clicks.* tracker → /e/… resolution) plus Luma, Partiful,
+ * and Meetup event pages. Keeps Gmail event ids stable for upsert.
  * @param {object[]} events
  * @param {{ concurrency?: number, timeoutMs?: number }} [opts]
  * @returns {Promise<object[]>}
@@ -1075,19 +1083,19 @@ export async function enrichGmailEventsFromPublicPages(events, opts = {}) {
 
   /**
    * @param {string} eventUrl
+   * @param {string} source
    * @returns {Promise<object | null>}
    */
-  async function loadPage(eventUrl) {
-    const key = String(eventUrl || '').split('#')[0].toLowerCase();
-    if (!key) return null;
+  async function loadPage(eventUrl, source) {
+    const key = `${source}|${String(eventUrl || '').split('#')[0].toLowerCase()}`;
     if (pageCache.has(key)) return pageCache.get(key) ?? null;
-    const page = await fetchNormalizedEventFromUrl(eventUrl, 'eventbrite', timeoutMs);
+    const page = await fetchNormalizedEventFromUrl(eventUrl, source, timeoutMs);
     pageCache.set(key, page);
     return page;
   }
 
   const indexes = list
-    .map((ev, i) => (gmailEventNeedsEventbriteEnrich(ev) ? i : -1))
+    .map((ev, i) => (gmailEventNeedsPageEnrich(ev) ? i : -1))
     .filter((i) => i >= 0);
   if (!indexes.length) return list;
 
@@ -1098,25 +1106,37 @@ export async function enrichGmailEventsFromPublicPages(events, opts = {}) {
       batch.map(async (idx) => {
         const ev = out[idx];
         const rawUrls = Array.isArray(ev.raw?.urls) ? ev.raw.urls : [];
-        const ebCandidates = [...new Set([ev.url, ...rawUrls].filter((u) => u && isEventbriteHost(u)))]
-          .sort((a, b) => platformUrlScore(b) - platformUrlScore(a));
+        const candidates = [...new Set([ev.url, ...rawUrls].filter(Boolean))];
+        const source = sourceFromPlatformUrls(candidates, String(ev.source || '').toLowerCase());
+        if (!ENRICHABLE_SOURCES.has(source)) return;
 
-        let eventUrl = ebCandidates.find((u) => isEventbriteEventUrl(u)) || null;
-        if (!eventUrl) {
-          for (const c of ebCandidates) {
-            const resolved = await resolveEb(c);
-            if (resolved) {
-              eventUrl = resolved;
-              break;
+        // Only pages on this platform's real host (drops CDN / redirect trackers).
+        const platformCandidates = candidates
+          .filter((u) => sourceFromPlatformUrls([u], '') === source)
+          .sort((a, b) => platformUrlScore(b) - platformUrlScore(a));
+        if (!platformCandidates.length) return;
+
+        let eventUrl = null;
+        if (source === 'eventbrite') {
+          eventUrl = platformCandidates.find((u) => isEventbriteEventUrl(u)) || null;
+          if (!eventUrl) {
+            for (const c of platformCandidates) {
+              const resolved = await resolveEb(c);
+              if (resolved) {
+                eventUrl = resolved;
+                break;
+              }
             }
           }
+        } else {
+          eventUrl = platformCandidates[0] || null;
         }
         if (!eventUrl) return;
 
-        const page = await loadPage(eventUrl);
+        const page = await loadPage(eventUrl, source);
         if (!page) {
-          // Still upgrade URL if we resolved a deep link.
-          if (eventUrl && eventUrl !== ev.url) {
+          // Eventbrite: still upgrade to the resolved deep link even if the page failed.
+          if (source === 'eventbrite' && eventUrl && eventUrl !== ev.url) {
             out[idx] = {
               ...ev,
               url: eventUrl,
@@ -1132,11 +1152,20 @@ export async function enrichGmailEventsFromPublicPages(events, opts = {}) {
         }
 
         const subjectish = String(ev.title || '');
+        // Non-Eventbrite marketing emails rarely carry the real event name in the
+        // subject, so trust the page title. Eventbrite subjects often embed it.
         const preferPageTitle =
-          !subjectish
-          || /^(just added!|new event|you're invited|you are invited)\b/i.test(subjectish)
-          || /📅/.test(subjectish)
-          || subjectish.length < 8;
+          source !== 'eventbrite'
+            ? Boolean(page.title)
+            : !subjectish
+              || /^(just added!|new event|you're invited|you are invited)\b/i.test(subjectish)
+              || /📅/.test(subjectish)
+              || subjectish.length < 8;
+
+        const canonicalUrl =
+          source === 'eventbrite'
+            ? (isEventbriteEventUrl(page.url) ? page.url : eventUrl)
+            : (page.url || eventUrl);
 
         out[idx] = {
           ...ev,
@@ -1148,14 +1177,14 @@ export async function enrichGmailEventsFromPublicPages(events, opts = {}) {
           city: page.city || ev.city || null,
           lat: page.lat ?? ev.lat ?? null,
           lon: page.lon ?? ev.lon ?? null,
-          url: isEventbriteEventUrl(page.url) ? page.url : eventUrl,
-          source: 'eventbrite',
+          url: canonicalUrl,
+          source,
           description: page.description || ev.description || null,
           imageUrl: page.imageUrl || ev.imageUrl || null,
           raw: {
             ...(ev.raw || {}),
             resolvedUrl: eventUrl,
-            enrich: 'eventbrite_page',
+            enrich: `${source}_page`,
             pageTitle: page.title || null,
           },
         };
@@ -1472,6 +1501,7 @@ export async function fetchGmailEventAnnouncementsFor(email, env = process.env, 
         windowDays: opts.windowDays,
         scrape: opts.scrape,
         windowWeeks: opts.windowWeeks,
+        deferWindowFilter: opts.deferWindowFilter === true,
       });
     } catch (e) {
       return {
@@ -1522,10 +1552,13 @@ export async function fetchGmailEventAnnouncementsFor(email, env = process.env, 
         scrape: opts.scrape,
         windowWeeks: opts.windowWeeks,
       });
-    const filtered = filterEventsToIngestWindow(events, {
-      pastDays: windowDays.pastDays,
-      futureDays: windowDays.futureDays,
-    });
+    // Deferred filtering lets enrichment fill missing start dates first.
+    const filtered = opts.deferWindowFilter
+      ? events
+      : filterEventsToIngestWindow(events, {
+          pastDays: windowDays.pastDays,
+          futureDays: windowDays.futureDays,
+        });
 
     return {
       ok: true,
@@ -1572,7 +1605,9 @@ export async function fetchGmailEventAnnouncements(env = process.env, opts = {})
   }
   const windowDays =
     opts.windowDays || eventsIngestWindowDays(env, { scrape, windowWeeks: opts.windowWeeks });
-  const fetchOpts = { ...opts, scrape, windowDays };
+  // Defer the per-mailbox window filter so enrichment can fill missing start dates
+  // (e.g. Luma marketing emails) before we drop dateless events here.
+  const fetchOpts = { ...opts, scrape, windowDays, deferWindowFilter: true };
   const force = opts.forceRefresh === true;
 
   const addresses = gmailIntakeAddresses(env);
@@ -1627,15 +1662,22 @@ export async function fetchGmailEventAnnouncements(env = process.env, opts = {})
     try {
       enriched = await enrichGmailEventsFromPublicPages(events);
     } catch (e) {
-      console.warn('[events-finder] gmail eventbrite enrich failed:', e?.message || e);
+      console.warn('[events-finder] gmail public-page enrich failed:', e?.message || e);
       enriched = events;
     }
+
+    // Apply the ingest-window filter now (deferred above) so enrichment had a chance
+    // to supply start dates first. Dateless / out-of-window events are dropped here.
+    const windowed = filterEventsToIngestWindow(enriched, {
+      pastDays: windowDays.pastDays,
+      futureDays: windowDays.futureDays,
+    });
 
     // Dedupe by platform URL when present, else by id
     const seen = new Set();
     /** @type {typeof events} */
     const deduped = [];
-    for (const ev of enriched) {
+    for (const ev of windowed) {
       const urlKey = ev.url && !ev.url.includes('mail.google.com')
         ? `url:${String(ev.url).split('#')[0].toLowerCase()}`
         : `id:${ev.id}`;

@@ -402,6 +402,40 @@ export async function renamePanelProject(projectId, title, env = process.env) {
 }
 
 /**
+ * Archive a project (hides it from the panel list). Uses the update (POST) scope,
+ * so it works even when the API token lacks `projects.delete`.
+ * @param {number} projectId
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function archivePanelProject(projectId, env = process.env) {
+  const getRes = await vikunjaFetch(`projects/${projectId}`, { env });
+  if (getRes.status === 404) {
+    const err = new Error('not_found');
+    err.code = 'not_found';
+    err.status = 404;
+    throw err;
+  }
+  if (!getRes.ok || !getRes.json || typeof getRes.json !== 'object') {
+    const err = new Error(safeUpstreamMessage(getRes) || 'vikunja_project_get_failed');
+    err.code = 'vikunja_upstream';
+    err.status = getRes.status >= 400 && getRes.status < 600 ? getRes.status : 502;
+    throw err;
+  }
+  const body = { ...getRes.json, is_archived: true };
+  const postRes = await vikunjaFetch(`projects/${projectId}`, {
+    method: 'POST',
+    body,
+    env,
+  });
+  if (!postRes.ok) {
+    const err = new Error(safeUpstreamMessage(postRes) || 'vikunja_project_archive_failed');
+    err.code = 'vikunja_upstream';
+    err.status = postRes.status >= 400 && postRes.status < 600 ? postRes.status : 502;
+    throw err;
+  }
+}
+
+/**
  * Delete a panel project (and its tasks upstream).
  * @param {number} projectId
  * @param {NodeJS.ProcessEnv} [env]
@@ -455,6 +489,13 @@ export async function deletePanelProject(projectId, env = process.env) {
     });
   }
   if (!finalRes.ok && finalRes.status !== 204) {
+    // The API token can create/update projects but not delete them (Vikunja
+    // returns 401/403 for a missing `projects.delete` scope). Fall back to
+    // archiving so the project still leaves the panel list.
+    if (finalRes.status === 401 || finalRes.status === 403) {
+      await archivePanelProject(projectId, env);
+      return;
+    }
     const err = new Error(safeUpstreamMessage(finalRes) || 'vikunja_project_delete_failed');
     err.code = 'vikunja_upstream';
     err.status = finalRes.status >= 400 && finalRes.status < 600 ? finalRes.status : 502;

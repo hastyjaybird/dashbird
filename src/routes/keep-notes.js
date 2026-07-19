@@ -4,6 +4,7 @@
 import { Router } from 'express';
 import express from 'express';
 import {
+  bulkKeepNotesAction,
   clearKeepNoteAttachment,
   createKeepNote,
   deleteKeepNote,
@@ -11,6 +12,7 @@ import {
   KEEP_NOTES_ROOT,
   listKeepNotes,
   readKeepNoteAttachment,
+  reorderKeepNotes,
   setKeepNoteAttachment,
   updateKeepNote,
 } from '../lib/keep-notes-store.js';
@@ -61,12 +63,57 @@ router.post('/', async (req, res) => {
   }
 });
 
+router.post('/bulk', async (req, res) => {
+  try {
+    const action = String(req.body?.action || '').trim().toLowerCase();
+    const result = await bulkKeepNotesAction(req.body?.ids, action);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    const code = String(e?.code || '');
+    const map = {
+      invalid_ids: 400,
+      invalid_action: 400,
+      bulk_failed: 400,
+    };
+    res.status(map[code] || 500).json({
+      ok: false,
+      error: String(e?.message || e),
+      code: code || undefined,
+    });
+  }
+});
+
+router.post('/reorder', async (req, res) => {
+  try {
+    const notes = await reorderKeepNotes({
+      pinned: req.body?.pinned,
+      others: req.body?.others,
+    });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, notes });
+  } catch (e) {
+    const code = String(e?.code || '');
+    const map = {
+      invalid_ids: 400,
+      invalid_section: 400,
+      not_found: 404,
+    };
+    res.status(map[code] || 500).json({
+      ok: false,
+      error: String(e?.message || e),
+      code: code || undefined,
+    });
+  }
+});
+
 router.patch('/:id', async (req, res) => {
   try {
     const note = await updateKeepNote(String(req.params.id || ''), {
       title: req.body?.title,
       body: req.body?.body,
       pinned: req.body?.pinned,
+      archived: req.body?.archived,
     });
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, note });

@@ -519,30 +519,47 @@ export function mountTasks(root, config = {}) {
    * @param {number} id
    */
   async function deleteProject(id) {
-    const title = projects.find((p) => p.id === id)?.title || 'Project';
-    const openCount =
-      projectId === id
-        ? items.length
-        : todosCache.has(id)
-          ? todosCache.get(id)?.length ?? 0
-          : null;
-    const msg =
-      openCount != null && openCount > 0
-        ? `Delete “${title}” and its ${openCount} open task${openCount === 1 ? '' : 's'}? This cannot be undone.`
-        : `Delete “${title}”? This cannot be undone.`;
-    if (!confirm(msg)) return;
+    const idx = projects.findIndex((p) => p.id === id);
+    if (idx < 0) return;
+    const removed = projects[idx];
+    const wasSelected = projectId === id;
+    const cachedTodos = todosCache.get(id);
 
-    editProjectBtn.disabled = true;
-    renameProjectMenuBtn.disabled = true;
-    deleteProjectMenuBtn.disabled = true;
+    // Remove from the list immediately; revert only if the server delete fails.
+    projects = projects.filter((p) => p.id !== id);
+    todosCache.delete(id);
     closeProjectEditMenu();
-    showStatus('Deleting…');
+    try {
+      if (readSavedProjectId() === id) localStorage.removeItem(PROJECT_LS_KEY);
+    } catch {
+      /* ignore */
+    }
+
+    if (wasSelected) {
+      projectId = null;
+      items = [];
+      clearAllPending();
+      setWritable(false);
+      detailTitle.textContent = 'Select a project';
+      renderList();
+      empty.hidden = true;
+      const next = projects[0]?.id;
+      if (next != null) selectProject(next);
+      else syncProjectEditUi();
+    }
+
+    renderProjects();
+    syncProjectEditUi();
+    showStatus('');
 
     try {
       const r = await fetch(`/api/vikunja/projects/${encodeURIComponent(String(id))}`, {
         method: 'DELETE',
       });
       const j = await r.json().catch(() => ({}));
+      // #region agent log
+      fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'9c9799'},body:JSON.stringify({sessionId:'9c9799',runId:'post-fix',hypothesisId:'A-B-C-E',location:'tasks.js:559',message:'DELETE project response',data:{id,status:r.status,ok:r.ok,jOk:j&&j.ok,jError:j&&j.error,jDetail:j&&j.detail,willRestore:(!r.ok||j.ok===false)},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       if (!r.ok || j.ok === false) {
         const err =
           j.error === 'archive_project_protected'
@@ -557,34 +574,17 @@ export function mountTasks(root, config = {}) {
                   : j.detail || j.error || `HTTP ${r.status}`;
         throw new Error(err);
       }
-
-      projects = projects.filter((p) => p.id !== id);
-      todosCache.delete(id);
-      try {
-        if (readSavedProjectId() === id) localStorage.removeItem(PROJECT_LS_KEY);
-      } catch {
-        /* ignore */
-      }
-
-      if (projectId === id) {
-        projectId = null;
-        items = [];
-        clearAllPending();
-        setWritable(false);
-        detailTitle.textContent = 'Select a project';
-        renderList();
-        empty.hidden = true;
-        const next = projects[0]?.id;
-        if (next != null) selectProject(next);
-        else syncProjectEditUi();
-      }
-
-      renderProjects();
-      showStatus('Project deleted.');
     } catch (e) {
-      showStatus(`Could not delete project: ${e?.message || e}`, true);
-    } finally {
+      // #region agent log
+      fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'9c9799'},body:JSON.stringify({sessionId:'9c9799',runId:'post-fix',hypothesisId:'D',location:'tasks.js:574',message:'DELETE project catch — restoring row',data:{id,errName:e&&e.name,errMsg:String(e&&e.message||e)},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      // Restore the row so the list stays in sync with Vikunja.
+      projects.push(removed);
+      sortProjectsInPlace();
+      if (cachedTodos) todosCache.set(id, cachedTodos);
+      renderProjects();
       syncProjectEditUi();
+      showStatus(`Could not delete project: ${e?.message || e}`, true);
     }
   }
 

@@ -268,7 +268,7 @@ async function mainDesktop() {
     { mountViewModeToggle },
     { mountPageTabs },
     { mountSkySidebarToggle },
-    { mountBookmarkGrid },
+    { mountBookmarkGrid, createBookmarksCoordinator },
     { mountCalendarUpcoming },
     { mountCalendar },
   ] = await Promise.all([
@@ -284,16 +284,21 @@ async function mainDesktop() {
   mountPageTabs(document.getElementById('mount-page-tabs'), { onChange: showPage });
   mountSkySidebarToggle(document.getElementById('sky-sidebar-toggle'));
 
+  const bookmarksCoordinator = createBookmarksCoordinator();
   const bookmarksPersonalPromise = mountBookmarkGrid(
     document.getElementById('mount-bookmarks-personal'),
     '/data/bookmarks-personal.json',
     'Add tiles in public/data/bookmarks-personal.json (up to 9).',
+    bookmarksCoordinator,
   );
   const bookmarksWorkPromise = mountBookmarkGrid(
     document.getElementById('mount-bookmarks-work'),
     '/data/bookmarks-work.json',
     'Add tiles in public/data/bookmarks-work.json.',
+    bookmarksCoordinator,
   );
+  const bookmarksActions = document.getElementById('bookmarks-actions');
+  if (bookmarksActions) bookmarksCoordinator.mountToolbar(bookmarksActions);
 
   const cachedConfig = readPanelCache(CONFIG_CACHE_KEY, CONFIG_CACHE_MAX_MS);
   const configPromise = loadConfigPreferLive();

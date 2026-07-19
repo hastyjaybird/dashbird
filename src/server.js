@@ -75,6 +75,7 @@ import networkRouter from './routes/network.js';
 import devNotesRouter from './routes/dev-notes.js';
 import devRequestsRouter from './routes/dev-requests.js';
 import keepNotesRouter from './routes/keep-notes.js';
+import bookmarksRouter from './routes/bookmarks.js';
 import devAgentLogRouter from './routes/dev-agent-log.js';
 import trustedDeviceAuthRouter, {
   deviceBindHandler,
@@ -188,6 +189,7 @@ app.use('/api/web-catalog', webCatalogRouter);
 app.use('/api/dev-notes', devNotesRouter);
 app.use('/api/dev-requests', devRequestsRouter);
 app.use('/api/keep-notes', keepNotesRouter);
+app.use('/api/bookmarks', bookmarksRouter);
 app.use('/api/dev-agent-log', devAgentLogRouter);
 
 

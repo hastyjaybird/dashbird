@@ -75,17 +75,11 @@ export function buildDevRequestForm(opts) {
   form.className = 'dev-request-form';
   form.noValidate = true;
 
-  const titleInput = document.createElement('input');
-  titleInput.type = 'text';
-  titleInput.className = 'dev-request-form__input';
-  titleInput.placeholder = 'Short title (required)';
-  titleInput.maxLength = 160;
-  titleInput.required = true;
-
   const bodyInput = document.createElement('textarea');
   bodyInput.className = 'dev-request-form__textarea';
   bodyInput.placeholder = 'What should change? Steps to reproduce, expected behavior…';
-  bodyInput.rows = opts.compact ? 3 : 4;
+  bodyInput.rows = opts.compact ? 4 : 5;
+  bodyInput.required = true;
 
   const row1 = document.createElement('div');
   row1.className = 'dev-request-form__row';
@@ -136,14 +130,28 @@ export function buildDevRequestForm(opts) {
   submitBtn.textContent = 'Submit request';
 
   footer.append(viewBtn, submitBtn);
-  form.append(titleInput, bodyInput, row1, attachZone, footer);
+  form.append(bodyInput, row1, attachZone, footer);
 
   /** @type {DevAreasMap} */
   let areas = { desktop: [], mobile: [] };
 
   function syncSubmitState() {
-    submitBtn.disabled = submitting || !titleInput.value.trim();
+    submitBtn.disabled = submitting || !bodyInput.value.trim();
     submitBtn.textContent = submitting ? 'Submitting…' : 'Submit request';
+  }
+
+  /**
+   * Derive a short title from the change-request text (first non-empty line).
+   * @param {string} text
+   * @returns {string}
+   */
+  function deriveTitle(text) {
+    const firstLine = String(text || '')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.length > 0) || '';
+    if (firstLine.length <= 160) return firstLine;
+    return `${firstLine.slice(0, 157).trimEnd()}…`;
   }
 
   function renderPreview() {
@@ -202,18 +210,19 @@ export function buildDevRequestForm(opts) {
 
   function populateAreas() {
     areaSelect.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Pick one (optional)';
+    placeholder.selected = true;
+    areaSelect.append(placeholder);
     const list = areas[platform] || [];
-    const detected = detectDevRequestArea(platform);
     for (const a of list) {
       const opt = document.createElement('option');
       opt.value = a.id;
       opt.textContent = a.label;
-      if (a.id === detected) opt.selected = true;
       areaSelect.append(opt);
     }
-    if (!list.some((a) => a.id === detected) && list.length) {
-      areaSelect.value = list[0].id;
-    }
+    areaSelect.value = '';
   }
 
   /** @param {DevPriority[]} priorities */
@@ -228,7 +237,7 @@ export function buildDevRequestForm(opts) {
     }
   }
 
-  titleInput.addEventListener('input', syncSubmitState);
+  bodyInput.addEventListener('input', syncSubmitState);
 
   attachZone.addEventListener('click', () => attachInput.click());
   attachInput.addEventListener('change', () => {
@@ -264,13 +273,14 @@ export function buildDevRequestForm(opts) {
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (submitting || !titleInput.value.trim()) return;
+    const changeText = bodyInput.value.trim();
+    if (submitting || !changeText) return;
     submitting = true;
     syncSubmitState();
     try {
       const payload = {
-        title: titleInput.value.trim(),
-        body: bodyInput.value.trim(),
+        title: deriveTitle(changeText),
+        body: changeText,
         platform,
         area: areaSelect.value,
         priority: Number(prioritySelect.value) || 2,
@@ -283,7 +293,6 @@ export function buildDevRequestForm(opts) {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) throw new Error(data.error || 'Submit failed');
-      titleInput.value = '';
       bodyInput.value = '';
       attachments = [];
       renderPreview();

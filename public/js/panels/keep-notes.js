@@ -12,7 +12,6 @@ export function mountKeepNotes(root) {
 
   const compose = document.createElement('div');
   compose.className = 'keep-notes__compose';
-  compose.setAttribute('role', 'search');
 
   const composeTitle = document.createElement('input');
   composeTitle.type = 'text';
@@ -34,7 +33,7 @@ export function mountKeepNotes(root) {
   const composeClose = document.createElement('button');
   composeClose.type = 'button';
   composeClose.className = 'keep-notes__btn keep-notes__btn--ghost';
-  composeClose.textContent = 'Close';
+  composeClose.textContent = 'Cancel';
 
   const composeSave = document.createElement('button');
   composeSave.type = 'button';
@@ -42,7 +41,6 @@ export function mountKeepNotes(root) {
   composeSave.textContent = 'Add';
 
   composeActions.append(composeClose, composeSave);
-  composeTitle.hidden = true;
   compose.append(composeTitle, composeBody, composeActions);
 
   const scroll = document.createElement('div');
@@ -74,12 +72,36 @@ export function mountKeepNotes(root) {
 
   scroll.append(pinnedSection, othersSection, empty);
 
+  const selectBar = document.createElement('div');
+  selectBar.className = 'keep-notes__select-bar';
+  selectBar.hidden = true;
+
+  const selectCount = document.createElement('span');
+  selectCount.className = 'keep-notes__select-count';
+
+  const archiveSelectedBtn = document.createElement('button');
+  archiveSelectedBtn.type = 'button';
+  archiveSelectedBtn.className = 'keep-notes__btn keep-notes__btn--ghost';
+  archiveSelectedBtn.textContent = 'Archive';
+
+  const deleteSelectedBtn = document.createElement('button');
+  deleteSelectedBtn.type = 'button';
+  deleteSelectedBtn.className = 'keep-notes__btn keep-notes__btn--danger-text';
+  deleteSelectedBtn.textContent = 'Delete';
+
+  const cancelSelectBtn = document.createElement('button');
+  cancelSelectBtn.type = 'button';
+  cancelSelectBtn.className = 'keep-notes__btn keep-notes__btn--ghost';
+  cancelSelectBtn.textContent = 'Cancel';
+
+  selectBar.append(selectCount, archiveSelectedBtn, deleteSelectedBtn, cancelSelectBtn);
+
   const status = document.createElement('p');
   status.className = 'keep-notes__status';
   status.hidden = true;
   status.setAttribute('aria-live', 'polite');
 
-  shell.append(compose, scroll, status);
+  shell.append(compose, selectBar, scroll, status);
   root.append(shell);
 
   /** @type {Array<object>} */
@@ -90,6 +112,210 @@ export function mountKeepNotes(root) {
   let recorder = null;
   /** @type {Blob[]} */
   let recordChunks = [];
+  /** @type {boolean} */
+  let selectMode = false;
+  /** @type {Set<string>} */
+  const selectedIds = new Set();
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let cardClickTimer = null;
+  /** @type {boolean} */
+  let noteDragActive = false;
+
+  /**
+   * @param {object} a
+   * @param {object} b
+   */
+  function compareNotes(a, b) {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    const ao = typeof a.sortOrder === 'number' ? a.sortOrder : null;
+    const bo = typeof b.sortOrder === 'number' ? b.sortOrder : null;
+    if (ao !== null && bo !== null && ao !== bo) return ao - bo;
+    if (ao !== null && bo === null) return -1;
+    if (ao === null && bo !== null) return 1;
+    return String(b.updatedAt).localeCompare(String(a.updatedAt));
+  }
+
+  function sortNotes() {
+    notes.sort(compareNotes);
+  }
+
+  /**
+   * @param {HTMLElement} grid
+   * @param {number} clientX
+   * @param {number} clientY
+   */
+  function dragInsertBefore(grid, clientX, clientY) {
+    const cards = [...grid.querySelectorAll('.keep-notes__card:not(.keep-notes__card--dragging)')];
+    if (!cards.length) return null;
+
+    let closest = null;
+    let closestDist = Infinity;
+    for (const card of cards) {
+      const rect = card.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const dist = (clientX - cx) ** 2 + (clientY - cy) ** 2;
+      if (dist < closestDist) {
+        closestDist = dist;
+        closest = { card, rect, cx, cy };
+      }
+    }
+    if (!closest) return null;
+
+    const { card, rect, cx, cy } = closest;
+    const onSameRow = clientY >= rect.top && clientY <= rect.bottom;
+    const insertBefore = onSameRow ? clientX < cx : clientY < cy;
+    return insertBefore ? card : card.nextElementSibling;
+  }
+
+  /**
+   * @param {HTMLElement} grid
+   */
+  function wireGridDragDrop(grid) {
+    grid.addEventListener('dragover', (e) => {
+      if (selectMode) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const dragging = grid.querySelector('.keep-notes__card--dragging');
+      if (!dragging) return;
+      const before = dragInsertBefore(grid, e.clientX, e.clientY);
+      if (before) grid.insertBefore(dragging, before);
+      else grid.append(dragging);
+    });
+    grid.addEventListener('drop', (e) => {
+      if (selectMode) return;
+      e.preventDefault();
+    });
+  }
+
+  async function persistNoteOrder() {
+    const pinnedIds = [...pinnedGrid.querySelectorAll('.keep-notes__card')].map((c) => c.dataset.id).filter(Boolean);
+    const othersIds = [...othersGrid.querySelectorAll('.keep-notes__card')].map((c) => c.dataset.id).filter(Boolean);
+    const expectedPinned = notes.filter((n) => n.pinned).sort(compareNotes).map((n) => n.id);
+    const expectedOthers = notes.filter((n) => !n.pinned).sort(compareNotes).map((n) => n.id);
+    if (pinnedIds.join('|') === expectedPinned.join('|') && othersIds.join('|') === expectedOthers.join('|')) {
+      renderNotes();
+      return;
+    }
+    pinnedIds.forEach((id, i) => {
+      const note = notes.find((n) => n.id === id);
+      if (note) note.sortOrder = i;
+    });
+    othersIds.forEach((id, i) => {
+      const note = notes.find((n) => n.id === id);
+      if (note) note.sortOrder = i;
+    });
+    sortNotes();
+    try {
+      const r = await fetch('/api/keep-notes/reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pinned: pinnedIds, others: othersIds }),
+      });
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.error || 'reorder failed');
+      notes = Array.isArray(data.notes) ? data.notes : notes;
+      renderNotes();
+    } catch (e) {
+      showStatus(String(e?.message || e), true);
+      void loadNotes();
+    }
+  }
+
+  function syncCardDraggables() {
+    root.querySelectorAll('.keep-notes__card-drag').forEach((handle) => {
+      handle.draggable = !selectMode;
+    });
+  }
+
+  /**
+   * @param {string} id
+   */
+  function setCardSelected(id, on) {
+    if (on) selectedIds.add(id);
+    else selectedIds.delete(id);
+    const card = root.querySelector(`.keep-notes__card[data-id="${CSS.escape(id)}"]`);
+    if (!card) return;
+    card.classList.toggle('keep-notes__card--selected', on);
+    const check = card.querySelector('.keep-notes__card-check');
+    if (check) check.checked = on;
+  }
+
+  function syncSelectBar() {
+    const n = selectedIds.size;
+    selectBar.hidden = !selectMode;
+    root.classList.toggle('keep-notes--select-mode', selectMode);
+    selectCount.textContent = n === 1 ? '1 selected' : `${n} selected`;
+    archiveSelectedBtn.disabled = n === 0;
+    deleteSelectedBtn.disabled = n === 0;
+    syncCardDraggables();
+  }
+
+  /**
+   * @param {string} id
+   */
+  function enterSelectMode(id) {
+    if (!selectMode) {
+      selectMode = true;
+      closeEditor();
+    }
+    setCardSelected(id, true);
+    syncSelectBar();
+  }
+
+  function exitSelectMode() {
+    selectMode = false;
+    for (const id of [...selectedIds]) setCardSelected(id, false);
+    selectedIds.clear();
+    syncSelectBar();
+  }
+
+  /**
+   * @param {string} id
+   */
+  function toggleSelected(id) {
+    setCardSelected(id, !selectedIds.has(id));
+    syncSelectBar();
+    if (selectedIds.size === 0) selectMode = false;
+  }
+
+  async function bulkAction(action) {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    if (action === 'delete') {
+      const label = ids.length === 1 ? 'Delete this note?' : `Delete ${ids.length} notes?`;
+      if (!window.confirm(label)) return;
+    }
+    archiveSelectedBtn.disabled = true;
+    deleteSelectedBtn.disabled = true;
+    try {
+      const r = await fetch('/api/keep-notes/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, action }),
+      });
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.error || `${action} failed`);
+      const affected = new Set(Array.isArray(data.affected) ? data.affected : []);
+      if (action === 'delete') {
+        notes = notes.filter((n) => !affected.has(n.id));
+      } else {
+        notes = notes.filter((n) => !affected.has(n.id));
+      }
+      exitSelectMode();
+      renderNotes();
+      const n = affected.size;
+      showStatus(action === 'delete' ? `Deleted ${n} note${n === 1 ? '' : 's'}` : `Archived ${n} note${n === 1 ? '' : 's'}`);
+    } catch (e) {
+      showStatus(String(e?.message || e), true);
+    } finally {
+      syncSelectBar();
+    }
+  }
+
+  cancelSelectBtn.addEventListener('click', () => exitSelectMode());
+  archiveSelectedBtn.addEventListener('click', () => void bulkAction('archive'));
+  deleteSelectedBtn.addEventListener('click', () => void bulkAction('delete'));
 
   /**
    * @param {string} msg
@@ -116,11 +342,17 @@ export function mountKeepNotes(root) {
   function fillCard(card, note) {
     card.dataset.id = note.id;
     card.classList.toggle('keep-notes__card--pinned', Boolean(note.pinned));
+    card.classList.toggle('keep-notes__card--selected', selectedIds.has(note.id));
 
+    const checkEl = card.querySelector('.keep-notes__card-check');
+    const dragHandle = card.querySelector('.keep-notes__card-drag');
     const titleEl = card.querySelector('.keep-notes__card-title');
     const bodyEl = card.querySelector('.keep-notes__card-body');
     const mediaEl = card.querySelector('.keep-notes__card-media');
     const pinBtn = card.querySelector('.keep-notes__card-pin');
+
+    if (checkEl) checkEl.checked = selectedIds.has(note.id);
+    if (dragHandle) dragHandle.draggable = !selectMode;
 
     const title = String(note.title || '').trim();
     const body = String(note.body || '').trim();
@@ -162,6 +394,18 @@ export function mountKeepNotes(root) {
     card.className = 'keep-notes__card';
     card.tabIndex = 0;
 
+    const checkEl = document.createElement('input');
+    checkEl.type = 'checkbox';
+    checkEl.className = 'keep-notes__card-check';
+    checkEl.setAttribute('aria-label', 'Select note');
+    checkEl.addEventListener('click', (e) => e.stopPropagation());
+    checkEl.addEventListener('change', () => {
+      if (!selectMode) enterSelectMode(card.dataset.id);
+      else setCardSelected(card.dataset.id, checkEl.checked);
+      syncSelectBar();
+      if (selectedIds.size === 0) selectMode = false;
+    });
+
     const pinBtn = document.createElement('button');
     pinBtn.type = 'button';
     pinBtn.className = 'keep-notes__card-pin';
@@ -179,17 +423,72 @@ export function mountKeepNotes(root) {
     mediaEl.className = 'keep-notes__card-media';
     mediaEl.hidden = true;
 
-    card.append(pinBtn, titleEl, bodyEl, mediaEl);
+    const dragHandle = document.createElement('span');
+    dragHandle.className = 'keep-notes__card-drag';
+    dragHandle.draggable = true;
+    dragHandle.title = 'Drag to reorder';
+    dragHandle.setAttribute('aria-label', 'Drag to reorder');
+    const grip = document.createElement('span');
+    grip.className = 'keep-notes__card-grip';
+    grip.setAttribute('aria-hidden', 'true');
+    dragHandle.append(grip);
+
+    card.append(checkEl, dragHandle, pinBtn, titleEl, bodyEl, mediaEl);
+
+    dragHandle.addEventListener('dragstart', (e) => {
+      if (selectMode) {
+        e.preventDefault();
+        return;
+      }
+      e.stopPropagation();
+      noteDragActive = true;
+      if (cardClickTimer) {
+        clearTimeout(cardClickTimer);
+        cardClickTimer = null;
+      }
+      card.classList.add('keep-notes__card--dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', card.dataset.id || '');
+    });
+    dragHandle.addEventListener('dragend', (e) => {
+      e.stopPropagation();
+      noteDragActive = false;
+      card.classList.remove('keep-notes__card--dragging');
+      if (!selectMode) void persistNoteOrder();
+    });
+    dragHandle.addEventListener('mousedown', (e) => e.stopPropagation());
+    dragHandle.addEventListener('click', (e) => e.stopPropagation());
 
     pinBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       void togglePin(card.dataset.id);
     });
-    card.addEventListener('click', () => openEditor(card.dataset.id));
+    card.addEventListener('click', () => {
+      const id = card.dataset.id;
+      if (noteDragActive) return;
+      if (selectMode) {
+        toggleSelected(id);
+        return;
+      }
+      if (cardClickTimer) clearTimeout(cardClickTimer);
+      cardClickTimer = setTimeout(() => {
+        cardClickTimer = null;
+        openEditor(id);
+      }, 220);
+    });
+    card.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      if (cardClickTimer) {
+        clearTimeout(cardClickTimer);
+        cardClickTimer = null;
+      }
+      enterSelectMode(card.dataset.id);
+    });
     card.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        openEditor(card.dataset.id);
+        if (selectMode) toggleSelected(card.dataset.id);
+        else openEditor(card.dataset.id);
       }
     });
 
@@ -199,6 +498,7 @@ export function mountKeepNotes(root) {
   function renderNotes() {
     pinnedGrid.replaceChildren();
     othersGrid.replaceChildren();
+    sortNotes();
     const pinned = notes.filter((n) => n.pinned);
     const others = notes.filter((n) => !n.pinned);
     pinnedSection.hidden = pinned.length === 0;
@@ -214,6 +514,7 @@ export function mountKeepNotes(root) {
       fillCard(card, note);
       othersGrid.append(card);
     }
+    syncSelectBar();
   }
 
   async function loadNotes() {
@@ -243,10 +544,7 @@ export function mountKeepNotes(root) {
       const data = await r.json();
       if (!data.ok) throw new Error(data.error || 'pin failed');
       notes = notes.map((n) => (n.id === id ? data.note : n));
-      notes.sort((a, b) => {
-        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-        return String(b.updatedAt).localeCompare(String(a.updatedAt));
-      });
+      sortNotes();
       renderNotes();
     } catch (e) {
       showStatus(String(e?.message || e), true);
@@ -256,11 +554,15 @@ export function mountKeepNotes(root) {
   function expandCompose(on) {
     compose.classList.toggle('keep-notes__compose--expanded', on);
     composeActions.hidden = !on;
-    composeTitle.hidden = !on;
-    if (on) composeTitle.focus();
   }
 
-  composeBody.addEventListener('focus', () => expandCompose(true));
+  composeBody.addEventListener('focus', () => {
+    expandCompose(true);
+    queueMicrotask(() => {
+      if (document.activeElement !== composeBody) composeBody.focus();
+    });
+  });
+  composeTitle.addEventListener('focus', () => expandCompose(true));
   composeClose.addEventListener('click', (e) => {
     e.stopPropagation();
     composeTitle.value = '';
@@ -282,7 +584,8 @@ export function mountKeepNotes(root) {
       });
       const data = await r.json();
       if (!data.ok) throw new Error(data.error || 'create failed');
-      notes.unshift(data.note);
+      notes.push(data.note);
+      sortNotes();
       renderNotes();
       composeTitle.value = '';
       composeBody.value = '';
@@ -428,7 +731,7 @@ export function mountKeepNotes(root) {
     syncPinEditorBtn(note);
     renderEditorMedia(note);
     overlay.hidden = false;
-    editorTitle.focus();
+    editorBody.focus();
   }
 
   function closeEditor() {
@@ -455,10 +758,7 @@ export function mountKeepNotes(root) {
       const data = await r.json();
       if (!data.ok) throw new Error(data.error || 'save failed');
       notes = notes.map((n) => (n.id === id ? data.note : n));
-      notes.sort((a, b) => {
-        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-        return String(b.updatedAt).localeCompare(String(a.updatedAt));
-      });
+      sortNotes();
       renderNotes();
       return data.note;
     } catch (e) {
@@ -486,7 +786,13 @@ export function mountKeepNotes(root) {
   });
 
   document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || overlay.hidden) return;
+    if (e.key !== 'Escape') return;
+    if (selectMode) {
+      e.preventDefault();
+      exitSelectMode();
+      return;
+    }
+    if (overlay.hidden) return;
     e.preventDefault();
     dismissEditor();
   });
@@ -671,6 +977,9 @@ export function mountKeepNotes(root) {
       showStatus(String(err?.message || err), true);
     }
   });
+
+  wireGridDragDrop(pinnedGrid);
+  wireGridDragDrop(othersGrid);
 
   void loadNotes();
 }

@@ -147,16 +147,40 @@ function fallbackGlyph(word) {
   return span;
 }
 
-function createTile(row) {
+function createTile(row, opts = {}) {
+  const { section = '', mode = 'view', selected = false, synthetic = false, onToggle } = opts;
   const a = document.createElement('a');
   a.className = 'bookmark-tile';
   a.href = row.href;
+  a.dataset.word = String(row.word || '');
+  a.dataset.href = String(row.href || '');
+  if (section) a.dataset.section = section;
+  if (synthetic) a.dataset.synthetic = '1';
   if (isLocalLaunchHref(row.href)) {
     a.target = '_self';
     a.rel = 'noopener';
   } else {
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
+  }
+
+  // Reorder / move by drag (view mode only, real bookmarks only).
+  if (mode === 'view' && !synthetic) {
+    a.draggable = true;
+  }
+
+  if (mode === 'select' && !synthetic) {
+    a.classList.add('is-selectable');
+    if (selected) a.classList.add('is-selected');
+    const check = document.createElement('span');
+    check.className = 'bookmark-tile__check';
+    check.setAttribute('aria-hidden', 'true');
+    a.appendChild(check);
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (typeof onToggle === 'function') onToggle(row, section, a);
+    });
   }
 
   const src = iconSrc(row);
@@ -239,116 +263,563 @@ function showBookmarkSkeleton(root, count = 6) {
   root.appendChild(grid);
 }
 
-function mountSections(root, data, emptyHint) {
-  root.replaceChildren();
-  if (!data.sections || !Array.isArray(data.sections)) {
-    root.innerHTML = `<p class="muted">${emptyHint}</p>`;
-    return;
+async function apiJson(method, path, body) {
+  const r = await fetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  let payload = null;
+  try {
+    payload = await r.json();
+  } catch {
+    payload = null;
   }
-  let any = false;
-  for (const sec of data.sections) {
-    if (!sec || typeof sec.title !== 'string' || !Array.isArray(sec.items)) continue;
-    let items = sec.items.filter((row) => row && typeof row.href === 'string' && row.word != null);
-    const isClientsSection = /client/i.test(sec.title);
-    const hasChatCo = items.some((row) => /https?:\/\/(www\.)?chat\.co\/?/i.test(String(row.href || '')));
-    if (isClientsSection && !hasChatCo) {
-      items = items.concat([
-        {
-          word: 'chat.co',
-          href: 'https://www.chat.co/',
-          title: 'chat.co',
-          icon: '/assets/tile-chatco.ico',
-        },
-      ]);
-    }
-    if (items.length === 0) continue;
-    any = true;
-
-    const details = document.createElement('details');
-    details.className = 'bookmark-section';
-    if (shouldAutoOpenSection(sec.title)) {
-      details.open = true;
-    }
-
-    const summary = document.createElement('summary');
-    summary.className = 'bookmark-section-summary';
-    summary.textContent = sec.title;
-
-    const grid = document.createElement('div');
-    grid.className = 'bookmark-section-grid';
-    for (const row of items) {
-      grid.appendChild(createTile(row));
-    }
-    details.append(summary, grid);
-    root.appendChild(details);
+  if (!r.ok || !payload || payload.ok !== true) {
+    const msg = payload && payload.error ? payload.error : `Request failed (${r.status})`;
+    throw new Error(msg);
   }
-  if (!any) {
-    root.innerHTML = `<p class="muted">${emptyHint}</p>`;
-  }
+  return payload;
+}
+
+function normalizeHrefInput(raw) {
+  const href = String(raw || '').trim();
+  if (!href) return '';
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('/')) return href;
+  return `https://${href}`;
 }
 
 /**
- * @param {HTMLElement} root
- * @param {string} dataPath
- * @param {string} emptyHint
+ * Modal popup to add a bookmark to any column/category.
+ * Resolves `{ scope }` when saved, or `false` when dismissed.
+ * @param {Array<{ scope: string, label: string, titles: string[] }>} columns
  */
-function mountBookmarkPayload(root, data, emptyHint) {
-  if (data && Array.isArray(data.sections)) {
-    mountSections(root, data, emptyHint);
-    return true;
-  }
+function openAddBookmarkDialog(columns) {
+  return new Promise((resolve) => {
+    const cols = Array.isArray(columns) && columns.length ? columns : [];
+    const backdrop = document.createElement('div');
+    backdrop.className = 'bookmark-modal-backdrop';
+    backdrop.setAttribute('role', 'presentation');
 
-  /* Legacy: flat array of { word, href } */
-  if (Array.isArray(data) && data.length > 0) {
-    root.replaceChildren();
-    const grid = document.createElement('div');
-    grid.className = 'bookmark-section-grid';
-    for (const row of data) {
-      if (!row?.href || row.word == null) continue;
-      grid.appendChild(createTile(row));
-    }
-    if (grid.childElementCount === 0) {
-      root.innerHTML = `<p class="muted">${emptyHint}</p>`;
-    } else {
-      root.appendChild(grid);
-    }
-    return true;
-  }
+    const dialog = document.createElement('form');
+    dialog.className = 'bookmark-modal';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-label', 'Add bookmark');
 
-  return false;
+    const title = document.createElement('h3');
+    title.className = 'bookmark-modal__title';
+    title.textContent = 'Add bookmark';
+
+    const nameField = document.createElement('label');
+    nameField.className = 'bookmark-modal__field';
+    nameField.innerHTML = '<span>Name</span>';
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.maxLength = 40;
+    nameInput.required = true;
+    nameInput.placeholder = 'e.g. Figma';
+    nameField.appendChild(nameInput);
+
+    const urlField = document.createElement('label');
+    urlField.className = 'bookmark-modal__field';
+    urlField.innerHTML = '<span>URL</span>';
+    const urlInput = document.createElement('input');
+    urlInput.type = 'text';
+    urlInput.required = true;
+    urlInput.placeholder = 'https://…';
+    urlField.appendChild(urlInput);
+
+    // Column (Personal / Admin)
+    const colField = document.createElement('label');
+    colField.className = 'bookmark-modal__field';
+    colField.innerHTML = '<span>Column</span>';
+    const colSelect = document.createElement('select');
+    for (const c of cols) {
+      const opt = document.createElement('option');
+      opt.value = c.scope;
+      opt.textContent = c.label;
+      colSelect.appendChild(opt);
+    }
+    colField.appendChild(colSelect);
+    colField.hidden = cols.length <= 1;
+
+    const catField = document.createElement('label');
+    catField.className = 'bookmark-modal__field';
+    catField.innerHTML = '<span>Category</span>';
+    const catSelect = document.createElement('select');
+    catField.appendChild(catSelect);
+
+    const newCatInput = document.createElement('input');
+    newCatInput.type = 'text';
+    newCatInput.maxLength = 32;
+    newCatInput.placeholder = 'New category name';
+    newCatInput.className = 'bookmark-modal__newcat';
+    catField.appendChild(newCatInput);
+
+    function currentTitles() {
+      const col = cols.find((c) => c.scope === colSelect.value);
+      return col ? col.titles : [];
+    }
+    function populateCategories() {
+      catSelect.replaceChildren();
+      const titles = currentTitles();
+      for (const t of titles) {
+        const opt = document.createElement('option');
+        opt.value = t;
+        opt.textContent = t;
+        catSelect.appendChild(opt);
+      }
+      const newOpt = document.createElement('option');
+      newOpt.value = '__new__';
+      newOpt.textContent = '+ New category…';
+      catSelect.appendChild(newOpt);
+      if (titles.length === 0) catSelect.value = '__new__';
+      newCatInput.hidden = catSelect.value !== '__new__';
+    }
+    populateCategories();
+
+    colSelect.addEventListener('change', populateCategories);
+    catSelect.addEventListener('change', () => {
+      const isNew = catSelect.value === '__new__';
+      newCatInput.hidden = !isNew;
+      if (isNew) newCatInput.focus();
+    });
+
+    const error = document.createElement('p');
+    error.className = 'bookmark-modal__error';
+    error.setAttribute('role', 'alert');
+
+    const actions = document.createElement('div');
+    actions.className = 'bookmark-modal__actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'bookmark-modal__btn bookmark-modal__btn--ghost';
+    cancel.textContent = 'Cancel';
+    const save = document.createElement('button');
+    save.type = 'submit';
+    save.className = 'bookmark-modal__btn bookmark-modal__btn--primary';
+    save.textContent = 'Add';
+    actions.append(cancel, save);
+
+    dialog.append(title, nameField, urlField, colField, catField, error, actions);
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+    nameInput.focus();
+
+    let settled = false;
+    function finish(value) {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener('keydown', onKey);
+      backdrop.remove();
+      resolve(value);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') finish(false);
+    }
+    document.addEventListener('keydown', onKey);
+    backdrop.addEventListener('mousedown', (e) => {
+      if (e.target === backdrop) finish(false);
+    });
+    cancel.addEventListener('click', () => finish(false));
+
+    dialog.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      error.textContent = '';
+      const scope = colSelect.value || (cols[0] && cols[0].scope);
+      const word = nameInput.value.trim();
+      const href = normalizeHrefInput(urlInput.value);
+      const section =
+        catSelect.value === '__new__' ? newCatInput.value.trim() : catSelect.value;
+      if (!scope) {
+        error.textContent = 'No column available';
+        return;
+      }
+      if (!word) {
+        error.textContent = 'Name is required';
+        return;
+      }
+      if (!href) {
+        error.textContent = 'A valid URL is required';
+        return;
+      }
+      if (!section) {
+        error.textContent = 'Pick or name a category';
+        return;
+      }
+      save.disabled = true;
+      try {
+        await apiJson('POST', `/api/bookmarks/${encodeURIComponent(scope)}/items`, {
+          section,
+          word,
+          href,
+        });
+        finish({ scope });
+      } catch (e) {
+        error.textContent = String(e?.message || e);
+        save.disabled = false;
+      }
+    });
+  });
 }
 
-export async function mountBookmarkGrid(root, dataPath, emptyHint) {
+const SCOPE_LABEL = { personal: 'Personal', work: 'Admin' };
+
+/**
+ * Shared controller for a single Add + Delete toolbar that operates on every
+ * registered bookmark column (Personal + Admin).
+ */
+export function createBookmarksCoordinator() {
+  const grids = [];
+  let mode = 'view';
+  let toolbarEl = null;
+
+  const totalSelected = () => grids.reduce((n, g) => n + g.selectedSize(), 0);
+
+  function makeBtn(label, cls) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = cls;
+    b.textContent = label;
+    return b;
+  }
+
+  function renderToolbar() {
+    if (!toolbarEl) return;
+    toolbarEl.replaceChildren();
+    if (mode === 'view') {
+      const add = makeBtn('+ Add bookmark', 'bookmark-toolbar__btn bookmark-toolbar__btn--primary');
+      add.addEventListener('click', onAdd);
+      const del = makeBtn('Delete…', 'bookmark-toolbar__btn');
+      del.addEventListener('click', () => setMode('select'));
+      toolbarEl.append(add, del);
+    } else {
+      const n = totalSelected();
+      const del = makeBtn(
+        n ? `Delete (${n})` : 'Delete',
+        'bookmark-toolbar__btn bookmark-toolbar__btn--danger',
+      );
+      del.disabled = n === 0;
+      del.addEventListener('click', onDelete);
+      const cancel = makeBtn('Cancel', 'bookmark-toolbar__btn');
+      cancel.addEventListener('click', () => setMode('view'));
+      const hint = document.createElement('span');
+      hint.className = 'bookmark-toolbar__hint';
+      hint.textContent = 'Tap bookmarks to select';
+      toolbarEl.append(hint, del, cancel);
+    }
+  }
+
+  function setMode(next) {
+    mode = next;
+    grids.forEach((g) => g.clearSelected());
+    grids.forEach((g) => g.rerender());
+    renderToolbar();
+  }
+
+  async function onAdd() {
+    const columns = grids.map((g) => ({
+      scope: g.scope,
+      label: SCOPE_LABEL[g.scope] || g.scope,
+      titles: g.getTitles(),
+    }));
+    const saved = await openAddBookmarkDialog(columns);
+    if (saved && saved.scope) {
+      const g = grids.find((x) => x.scope === saved.scope);
+      if (g) await g.reload(true);
+    }
+  }
+
+  async function onDelete() {
+    const n = totalSelected();
+    if (!n) return;
+    if (!window.confirm(`Delete ${n} bookmark(s)?`)) return;
+    for (const g of grids) {
+      const items = g.collectSelected();
+      if (items.length === 0) continue;
+      try {
+        await apiJson('POST', `/api/bookmarks/${encodeURIComponent(g.scope)}/bulk-delete`, {
+          items,
+        });
+      } catch (e) {
+        window.alert(`Could not delete from ${SCOPE_LABEL[g.scope] || g.scope}: ${String(e?.message || e)}`);
+      }
+    }
+    mode = 'view';
+    grids.forEach((g) => g.clearSelected());
+    for (const g of grids) await g.reload(true);
+    renderToolbar();
+  }
+
+  return {
+    register(controller) {
+      grids.push(controller);
+    },
+    getMode() {
+      return mode;
+    },
+    onSelectionChanged() {
+      renderToolbar();
+    },
+    mountToolbar(el) {
+      toolbarEl = el;
+      renderToolbar();
+    },
+  };
+}
+
+/** Serialize the current DOM order into a layout payload (skips synthetic tiles). */
+function serializeLayout(root) {
+  const sections = [];
+  for (const details of root.querySelectorAll('.bookmark-section')) {
+    const label = details.querySelector('.bookmark-section-summary__label');
+    const title = label ? label.textContent.trim() : '';
+    if (!title) continue;
+    const items = [];
+    for (const tile of details.querySelectorAll('.bookmark-tile')) {
+      if (tile.dataset.synthetic === '1') continue;
+      if (!tile.dataset.href) continue;
+      items.push({ word: tile.dataset.word || '', href: tile.dataset.href });
+    }
+    sections.push({ title, items });
+  }
+  return { sections };
+}
+
+function withChatCoFallback(title, items) {
+  if (!/client/i.test(title)) return items;
+  const hasChatCo = items.some((row) =>
+    /https?:\/\/(www\.)?chat\.co\/?/i.test(String(row.href || '')),
+  );
+  if (hasChatCo) return items;
+  return items.concat([
+    {
+      word: 'chat.co',
+      href: 'https://www.chat.co/',
+      title: 'chat.co',
+      icon: '/assets/tile-chatco.ico',
+      __synthetic: true,
+    },
+  ]);
+}
+
+/** Map a bookmark JSON path to its editable scope (personal/work). */
+function scopeFromPath(dataPath) {
+  const p = String(dataPath || '').toLowerCase();
+  if (p.includes('bookmarks-personal')) return 'personal';
+  if (p.includes('bookmarks-work')) return 'work';
+  return '';
+}
+
+export async function mountBookmarkGrid(root, dataPath, emptyHint, coordinator = null) {
   if (!root) return;
   root.dataset.bookmarkPath = dataPath;
 
+  const scope = scopeFromPath(dataPath);
+  const editable = Boolean(scope) && Boolean(coordinator);
+  const getMode = () => (coordinator ? coordinator.getMode() : 'view');
+
+  /** @type {any} */
+  let currentData = null;
+  const selected = new Map(); // key -> { section, word, href }
+
+  const keyOf = (section, row) =>
+    `${String(section).toLowerCase()}||${String(row.word).toLowerCase()}||${String(row.href)}`;
+
+  function captureOpenTitles() {
+    const open = new Set();
+    for (const d of root.querySelectorAll('.bookmark-section[open]')) {
+      const label = d.querySelector('.bookmark-section-summary__label');
+      if (label) open.add(label.textContent.trim().toLowerCase());
+    }
+    return open;
+  }
+
+  function render() {
+    const mode = getMode();
+    const openTitles = captureOpenTitles();
+    root.replaceChildren();
+
+    if (!currentData || !Array.isArray(currentData.sections)) {
+      // Legacy flat array support (view only).
+      if (Array.isArray(currentData) && currentData.length > 0) {
+        const grid = document.createElement('div');
+        grid.className = 'bookmark-section-grid';
+        for (const row of currentData) {
+          if (!row?.href || row.word == null) continue;
+          grid.appendChild(createTile(row));
+        }
+        root.appendChild(grid);
+        return;
+      }
+      root.innerHTML = `<p class="muted">${emptyHint}</p>`;
+      return;
+    }
+
+    let any = false;
+    for (const sec of currentData.sections) {
+      if (!sec || typeof sec.title !== 'string' || !Array.isArray(sec.items)) continue;
+      let items = sec.items.filter((row) => row && typeof row.href === 'string' && row.word != null);
+      items = withChatCoFallback(sec.title, items);
+      if (items.length === 0) continue;
+      any = true;
+
+      const details = document.createElement('details');
+      details.className = 'bookmark-section';
+      const titleKey = sec.title.trim().toLowerCase();
+      details.open = openTitles.size
+        ? openTitles.has(titleKey)
+        : shouldAutoOpenSection(sec.title);
+
+      const summary = document.createElement('summary');
+      summary.className = 'bookmark-section-summary';
+      const summaryLabel = document.createElement('span');
+      summaryLabel.className = 'bookmark-section-summary__label';
+      summaryLabel.textContent = sec.title;
+      summary.appendChild(summaryLabel);
+
+      const grid = document.createElement('div');
+      grid.className = 'bookmark-section-grid';
+      for (const row of items) {
+        const synthetic = Boolean(row.__synthetic);
+        const tile = createTile(row, {
+          section: sec.title,
+          mode: editable ? mode : 'view',
+          synthetic,
+          selected: selected.has(keyOf(sec.title, row)),
+          onToggle: (r, section, tileEl) => {
+            const key = keyOf(section, r);
+            if (selected.has(key)) {
+              selected.delete(key);
+              tileEl.classList.remove('is-selected');
+            } else {
+              selected.set(key, { section, word: r.word, href: r.href });
+              tileEl.classList.add('is-selected');
+            }
+            coordinator?.onSelectionChanged();
+          },
+        });
+        grid.appendChild(tile);
+      }
+      details.append(summary, grid);
+      root.appendChild(details);
+    }
+
+    if (!any) {
+      root.innerHTML = `<p class="muted">${emptyHint}</p>`;
+    }
+  }
+
+  // Drag-to-reorder / move between categories (view mode only). Bound once.
+  if (editable && !root.dataset.dndBound) {
+    root.dataset.dndBound = '1';
+    let dragEl = null;
+    let dragStartLayout = '';
+
+    root.addEventListener('dragstart', (e) => {
+      if (getMode() !== 'view') return;
+      const tile = e.target.closest?.('.bookmark-tile[draggable="true"]');
+      if (!tile || !root.contains(tile)) return;
+      dragEl = tile;
+      dragStartLayout = JSON.stringify(serializeLayout(root));
+      e.dataTransfer.effectAllowed = 'move';
+      try {
+        e.dataTransfer.setData('text/plain', tile.dataset.href || '');
+      } catch {
+        /* some browsers require setData; ignore failures */
+      }
+      setTimeout(() => tile.classList.add('is-dragging'), 0);
+    });
+
+    root.addEventListener('dragover', (e) => {
+      if (!dragEl) return;
+      const grid = e.target.closest?.('.bookmark-section-grid');
+      if (!grid || grid.classList.contains('bookmark-section-grid--skeleton')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const over = e.target.closest?.('.bookmark-tile');
+      if (over && over !== dragEl && !over.dataset.synthetic) {
+        const rect = over.getBoundingClientRect();
+        const before = e.clientX < rect.left + rect.width / 2;
+        grid.insertBefore(dragEl, before ? over : over.nextSibling);
+      } else if (!over) {
+        grid.appendChild(dragEl);
+      }
+    });
+
+    root.addEventListener('drop', (e) => {
+      if (dragEl) e.preventDefault();
+    });
+
+    root.addEventListener('dragend', async () => {
+      if (!dragEl) return;
+      dragEl.classList.remove('is-dragging');
+      dragEl = null;
+      const now = JSON.stringify(serializeLayout(root));
+      if (now === dragStartLayout) return;
+      try {
+        const res = await apiJson('PUT', `/api/bookmarks/${encodeURIComponent(scope)}/layout`,
+          serializeLayout(root));
+        currentData = res.data;
+        writeBookmarkCache(dataPath, currentData);
+        render();
+      } catch (e) {
+        window.alert(`Could not save order: ${String(e?.message || e)}`);
+        await loadAndMount(true);
+      }
+    });
+  }
+
+  async function loadAndMount(force) {
+    try {
+      const url = force ? `${dataPath}?_=${Date.now()}` : dataPath;
+      const r = await fetch(url, { cache: force ? 'no-store' : 'default' });
+      if (!r.ok) {
+        if (!root.querySelector('.bookmark-section, .bookmark-section-grid')) {
+          root.innerHTML = `<p class="muted">${emptyHint}</p>`;
+        }
+        return;
+      }
+      let data;
+      try {
+        data = await r.json();
+      } catch {
+        root.innerHTML = '<p class="muted">Invalid JSON in bookmark file.</p>';
+        return;
+      }
+      currentData = data;
+      writeBookmarkCache(dataPath, data);
+      render();
+    } catch {
+      if (!root.querySelector('.bookmark-section, .bookmark-section-grid')) {
+        root.innerHTML = `<p class="muted">${emptyHint}</p>`;
+      }
+    }
+  }
+
+  if (editable && coordinator) {
+    coordinator.register({
+      scope,
+      getTitles: () =>
+        (currentData?.sections || [])
+          .map((s) => (typeof s.title === 'string' ? s.title.trim() : ''))
+          .filter(Boolean),
+      reload: (force) => loadAndMount(force),
+      rerender: () => render(),
+      selectedSize: () => selected.size,
+      clearSelected: () => selected.clear(),
+      collectSelected: () => Array.from(selected.values()),
+    });
+  }
+
   const cached = readBookmarkCache(dataPath);
   if (cached) {
-    mountBookmarkPayload(root, cached, emptyHint);
+    currentData = cached;
+    render();
   } else {
     showBookmarkSkeleton(root);
   }
 
-  try {
-    // Prefer HTTP cache (server sets short max-age in production); still revalidate.
-    const r = await fetch(dataPath, { cache: 'default' });
-    if (!r.ok) {
-      if (!cached) root.innerHTML = `<p class="muted">${emptyHint}</p>`;
-      return;
-    }
-    let data;
-    try {
-      data = await r.json();
-    } catch {
-      if (!cached) root.innerHTML = '<p class="muted">Invalid JSON in bookmark file.</p>';
-      return;
-    }
-
-    writeBookmarkCache(dataPath, data);
-    if (!mountBookmarkPayload(root, data, emptyHint) && !cached) {
-      root.innerHTML = `<p class="muted">${emptyHint}</p>`;
-    }
-  } catch {
-    if (!cached) root.innerHTML = `<p class="muted">${emptyHint}</p>`;
-  }
+  await loadAndMount(false);
 }

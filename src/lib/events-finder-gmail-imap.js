@@ -153,10 +153,14 @@ export async function fetchGmailEventsViaImap(email, appPassword, env = process.
         scrape: opts.scrape,
         windowWeeks: opts.windowWeeks,
       });
-    const filtered = filterEventsToIngestWindow(events, {
-      pastDays: windowDays.pastDays,
-      futureDays: windowDays.futureDays,
-    });
+    // When deferred, return unfiltered events so page-enrichment can supply a
+    // start date BEFORE the ingest-window filter runs (see fetchGmailEventAnnouncements).
+    const filtered = opts.deferWindowFilter
+      ? events
+      : filterEventsToIngestWindow(events, {
+          pastDays: windowDays.pastDays,
+          futureDays: windowDays.futureDays,
+        });
 
     return {
       ok: true,

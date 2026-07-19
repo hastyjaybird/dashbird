@@ -10424,6 +10424,14 @@ button.network-crm__person-name--link:hover {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
 }
 
+.keep-notes__compose:not(.keep-notes__compose--expanded) .keep-notes__compose-title {
+  display: none;
+}
+
+.keep-notes__compose--expanded .keep-notes__compose-body {
+  min-height: 3.5rem;
+}
+
 .keep-notes__compose-title,
 .keep-notes__compose-body,
 .keep-notes__editor-title,
@@ -10443,10 +10451,6 @@ button.network-crm__person-name--link:hover {
   font-weight: 600;
 }
 
-.keep-notes__compose-title[hidden] {
-  display: none;
-}
-
 .keep-notes__compose-body,
 .keep-notes__editor-body {
   font-size: 0.78rem;
@@ -10462,6 +10466,39 @@ button.network-crm__person-name--link:hover {
 
 .keep-notes__compose-actions[hidden] {
   display: none !important;
+}
+
+.keep-notes__select-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid rgba(110, 181, 255, 0.28);
+  border-radius: 9px;
+  background: rgba(110, 181, 255, 0.08);
+}
+
+.keep-notes__select-bar[hidden] {
+  display: none !important;
+}
+
+.keep-notes__select-count {
+  flex: 1 1 auto;
+  min-width: 5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #cfe8ff;
+}
+
+.keep-notes__btn--danger-text {
+  color: #fca5a5;
+}
+
+.keep-notes__btn--danger-text:hover,
+.keep-notes__btn--danger-text:focus-visible {
+  color: #fecaca;
+  background: rgba(248, 113, 113, 0.14);
 }
 
 .keep-notes__scroll {
@@ -10482,8 +10519,11 @@ button.network-crm__person-name--link:hover {
 }
 
 .keep-notes__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  align-content: flex-start;
   gap: 0.45rem;
   margin-bottom: 0.55rem;
 }
@@ -10492,6 +10532,9 @@ button.network-crm__person-name--link:hover {
   position: relative;
   display: flex;
   flex-direction: column;
+  flex: 0 0 auto;
+  width: 7.5rem;
+  max-width: 100%;
   gap: 0.25rem;
   min-height: 4.5rem;
   padding: 0.5rem 0.45rem 0.45rem;
@@ -10515,6 +10558,82 @@ button.network-crm__person-name--link:hover {
 .keep-notes__card--pinned {
   border-color: rgba(251, 191, 36, 0.35);
   background: rgba(251, 191, 36, 0.06);
+}
+
+.keep-notes__card--selected {
+  border-color: rgba(110, 181, 255, 0.55);
+  background: rgba(110, 181, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(110, 181, 255, 0.25);
+}
+
+.keep-notes__card--dragging {
+  opacity: 0.55;
+  border-color: rgba(110, 181, 255, 0.65);
+}
+
+.keep-notes__card-drag {
+  position: absolute;
+  left: 0.18rem;
+  bottom: 0.16rem;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  color: var(--muted, #9aa3b2);
+  cursor: grab;
+  user-select: none;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+
+.keep-notes__card:hover .keep-notes__card-drag,
+.keep-notes__card:focus-within .keep-notes__card-drag,
+.keep-notes__card--dragging .keep-notes__card-drag {
+  opacity: 0.85;
+}
+
+.keep-notes__card-drag:active {
+  cursor: grabbing;
+}
+
+.keep-notes__card-grip {
+  display: block;
+  width: 0.5rem;
+  height: 0.72rem;
+  background-image: radial-gradient(circle, currentColor 1px, transparent 1.15px);
+  background-size: 50% 33.333%;
+  background-repeat: repeat;
+}
+
+.keep-notes--select-mode .keep-notes__card-drag {
+  opacity: 0 !important;
+  pointer-events: none;
+}
+
+.keep-notes__card-check {
+  position: absolute;
+  top: 0.28rem;
+  left: 0.28rem;
+  width: 0.9rem;
+  height: 0.9rem;
+  margin: 0;
+  accent-color: #6eb5ff;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.keep-notes--select-mode .keep-notes__card-check {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.keep-notes--select-mode .keep-notes__card-pin {
+  opacity: 0 !important;
+  pointer-events: none;
 }
 
 .keep-notes__card-pin {
@@ -10554,10 +10673,15 @@ button.network-crm__person-name--link:hover {
 .keep-notes__card-title {
   margin: 0;
   padding-right: 1.1rem;
+  padding-left: 0;
   font-size: 0.72rem;
   font-weight: 600;
   line-height: 1.35;
   word-break: break-word;
+}
+
+.keep-notes--select-mode .keep-notes__card-title {
+  padding-left: 1.1rem;
 }
 
 .keep-notes__card-body {
@@ -11681,6 +11805,219 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
   border-radius: 12px;
   border: 1px dashed rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.03);
+}
+
+.bookmark-section-summary__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Drag-to-reorder */
+.bookmark-tile[draggable='true'] {
+  cursor: grab;
+}
+
+.bookmark-tile.is-dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+/* Select-to-delete */
+.bookmark-tile.is-selectable {
+  position: relative;
+  cursor: pointer;
+}
+
+.bookmark-tile__check {
+  position: absolute;
+  top: -0.3rem;
+  right: -0.3rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 2;
+}
+
+.bookmark-tile.is-selected {
+  border-color: #ff5b54;
+  background: rgba(215, 68, 62, 0.18);
+}
+
+.bookmark-tile.is-selected .bookmark-tile__check {
+  border-color: #ff5b54;
+  background: #d7443e;
+}
+
+.bookmark-tile.is-selected .bookmark-tile__check::after {
+  content: '\2713';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+/* Shared bottom-right toolbar for the whole Bookmarks section */
+.bookmarks-mega__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.bookmark-toolbar__btn {
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.32rem 0.7rem;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.bookmark-toolbar__btn:hover {
+  border-color: rgba(123, 255, 206, 0.45);
+}
+
+.bookmark-toolbar__btn--primary {
+  background: var(--accent-2, #7bffce);
+  border-color: transparent;
+  color: #0a1018;
+}
+
+.bookmark-toolbar__btn--danger {
+  background: #d7443e;
+  border-color: transparent;
+  color: #fff;
+}
+
+.bookmark-toolbar__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.bookmark-toolbar__hint {
+  font-size: 0.66rem;
+  color: var(--muted);
+  margin-right: auto;
+}
+
+/* Add-bookmark modal */
+.bookmark-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  padding: 1rem;
+}
+
+.bookmark-modal {
+  width: min(24rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 1.1rem 1.15rem 1.2rem;
+  border-radius: 14px;
+  background: #141a24;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+}
+
+.bookmark-modal__title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.bookmark-modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.bookmark-modal__field input,
+.bookmark-modal__field select {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text);
+}
+
+.bookmark-modal__field input:focus,
+.bookmark-modal__field select:focus {
+  outline: none;
+  border-color: rgba(123, 255, 206, 0.5);
+}
+
+.bookmark-modal__newcat {
+  margin-top: 0.35rem;
+}
+
+.bookmark-modal__error {
+  margin: 0;
+  min-height: 0.9rem;
+  font-size: 0.72rem;
+  color: #ff7a72;
+}
+
+.bookmark-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+
+.bookmark-modal__btn {
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.42rem 0.95rem;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.bookmark-modal__btn--ghost {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--text);
+}
+
+.bookmark-modal__btn--primary {
+  background: var(--accent-2, #7bffce);
+  color: #0a1018;
+}
+
+.bookmark-modal__btn--primary:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .panel__body--calendar {
@@ -14720,13 +15057,16 @@ body.dev-request-mobile-open {
 }
 
 .tasks-random__filter-row {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  align-items: start;
+  column-gap: 0.75rem;
+  row-gap: 0.3rem;
 }
 
 .tasks-random__row-label {
   margin: 0;
+  padding-top: 0.45rem;
   font-size: 0.68em;
   font-weight: 600;
   letter-spacing: 0.04em;
