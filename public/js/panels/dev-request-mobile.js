@@ -80,6 +80,12 @@ export function mountDevRequestMobile() {
     },
   });
 
+  // Enlarge the consolidated description box on mobile — the default is cramped.
+  const bodyInput = form.querySelector('.dev-request-form__textarea');
+  if (bodyInput instanceof HTMLTextAreaElement) {
+    bodyInput.rows = Math.max(bodyInput.rows, 6);
+  }
+
   sheet.append(sheetHeader, sheetHint, form, toastEl);
   document.body.append(fab, backdrop, sheet);
 

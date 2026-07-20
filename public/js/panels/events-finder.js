@@ -962,6 +962,29 @@ export function mountEventsFinder(root) {
     }
   }
 
+  /**
+   * POST a big-event feed-card action (snooze / skip / restore), then refresh
+   * the tracked table + feed so the card disappears (or returns) immediately.
+   * @param {object} item
+   * @param {'snooze' | 'skip' | 'restore'} action
+   */
+  async function bigEventCardAction(item, action) {
+    const slug = String(item?.slug || '').trim();
+    if (!slug) return;
+    try {
+      const res = await fetch(
+        `/api/events-finder/big-events/${encodeURIComponent(slug)}/${action}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      void refreshBigEventsFromStore();
+      void loadEvents({ catalogOnly: true, quiet: true });
+    } catch (e) {
+      console.warn('[big-events] action failed:', action, e?.message || e);
+    }
+  }
+
   async function removeBigEvent(item) {
     const slug = String(item?.slug || '').trim();
     if (!slug) return;
@@ -2661,6 +2684,24 @@ export function mountEventsFinder(root) {
       body.append(links);
     }
 
+    if (item.skipped || item.snoozed) {
+      const hiddenNote = document.createElement('p');
+      hiddenNote.className = 'events-finder__conference-ticket muted';
+      hiddenNote.textContent = item.skipped
+        ? 'Skipped — hidden from the events feed.'
+        : `Snoozed — hidden from the feed until ${formatWhen(item.snoozedUntil) || 'later'}.`;
+      body.append(hiddenNote);
+      const restore = document.createElement('button');
+      restore.type = 'button';
+      restore.className = 'events-finder__conference-detail-link';
+      restore.textContent = 'Restore to feed';
+      restore.addEventListener('click', () => {
+        void bigEventCardAction(item, 'restore');
+        closeConferencePopout();
+      });
+      body.append(restore);
+    }
+
     openConferencePopout({
       title: String(item.title || item.query || 'Conference'),
       body,
@@ -2740,7 +2781,46 @@ export function mountEventsFinder(root) {
       status.append(ex);
     }
 
-    card.append(snap, head, cityEl, meta, status);
+    const actions = document.createElement('div');
+    actions.className = 'events-finder__card-actions';
+
+    const snoozeBtn = document.createElement('button');
+    snoozeBtn.type = 'button';
+    snoozeBtn.className = 'events-finder__card-action events-finder__card-action--snooze';
+    snoozeBtn.title = 'Snooze — hide for one week, then bring it back';
+    snoozeBtn.setAttribute('aria-label', 'Snooze this big event for one week');
+    snoozeBtn.textContent = 'Snooze';
+    snoozeBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      void bigEventCardAction(item, 'snooze');
+    });
+
+    const skipBtn = document.createElement('button');
+    skipBtn.type = 'button';
+    skipBtn.className = 'events-finder__card-action events-finder__card-action--hide';
+    skipBtn.title = 'Skip — dismiss this big event';
+    skipBtn.setAttribute('aria-label', 'Skip this big event');
+    skipBtn.textContent = 'Skip';
+    skipBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      void bigEventCardAction(item, 'skip');
+    });
+
+    const calBtn = document.createElement('a');
+    calBtn.className = 'events-finder__card-action events-finder__card-action--cal';
+    calBtn.href = googleCalendarAddUrl(item);
+    calBtn.target = '_blank';
+    calBtn.rel = 'noopener noreferrer';
+    calBtn.title = 'Add to calendar';
+    calBtn.setAttribute('aria-label', 'Add this big event to calendar');
+    calBtn.textContent = 'Add to cal';
+    calBtn.addEventListener('click', (e) => e.stopPropagation());
+
+    actions.append(snoozeBtn, skipBtn, calBtn);
+
+    card.append(snap, head, cityEl, meta, status, actions);
     card.addEventListener('click', () => openConferenceDetailPopout(item));
     return card;
   }
@@ -3169,7 +3249,9 @@ export function mountEventsFinder(root) {
       : [];
     const activeBigEvents = showSkipped
       ? []
-      : bigEventItems.filter((it) => it && it.displayActive && !it.researching);
+      : bigEventItems.filter(
+          (it) => it && it.displayActive && !it.researching && !it.skipped && !it.snoozed,
+        );
     const gmail = data.sources?.gmail;
     const facebook = data.sources?.facebook;
     const hadCards = listEl.querySelector('.events-finder__card') != null;

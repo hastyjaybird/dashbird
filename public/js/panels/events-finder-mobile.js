@@ -890,6 +890,28 @@ export function mountEventsFinderMobile(root) {
     }
   }
 
+  /**
+   * POST a big-event feed-card action (snooze / skip / restore), then refresh.
+   * @param {object} item
+   * @param {'snooze' | 'skip' | 'restore'} action
+   */
+  async function bigEventCardAction(item, action) {
+    const slug = String(item?.slug || '').trim();
+    if (!slug) return;
+    try {
+      const res = await fetch(
+        `/api/events-finder/big-events/${encodeURIComponent(slug)}/${action}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      void refreshBigEventsFromStore();
+      void loadEvents();
+    } catch (e) {
+      console.warn('[big-events] action failed:', action, e?.message || e);
+    }
+  }
+
   function openConferenceWatchlistPopout() {
     const wrap = document.createElement('div');
     wrap.className = 'events-finder__big-events events-finder__big-events--mobile';
@@ -1781,6 +1803,24 @@ export function mountEventsFinderMobile(root) {
       body.append(links);
     }
 
+    if (item.skipped || item.snoozed) {
+      const hiddenNote = document.createElement('p');
+      hiddenNote.className = 'events-finder__conference-ticket muted';
+      hiddenNote.textContent = item.skipped
+        ? 'Skipped — hidden from the events feed.'
+        : `Snoozed — hidden from the feed until ${formatWhen(item.snoozedUntil) || 'later'}.`;
+      body.append(hiddenNote);
+      const restore = document.createElement('button');
+      restore.type = 'button';
+      restore.className = 'events-finder__conference-detail-link';
+      restore.textContent = 'Restore to feed';
+      restore.addEventListener('click', () => {
+        void bigEventCardAction(item, 'restore');
+        closeConferencePopout();
+      });
+      body.append(restore);
+    }
+
     openConferencePopout({
       title: String(item.title || item.query || 'Conference'),
       body,
@@ -2487,7 +2527,46 @@ export function mountEventsFinderMobile(root) {
       statusLine.append(ex);
     }
 
-    body.append(head, meta, statusLine);
+    const actions = document.createElement('div');
+    actions.className = 'mobile-events__actions';
+
+    const snoozeBtn = document.createElement('button');
+    snoozeBtn.type = 'button';
+    snoozeBtn.className = 'mobile-events__action mobile-events__action--snooze';
+    snoozeBtn.title = 'Snooze — hide for one week';
+    snoozeBtn.setAttribute('aria-label', 'Snooze this big event for one week');
+    snoozeBtn.textContent = 'Snooze';
+    snoozeBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      void bigEventCardAction(item, 'snooze');
+    });
+
+    const skipBtn = document.createElement('button');
+    skipBtn.type = 'button';
+    skipBtn.className = 'mobile-events__action mobile-events__action--skip';
+    skipBtn.title = 'Skip — dismiss this big event';
+    skipBtn.setAttribute('aria-label', 'Skip this big event');
+    skipBtn.textContent = 'Skip';
+    skipBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      void bigEventCardAction(item, 'skip');
+    });
+
+    const calBtn = document.createElement('a');
+    calBtn.className = 'mobile-events__action mobile-events__action--cal';
+    calBtn.href = googleCalendarAddUrl(item, googleCalendarTarget);
+    calBtn.target = '_blank';
+    calBtn.rel = 'noopener noreferrer';
+    calBtn.title = 'Add to calendar';
+    calBtn.setAttribute('aria-label', 'Add this big event to calendar');
+    calBtn.textContent = 'Add to cal';
+    calBtn.addEventListener('click', (e) => e.stopPropagation());
+
+    actions.append(snoozeBtn, skipBtn, calBtn);
+
+    body.append(head, meta, statusLine, actions);
     row.append(icon, body);
     card.append(row);
     card.addEventListener('click', () => openConferenceDetailPopout(item));
@@ -2742,7 +2821,9 @@ export function mountEventsFinderMobile(root) {
       : [];
     const activeBigEvents = showSkipped
       ? []
-      : bigEventItems.filter((it) => it && it.displayActive && !it.researching);
+      : bigEventItems.filter(
+          (it) => it && it.displayActive && !it.researching && !it.skipped && !it.snoozed,
+        );
 
     list.replaceChildren();
     refreshConferencePopoutIfOpen();

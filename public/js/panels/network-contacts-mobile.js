@@ -14,6 +14,7 @@ import {
   mobileNavBack,
   isMobileNavApplying,
 } from '../lib/mobile-history.js';
+import { addSceneToken } from '../lib/network-scene-tokens.js';
 
 const RELATIONSHIP_STATUSES = [
   'Lead',
@@ -574,7 +575,8 @@ export function mountNetworkContactsMobile(root) {
   }
 
   /**
-   * Mobile-friendly group picker (replaces desktop prompt()).
+   * Mobile-friendly group picker (replaces desktop prompt()). Resolves with the
+   * chosen group, the sentinel `{ createNew: true }`, or null when cancelled.
    * @param {object[]} groups
    * @param {number} contactCount
    * @returns {Promise<object | null>}
@@ -621,6 +623,21 @@ export function mountNetworkContactsMobile(root) {
         if (e.key === 'Escape') finish(null);
       }
 
+      const createLi = document.createElement('li');
+      const createBtn = document.createElement('button');
+      createBtn.type = 'button';
+      createBtn.className = 'mobile-network__sheet-option mobile-network__sheet-option--create';
+      const createName = document.createElement('span');
+      createName.className = 'mobile-network__sheet-option-name';
+      createName.textContent = '+ Create new group';
+      const createMeta = document.createElement('span');
+      createMeta.className = 'mobile-network__sheet-option-meta';
+      createMeta.textContent = 'Scene or Event';
+      createBtn.append(createName, createMeta);
+      createBtn.addEventListener('click', () => finish({ createNew: true }));
+      createLi.append(createBtn);
+      listEl.append(createLi);
+
       for (const g of groups) {
         const kind = g.kind === 'event' ? NETWORK_LABELS.event : NETWORK_LABELS.scene;
         const memberCount = Array.isArray(g.memberIds) ? g.memberIds.length : 0;
@@ -650,6 +667,106 @@ export function mountNetworkContactsMobile(root) {
       document.body.append(backdrop);
       document.addEventListener('keydown', onKey);
       closeBtn.focus();
+    });
+  }
+
+  /**
+   * Mobile-friendly "create new group" sheet: name + Scene/Event choice.
+   * @param {number} contactCount
+   * @returns {Promise<{ name: string, kind: 'community' | 'event' } | null>}
+   */
+  function openCreateGroupSheet(contactCount) {
+    return new Promise((resolve) => {
+      const backdrop = document.createElement('div');
+      backdrop.className = 'mobile-network__sheet-backdrop';
+      backdrop.setAttribute('role', 'presentation');
+
+      const sheet = document.createElement('div');
+      sheet.className = 'mobile-network__sheet';
+      sheet.setAttribute('role', 'dialog');
+      sheet.setAttribute('aria-modal', 'true');
+      sheet.setAttribute('aria-label', 'Create new group');
+
+      const header = document.createElement('div');
+      header.className = 'mobile-network__sheet-head';
+      const title = document.createElement('h3');
+      title.className = 'mobile-network__sheet-title';
+      title.textContent = 'Create new group';
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'mobile-network__sheet-close';
+      closeBtn.textContent = 'Cancel';
+      header.append(title, closeBtn);
+
+      const body = document.createElement('div');
+      body.className = 'mobile-network__sheet-body';
+
+      const nameField = field('Group name', 'groupName', '', { placeholder: 'e.g. Book Club' });
+      const nameInput = nameField.querySelector('input');
+
+      const hint = document.createElement('p');
+      hint.className = 'mobile-network__field-hint';
+      hint.textContent =
+        contactCount === 1
+          ? 'Pick a type, then the contact is added.'
+          : `Pick a type, then the ${contactCount} contacts are added.`;
+
+      const kindRow = document.createElement('div');
+      kindRow.className = 'mobile-groups__kind-choice';
+      const sceneBtn = document.createElement('button');
+      sceneBtn.type = 'button';
+      sceneBtn.className = 'mobile-network__selection-btn';
+      sceneBtn.textContent = `${NETWORK_LABELS.scene} group`;
+      const eventBtn = document.createElement('button');
+      eventBtn.type = 'button';
+      eventBtn.className = 'mobile-network__selection-btn mobile-network__selection-btn--primary';
+      eventBtn.textContent = `${NETWORK_LABELS.event} group`;
+      kindRow.append(sceneBtn, eventBtn);
+
+      const errNote = document.createElement('p');
+      errNote.className = 'mobile-network__save-status mobile-network__save-status--err';
+      errNote.hidden = true;
+
+      let settled = false;
+      /** @param {{ name: string, kind: 'community' | 'event' } | null} result */
+      function finish(result) {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener('keydown', onKey);
+        backdrop.remove();
+        resolve(result);
+      }
+
+      /** @param {KeyboardEvent} e */
+      function onKey(e) {
+        if (e.key === 'Escape') finish(null);
+      }
+
+      /** @param {'community' | 'event'} kind */
+      function choose(kind) {
+        const name = String(nameInput instanceof HTMLInputElement ? nameInput.value : '').trim();
+        if (!name) {
+          errNote.hidden = false;
+          errNote.textContent = 'Group name is required';
+          if (nameInput instanceof HTMLInputElement) nameInput.focus();
+          return;
+        }
+        finish({ name, kind });
+      }
+      sceneBtn.addEventListener('click', () => choose('community'));
+      eventBtn.addEventListener('click', () => choose('event'));
+
+      closeBtn.addEventListener('click', () => finish(null));
+      backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) finish(null);
+      });
+
+      body.append(nameField, hint, kindRow, errNote);
+      sheet.append(header, body);
+      backdrop.append(sheet);
+      document.body.append(backdrop);
+      document.addEventListener('keydown', onKey);
+      if (nameInput instanceof HTMLInputElement) nameInput.focus();
     });
   }
 
@@ -1111,6 +1228,46 @@ export function mountNetworkContactsMobile(root) {
     addInput.autocomplete = 'off';
     const taskList = document.createElement('ul');
     taskList.className = 'mobile-network__tasks-list';
+    const taskStatus = document.createElement('p');
+    taskStatus.className = 'mobile-network__save-status mobile-network__tasks-status';
+    taskStatus.hidden = true;
+
+    /**
+     * Persist the current task list immediately (checkbox toggles auto-save so
+     * the user does not need a separate Save). Sends a partial PUT — the server
+     * merges `tasks` over the stored contact, leaving other fields untouched.
+     * @param {HTMLInputElement | null} [cb]
+     */
+    async function persistTasks(cb = null) {
+      const tasks = draftTasks.map((t) => ({ id: t.id, text: t.text, done: t.done }));
+      if (cb) cb.disabled = true;
+      taskStatus.hidden = false;
+      taskStatus.textContent = 'Saving…';
+      taskStatus.classList.remove('mobile-network__save-status--err');
+      try {
+        const r = await fetch(`/api/network/contacts/${encodeURIComponent(current.id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tasks }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+        if (data.contact) {
+          current = { ...current, tasks: data.contact.tasks || tasks };
+          const idx = contacts.findIndex((x) => x.id === current.id);
+          if (idx >= 0) contacts[idx] = { ...contacts[idx], tasks: current.tasks };
+        }
+        taskStatus.textContent = 'Saved';
+        setTimeout(() => {
+          if (taskStatus.textContent === 'Saved') taskStatus.hidden = true;
+        }, 1200);
+      } catch (err) {
+        taskStatus.textContent = `Task save failed: ${err?.message || err}`;
+        taskStatus.classList.add('mobile-network__save-status--err');
+      } finally {
+        if (cb) cb.disabled = false;
+      }
+    }
 
     function renderTasks() {
       taskList.replaceChildren();
@@ -1126,7 +1283,7 @@ export function mountNetworkContactsMobile(root) {
         cb.addEventListener('change', () => {
           task.done = cb.checked;
           li.classList.toggle('mobile-network__tasks-item--done', task.done);
-          dirty = true;
+          void persistTasks(cb);
         });
         const text = document.createElement('span');
         text.textContent = task.text;
@@ -1151,7 +1308,7 @@ export function mountNetworkContactsMobile(root) {
     });
     /** @type {any} */ (tasksWrap).getTasks = () =>
       draftTasks.map((t) => ({ id: t.id, text: t.text, done: t.done }));
-    tasksWrap.append(tasksLabel, addInput, taskList);
+    tasksWrap.append(tasksLabel, addInput, taskList, taskStatus);
     renderTasks();
 
     const contactUrls = [
@@ -1446,6 +1603,57 @@ export function mountNetworkContactsMobile(root) {
     }
   });
 
+  async function reloadContacts() {
+    try {
+      const cr = await fetch('/api/network/contacts', { cache: 'no-store' });
+      const cj = await cr.json();
+      if (cr.ok && cj.ok !== false && Array.isArray(cj.contacts)) {
+        contacts = cj.contacts.slice();
+        contacts.sort((a, b) =>
+          contactName(a).localeCompare(contactName(b), undefined, { sensitivity: 'base' }),
+        );
+        refreshLocationFilterOptions();
+      }
+    } catch {
+      /* keep existing contacts */
+    }
+  }
+
+  /**
+   * Add contacts to a Scene by editing each contact's Scene tag (scene groups
+   * mirror `networkCircles`; the server creates/joins the community group).
+   * @param {string[]} ids
+   * @param {string} sceneName
+   */
+  async function addContactsToScene(ids, sceneName) {
+    for (const id of ids) {
+      const c = contacts.find((x) => String(x.id) === String(id));
+      const next = addSceneToken(c?.networkCircles, sceneName);
+      if (c && next === String(c.networkCircles || '')) continue;
+      const r = await fetch(`/api/network/contacts/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ networkCircles: next }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+    }
+  }
+
+  /**
+   * @param {string[]} ids
+   * @param {string} groupId
+   */
+  async function addContactsToEventGroup(ids, groupId) {
+    const ar = await fetch(`/api/network/groups/${encodeURIComponent(groupId)}/members`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactIds: ids }),
+    });
+    const aj = await ar.json().catch(() => ({}));
+    if (!ar.ok || aj.ok === false) throw new Error(aj.error || 'add_failed');
+  }
+
   addToGroupBtn.addEventListener('click', async () => {
     const ids = [...selectedContactIds];
     if (!ids.length) return;
@@ -1456,45 +1664,60 @@ export function mountNetworkContactsMobile(root) {
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'groups_failed');
       const groups = Array.isArray(j.groups) ? j.groups : [];
-      if (!groups.length) {
-        status.textContent = 'No groups yet — create one from the Groups tab first.';
-        return;
-      }
       status.hidden = true;
-      const group = await openGroupPickerDialog(groups, ids.length);
-      if (!group) return;
-      status.hidden = false;
-      status.textContent = 'Adding to group…';
-      const ar = await fetch(`/api/network/groups/${encodeURIComponent(group.id)}/members`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contactIds: ids }),
-      });
-      const aj = await ar.json();
-      if (!aj.ok) throw new Error(aj.error || 'add_failed');
+      const picked = await openGroupPickerDialog(groups, ids.length);
+      if (!picked) return;
+
+      let addedLabel = '';
+      let touchedScenes = false;
+
+      if (picked.createNew) {
+        const draft = await openCreateGroupSheet(ids.length);
+        if (!draft) return;
+        status.hidden = false;
+        status.textContent = 'Creating group…';
+        if (draft.kind === 'event') {
+          const cr = await fetch('/api/network/groups', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: draft.name, kind: 'event', eventType: '' }),
+          });
+          const cj = await cr.json().catch(() => ({}));
+          if (!cr.ok || cj.ok === false || !cj.group?.id) {
+            throw new Error(cj.error || 'create_failed');
+          }
+          await addContactsToEventGroup(ids, cj.group.id);
+          addedLabel = cj.group.name || draft.name;
+        } else {
+          await addContactsToScene(ids, draft.name);
+          touchedScenes = true;
+          addedLabel = draft.name;
+        }
+      } else if (picked.kind === 'event') {
+        status.hidden = false;
+        status.textContent = 'Adding to group…';
+        await addContactsToEventGroup(ids, picked.id);
+        addedLabel = picked.name || 'group';
+      } else {
+        // Scene / community group — add by editing each contact's Scene tag.
+        status.hidden = false;
+        status.textContent = 'Adding to Scene…';
+        await addContactsToScene(ids, picked.name || '');
+        touchedScenes = true;
+        addedLabel = picked.name || 'Scene';
+      }
+
       selectedContactIds.clear();
       syncSelectionUi();
-      if (group.kind !== 'event') {
-        try {
-          const cr = await fetch('/api/network/contacts', { cache: 'no-store' });
-          const cj = await cr.json();
-          if (cr.ok && cj.ok !== false && Array.isArray(cj.contacts)) {
-            contacts = cj.contacts.slice();
-            contacts.sort((a, b) =>
-              contactName(a).localeCompare(contactName(b), undefined, { sensitivity: 'base' }),
-            );
-            refreshLocationFilterOptions();
-          }
-        } catch {
-          /* keep existing contacts */
-        }
-      }
+      if (touchedScenes) await reloadContacts();
       renderList();
-      status.textContent = `Added to ${group.name || 'group'}`;
+      status.hidden = false;
+      status.textContent = `Added to ${addedLabel}`;
       setTimeout(() => {
         if (status.textContent.startsWith('Added to')) status.hidden = true;
       }, 2000);
     } catch (err) {
+      status.hidden = false;
       status.textContent = String(err?.message || err);
     }
   });

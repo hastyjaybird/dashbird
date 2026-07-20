@@ -63,13 +63,13 @@ function fieldOptionsForAssign(field, taskMeta, projectMeta) {
  * @param {Record<string, unknown> | null | undefined} projectMeta
  * @returns {string | null}
  */
-function resolvedLocationAssignValue(taskMeta, projectMeta) {
+function resolvedLocationAssignValue(taskMeta, _projectMeta) {
   if (taskMeta?.locationAny) return '__any__';
   if (typeof taskMeta?.location === 'string' && taskMeta.location) return taskMeta.location;
   if (Array.isArray(taskMeta?.locations) && taskMeta.locations.length) {
     return String(taskMeta.locations[0]);
   }
-  if (typeof projectMeta?.location === 'string' && projectMeta.location) return projectMeta.location;
+  // No project-default inheritance: a task only shows a location it sets itself.
   return null;
 }
 
@@ -212,11 +212,11 @@ function appendAssignFields(assignRow, fields, taskMeta, projectMeta, data, opts
  * @param {Record<string, unknown> | null | undefined} taskMeta
  * @param {Record<string, unknown> | null | undefined} projectMeta
  */
-function hasEffectiveLocation(taskMeta, projectMeta) {
+function hasEffectiveLocation(taskMeta, _projectMeta) {
   if (taskMeta?.locationAny) return true;
   if (typeof taskMeta?.location === 'string' && taskMeta.location) return true;
   if (Array.isArray(taskMeta?.locations) && taskMeta.locations.length) return true;
-  if (typeof projectMeta?.location === 'string' && projectMeta.location) return true;
+  // No project-default inheritance: project location no longer satisfies a task.
   return false;
 }
 

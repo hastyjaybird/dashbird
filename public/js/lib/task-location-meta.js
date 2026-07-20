@@ -40,13 +40,13 @@ export function projectDefaultLocationLabel(projectMeta) {
  * @param {Record<string, unknown> | null | undefined} taskMeta
  * @param {Record<string, unknown> | null | undefined} projectMeta
  */
-export function taskLocationSelectValue(taskMeta, projectMeta) {
+export function taskLocationSelectValue(taskMeta, _projectMeta) {
   if (taskMeta?.locationAny) return '__any__';
   if (typeof taskMeta?.location === 'string' && taskMeta.location) return taskMeta.location;
   if (Array.isArray(taskMeta?.locations) && taskMeta.locations.length) {
     return String(taskMeta.locations[0]);
   }
-  if (typeof projectMeta?.location === 'string' && projectMeta.location) return projectMeta.location;
+  // No project-default inheritance: unset tasks read as "Any" until explicitly set.
   return '__any__';
 }
 

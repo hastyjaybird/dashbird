@@ -101,6 +101,19 @@ function normalizeDate(raw) {
 }
 
 /**
+ * Normalize an ISO datetime (used for snooze-until timestamps). Falls back to
+ * null when unparseable. Keeps full precision (not date-only like normalizeDate).
+ * @param {unknown} raw
+ * @returns {string | null}
+ */
+function normalizeIsoDateTime(raw) {
+  if (raw == null || raw === '') return null;
+  const ms = Date.parse(String(raw).trim());
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString();
+}
+
+/**
  * @param {unknown} raw
  * @returns {object | null}
  */
@@ -148,6 +161,10 @@ function normalizeRecord(raw) {
     error: String(r.error || '').trim().slice(0, 200) || null,
     researching: r.researching === true,
     researchedAt: String(r.researchedAt || '').trim().slice(0, 40) || null,
+    // Feed-card controls: hide from the events feed until this ISO timestamp
+    // (Snooze), or dismiss entirely (Skip). Management table still lists them.
+    snoozedUntil: normalizeIsoDateTime(r.snoozedUntil),
+    skipped: r.skipped === true,
   };
 }
 

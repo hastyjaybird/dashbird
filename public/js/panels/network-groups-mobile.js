@@ -9,46 +9,11 @@ import {
   groupKind,
   groupKindLabel,
   groupSectionLabel,
+  isEventGroup,
   isSceneGroup,
 } from '../lib/network-group-kind.js?v=scene-ux-1';
 import { NETWORK_LABELS } from '../lib/network-labels.js';
-
-/**
- * @param {string} label
- * @param {string} name
- * @param {string} value
- * @param {{ type?: string, rows?: number, placeholder?: string, hidden?: boolean }} [opts]
- * @returns {HTMLLabelElement}
- */
-function field(label, name, value, opts = {}) {
-  const wrap = document.createElement('label');
-  wrap.className = 'mobile-network__field';
-  if (opts.hidden) wrap.hidden = true;
-  const span = document.createElement('span');
-  span.className = 'mobile-network__field-label';
-  span.textContent = label;
-  wrap.append(span);
-
-  if (opts.rows && opts.rows > 1) {
-    const ta = document.createElement('textarea');
-    ta.name = name;
-    ta.className = 'mobile-network__input';
-    ta.rows = opts.rows;
-    ta.value = value || '';
-    if (opts.placeholder) ta.placeholder = opts.placeholder;
-    wrap.append(ta);
-    return wrap;
-  }
-
-  const input = document.createElement('input');
-  input.type = opts.type || 'text';
-  input.name = name;
-  input.className = 'mobile-network__input';
-  input.value = value || '';
-  if (opts.placeholder) input.placeholder = opts.placeholder;
-  wrap.append(input);
-  return wrap;
-}
+import { addSceneToken, removeSceneToken } from '../lib/network-scene-tokens.js';
 
 /**
  * @param {object} c
@@ -75,10 +40,71 @@ function memberCount(g) {
 }
 
 /**
- * Mobile-friendly discard prompt (replaces window.confirm).
- * @returns {Promise<boolean>} true when the user chooses to discard
+ * Fire a callback after a touch (or mouse) press is held for ~ms without moving.
+ * Touch-first for mobile; mouse handlers make it usable on desktop too.
+ * @param {HTMLElement} el
+ * @param {() => void} onLongPress
+ * @param {number} [ms]
  */
-function openDiscardSheet() {
+function attachLongPress(el, onLongPress, ms = 500) {
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let timer = null;
+  let startX = 0;
+  let startY = 0;
+
+  function clear() {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  }
+  /** @param {number} x @param {number} y */
+  function start(x, y) {
+    startX = x;
+    startY = y;
+    clear();
+    timer = setTimeout(() => {
+      timer = null;
+      onLongPress();
+    }, ms);
+  }
+  /** @param {number} x @param {number} y */
+  function move(x, y) {
+    if (!timer) return;
+    if (Math.abs(x - startX) > 10 || Math.abs(y - startY) > 10) clear();
+  }
+
+  el.addEventListener(
+    'touchstart',
+    (e) => {
+      const t = e.touches[0];
+      if (t) start(t.clientX, t.clientY);
+    },
+    { passive: true },
+  );
+  el.addEventListener(
+    'touchmove',
+    (e) => {
+      const t = e.touches[0];
+      if (t) move(t.clientX, t.clientY);
+    },
+    { passive: true },
+  );
+  el.addEventListener('touchend', clear);
+  el.addEventListener('touchcancel', clear);
+  el.addEventListener('mousedown', (e) => start(e.clientX, e.clientY));
+  el.addEventListener('mousemove', (e) => move(e.clientX, e.clientY));
+  el.addEventListener('mouseup', clear);
+  el.addEventListener('mouseleave', clear);
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
+/**
+ * Multi-select contact picker sheet. Resolves with selected contact ids, or null.
+ * @param {{ title: string, candidates: object[] }} opts
+ * @returns {Promise<string[] | null>}
+ */
+function openContactPickerSheet({ title, candidates }) {
   return new Promise((resolve) => {
     const backdrop = document.createElement('div');
     backdrop.className = 'mobile-network__sheet-backdrop';
@@ -88,55 +114,125 @@ function openDiscardSheet() {
     sheet.className = 'mobile-network__sheet';
     sheet.setAttribute('role', 'dialog');
     sheet.setAttribute('aria-modal', 'true');
-    sheet.setAttribute('aria-label', 'Discard changes');
+    sheet.setAttribute('aria-label', title);
 
     const header = document.createElement('div');
     header.className = 'mobile-network__sheet-head';
-    const title = document.createElement('h3');
-    title.className = 'mobile-network__sheet-title';
-    title.textContent = 'Discard unsaved changes?';
-    header.append(title);
+    const heading = document.createElement('h3');
+    heading.className = 'mobile-network__sheet-title';
+    heading.textContent = title;
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'mobile-network__sheet-close';
+    closeBtn.textContent = 'Cancel';
+    header.append(heading, closeBtn);
 
-    const actions = document.createElement('div');
-    actions.className = 'mobile-groups__sheet-actions';
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.className = 'mobile-network__search';
+    search.placeholder = 'Search people…';
+    search.autocomplete = 'off';
+    search.setAttribute('aria-label', 'Search people to add');
 
-    const keepBtn = document.createElement('button');
-    keepBtn.type = 'button';
-    keepBtn.className = 'mobile-network__selection-btn';
-    keepBtn.textContent = 'Keep editing';
+    const listEl = document.createElement('ul');
+    listEl.className = 'mobile-network__sheet-list mobile-groups__picker-list';
 
-    const discardBtn = document.createElement('button');
-    discardBtn.type = 'button';
-    discardBtn.className = 'mobile-network__selection-btn mobile-network__selection-btn--primary';
-    discardBtn.textContent = 'Discard';
+    const footer = document.createElement('div');
+    footer.className = 'mobile-groups__picker-footer';
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'mobile-network__selection-btn mobile-network__selection-btn--primary';
+    addBtn.textContent = 'Add';
+    addBtn.disabled = true;
+    footer.append(addBtn);
+
+    /** @type {Set<string>} */
+    const selected = new Set();
+
+    function syncAddBtn() {
+      const n = selected.size;
+      addBtn.disabled = n === 0;
+      addBtn.textContent = n === 0 ? 'Add' : `Add ${n}`;
+    }
+
+    function paint() {
+      listEl.replaceChildren();
+      const q = search.value.trim().toLowerCase();
+      const items = candidates
+        .filter((c) => {
+          if (!q) return true;
+          const hay = [c.displayName, c.nickname, c.org, c.organizationName]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          return hay.includes(q);
+        })
+        .sort((a, b) => compareContactSearchNameRank(a, b, q, contactName))
+        .slice(0, 60);
+      if (!items.length) {
+        const empty = document.createElement('li');
+        empty.className = 'mobile-network__empty';
+        empty.textContent = q ? 'No matching people' : 'No contacts available';
+        listEl.append(empty);
+        return;
+      }
+      for (const c of items) {
+        const li = document.createElement('li');
+        const lab = document.createElement('label');
+        lab.className = 'mobile-network__sheet-option mobile-groups__picker-opt';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = selected.has(String(c.id));
+        cb.addEventListener('change', () => {
+          if (cb.checked) selected.add(String(c.id));
+          else selected.delete(String(c.id));
+          syncAddBtn();
+        });
+        const name = document.createElement('span');
+        name.className = 'mobile-network__sheet-option-name';
+        name.textContent = contactName(c);
+        const sub = String(c.nickname || c.organizationName || c.org || '').trim();
+        lab.append(cb, name);
+        if (sub) {
+          const meta = document.createElement('span');
+          meta.className = 'mobile-network__sheet-option-meta';
+          meta.textContent = sub;
+          lab.append(meta);
+        }
+        li.append(lab);
+        listEl.append(li);
+      }
+    }
 
     let settled = false;
-    /** @param {boolean} discard */
-    function finish(discard) {
+    /** @param {string[] | null} result */
+    function finish(result) {
       if (settled) return;
       settled = true;
       document.removeEventListener('keydown', onKey);
       backdrop.remove();
-      resolve(discard);
+      resolve(result);
     }
 
     /** @param {KeyboardEvent} e */
     function onKey(e) {
-      if (e.key === 'Escape') finish(false);
+      if (e.key === 'Escape') finish(null);
     }
 
-    keepBtn.addEventListener('click', () => finish(false));
-    discardBtn.addEventListener('click', () => finish(true));
+    search.addEventListener('input', paint);
+    addBtn.addEventListener('click', () => finish([...selected]));
+    closeBtn.addEventListener('click', () => finish(null));
     backdrop.addEventListener('click', (e) => {
-      if (e.target === backdrop) finish(false);
+      if (e.target === backdrop) finish(null);
     });
 
-    actions.append(keepBtn, discardBtn);
-    sheet.append(header, actions);
+    paint();
+    syncAddBtn();
+    sheet.append(header, search, listEl, footer);
     backdrop.append(sheet);
     document.body.append(backdrop);
     document.addEventListener('keydown', onKey);
-    keepBtn.focus();
+    search.focus();
   });
 }
 
@@ -271,56 +367,118 @@ export function mountNetworkGroupsMobile(root) {
 
     /** @type {object} */
     let current = group;
-    const readOnly = isSceneGroup(group);
+    const isScene = isSceneGroup(group);
 
     const back = document.createElement('button');
     back.type = 'button';
     back.className = 'mobile-network__back';
     back.textContent = '← Groups';
-    back.addEventListener('click', async () => {
-      if (dirty && !(await openDiscardSheet())) return;
+    back.addEventListener('click', () => {
       mobileNavBack();
     });
 
-    const form = document.createElement('form');
-    form.className = 'mobile-network__form';
-    if (!readOnly) {
-      form.addEventListener('input', () => {
-        dirty = true;
-      });
-      form.addEventListener('change', () => {
-        dirty = true;
-      });
+    // --- Header: kind icon + name (event names rename inline on long-press). ---
+    const headerBlock = document.createElement('div');
+    headerBlock.className = 'mobile-groups__header-block';
+
+    const head = document.createElement('div');
+    head.className = 'mobile-groups__scene-head';
+    head.append(createGroupKindIconEl(current, 'mobile-groups__kind-icon'));
+
+    const title = document.createElement('h2');
+    title.className = 'mobile-network__detail-name mobile-groups__name-title';
+    title.textContent = groupName(current);
+    head.append(title);
+
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'mobile-network__input mobile-groups__name-input';
+    nameInput.setAttribute('aria-label', 'Group name');
+    nameInput.hidden = true;
+
+    const nameStatus = document.createElement('p');
+    nameStatus.className = 'mobile-network__save-status';
+    nameStatus.hidden = true;
+
+    headerBlock.append(head, nameInput, nameStatus);
+
+    /**
+     * @param {string} [msg]
+     * @param {boolean} [isErr]
+     */
+    function showNameStatus(msg, isErr = false) {
+      nameStatus.hidden = !msg;
+      nameStatus.textContent = msg || '';
+      nameStatus.classList.toggle('mobile-network__save-status--err', isErr);
     }
 
-    const kindNote = document.createElement('p');
-    kindNote.className = 'mobile-groups__desc';
-    kindNote.textContent = readOnly ? NETWORK_LABELS.sceneGroupNote : NETWORK_LABELS.eventGroupNote;
-
-    const saveRow = document.createElement('div');
-    saveRow.className = 'mobile-network__save-row';
-    const saveBtn = document.createElement('button');
-    saveBtn.type = 'submit';
-    saveBtn.className = 'mobile-network__save';
-    saveBtn.textContent = 'Save';
-    const saveStatus = document.createElement('p');
-    saveStatus.className = 'mobile-network__save-status';
-    saveStatus.hidden = true;
-    saveRow.append(saveBtn, saveStatus);
-
-    if (readOnly) {
-      const head = document.createElement('div');
-      head.className = 'mobile-groups__scene-head';
-      head.append(createGroupKindIconEl(group, 'mobile-groups__kind-icon'));
-      const title = document.createElement('h2');
-      title.className = 'mobile-network__detail-name';
-      title.textContent = groupName(current);
-      head.append(title);
-      form.append(head, kindNote);
-    } else {
-      form.append(field('Name', 'name', current.name || ''), kindNote, saveRow);
+    let editingName = false;
+    function openNameEditor() {
+      if (isScene || editingName) return;
+      editingName = true;
+      nameInput.value = String(current.name || '');
+      title.hidden = true;
+      nameInput.hidden = false;
+      nameInput.focus();
+      nameInput.select();
+    }
+    function closeNameEditor() {
+      editingName = false;
+      nameInput.hidden = true;
+      title.hidden = false;
+    }
+    async function commitGroupName() {
+      if (!editingName) return;
+      const name = String(nameInput.value || '').trim();
+      if (!name || name === String(current.name || '')) {
+        closeNameEditor();
+        return;
+      }
+      showNameStatus('Saving…');
+      try {
+        const r = await fetch(`/api/network/groups/${encodeURIComponent(current.id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, kind: 'event' }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+        current = data.group || { ...current, name };
+        upsertGroup(current);
+        title.textContent = groupName(current);
+        showNameStatus('');
+        closeNameEditor();
+        renderList();
+      } catch (err) {
+        showNameStatus(`Rename failed: ${err?.message || err}`, true);
+      }
     }
 
+    if (!isScene) {
+      title.classList.add('mobile-groups__name-title--editable');
+      title.setAttribute('role', 'button');
+      title.setAttribute('tabindex', '0');
+      title.title = 'Long-press to rename';
+      attachLongPress(title, openNameEditor);
+      nameInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          void commitGroupName();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          closeNameEditor();
+        }
+      });
+      nameInput.addEventListener('blur', () => {
+        void commitGroupName();
+      });
+      const editHint = document.createElement('p');
+      editHint.className = 'mobile-network__field-hint mobile-groups__name-hint';
+      editHint.textContent = 'Long-press the name to rename.';
+      headerBlock.append(editHint);
+    }
+
+    // --- Members section (multi-select + bulk copy / remove). ---
     const membersSection = document.createElement('div');
     membersSection.className = 'mobile-network__section';
     const membersHead = document.createElement('div');
@@ -328,32 +486,35 @@ export function mountNetworkGroupsMobile(root) {
     const membersLabel = document.createElement('h3');
     membersLabel.className = 'mobile-network__section-title';
     membersLabel.textContent = 'Members';
-    membersHead.append(membersLabel);
+    const addContactsBtn = document.createElement('button');
+    addContactsBtn.type = 'button';
+    addContactsBtn.className = 'mobile-network__action mobile-groups__add-contacts';
+    addContactsBtn.textContent = 'Add contacts';
+    membersHead.append(membersLabel, addContactsBtn);
     membersSection.append(membersHead);
 
     const memberBulk = document.createElement('div');
-    memberBulk.className = 'mobile-network__selection-bar';
+    memberBulk.className = 'mobile-network__selection-bar mobile-groups__member-bulk';
     memberBulk.hidden = true;
     const memberBulkCount = document.createElement('span');
     memberBulkCount.className = 'mobile-network__selection-count';
-    const bulkRemoveBtn = document.createElement('button');
-    bulkRemoveBtn.type = 'button';
-    bulkRemoveBtn.className = 'mobile-network__selection-btn';
-    bulkRemoveBtn.textContent = 'Remove';
-    const moveSelect = document.createElement('select');
-    moveSelect.className = 'mobile-network__input mobile-groups__move-select';
-    moveSelect.setAttribute('aria-label', 'Move selected members to group');
-    const bulkMoveBtn = document.createElement('button');
-    bulkMoveBtn.type = 'button';
-    bulkMoveBtn.className = 'mobile-network__selection-btn mobile-network__selection-btn--primary';
-    bulkMoveBtn.textContent = 'Move';
+    const copySelect = document.createElement('select');
+    copySelect.className = 'mobile-network__input mobile-groups__move-select';
+    copySelect.setAttribute('aria-label', 'Copy selected members to group');
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'mobile-network__selection-btn mobile-network__selection-btn--primary';
+    copyBtn.textContent = 'Copy';
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'mobile-network__selection-btn';
+    removeBtn.textContent = 'Remove from group';
     const clearMemberSelBtn = document.createElement('button');
     clearMemberSelBtn.type = 'button';
     clearMemberSelBtn.className = 'mobile-network__selection-btn';
     clearMemberSelBtn.textContent = 'Clear';
-    memberBulk.append(memberBulkCount, bulkRemoveBtn, moveSelect, bulkMoveBtn, clearMemberSelBtn);
+    memberBulk.append(memberBulkCount, copySelect, copyBtn, removeBtn, clearMemberSelBtn);
     membersSection.append(memberBulk);
-    if (readOnly) memberBulk.hidden = true;
 
     const memberStatus = document.createElement('p');
     memberStatus.className = 'mobile-network__save-status';
@@ -368,32 +529,34 @@ export function mountNetworkGroupsMobile(root) {
     /** @type {Set<string>} */
     const selectedMemberIds = new Set();
 
-    function fillMoveGroupOptions() {
-      moveSelect.replaceChildren();
+    function fillCopyOptions() {
+      const prev = copySelect.value;
+      copySelect.replaceChildren();
       const blank = document.createElement('option');
       blank.value = '';
-      blank.textContent = 'Move to…';
-      moveSelect.append(blank);
-      for (const og of groups) {
-        if (String(og.id) === String(current.id)) continue;
+      blank.textContent = 'Copy to…';
+      copySelect.append(blank);
+      const others = groups.filter((og) => String(og.id) !== String(current.id));
+      for (const og of others) {
         const o = document.createElement('option');
         o.value = og.id;
         o.textContent = `${groupName(og)} (${groupKindLabel(og)})`;
-        moveSelect.append(o);
+        copySelect.append(o);
       }
-      moveSelect.disabled = !groups.some((og) => String(og.id) !== String(current.id));
+      copySelect.disabled = others.length === 0;
+      if (prev && others.some((og) => String(og.id) === String(prev))) copySelect.value = prev;
     }
 
     function syncMemberBulkUi() {
       const n = selectedMemberIds.size;
       memberBulk.hidden = n === 0;
       memberBulkCount.textContent = n === 1 ? '1 selected' : `${n} selected`;
-      bulkRemoveBtn.disabled = n === 0;
-      bulkMoveBtn.disabled = n === 0 || !moveSelect.value;
+      removeBtn.disabled = n === 0;
+      copyBtn.disabled = n === 0 || !copySelect.value;
     }
 
-    fillMoveGroupOptions();
-    moveSelect.addEventListener('change', syncMemberBulkUi);
+    fillCopyOptions();
+    copySelect.addEventListener('change', syncMemberBulkUi);
 
     clearMemberSelBtn.addEventListener('click', () => {
       selectedMemberIds.clear();
@@ -403,8 +566,14 @@ export function mountNetworkGroupsMobile(root) {
       syncMemberBulkUi();
     });
 
-    async function refreshContactsIfCommunity(force = false) {
-      if (!force && groupKind(current) !== 'community') return;
+    /** @param {string} [msg] @param {boolean} [isErr] */
+    function showMemberStatus(msg, isErr = false) {
+      memberStatus.hidden = !msg;
+      memberStatus.textContent = msg || '';
+      memberStatus.classList.toggle('mobile-network__save-status--err', isErr);
+    }
+
+    async function refreshContacts() {
       try {
         const contactsRes = await fetch('/api/network/contacts', { cache: 'no-store' });
         const contactsData = await contactsRes.json().catch(() => ({}));
@@ -419,97 +588,81 @@ export function mountNetworkGroupsMobile(root) {
       }
     }
 
+    async function reloadCurrentGroup() {
+      try {
+        const r = await fetch(`/api/network/groups/${encodeURIComponent(current.id)}`, {
+          cache: 'no-store',
+        });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d.ok !== false && d.group) applyMembership(d.group);
+      } catch {
+        /* non-fatal */
+      }
+    }
+
+    async function reloadGroups() {
+      try {
+        const r = await fetch('/api/network/groups', { cache: 'no-store' });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d.ok !== false && Array.isArray(d.groups)) {
+          groups = d.groups.slice();
+          const updated = groups.find((x) => String(x.id) === String(current.id));
+          if (updated) {
+            current = updated;
+            upsertGroup(current);
+          }
+        }
+      } catch {
+        /* non-fatal */
+      }
+    }
+
+    /**
+     * Add contacts to a Scene by editing each contact's Scene tag. Scene groups
+     * mirror `networkCircles`, so the server re-syncs group membership.
+     * @param {string[]} ids
+     * @param {string} sceneName
+     */
+    async function addContactsToScene(ids, sceneName) {
+      for (const id of ids) {
+        const c = contactMap.get(String(id));
+        const next = addSceneToken(c?.networkCircles, sceneName);
+        if (c && next === String(c.networkCircles || '')) continue;
+        const r = await fetch(`/api/network/contacts/${encodeURIComponent(id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ networkCircles: next }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      }
+    }
+
     /**
      * @param {string[]} ids
+     * @param {string} sceneName
      */
-    async function removeMembers(ids) {
-      if (!ids.length) return;
-      showMemberStatus(`Removing ${ids.length}…`);
-      const r = await fetch(`/api/network/groups/${encodeURIComponent(current.id)}/members`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contactIds: ids }),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
-      for (const id of ids) selectedMemberIds.delete(String(id));
-      applyMembership(data.group);
-      await refreshContactsIfCommunity();
-      showMemberStatus(`Removed ${ids.length}`);
-      renderList();
-      syncMemberBulkUi();
-      setTimeout(() => {
-        if (memberStatus.textContent.startsWith('Removed')) memberStatus.hidden = true;
-      }, 1500);
-    }
-
-    bulkRemoveBtn.addEventListener('click', async () => {
-      const ids = [...selectedMemberIds];
-      if (!ids.length) return;
-      bulkRemoveBtn.disabled = true;
-      try {
-        await removeMembers(ids);
-      } catch (err) {
-        showMemberStatus(`Remove failed: ${err?.message || err}`, true);
-        syncMemberBulkUi();
-      }
-    });
-
-    bulkMoveBtn.addEventListener('click', async () => {
-      const targetId = moveSelect.value;
-      const ids = [...selectedMemberIds];
-      if (!targetId || !ids.length) return;
-      bulkMoveBtn.disabled = true;
-      showMemberStatus(`Moving ${ids.length}…`);
-      try {
-        const addRes = await fetch(`/api/network/groups/${encodeURIComponent(targetId)}/members`, {
-          method: 'POST',
+    async function removeContactsFromScene(ids, sceneName) {
+      for (const id of ids) {
+        const c = contactMap.get(String(id));
+        const next = removeSceneToken(c?.networkCircles, sceneName);
+        if (c && next === String(c.networkCircles || '')) continue;
+        const r = await fetch(`/api/network/contacts/${encodeURIComponent(id)}`, {
+          method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contactIds: ids }),
+          body: JSON.stringify({ networkCircles: next }),
         });
-        const addData = await addRes.json().catch(() => ({}));
-        if (!addRes.ok || addData.ok === false) throw new Error(addData.error || `HTTP ${addRes.status}`);
-        upsertGroup(addData.group);
-
-        const rmRes = await fetch(`/api/network/groups/${encodeURIComponent(current.id)}/members`, {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contactIds: ids }),
-        });
-        const rmData = await rmRes.json().catch(() => ({}));
-        if (!rmRes.ok || rmData.ok === false) throw new Error(rmData.error || `HTTP ${rmRes.status}`);
-
-        for (const id of ids) selectedMemberIds.delete(String(id));
-        applyMembership(rmData.group);
-        const sceneRefresh =
-          groupKind(current) === 'community'
-          || groupKind(addData.group) === 'community';
-        if (sceneRefresh) await refreshContactsIfCommunity(true);
-        moveSelect.value = '';
-        showMemberStatus(`Moved ${ids.length}`);
-        renderList();
-        syncMemberBulkUi();
-        setTimeout(() => {
-          if (memberStatus.textContent.startsWith('Moved')) memberStatus.hidden = true;
-        }, 1500);
-      } catch (err) {
-        showMemberStatus(`Move failed: ${err?.message || err}`, true);
-        syncMemberBulkUi();
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
       }
-    });
-
-    function showMemberStatus(msg, isErr = false) {
-      memberStatus.hidden = !msg;
-      memberStatus.textContent = msg || '';
-      memberStatus.classList.toggle('mobile-network__save-status--err', isErr);
     }
 
     /**
-     * @param {object} group
+     * @param {object} g
      */
-    function applyMembership(group) {
-      if (!group) return;
-      current = group;
+    function applyMembership(g) {
+      if (!g) return;
+      current = g;
       upsertGroup(current);
       memberSet.clear();
       for (const id of Array.isArray(current.memberIds) ? current.memberIds : []) {
@@ -519,9 +672,114 @@ export function mountNetworkGroupsMobile(root) {
         if (!memberSet.has(String(id))) selectedMemberIds.delete(id);
       }
       paintMembers();
-      renderAddCandidates();
       syncMemberBulkUi();
     }
+
+    removeBtn.addEventListener('click', async () => {
+      const ids = [...selectedMemberIds];
+      if (!ids.length) return;
+      removeBtn.disabled = true;
+      showMemberStatus(`Removing ${ids.length}…`);
+      try {
+        if (isScene) {
+          await removeContactsFromScene(ids, current.name || '');
+          for (const id of ids) selectedMemberIds.delete(String(id));
+          await refreshContacts();
+          await reloadCurrentGroup();
+        } else {
+          const r = await fetch(`/api/network/groups/${encodeURIComponent(current.id)}/members`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contactIds: ids }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+          for (const id of ids) selectedMemberIds.delete(String(id));
+          applyMembership(data.group);
+        }
+        showMemberStatus(`Removed ${ids.length}`);
+        renderList();
+        setTimeout(() => {
+          if (memberStatus.textContent.startsWith('Removed')) memberStatus.hidden = true;
+        }, 1500);
+      } catch (err) {
+        showMemberStatus(`Remove failed: ${err?.message || err}`, true);
+      } finally {
+        syncMemberBulkUi();
+      }
+    });
+
+    copyBtn.addEventListener('click', async () => {
+      const targetId = copySelect.value;
+      const ids = [...selectedMemberIds];
+      if (!targetId || !ids.length) return;
+      const target = groups.find((g) => String(g.id) === String(targetId));
+      if (!target) return;
+      copyBtn.disabled = true;
+      showMemberStatus(`Copying ${ids.length}…`);
+      try {
+        if (isEventGroup(target)) {
+          const r = await fetch(`/api/network/groups/${encodeURIComponent(target.id)}/members`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contactIds: ids }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+          if (data.group) upsertGroup(data.group);
+        } else {
+          await addContactsToScene(ids, target.name || '');
+          await refreshContacts();
+        }
+        copySelect.value = '';
+        showMemberStatus(`Copied ${ids.length} to ${groupName(target)}`);
+        await reloadGroups();
+        fillCopyOptions();
+        renderList();
+        setTimeout(() => {
+          if (memberStatus.textContent.startsWith('Copied')) memberStatus.hidden = true;
+        }, 1800);
+      } catch (err) {
+        showMemberStatus(`Copy failed: ${err?.message || err}`, true);
+      } finally {
+        syncMemberBulkUi();
+      }
+    });
+
+    addContactsBtn.addEventListener('click', async () => {
+      const candidates = [...contactMap.values()].filter(
+        (c) => c?.id && !memberSet.has(String(c.id)),
+      );
+      const picked = await openContactPickerSheet({
+        title: `Add contacts to ${groupName(current)}`,
+        candidates,
+      });
+      if (!picked || !picked.length) return;
+      showMemberStatus(`Adding ${picked.length}…`);
+      try {
+        if (isScene) {
+          await addContactsToScene(picked, current.name || '');
+          await refreshContacts();
+          await reloadCurrentGroup();
+        } else {
+          const r = await fetch(`/api/network/groups/${encodeURIComponent(current.id)}/members`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contactIds: picked }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+          applyMembership(data.group);
+        }
+        showMemberStatus(`Added ${picked.length}`);
+        renderList();
+        setTimeout(() => {
+          if (memberStatus.textContent.startsWith('Added')) memberStatus.hidden = true;
+        }, 1500);
+      } catch (err) {
+        showMemberStatus(`Add failed: ${err?.message || err}`, true);
+      }
+    });
 
     /**
      * @param {object} c
@@ -529,22 +787,21 @@ export function mountNetworkGroupsMobile(root) {
     function appendMemberRow(c) {
       const li = document.createElement('li');
       li.className = 'mobile-network__row mobile-groups__member-row';
-      if (!readOnly) {
-        const checkWrap = document.createElement('label');
-        checkWrap.className = 'mobile-groups__member-check';
-        const check = document.createElement('input');
-        check.type = 'checkbox';
-        check.checked = selectedMemberIds.has(String(c.id));
-        check.setAttribute('aria-label', `Select ${contactName(c)}`);
-        check.addEventListener('click', (e) => e.stopPropagation());
-        check.addEventListener('change', () => {
-          if (check.checked) selectedMemberIds.add(String(c.id));
-          else selectedMemberIds.delete(String(c.id));
-          syncMemberBulkUi();
-        });
-        checkWrap.append(check);
-        li.append(checkWrap);
-      }
+      const checkWrap = document.createElement('label');
+      checkWrap.className = 'mobile-groups__member-check';
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.checked = selectedMemberIds.has(String(c.id));
+      check.setAttribute('aria-label', `Select ${contactName(c)}`);
+      check.addEventListener('click', (e) => e.stopPropagation());
+      check.addEventListener('change', () => {
+        if (check.checked) selectedMemberIds.add(String(c.id));
+        else selectedMemberIds.delete(String(c.id));
+        syncMemberBulkUi();
+      });
+      checkWrap.append(check);
+      li.append(checkWrap);
+
       const avatarWrap = document.createElement('div');
       avatarWrap.className = 'mobile-network__avatar-wrap';
       const avatar = document.createElement('div');
@@ -588,9 +845,9 @@ export function mountNetworkGroupsMobile(root) {
       if (!ids.length) {
         const empty = document.createElement('p');
         empty.className = 'mobile-network__empty';
-        empty.textContent = readOnly
-          ? 'No contacts with this Scene tag yet.'
-          : 'No members yet — add people below.';
+        empty.textContent = isScene
+          ? 'No contacts with this Scene tag yet — use Add contacts.'
+          : 'No members yet — use Add contacts.';
         membersSection.append(empty);
         return;
       }
@@ -605,159 +862,7 @@ export function mountNetworkGroupsMobile(root) {
     paintMembers();
     membersSection.append(members);
 
-    const addSection = document.createElement('div');
-    addSection.className = 'mobile-network__section';
-    const addHead = document.createElement('div');
-    addHead.className = 'mobile-network__section-head';
-    const addTitle = document.createElement('h3');
-    addTitle.className = 'mobile-network__section-title';
-    addTitle.textContent = 'Add people';
-    addHead.append(addTitle);
-    const addSearch = document.createElement('input');
-    addSearch.type = 'search';
-    addSearch.className = 'mobile-network__search';
-    addSearch.placeholder = 'Search people to add…';
-    addSearch.autocomplete = 'off';
-    addSearch.setAttribute('aria-label', 'Search people to add');
-    const addList = document.createElement('ul');
-    addList.className = 'mobile-network__list';
-
-    function renderAddCandidates() {
-      addList.replaceChildren();
-      addSection.querySelector('.mobile-network__empty')?.remove();
-      const q = addSearch.value.trim().toLowerCase();
-      const candidates = [...contactMap.values()]
-        .filter((c) => c?.id && !memberSet.has(String(c.id)))
-        .filter((c) => {
-          if (!q) return true;
-          const hay = [c.displayName, c.nickname, c.org, c.organizationName]
-            .filter(Boolean)
-            .join(' ')
-            .toLowerCase();
-          return hay.includes(q);
-        })
-        .sort((a, b) => compareContactSearchNameRank(a, b, q, contactName))
-        .slice(0, 40);
-      if (!candidates.length) {
-        const empty = document.createElement('p');
-        empty.className = 'mobile-network__empty';
-        empty.textContent = q ? 'No matching people' : 'Everyone is already in this group';
-        addSection.append(empty);
-        return;
-      }
-      for (const c of candidates) {
-        const li = document.createElement('li');
-        li.className = 'mobile-network__row mobile-groups__member-row';
-        const avatarWrap = document.createElement('div');
-        avatarWrap.className = 'mobile-network__avatar-wrap';
-        const avatar = document.createElement('div');
-        avatar.className = 'mobile-network__avatar';
-        const avatarUrl = String(c.avatarUrl || '').trim();
-        if (avatarUrl) {
-          const img = document.createElement('img');
-          img.src = avatarUrl;
-          img.alt = '';
-          img.loading = 'lazy';
-          img.referrerPolicy = 'no-referrer';
-          avatar.append(img);
-        } else {
-          avatar.textContent = contactName(c).slice(0, 1).toUpperCase();
-        }
-        avatarWrap.append(avatar);
-        const body = document.createElement('div');
-        body.className = 'mobile-network__row-body';
-        const name = document.createElement('div');
-        name.className = 'mobile-network__row-name';
-        name.textContent = contactName(c);
-        body.append(name);
-        const addBtn = document.createElement('button');
-        addBtn.type = 'button';
-        addBtn.className = 'mobile-network__selection-btn mobile-network__selection-btn--primary';
-        addBtn.textContent = 'Add';
-        addBtn.addEventListener('click', async () => {
-          addBtn.disabled = true;
-          showMemberStatus(`Adding ${contactName(c)}…`);
-          try {
-            const r = await fetch(`/api/network/groups/${encodeURIComponent(current.id)}/members`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ contactIds: [c.id] }),
-            });
-            const data = await r.json().catch(() => ({}));
-            if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
-            applyMembership(data.group);
-            if (groupKind(current) === 'community') {
-              try {
-                const contactsRes = await fetch('/api/network/contacts', { cache: 'no-store' });
-                const contactsData = await contactsRes.json().catch(() => ({}));
-                if (contactsRes.ok && contactsData.ok !== false) {
-                  contactMap = new Map();
-                  for (const row of Array.isArray(contactsData.contacts) ? contactsData.contacts : []) {
-                    if (row?.id) contactMap.set(String(row.id), row);
-                  }
-                }
-              } catch {
-                /* non-fatal */
-              }
-            }
-            showMemberStatus('Added');
-            renderList();
-            setTimeout(() => {
-              if (memberStatus.textContent === 'Added') memberStatus.hidden = true;
-            }, 1500);
-          } catch (err) {
-            showMemberStatus(`Add failed: ${err?.message || err}`, true);
-            addBtn.disabled = false;
-          }
-        });
-        li.append(avatarWrap, body, addBtn);
-        addList.append(li);
-      }
-    }
-
-    addSearch.addEventListener('input', () => renderAddCandidates());
-    addSection.append(addHead, addSearch, addList);
-    if (!readOnly) renderAddCandidates();
-
-    if (!readOnly) {
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        saveBtn.disabled = true;
-        saveStatus.hidden = false;
-        saveStatus.textContent = 'Saving…';
-        saveStatus.classList.remove('mobile-network__save-status--err');
-        try {
-          const fd = new FormData(form);
-          const r = await fetch(`/api/network/groups/${encodeURIComponent(current.id)}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: String(fd.get('name') || '').trim(),
-              kind: 'event',
-            }),
-          });
-          const data = await r.json().catch(() => ({}));
-          if (!r.ok || data.ok === false) {
-            throw new Error(data.error || `HTTP ${r.status}`);
-          }
-          current = data.group || current;
-          upsertGroup(current);
-          dirty = false;
-          saveStatus.textContent = 'Saved';
-          renderList();
-          paintMembers();
-          mobileNavBack();
-        } catch (err) {
-          saveStatus.textContent = `Save failed: ${err?.message || err}`;
-          saveStatus.classList.add('mobile-network__save-status--err');
-        } finally {
-          saveBtn.disabled = false;
-        }
-      });
-    }
-
-    detailPane.append(back, form, membersSection);
-    if (!readOnly) detailPane.append(addSection);
+    detailPane.append(back, headerBlock, membersSection);
   }
 
   function renderList() {

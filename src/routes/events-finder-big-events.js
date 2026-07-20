@@ -212,6 +212,76 @@ router.patch('/:slug', async (req, res) => {
   }
 });
 
+/**
+ * Update one big event's record with a partial patch, returning the fresh
+ * watch item. Shared by the snooze / skip / restore feed-card actions.
+ * @param {string} slug
+ * @param {Record<string, unknown>} patch
+ * @param {import('express').Response} res
+ */
+async function patchBigEventRecord(slug, patch, res) {
+  const store = await loadConferenceWatchlistStore(process.env);
+  const rec = store.bySlug[slug];
+  if (!rec) {
+    res.status(404).json({ ok: false, error: 'not_found' });
+    return;
+  }
+  const updated = await upsertConferenceWatchlistRecords(
+    { [slug]: { ...rec, ...patch } },
+    process.env,
+  );
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({
+    ok: true,
+    item: conferenceRecordToWatchItem(updated.bySlug[slug] || rec, new Date()),
+  });
+}
+
+/** POST /:slug/snooze { days? } — hide from the feed for a week (default). */
+router.post('/:slug/snooze', async (req, res) => {
+  try {
+    const slug = slugFromQuery(String(req.params.slug || ''));
+    if (!slug) {
+      res.status(400).json({ ok: false, error: 'invalid_slug' });
+      return;
+    }
+    const daysRaw = Number(req.body?.days);
+    const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(daysRaw, 365) : 7;
+    const until = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    await patchBigEventRecord(slug, { snoozedUntil: until, skipped: false }, res);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+/** POST /:slug/skip — dismiss from the feed (kept in the tracked table). */
+router.post('/:slug/skip', async (req, res) => {
+  try {
+    const slug = slugFromQuery(String(req.params.slug || ''));
+    if (!slug) {
+      res.status(400).json({ ok: false, error: 'invalid_slug' });
+      return;
+    }
+    await patchBigEventRecord(slug, { skipped: true, snoozedUntil: null }, res);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+/** POST /:slug/restore — clear snooze + skip so it shows in the feed again. */
+router.post('/:slug/restore', async (req, res) => {
+  try {
+    const slug = slugFromQuery(String(req.params.slug || ''));
+    if (!slug) {
+      res.status(400).json({ ok: false, error: 'invalid_slug' });
+      return;
+    }
+    await patchBigEventRecord(slug, { skipped: false, snoozedUntil: null }, res);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 /** DELETE /:slug — remove from the watchlist + cached research + snapshot. */
 router.delete('/:slug', async (req, res) => {
   try {

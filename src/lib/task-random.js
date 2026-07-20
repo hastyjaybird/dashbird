@@ -15,11 +15,11 @@ import {
   PRIORITY_WEIGHT,
 } from './task-random-enums.js';
 
-export function effectiveTaskLocations(taskMeta, projectMeta) {
+export function effectiveTaskLocations(taskMeta, _projectMeta) {
   if (taskMeta?.locationAny) return [];
   if (taskMeta?.location) return [taskMeta.location];
   if (taskMeta?.locations?.length) return taskMeta.locations;
-  if (projectMeta?.location) return [projectMeta.location];
+  // No project-default inheritance: a task only has a location if it sets one.
   return [];
 }
 

@@ -1181,8 +1181,15 @@ export async function enrichGmailEventsFromPublicPages(events, opts = {}) {
           source,
           description: page.description || ev.description || null,
           imageUrl: page.imageUrl || ev.imageUrl || null,
+          // Carry ticket price parsed from the detail page's JSON-LD offers.
+          // Thin invite mail rarely lists a price; the public event page does.
+          ticketPrice: page.ticketPrice ?? ev.ticketPrice ?? null,
+          price: page.price ?? page.ticketPrice ?? ev.price ?? null,
+          priceMax: page.priceMax ?? ev.priceMax ?? null,
           raw: {
             ...(ev.raw || {}),
+            // Preserve the page's schema so withEventPrice() can re-read offers.
+            schema: page.raw?.schema ?? ev.raw?.schema ?? null,
             resolvedUrl: eventUrl,
             enrich: `${source}_page`,
             pageTitle: page.title || null,

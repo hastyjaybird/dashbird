@@ -546,6 +546,61 @@ export async function fetchPartifulExploreListing(env = process.env) {
 }
 
 /**
+ * Eventbrite listing/browse pages do NOT carry per-event ticket offers in their
+ * JSON-LD (the price lives only on each `/e/…` detail page). For events that came
+ * off a listing with no price yet, fetch the detail page and copy over the parsed
+ * offers so the card can show "$23" / "Free". Bounded + free (plain HTML fetch).
+ * @param {object[]} events
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<number>} count enriched with a price
+ */
+export async function enrichEventbritePricesFromDetail(events, env = process.env) {
+  const list = Array.isArray(events) ? events : [];
+  if (!list.length) return 0;
+  const capRaw = Number(env.EVENTBRITE_PRICE_ENRICH_MAX);
+  const cap = Number.isFinite(capRaw) && capRaw >= 0 ? Math.min(capRaw, 120) : 40;
+  if (cap === 0) return 0;
+
+  const isEbEventUrl = (u) => /^https?:\/\/[^/]*eventbrite\.[^/]+\/e\//i.test(String(u || ''));
+  const needsPrice = (ev) =>
+    ev
+    && ev.ticketPrice == null
+    && ev.price == null
+    && !ev.raw?.schema?.offers
+    && isEbEventUrl(ev.url);
+
+  const targets = list.filter(needsPrice).slice(0, cap);
+  if (!targets.length) return 0;
+
+  let enriched = 0;
+  const concurrency = 3;
+  const queue = [...targets];
+  async function worker() {
+    while (queue.length) {
+      const ev = queue.shift();
+      if (!ev) break;
+      const detail = await fetchNormalizedEventFromUrl(ev.url, 'eventbrite', 12000);
+      if (!detail) continue;
+      if (detail.ticketPrice != null || detail.price != null) {
+        ev.ticketPrice = detail.ticketPrice ?? detail.price ?? null;
+        ev.price = detail.price ?? detail.ticketPrice ?? null;
+        if (detail.priceMax != null) ev.priceMax = detail.priceMax;
+        enriched += 1;
+      }
+      // Opportunistically backfill start/venue/image while we have the page.
+      if (!ev.start && detail.start) ev.start = detail.start;
+      if (!ev.venue && detail.venue) ev.venue = detail.venue;
+      if (!ev.imageUrl && detail.imageUrl) ev.imageUrl = detail.imageUrl;
+      if (detail.raw?.schema) {
+        ev.raw = { ...(ev.raw && typeof ev.raw === 'object' ? ev.raw : {}), schema: detail.raw.schema };
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return enriched;
+}
+
+/**
  * Eventbrite public destination listings for dashboard city + category seeds.
  * Uses /d/{slug}/events/ plus /b/{slug}/{category}/ pages (JSON-LD + /e/ fallback).
  * @param {NodeJS.ProcessEnv} [env]
@@ -667,12 +722,21 @@ export async function fetchEventbritePublicListing(env = process.env) {
   }
   await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
+  // Listing pages carry no ticket offers — enrich a bounded set from detail pages.
+  let pricesEnriched = 0;
+  try {
+    pricesEnriched = await enrichEventbritePricesFromDetail(events, env);
+  } catch (e) {
+    console.warn('[events-finder] eventbrite price enrich failed:', String(e?.message || e).slice(0, 160));
+  }
+
   return {
     ok: events.length > 0 || pagesOk > 0,
     url: urls[0] || null,
     urls,
     pagesOk,
     pagesFailed,
+    pricesEnriched,
     events,
     error: events.length || pagesOk ? undefined : 'no_eventbrite_pages',
   };
@@ -745,6 +809,7 @@ export async function fetchPublicPageEvents(env = process.env) {
         urls: eventbrite.urls,
         pagesOk: eventbrite.pagesOk,
         pagesFailed: eventbrite.pagesFailed,
+        pricesEnriched: eventbrite.pricesEnriched ?? 0,
         error: eventbrite.error,
       },
     },

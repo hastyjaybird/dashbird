@@ -17,6 +17,10 @@ export function mountKilaueaLivestream(card, mount) {
   let labelEl = null;
   /** @type {HTMLElement | null} */
   let counterEl = null;
+  /** @type {HTMLButtonElement | null} */
+  let arrowPrev = null;
+  /** @type {HTMLButtonElement | null} */
+  let arrowNext = null;
 
   function readSavedCameraId() {
     try {
@@ -64,6 +68,13 @@ export function mountKilaueaLivestream(card, mount) {
     paintCamera();
   }
 
+  // Overlay arrows (mobile) only make sense with more than one camera.
+  function syncArrows() {
+    const multi = cameras.length > 1;
+    if (arrowPrev) arrowPrev.hidden = !multi;
+    if (arrowNext) arrowNext.hidden = !multi;
+  }
+
   function buildUi() {
     mount.replaceChildren();
     mount.className = 'sky-sidebar__card-body sky-sidebar__card-body--kilauea-live kilauea-live';
@@ -79,6 +90,25 @@ export function mountKilaueaLivestream(card, mount) {
     iframe.allowFullscreen = true;
     iframe.referrerPolicy = 'strict-origin-when-cross-origin';
     frameWrap.appendChild(iframe);
+
+    // Mobile-only overlay arrows on the camera view (CSS reveals them ≤900px).
+    arrowPrev = document.createElement('button');
+    arrowPrev.type = 'button';
+    arrowPrev.className = 'kilauea-live__arrow kilauea-live__arrow--prev';
+    arrowPrev.setAttribute('aria-label', 'Previous Kīlauea camera');
+    arrowPrev.textContent = '‹';
+    arrowPrev.hidden = true;
+    arrowPrev.addEventListener('click', () => step(-1));
+
+    arrowNext = document.createElement('button');
+    arrowNext.type = 'button';
+    arrowNext.className = 'kilauea-live__arrow kilauea-live__arrow--next';
+    arrowNext.setAttribute('aria-label', 'Next Kīlauea camera');
+    arrowNext.textContent = '›';
+    arrowNext.hidden = true;
+    arrowNext.addEventListener('click', () => step(1));
+
+    frameWrap.append(arrowPrev, arrowNext);
 
     const meta = document.createElement('div');
     meta.className = 'kilauea-live__meta';
@@ -142,6 +172,7 @@ export function mountKilaueaLivestream(card, mount) {
       }
       index = indexForSavedCamera();
       paintCamera();
+      syncArrows();
       setVisible(true);
     })
     .catch(() => {

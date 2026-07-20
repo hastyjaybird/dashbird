@@ -968,6 +968,9 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       nextEditionEstimated,
       notes: notes || existing.notes || null,
       researching: false,
+      // Preserve user snooze/skip state across background re-research.
+      snoozedUntil: existing.snoozedUntil || null,
+      skipped: existing.skipped === true,
       error:
         finalStart || ticketPrice || allPages.length ? null : 'no_pages_found',
       researchedAt: nowIso,
@@ -1188,6 +1191,9 @@ export function conferenceRecordToHeadsUp(record, now = new Date()) {
     researching: record.researching === true,
     error: record.error || null,
     researchedAt: record.researchedAt || null,
+    snoozedUntil: record.snoozedUntil || null,
+    snoozed: Boolean(record.snoozedUntil) && Date.parse(String(record.snoozedUntil)) > now.getTime(),
+    skipped: record.skipped === true,
     source: 'conference-watch',
     headsUp: true,
     conferenceWatch: true,

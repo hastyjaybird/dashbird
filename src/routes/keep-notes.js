@@ -16,6 +16,7 @@ import {
   setKeepNoteAttachment,
   updateKeepNote,
 } from '../lib/keep-notes-store.js';
+import { importKeepTakeout, listKeepImportFiles } from '../lib/keep-notes-import.js';
 
 const router = Router();
 router.use(express.json({ limit: '14mb' }));
@@ -23,6 +24,35 @@ router.use(express.json({ limit: '14mb' }));
 router.get('/meta', (_req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
   res.json({ ok: true, root: KEEP_NOTES_ROOT });
+});
+
+/** How many Takeout files are staged for import in data/keep-import/. */
+router.get('/import', async (_req, res) => {
+  try {
+    const staged = await listKeepImportFiles();
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({
+      ok: true,
+      root: staged.root,
+      jsonCount: staged.jsonCount,
+      htmlCount: staged.htmlCount,
+      total: staged.total,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+/** Parse staged Google Takeout Keep files and create notes. */
+router.post('/import', async (req, res) => {
+  try {
+    const includeArchived = req.body?.includeArchived === true;
+    const summary = await importKeepTakeout(process.env, { includeArchived });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, ...summary });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
 });
 
 router.get('/', async (_req, res) => {

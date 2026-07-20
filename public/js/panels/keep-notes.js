@@ -32,6 +32,10 @@ export function mountKeepNotes(root) {
     '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>';
   const VOICE_ICON =
     '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>';
+  const MORE_ICON =
+    '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>';
+  const SEND_ICON =
+    '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>';
 
   const composeActions = document.createElement('div');
   composeActions.className = 'keep-notes__compose-actions';
@@ -136,7 +140,17 @@ export function mountKeepNotes(root) {
   status.hidden = true;
   status.setAttribute('aria-live', 'polite');
 
-  shell.append(compose, selectBar, scroll, status);
+  const importBar = document.createElement('div');
+  importBar.className = 'keep-notes__import-bar';
+
+  const importBtn = document.createElement('button');
+  importBtn.type = 'button';
+  importBtn.className = 'keep-notes__btn keep-notes__btn--ghost keep-notes__import-btn';
+  importBtn.textContent = 'Import Google Keep…';
+  importBtn.title = 'Import notes from a Google Takeout Keep export';
+  importBar.append(importBtn);
+
+  shell.append(compose, importBar, selectBar, scroll, status);
   root.append(shell);
 
   /** @type {Array<object>} */
@@ -456,6 +470,21 @@ export function mountKeepNotes(root) {
     pinBtn.innerHTML =
       '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H8c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1.03-1 1.03 1v-7H19v-2c-1.66 0-3-1.34-3-3z"/></svg>';
 
+    const moreBtn = document.createElement('button');
+    moreBtn.type = 'button';
+    moreBtn.className = 'keep-notes__card-more';
+    moreBtn.title = 'Send to…';
+    moreBtn.setAttribute('aria-label', 'Send note to another app');
+    moreBtn.innerHTML = MORE_ICON;
+    moreBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (cardClickTimer) {
+        clearTimeout(cardClickTimer);
+        cardClickTimer = null;
+      }
+      openTransfer(card.dataset.id);
+    });
+
     const titleEl = document.createElement('h4');
     titleEl.className = 'keep-notes__card-title';
 
@@ -476,7 +505,7 @@ export function mountKeepNotes(root) {
     grip.setAttribute('aria-hidden', 'true');
     dragHandle.append(grip);
 
-    card.append(checkEl, dragHandle, pinBtn, titleEl, bodyEl, mediaEl);
+    card.append(checkEl, dragHandle, pinBtn, moreBtn, titleEl, bodyEl, mediaEl);
 
     dragHandle.addEventListener('dragstart', (e) => {
       if (selectMode) {
@@ -934,12 +963,19 @@ export function mountKeepNotes(root) {
   deleteBtn.innerHTML =
     '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>';
 
+  const sendEditorBtn = document.createElement('button');
+  sendEditorBtn.type = 'button';
+  sendEditorBtn.className = 'keep-notes__btn keep-notes__btn--icon';
+  sendEditorBtn.title = 'Send to…';
+  sendEditorBtn.setAttribute('aria-label', 'Send note to Task, Event, or Contact');
+  sendEditorBtn.innerHTML = SEND_ICON;
+
   const closeEditorBtn = document.createElement('button');
   closeEditorBtn.type = 'button';
   closeEditorBtn.className = 'keep-notes__btn keep-notes__btn--ghost';
   closeEditorBtn.textContent = 'Close';
 
-  editorToolbar.append(pinEditorBtn, imageBtn, voiceBtn, removeAttBtn, deleteBtn, closeEditorBtn);
+  editorToolbar.append(pinEditorBtn, imageBtn, voiceBtn, sendEditorBtn, removeAttBtn, deleteBtn, closeEditorBtn);
   editor.append(editorTitle, editorBody, editorMedia, editorToolbar);
   overlay.append(editor);
   document.body.append(overlay);
@@ -1226,6 +1262,465 @@ export function mountKeepNotes(root) {
     } catch (err) {
       showStatus(String(err?.message || err), true);
     }
+  });
+
+  /* ---- Transfer: send a note to Task / Event / Contact ------------------- */
+
+  /**
+   * @param {object} note
+   * @returns {string}
+   */
+  function noteText(note) {
+    return [String(note?.title || '').trim(), String(note?.body || '').trim()]
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
+  /**
+   * @param {object} note
+   * @returns {string}
+   */
+  function noteFirstLine(note) {
+    const title = String(note?.title || '').trim();
+    if (title) return title;
+    const body = String(note?.body || '').trim();
+    return body.split(/\r?\n/).find((l) => l.trim()) || '';
+  }
+
+  /**
+   * @param {string} id
+   */
+  async function archiveNoteById(id) {
+    try {
+      const r = await fetch(`/api/keep-notes/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ archived: true, pinned: false }),
+      });
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.error || 'archive failed');
+      notes = notes.filter((n) => n.id !== id);
+      renderNotes();
+      showStatus('Note archived');
+    } catch (e) {
+      showStatus(String(e?.message || e), true);
+    }
+  }
+
+  /**
+   * @param {object} note
+   * @param {string} label
+   */
+  function offerArchive(note, label) {
+    showStatus(label);
+    if (note && window.confirm(`${label}. Archive this note now?`)) {
+      void archiveNoteById(note.id);
+    }
+  }
+
+  /**
+   * Google Calendar "create event" template URL — the note becomes a new event.
+   * @param {object} note
+   * @returns {string}
+   */
+  function googleCalendarAddUrl(note) {
+    const params = new URLSearchParams();
+    params.set('action', 'TEMPLATE');
+    params.set('text', (noteFirstLine(note) || 'Note').slice(0, 500));
+    const details = noteText(note).slice(0, 6000);
+    if (details) params.set('details', details);
+    return `https://calendar.google.com/calendar/render?${params.toString()}`;
+  }
+
+  /** @type {object | null} */
+  let transferNote = null;
+  /** @type {Array<object> | null} */
+  let contactsCache = null;
+
+  const transferOverlay = document.createElement('div');
+  transferOverlay.className = 'keep-notes__overlay keep-notes__transfer-overlay';
+  transferOverlay.hidden = true;
+
+  const transfer = document.createElement('div');
+  transfer.className = 'keep-notes__editor keep-notes__transfer';
+  transfer.setAttribute('role', 'dialog');
+  transfer.setAttribute('aria-modal', 'true');
+  transfer.setAttribute('aria-label', 'Send note');
+
+  const transferHeading = document.createElement('h3');
+  transferHeading.className = 'keep-notes__transfer-heading';
+  transferHeading.textContent = 'Send note to…';
+
+  const transferPreview = document.createElement('p');
+  transferPreview.className = 'keep-notes__transfer-preview';
+
+  const transferActions = document.createElement('div');
+  transferActions.className = 'keep-notes__transfer-actions';
+
+  const toTaskBtn = document.createElement('button');
+  toTaskBtn.type = 'button';
+  toTaskBtn.className = 'keep-notes__btn';
+  toTaskBtn.textContent = 'Send to Task';
+
+  const toEventBtn = document.createElement('button');
+  toEventBtn.type = 'button';
+  toEventBtn.className = 'keep-notes__btn';
+  toEventBtn.textContent = 'Send to Event';
+
+  const toContactBtn = document.createElement('button');
+  toContactBtn.type = 'button';
+  toContactBtn.className = 'keep-notes__btn';
+  toContactBtn.textContent = 'Send to Contact';
+
+  transferActions.append(toTaskBtn, toEventBtn, toContactBtn);
+
+  const contactPicker = document.createElement('div');
+  contactPicker.className = 'keep-notes__transfer-contact';
+  contactPicker.hidden = true;
+
+  const contactSearch = document.createElement('input');
+  contactSearch.type = 'search';
+  contactSearch.className = 'keep-notes__transfer-search';
+  contactSearch.placeholder = 'Search contacts…';
+  contactSearch.autocomplete = 'off';
+
+  const newContactBtn = document.createElement('button');
+  newContactBtn.type = 'button';
+  newContactBtn.className = 'keep-notes__btn keep-notes__btn--primary keep-notes__transfer-new';
+  newContactBtn.textContent = 'Create new contact from note';
+
+  const contactResults = document.createElement('div');
+  contactResults.className = 'keep-notes__transfer-results';
+
+  contactPicker.append(contactSearch, newContactBtn, contactResults);
+
+  const transferFoot = document.createElement('div');
+  transferFoot.className = 'keep-notes__transfer-foot';
+
+  const transferCancel = document.createElement('button');
+  transferCancel.type = 'button';
+  transferCancel.className = 'keep-notes__btn keep-notes__btn--ghost';
+  transferCancel.textContent = 'Cancel';
+  transferFoot.append(transferCancel);
+
+  transfer.append(transferHeading, transferPreview, transferActions, contactPicker, transferFoot);
+  transferOverlay.append(transfer);
+  document.body.append(transferOverlay);
+
+  transfer.addEventListener('click', (e) => e.stopPropagation());
+  transferOverlay.addEventListener('click', () => closeTransfer());
+
+  /**
+   * @param {string} id
+   */
+  function openTransfer(id) {
+    const note = notes.find((n) => n.id === id);
+    if (!note) return;
+    transferNote = note;
+    const preview = noteText(note) || '(empty note)';
+    transferPreview.textContent = preview.length > 160 ? `${preview.slice(0, 160)}…` : preview;
+    contactPicker.hidden = true;
+    contactSearch.value = '';
+    contactResults.replaceChildren();
+    transferOverlay.hidden = false;
+  }
+
+  function closeTransfer() {
+    transferOverlay.hidden = true;
+    transferNote = null;
+  }
+
+  async function sendNoteToTask() {
+    if (!transferNote) return;
+    const note = transferNote;
+    const text = noteText(note).replace(/\s+/g, ' ').trim().slice(0, 280);
+    if (!text) {
+      showStatus('Note is empty — nothing to send.', true);
+      return;
+    }
+    toTaskBtn.disabled = true;
+    try {
+      const r = await fetch('/api/vikunja/todos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false || !j.item) {
+        throw new Error(
+          j.error === 'vikunja_not_configured'
+            ? 'Tasks not configured (set VIKUNJA_BASE_URL/TOKEN).'
+            : j.detail || j.error || 'Could not create task.',
+        );
+      }
+      closeTransfer();
+      offerArchive(note, 'Sent to Tasks');
+    } catch (e) {
+      showStatus(String(e?.message || e), true);
+    } finally {
+      toTaskBtn.disabled = false;
+    }
+  }
+
+  function sendNoteToEvent() {
+    if (!transferNote) return;
+    const note = transferNote;
+    const url = googleCalendarAddUrl(note);
+    window.open(url, '_blank', 'noopener');
+    closeTransfer();
+    offerArchive(note, 'Opened Google Calendar');
+  }
+
+  async function loadContactsForPicker() {
+    if (contactsCache) return contactsCache;
+    const r = await fetch('/api/network/contacts', { cache: 'no-store' });
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok || !Array.isArray(j.contacts)) throw new Error(j.error || 'Could not load contacts.');
+    contactsCache = j.contacts;
+    return contactsCache;
+  }
+
+  function renderContactResults() {
+    const q = contactSearch.value.trim().toLowerCase();
+    const list = (contactsCache || [])
+      .filter((c) => !q || String(c.displayName || '').toLowerCase().includes(q))
+      .slice(0, 40);
+    contactResults.replaceChildren();
+    if (!list.length) {
+      const p = document.createElement('p');
+      p.className = 'keep-notes__transfer-empty muted';
+      p.textContent = contactsCache && contactsCache.length ? 'No matching contacts.' : 'No contacts yet.';
+      contactResults.append(p);
+      return;
+    }
+    for (const c of list) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'keep-notes__btn keep-notes__btn--ghost keep-notes__transfer-result';
+      btn.textContent = String(c.displayName || 'Unnamed');
+      btn.addEventListener('click', () => void attachNoteToContact(c));
+      contactResults.append(btn);
+    }
+  }
+
+  async function openContactPicker() {
+    contactPicker.hidden = false;
+    contactResults.replaceChildren();
+    const loading = document.createElement('p');
+    loading.className = 'keep-notes__transfer-empty muted';
+    loading.textContent = 'Loading contacts…';
+    contactResults.append(loading);
+    try {
+      await loadContactsForPicker();
+      renderContactResults();
+      contactSearch.focus();
+    } catch (e) {
+      contactResults.replaceChildren();
+      const p = document.createElement('p');
+      p.className = 'keep-notes__transfer-empty muted';
+      p.textContent = String(e?.message || e);
+      contactResults.append(p);
+    }
+  }
+
+  /**
+   * @param {object} contact
+   */
+  async function attachNoteToContact(contact) {
+    if (!transferNote) return;
+    const note = transferNote;
+    const addition = noteText(note).trim();
+    if (!addition) {
+      showStatus('Note is empty — nothing to attach.', true);
+      return;
+    }
+    const stamp = new Date().toLocaleDateString();
+    const block = `Keep note (${stamp}): ${addition}`;
+    const merged = [String(contact.notes || '').trim(), block].filter(Boolean).join('\n\n').slice(0, 8000);
+    try {
+      const r = await fetch(`/api/network/contacts/${encodeURIComponent(contact.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: merged }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || 'Could not attach note.');
+      contactsCache = null;
+      closeTransfer();
+      offerArchive(note, `Attached to ${contact.displayName || 'contact'}`);
+    } catch (e) {
+      showStatus(String(e?.message || e), true);
+    }
+  }
+
+  async function createContactFromNote() {
+    if (!transferNote) return;
+    const note = transferNote;
+    const displayName = (noteFirstLine(note) || 'New contact').slice(0, 200);
+    try {
+      const r = await fetch('/api/network/contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ displayName, notes: noteText(note).slice(0, 8000), source: 'keep-note' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false || !j.contact) throw new Error(j.error || 'Could not create contact.');
+      contactsCache = null;
+      closeTransfer();
+      offerArchive(note, `Created contact ${j.contact.displayName || displayName}`);
+    } catch (e) {
+      showStatus(String(e?.message || e), true);
+    }
+  }
+
+  toTaskBtn.addEventListener('click', () => void sendNoteToTask());
+  toEventBtn.addEventListener('click', () => sendNoteToEvent());
+  toContactBtn.addEventListener('click', () => void openContactPicker());
+  contactSearch.addEventListener('input', () => renderContactResults());
+  newContactBtn.addEventListener('click', () => void createContactFromNote());
+  transferCancel.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeTransfer();
+  });
+
+  sendEditorBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!editingNote) return;
+    const id = editingNote.id;
+    await saveEditor();
+    closeEditor();
+    openTransfer(id);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !transferOverlay.hidden) {
+      e.preventDefault();
+      closeTransfer();
+    }
+    if (e.key === 'Escape' && !importOverlay.hidden) {
+      e.preventDefault();
+      closeImport();
+    }
+  });
+
+  /* ---- Import: Google Takeout Keep export -------------------------------- */
+
+  const importOverlay = document.createElement('div');
+  importOverlay.className = 'keep-notes__overlay keep-notes__import-overlay';
+  importOverlay.hidden = true;
+
+  const importDialog = document.createElement('div');
+  importDialog.className = 'keep-notes__editor keep-notes__import-dialog';
+  importDialog.setAttribute('role', 'dialog');
+  importDialog.setAttribute('aria-modal', 'true');
+  importDialog.setAttribute('aria-label', 'Import Google Keep');
+
+  const importHeading = document.createElement('h3');
+  importHeading.className = 'keep-notes__transfer-heading';
+  importHeading.textContent = 'Import from Google Keep';
+
+  const importHelp = document.createElement('p');
+  importHelp.className = 'keep-notes__import-help';
+  importHelp.textContent =
+    'Google Keep has no public API. Export your notes from Google Takeout (select only Keep), unzip the download, and drop the note files (.json / .html and any images) into the import folder below. Then run the import.';
+
+  const importPath = document.createElement('p');
+  importPath.className = 'keep-notes__import-path';
+
+  const importCount = document.createElement('p');
+  importCount.className = 'keep-notes__import-count';
+
+  const importResult = document.createElement('p');
+  importResult.className = 'keep-notes__import-result';
+  importResult.hidden = true;
+  importResult.setAttribute('aria-live', 'polite');
+
+  const importFoot = document.createElement('div');
+  importFoot.className = 'keep-notes__transfer-foot';
+
+  const runImportBtn = document.createElement('button');
+  runImportBtn.type = 'button';
+  runImportBtn.className = 'keep-notes__btn keep-notes__btn--primary';
+  runImportBtn.textContent = 'Run import';
+
+  const importClose = document.createElement('button');
+  importClose.type = 'button';
+  importClose.className = 'keep-notes__btn keep-notes__btn--ghost';
+  importClose.textContent = 'Close';
+
+  importFoot.append(runImportBtn, importClose);
+  importDialog.append(importHeading, importHelp, importPath, importCount, importResult, importFoot);
+  importOverlay.append(importDialog);
+  document.body.append(importOverlay);
+
+  importDialog.addEventListener('click', (e) => e.stopPropagation());
+  importOverlay.addEventListener('click', () => closeImport());
+
+  function closeImport() {
+    importOverlay.hidden = true;
+  }
+
+  async function refreshImportStaged() {
+    try {
+      const r = await fetch('/api/keep-notes/import', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (!j.ok) throw new Error(j.error || 'Could not read import folder.');
+      importPath.textContent = `Drop files in: ${j.root}`;
+      const total = Number(j.total) || 0;
+      importCount.textContent = total
+        ? `${total} file${total === 1 ? '' : 's'} staged (${j.jsonCount} JSON, ${j.htmlCount} HTML).`
+        : 'No files staged yet.';
+      runImportBtn.disabled = total === 0;
+    } catch (e) {
+      importPath.textContent = '';
+      importCount.textContent = String(e?.message || e);
+      runImportBtn.disabled = true;
+    }
+  }
+
+  async function openImport() {
+    importResult.hidden = true;
+    importResult.textContent = '';
+    importPath.textContent = 'Checking import folder…';
+    importCount.textContent = '';
+    runImportBtn.disabled = true;
+    importOverlay.hidden = false;
+    await refreshImportStaged();
+  }
+
+  async function runImport() {
+    runImportBtn.disabled = true;
+    importResult.hidden = false;
+    importResult.textContent = 'Importing…';
+    try {
+      const r = await fetch('/api/keep-notes/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || 'Import failed.');
+      const parts = [`Imported ${j.created} note${j.created === 1 ? '' : 's'}`];
+      if (j.withImage) parts.push(`${j.withImage} with image`);
+      if (j.skippedArchived) parts.push(`${j.skippedArchived} archived skipped`);
+      if (j.skippedTrashed) parts.push(`${j.skippedTrashed} trashed skipped`);
+      if (j.skippedEmpty) parts.push(`${j.skippedEmpty} empty skipped`);
+      if (j.failed) parts.push(`${j.failed} failed`);
+      importResult.textContent = `${parts.join(' · ')}.`;
+      if (j.created > 0) await loadNotes();
+      await refreshImportStaged();
+    } catch (e) {
+      importResult.textContent = String(e?.message || e);
+    } finally {
+      runImportBtn.disabled = false;
+    }
+  }
+
+  importBtn.addEventListener('click', () => void openImport());
+  runImportBtn.addEventListener('click', () => void runImport());
+  importClose.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeImport();
   });
 
   wireGridDragDrop(pinnedGrid);
