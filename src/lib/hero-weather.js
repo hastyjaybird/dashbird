@@ -95,6 +95,9 @@ async function fetchFromOpenMeteo(lat, lon) {
     'current',
     'temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,uv_index',
   );
+  url.searchParams.set('daily', 'temperature_2m_max,temperature_2m_min');
+  url.searchParams.set('forecast_days', '1');
+  url.searchParams.set('timezone', 'auto');
   url.searchParams.set('temperature_unit', 'fahrenheit');
   url.searchParams.set('wind_speed_unit', 'mph');
 
@@ -116,6 +119,9 @@ async function fetchFromOpenMeteo(lat, lon) {
       throw new Error('open_meteo_no_current');
     }
     const uvRaw = cur.uv_index;
+    const daily = data?.daily;
+    const highRaw = Array.isArray(daily?.temperature_2m_max) ? daily.temperature_2m_max[0] : null;
+    const lowRaw = Array.isArray(daily?.temperature_2m_min) ? daily.temperature_2m_min[0] : null;
     return {
       ok: true,
       provider: 'open-meteo',
@@ -125,6 +131,8 @@ async function fetchFromOpenMeteo(lat, lon) {
       windMph: typeof cur.wind_speed_10m === 'number' ? cur.wind_speed_10m : null,
       windDirectionFromDeg:
         typeof cur.wind_direction_10m === 'number' ? cur.wind_direction_10m : null,
+      highF: typeof highRaw === 'number' && Number.isFinite(highRaw) ? highRaw : null,
+      lowF: typeof lowRaw === 'number' && Number.isFinite(lowRaw) ? lowRaw : null,
       uvIndex: typeof uvRaw === 'number' && Number.isFinite(uvRaw) ? uvRaw : null,
       usAqi: null,
       description: '',
@@ -167,6 +175,8 @@ async function fetchNwsStationObservation(stationUrl) {
       code: nwsTextToWeatherCode(desc, icon),
       windMph: windKmh != null ? kmhToMph(windKmh) : null,
       windDirectionFromDeg: windDir,
+      highF: null,
+      lowF: null,
       uvIndex: null,
       usAqi: null,
       description: desc,

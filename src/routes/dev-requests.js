@@ -96,6 +96,8 @@ router.patch('/:id', async (req, res) => {
     const request = await updateDevRequest(String(req.params.id || ''), {
       status: req.body?.status,
       priority: req.body?.priority,
+      title: req.body?.title,
+      body: req.body?.body,
     });
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, request, inboxPath: DEV_REQUESTS_INBOX_PATH });

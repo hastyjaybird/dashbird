@@ -635,9 +635,9 @@ export function mountEventsFinder(root) {
   conferenceToggle.className = 'events-finder__conferences-toggle';
   conferenceToggle.setAttribute('aria-expanded', 'false');
   conferenceToggle.setAttribute('aria-haspopup', 'dialog');
-  conferenceToggle.textContent = 'Big conferences & festivals';
+  conferenceToggle.textContent = 'Big events';
   conferenceToggle.title =
-    'Track big events with ~2 month heads-up — finds the site, dates, ticket price, and early bird windows.';
+    'Track big conferences & festivals — search a name, preview the site, then log dates, ticket price, and early bird windows.';
 
   const conferenceInput = document.createElement('textarea');
   conferenceInput.id = 'events-finder-conferences';
@@ -647,7 +647,7 @@ export function mountEventsFinder(root) {
   conferenceInput.setAttribute('aria-hidden', 'true');
   conferenceInput.placeholder = 'e.g. open sauce';
   conferenceInput.spellcheck = true;
-  conferenceInput.title = 'Conference or festival names to watch';
+  conferenceInput.title = 'Big event names being tracked';
 
   conferenceField.append(conferenceToggle, conferenceInput);
   filterPanel.append(conferenceField);
@@ -730,10 +730,7 @@ export function mountEventsFinder(root) {
 
   function syncConferenceToggleLabel() {
     const count = readConferenceWatchlistFromForm().length;
-    conferenceToggle.textContent =
-      count > 0
-        ? `Big conferences & festivals (${count})`
-        : 'Big conferences & festivals';
+    conferenceToggle.textContent = count > 0 ? `Big events (${count})` : 'Big events';
   }
 
   /**
@@ -769,56 +766,135 @@ export function mountEventsFinder(root) {
     return item.displayActive ? 'Active' : 'Inactive';
   }
 
+  /** Ticket text for a table row / detail. */
+  function bigEventTicketText(item) {
+    if (item.researching) return 'Looking up…';
+    if (item.ticketLabel) return String(item.ticketLabel);
+    if (item.ticketPrice) return String(item.ticketPrice);
+    if (item.dataFetched === 'failed' || item.error) return 'Not found';
+    return '—';
+  }
+
   /**
    * @param {object} item
    * @returns {HTMLElement}
    */
-  function buildConferenceWatchStatusRow(item) {
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'events-finder__conference-status-row';
-    row.title = 'View details';
+  function buildBigEventRow(item) {
+    const row = document.createElement('tr');
+    row.className = 'events-finder__big-events-row';
 
-    const name = document.createElement('span');
-    name.className = 'events-finder__conference-status-name';
-    name.textContent = String(item.title || item.query || 'Conference');
+    // Event name (+ optional snapshot thumb) — opens detail.
+    const nameCell = document.createElement('td');
+    nameCell.className = 'events-finder__big-events-cell events-finder__big-events-cell--name';
+    const nameBtn = document.createElement('button');
+    nameBtn.type = 'button';
+    nameBtn.className = 'events-finder__big-events-name';
+    nameBtn.title = 'View details';
+    if (item.screenshotUrl) {
+      const thumb = document.createElement('img');
+      thumb.className = 'events-finder__big-events-thumb';
+      thumb.src = String(item.screenshotUrl);
+      thumb.alt = '';
+      thumb.loading = 'lazy';
+      thumb.decoding = 'async';
+      nameBtn.append(thumb);
+    }
+    const nameText = document.createElement('span');
+    nameText.className = 'events-finder__big-events-name-text';
+    nameText.textContent = String(item.title || item.query || 'Big event');
+    nameBtn.append(nameText);
+    nameBtn.addEventListener('click', () => openConferenceDetailPopout(item));
+    nameCell.append(nameBtn);
 
-    const status = document.createElement('span');
-    status.className = 'events-finder__conference-status-meta';
-    status.textContent = [
-      `URL ${conferenceUrlStatusLabel(item)}`,
-      `Data ${conferenceDataStatusLabel(item)}`,
-      `Display ${conferenceDisplayStatusLabel(item)}`,
-    ].join(' · ');
+    // Dates.
+    const dateCell = document.createElement('td');
+    dateCell.className = 'events-finder__big-events-cell events-finder__big-events-cell--dates';
+    dateCell.textContent = String(item.whenLabel || (item.researching ? 'Looking up…' : 'Dates TBD'));
 
-    const summary = document.createElement('span');
-    summary.className = 'events-finder__conference-status-summary muted';
-    const bits = [String(item.whenLabel || '')];
-    if (item.earlyBirdLine) bits.push(String(item.earlyBirdLine));
-    else if (item.ticketPrice) bits.push(String(item.ticketPrice));
-    summary.textContent = bits.filter(Boolean).join(' · ');
+    // Ticket price (+ estimated badge + early bird note).
+    const priceCell = document.createElement('td');
+    priceCell.className = 'events-finder__big-events-cell events-finder__big-events-cell--price';
+    const priceWrap = document.createElement('div');
+    priceWrap.className = 'events-finder__big-events-pricewrap';
+    const priceMain = document.createElement('span');
+    priceMain.className = 'events-finder__big-events-price';
+    priceMain.textContent = item.priceEstimated && item.ticketPrice
+      ? String(item.ticketPrice)
+      : bigEventTicketText(item);
+    priceWrap.append(priceMain);
+    if (item.priceEstimated) {
+      const badge = document.createElement('span');
+      badge.className = 'events-finder__big-events-badge events-finder__big-events-badge--est';
+      badge.textContent = 'estimated from last year';
+      priceWrap.append(badge);
+    }
+    if (item.earlyBirdNote) {
+      const eb = document.createElement('span');
+      eb.className = 'events-finder__big-events-earlybird';
+      eb.textContent = String(item.earlyBirdNote);
+      priceWrap.append(eb);
+    } else if (item.earlyBirdLine && item.earlyBirdKind !== 'price') {
+      const eb = document.createElement('span');
+      eb.className = 'events-finder__big-events-earlybird';
+      eb.textContent = String(item.earlyBirdLine);
+      priceWrap.append(eb);
+    }
+    if (item.ticketUrl) {
+      const tlink = document.createElement('a');
+      tlink.className = 'events-finder__big-events-ticketlink';
+      tlink.href = String(item.ticketUrl);
+      tlink.target = '_blank';
+      tlink.rel = 'noopener noreferrer';
+      tlink.textContent = 'Tickets ↗';
+      tlink.addEventListener('click', (e) => e.stopPropagation());
+      priceWrap.append(tlink);
+    }
+    priceCell.append(priceWrap);
 
-    row.append(name, status, summary);
-    row.addEventListener('click', () => openConferenceDetailPopout(item));
+    // Ticket sales status.
+    const statusCell = document.createElement('td');
+    statusCell.className = 'events-finder__big-events-cell events-finder__big-events-cell--status';
+    const statusPill = document.createElement('span');
+    statusPill.className = `events-finder__big-events-status events-finder__big-events-status--${item.salesStatusKind || 'unknown'}`;
+    statusPill.textContent = String(item.salesStatus || '—');
+    statusCell.append(statusPill);
+
+    // Remove.
+    const actionCell = document.createElement('td');
+    actionCell.className = 'events-finder__big-events-cell events-finder__big-events-cell--action';
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'events-finder__big-events-remove';
+    del.setAttribute('aria-label', `Remove ${item.title || item.query || 'event'}`);
+    del.title = 'Remove';
+    del.textContent = '×';
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void removeBigEvent(item);
+    });
+    actionCell.append(del);
+
+    row.append(nameCell, dateCell, priceCell, statusCell, actionCell);
     return row;
   }
 
   /**
    * @param {object[]} items
-   * @param {HTMLElement} listEl
+   * @param {HTMLElement} tbody
    */
-  function paintConferenceWatchStatusList(items, listEl) {
-    listEl.replaceChildren();
+  function paintBigEventsTable(items, tbody) {
+    tbody.replaceChildren();
     if (!items.length) {
-      const empty = document.createElement('p');
-      empty.className = 'events-finder__conference-status-empty muted';
-      empty.textContent = 'No conferences tracked yet — add names below.';
-      listEl.append(empty);
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 5;
+      td.className = 'events-finder__big-events-empty muted';
+      td.textContent = 'No big events tracked yet — add one above.';
+      tr.append(td);
+      tbody.append(tr);
       return;
     }
-    for (const item of items) {
-      listEl.append(buildConferenceWatchStatusRow(item));
-    }
+    for (const item of items) tbody.append(buildBigEventRow(item));
   }
 
   /**
@@ -830,63 +906,270 @@ export function mountEventsFinder(root) {
     return [];
   }
 
+  function syncConferenceNamesFromPayload() {
+    const names = Array.isArray(lastEventsPayload?.conferenceWatchlist)
+      ? lastEventsPayload.conferenceWatchlist.map(String)
+      : null;
+    if (names) {
+      conferenceInput.value = names.join('\n');
+      if (taste) taste.conferenceWatchlist = names;
+      syncConferenceToggleLabel();
+    }
+  }
+
   function refreshConferencePopoutIfOpen() {
+    syncConferenceNamesFromPayload();
     if (!conferencePopoutStatusList) return;
-    paintConferenceWatchStatusList(conferenceWatchItemsFromPayload(), conferencePopoutStatusList);
+    paintBigEventsTable(conferenceWatchItemsFromPayload(), conferencePopoutStatusList);
+  }
+
+  /** Re-pull the feed a few times so async research fills the table. */
+  function reloadBigEventsSoon() {
+    void loadEvents({ catalogOnly: true, quiet: true });
+    for (const delay of [4000, 9000, 16000]) {
+      setTimeout(() => {
+        if (conferencePopoutStatusList) void loadEvents({ catalogOnly: true, quiet: true });
+      }, delay);
+    }
+  }
+
+  async function removeBigEvent(item) {
+    const slug = String(item?.slug || '').trim();
+    if (!slug) return;
+    if (!window.confirm(`Remove "${item.title || item.query || 'this event'}" from Big events?`)) return;
+    try {
+      const res = await fetch(`/api/events-finder/big-events/${encodeURIComponent(slug)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      void loadEvents({ catalogOnly: true, quiet: true });
+    } catch (e) {
+      window.alert(`Could not remove: ${String(e?.message || e)}`);
+    }
   }
 
   function openConferenceWatchlistPopout() {
     const wrap = document.createElement('div');
-    wrap.className = 'events-finder__conference-popout-manage';
+    wrap.className = 'events-finder__big-events';
 
-    const listHeading = document.createElement('p');
-    listHeading.className = 'events-finder__conference-popout-section-title';
-    listHeading.textContent = 'Tracked conferences';
+    // --- Add event flow ---------------------------------------------------
+    const addBar = document.createElement('div');
+    addBar.className = 'events-finder__big-events-addbar';
+    const addToggle = document.createElement('button');
+    addToggle.type = 'button';
+    addToggle.className = 'events-finder__big-events-add';
+    addToggle.textContent = '+ Add event';
 
-    const statusList = document.createElement('div');
-    statusList.className = 'events-finder__conference-status-list';
-    conferencePopoutStatusList = statusList;
-    paintConferenceWatchStatusList(conferenceWatchItemsFromPayload(), statusList);
+    const form = document.createElement('div');
+    form.className = 'events-finder__big-events-form';
+    form.hidden = true;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'events-finder__big-events-input';
+    input.placeholder = 'e.g. open sauce';
+    input.autocomplete = 'off';
+    const searchBtn = document.createElement('button');
+    searchBtn.type = 'button';
+    searchBtn.className = 'events-finder__big-events-search';
+    searchBtn.textContent = 'Search';
+    form.append(input, searchBtn);
 
-    const editHeading = document.createElement('p');
-    editHeading.className = 'events-finder__conference-popout-section-title';
-    editHeading.textContent = 'Add or edit names';
+    const msg = document.createElement('p');
+    msg.className = 'events-finder__big-events-msg muted';
+    msg.hidden = true;
 
-    const hint = document.createElement('p');
-    hint.className = 'events-finder__conferences-hint muted';
-    hint.textContent =
-      'One name per line. Dashbird searches for the official site, event dates, ticket price, and early bird sale start/end.';
+    const preview = document.createElement('div');
+    preview.className = 'events-finder__big-events-preview';
+    preview.hidden = true;
 
-    const area = document.createElement('textarea');
-    area.className = 'events-finder__conferences-input events-finder__conferences-input--popout';
-    area.rows = 8;
-    area.placeholder = 'e.g. open sauce';
-    area.spellcheck = true;
-    area.value = conferenceInput.value;
+    addBar.append(addToggle);
 
-    wrap.append(listHeading, statusList, editHeading, hint, area);
+    // --- Tracked table ----------------------------------------------------
+    const tableWrap = document.createElement('div');
+    tableWrap.className = 'events-finder__big-events-table-wrap';
+    const table = document.createElement('table');
+    table.className = 'events-finder__big-events-table';
+    const thead = document.createElement('thead');
+    thead.innerHTML =
+      '<tr><th>Event</th><th>Dates</th><th>Ticket price</th><th>Ticket sales</th><th aria-label="Remove"></th></tr>';
+    const tbody = document.createElement('tbody');
+    conferencePopoutStatusList = tbody;
+    paintBigEventsTable(conferenceWatchItemsFromPayload(), tbody);
+    table.append(thead, tbody);
+    tableWrap.append(table);
+
+    wrap.append(addBar, form, msg, preview, tableWrap);
+
+    /** @type {{ query: string, url: string|null, screenshotPath: string|null }|null} */
+    let pendingPreview = null;
+
+    function setMsg(text, kind) {
+      msg.hidden = !text;
+      msg.textContent = text || '';
+      msg.className = `events-finder__big-events-msg${kind ? ` events-finder__big-events-msg--${kind}` : ' muted'}`;
+    }
+
+    function showAddForm() {
+      form.hidden = false;
+      addToggle.hidden = true;
+      input.focus();
+    }
+
+    function resetAddFlow() {
+      form.hidden = true;
+      addToggle.hidden = false;
+      preview.hidden = true;
+      preview.replaceChildren();
+      pendingPreview = null;
+      input.value = '';
+      setMsg('');
+    }
+
+    async function runSearch() {
+      const query = input.value.trim();
+      if (!query) {
+        input.focus();
+        return;
+      }
+      searchBtn.disabled = true;
+      searchBtn.textContent = 'Searching…';
+      setMsg('Searching the web and grabbing a snapshot…');
+      preview.hidden = true;
+      preview.replaceChildren();
+      try {
+        const res = await fetch('/api/events-finder/big-events/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        pendingPreview = {
+          query,
+          url: data.preview?.url || null,
+          homepageUrl: data.preview?.homepageUrl || data.preview?.url || null,
+          ticketUrl: data.preview?.ticketUrl || null,
+          screenshotPath: data.preview?.screenshotPath || null,
+        };
+        renderPreview(data.preview || {});
+        setMsg('');
+      } catch (e) {
+        setMsg(`Search failed: ${String(e?.message || e)}`, 'error');
+      } finally {
+        searchBtn.disabled = false;
+        searchBtn.textContent = 'Search';
+      }
+    }
+
+    function renderPreview(p) {
+      preview.replaceChildren();
+      preview.hidden = false;
+
+      if (p.screenshotUrl) {
+        const shot = document.createElement('img');
+        shot.className = 'events-finder__big-events-shot';
+        shot.src = String(p.screenshotUrl);
+        shot.alt = `Snapshot of ${p.url || p.query}`;
+        shot.loading = 'lazy';
+        preview.append(shot);
+      } else {
+        const noShot = document.createElement('p');
+        noShot.className = 'events-finder__big-events-noshot muted';
+        noShot.textContent = 'No snapshot available — you can still add it.';
+        preview.append(noShot);
+      }
+
+      const nameEl = document.createElement('p');
+      nameEl.className = 'events-finder__big-events-preview-name';
+      nameEl.textContent = String(p.name || p.query || '');
+      preview.append(nameEl);
+
+      if (p.url) {
+        const link = document.createElement('a');
+        link.className = 'events-finder__big-events-preview-url';
+        link.href = String(p.url);
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = String(p.url);
+        preview.append(link);
+      } else {
+        const noUrl = document.createElement('p');
+        noUrl.className = 'events-finder__big-events-preview-url muted';
+        noUrl.textContent = 'No official site found.';
+        preview.append(noUrl);
+      }
+
+      if (p.ticketUrl && p.ticketUrl !== p.url) {
+        const tlink = document.createElement('a');
+        tlink.className = 'events-finder__big-events-preview-url events-finder__big-events-preview-tickets';
+        tlink.href = String(p.ticketUrl);
+        tlink.target = '_blank';
+        tlink.rel = 'noopener noreferrer';
+        tlink.textContent = 'Tickets ↗';
+        preview.append(tlink);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'events-finder__big-events-preview-actions';
+      const confirmBtn = document.createElement('button');
+      confirmBtn.type = 'button';
+      confirmBtn.className = 'events-finder__big-events-confirm';
+      confirmBtn.textContent = 'Add event';
+      confirmBtn.addEventListener('click', () => void confirmAdd(confirmBtn));
+      const againBtn = document.createElement('button');
+      againBtn.type = 'button';
+      againBtn.className = 'events-finder__big-events-again';
+      againBtn.textContent = 'Search again';
+      againBtn.addEventListener('click', () => {
+        preview.hidden = true;
+        preview.replaceChildren();
+        input.focus();
+        input.select();
+      });
+      actions.append(confirmBtn, againBtn);
+      preview.append(actions);
+    }
+
+    async function confirmAdd(btn) {
+      if (!pendingPreview) return;
+      btn.disabled = true;
+      btn.textContent = 'Adding…';
+      try {
+        const res = await fetch('/api/events-finder/big-events/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(pendingPreview),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        resetAddFlow();
+        setMsg('Added — looking up dates, price, and early bird…');
+        setTimeout(() => setMsg(''), 6000);
+        reloadBigEventsSoon();
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Add event';
+        setMsg(`Could not add: ${String(e?.message || e)}`, 'error');
+      }
+    }
+
+    addToggle.addEventListener('click', showAddForm);
+    searchBtn.addEventListener('click', () => void runSearch());
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        void runSearch();
+      }
+    });
 
     openConferencePopout({
-      title: 'Big conferences & festivals',
+      title: 'Big events',
       body: wrap,
       onClose: () => {
-        conferenceInput.value = area.value;
         conferencePopoutStatusList = null;
-        syncConferenceToggleLabel();
       },
     });
-
-    area.addEventListener('input', () => {
-      conferenceInput.value = area.value;
-      syncConferenceToggleLabel();
-      if (!filtersReady || applyingCriteria) return;
-      if (conferenceAutosaveTimer) clearTimeout(conferenceAutosaveTimer);
-      conferenceAutosaveTimer = setTimeout(() => {
-        conferenceAutosaveTimer = null;
-        void autosaveConferenceWatchlist();
-      }, FILTER_AUTOSAVE_MS);
-    });
-    area.focus();
   }
 
   conferenceToggle.addEventListener('click', () => {
@@ -2213,31 +2496,30 @@ export function mountEventsFinder(root) {
    * @param {object} item
    */
   function openConferenceDetailPopout(item) {
-    const eventUrl = String(item.url || '').trim();
+    const eventUrl = String(item.homepageUrl || item.url || '').trim();
+    const ticketHref = String(item.ticketUrl || '').trim();
     const body = document.createElement('div');
     body.className = 'events-finder__conference-detail';
 
-    const badge = document.createElement('p');
-    badge.className = 'events-finder__conference-badge';
-    badge.textContent = '2-month heads-up';
-
-    const statusRow = document.createElement('p');
-    statusRow.className = 'events-finder__conference-detail-status';
-    statusRow.textContent = [
-      `URL ${conferenceUrlStatusLabel(item)}`,
-      `Data ${conferenceDataStatusLabel(item)}`,
-      `Display ${conferenceDisplayStatusLabel(item)}`,
-    ].join(' · ');
-
     const title = document.createElement('h3');
     title.className = 'events-finder__conference-detail-title';
-    title.textContent = item.title || item.query || 'Conference';
+    title.textContent = item.title || item.query || 'Big event';
+
+    body.append(title);
+
+    if (item.screenshotUrl) {
+      const shot = document.createElement('img');
+      shot.className = 'events-finder__conference-detail-shot';
+      shot.src = String(item.screenshotUrl);
+      shot.alt = `Snapshot of ${item.title || item.query}`;
+      shot.loading = 'lazy';
+      body.append(shot);
+    }
 
     const whenEl = document.createElement('p');
     whenEl.className = 'events-finder__conference-detail-when';
     whenEl.textContent = String(item.whenLabel || 'Dates TBD');
-
-    body.append(badge, statusRow, title, whenEl);
+    body.append(whenEl);
 
     if (item.placeLabel) {
       const placeEl = document.createElement('p');
@@ -2246,24 +2528,46 @@ export function mountEventsFinder(root) {
       body.append(placeEl);
     }
 
+    if (item.salesStatus) {
+      const statusWrap = document.createElement('p');
+      statusWrap.className = 'events-finder__conference-detail-place';
+      const statusPill = document.createElement('span');
+      statusPill.className = `events-finder__big-events-status events-finder__big-events-status--${item.salesStatusKind || 'unknown'}`;
+      statusPill.textContent = String(item.salesStatus);
+      statusWrap.append(statusPill);
+      body.append(statusWrap);
+    }
+
     const ticketEl = document.createElement('p');
     ticketEl.className = 'events-finder__conference-ticket';
     if (item.researching) {
       ticketEl.textContent = 'Looking up dates and tickets…';
-    } else if (item.earlyBirdLine) {
-      ticketEl.textContent = String(item.earlyBirdLine);
-      if (item.earlyBirdKind === 'active') {
-        ticketEl.classList.add('events-finder__conference-ticket--active');
-      }
-    } else if (item.ticketPrice) {
-      ticketEl.textContent = String(item.ticketPrice);
+      ticketEl.classList.add('muted');
+    } else if (item.ticketLabel) {
+      ticketEl.textContent = String(item.ticketLabel);
     } else if (item.error) {
       ticketEl.textContent = 'Could not find ticket details yet — will retry.';
       ticketEl.classList.add('muted');
     } else {
-      ticketEl.hidden = true;
+      ticketEl.textContent = 'Ticket price not found yet.';
+      ticketEl.classList.add('muted');
     }
-    if (!ticketEl.hidden) body.append(ticketEl);
+    body.append(ticketEl);
+
+    if (item.earlyBirdNote) {
+      const ebNote = document.createElement('p');
+      ebNote.className = 'events-finder__conference-ticket events-finder__conference-ticket--active';
+      ebNote.textContent = String(item.earlyBirdNote);
+      body.append(ebNote);
+    } else if (item.earlyBirdLine && item.earlyBirdKind !== 'price') {
+      const ebNote = document.createElement('p');
+      ebNote.className = 'events-finder__conference-ticket';
+      if (item.earlyBirdKind === 'active') {
+        ebNote.classList.add('events-finder__conference-ticket--active');
+      }
+      ebNote.textContent = String(item.earlyBirdLine);
+      body.append(ebNote);
+    }
 
     if (item.earlyBirdStart || item.earlyBirdEnd) {
       const eb = document.createElement('dl');
@@ -2292,14 +2596,28 @@ export function mountEventsFinder(root) {
       body.append(notesEl);
     }
 
-    if (eventUrl) {
-      const link = document.createElement('a');
-      link.className = 'events-finder__conference-detail-link';
-      link.href = eventUrl;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.textContent = 'Official site';
-      body.append(link);
+    if (eventUrl || ticketHref) {
+      const links = document.createElement('div');
+      links.className = 'events-finder__conference-detail-links';
+      if (eventUrl) {
+        const link = document.createElement('a');
+        link.className = 'events-finder__conference-detail-link';
+        link.href = eventUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = 'Official site';
+        links.append(link);
+      }
+      if (ticketHref && ticketHref !== eventUrl) {
+        const tlink = document.createElement('a');
+        tlink.className = 'events-finder__conference-detail-link events-finder__conference-detail-link--tickets';
+        tlink.href = ticketHref;
+        tlink.target = '_blank';
+        tlink.rel = 'noopener noreferrer';
+        tlink.textContent = 'Tickets ↗';
+        links.append(tlink);
+      }
+      body.append(links);
     }
 
     openConferencePopout({

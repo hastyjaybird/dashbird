@@ -211,24 +211,6 @@ function clampSeeMoreSection(sectionKey) {
 }
 
 /**
- * What changes on future refreshes — not how thumbs/guide storage works.
- * @param {'up' | 'down'} vibe
- * @param {string} [sectionKey]
- */
-function guideBehaviorExplainer(vibe, sectionKey) {
-  if (vibe === 'down') {
-    return (
-      'Next refresh should show fewer items matching this pattern. '
-      + 'Repeated 👎 on similar mail tightens the filter (Soft skip at 3×, Never show at 5×).'
-    );
-  }
-  if (clampSeeMoreSection(sectionKey) === 'show_these') {
-    return 'Next refresh is more likely to surface matching mail as action items.';
-  }
-  return 'Next refresh will rank similar mail higher in Daily Summary.';
-}
-
-/**
  * @param {string} sectionKey
  */
 function guideSaveMessageUp(sectionKey) {
@@ -325,18 +307,37 @@ function openPreferenceFeedbackModal(root, item, vibe, onSaved, showStatus) {
 
   let saveSection = vibe === 'down' ? 'prefer_less' : 'prefer_more';
 
-  const explainer = document.createElement('p');
-  explainer.className = 'daily-summary__modal-explainer';
-  explainer.textContent = guideBehaviorExplainer(vibe, saveSection);
-
   const lineLabel = document.createElement('label');
   lineLabel.className = 'daily-summary__modal-field-label';
   lineLabel.textContent = 'Pattern to match';
+
+  const fieldWrap = document.createElement('div');
+  fieldWrap.className = 'daily-summary__modal-field-shell';
 
   const lineArea = document.createElement('textarea');
   lineArea.className = 'daily-summary__modal-textarea daily-summary__modal-textarea--guide';
   lineArea.rows = 3;
   lineArea.spellcheck = true;
+
+  const pending = document.createElement('div');
+  pending.className = 'daily-summary__modal-field-pending';
+  const pendingLabel = document.createElement('span');
+  pendingLabel.className = 'daily-summary__modal-pending-label';
+  pendingLabel.textContent = 'Tailoring to this email';
+  const pendingDots = document.createElement('span');
+  pendingDots.className = 'daily-summary__chase-dots';
+  pendingDots.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < 3; i += 1) {
+    const dot = document.createElement('span');
+    dot.textContent = '.';
+    pendingDots.append(dot);
+  }
+  pending.append(pendingLabel, pendingDots);
+
+  fieldWrap.append(lineArea, pending);
+
+  let userEditedLine = false;
+  lineArea.addEventListener('input', () => { userEditedLine = true; });
 
   const msg = document.createElement('p');
   msg.className = 'daily-summary__modal-msg';
@@ -353,10 +354,6 @@ function openPreferenceFeedbackModal(root, item, vibe, onSaved, showStatus) {
   save.className = 'daily-summary__btn daily-summary__btn--primary';
   save.textContent = 'Save to guide';
   save.disabled = true;
-
-  const syncExplainer = () => {
-    explainer.textContent = guideBehaviorExplainer(vibe, saveSection);
-  };
 
   const close = () => backdrop.remove();
   cancel.addEventListener('click', close);
@@ -397,31 +394,37 @@ function openPreferenceFeedbackModal(root, item, vibe, onSaved, showStatus) {
   });
 
   actions.append(cancel, save);
-  modal.append(title, itemLabel, explainer, lineLabel, lineArea, msg, actions);
+  modal.append(title, itemLabel, lineLabel, fieldWrap, msg, actions);
   backdrop.append(modal);
   document.body.append(backdrop);
 
+  const setFieldLoading = () => fieldWrap.classList.add('daily-summary__modal-field-shell--loading');
+  const clearFieldLoading = () => fieldWrap.classList.remove('daily-summary__modal-field-shell--loading');
+
   void (async () => {
+    // No draft/example text until the tailored suggestion is ready — just the loader.
+    setFieldLoading();
     try {
       const j = await fetchJsonWithRetry(
         '/api/gmail-daily-summary/guide/suggest',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ vibe, item, skipLlm: true }),
+          body: JSON.stringify({ vibe, item }),
         },
         1,
       );
       saveSection = vibe === 'down' ? 'prefer_less' : clampSeeMoreSection(j.section);
-      lineArea.value = String(j.proposedLines || j.append || '').trim();
-      syncExplainer();
-      save.disabled = false;
-      lineArea.focus();
-    } catch {
-      lineArea.value =
-        vibe === 'down'
-          ? '- FYI or automated notices that do not need a reply or decision'
-          : '- Important follow-ups that deserve a dedicated action item';
+      if (!userEditedLine) lineArea.value = String(j.proposedLines || j.append || '').trim();
+    } catch (suggestErr) {
+      if (!userEditedLine) {
+        lineArea.value =
+          vibe === 'down'
+            ? '- FYI or automated notices that do not need a reply or decision'
+            : '- Important follow-ups that deserve a dedicated action item';
+      }
+    } finally {
+      clearFieldLoading();
       save.disabled = false;
       lineArea.focus();
     }

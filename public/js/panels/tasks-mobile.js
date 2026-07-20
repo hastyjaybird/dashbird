@@ -256,20 +256,12 @@ export function mountTasksMobile(root, config = {}) {
   listTitle.textContent = 'Projects';
   const listHeadActions = document.createElement('div');
   listHeadActions.className = 'mobile-tasks__head-actions';
-  const openLink = document.createElement('a');
-  openLink.className = 'mobile-tasks__open';
-  openLink.target = '_blank';
-  openLink.rel = 'noopener noreferrer';
-  openLink.textContent = TASKS_LABELS.openTaskManager;
-  const publicUrl = String(config.vikunjaPublicUrl || '').trim();
-  if (publicUrl) openLink.href = publicUrl;
-  else openLink.hidden = true;
   const randomBtn = document.createElement('button');
   randomBtn.type = 'button';
   randomBtn.className = 'mobile-tasks__header-btn';
   randomBtn.textContent = TASKS_LABELS.random;
 
-  listHeadActions.append(randomBtn, openLink);
+  listHeadActions.append(randomBtn);
 
   const vikunjaConfigured = config.vikunjaConfigured !== false;
   if (!vikunjaConfigured) {
@@ -330,16 +322,61 @@ export function mountTasksMobile(root, config = {}) {
   moveRenameInput.enterKeyHint = 'done';
   moveRenameInput.setAttribute('aria-label', 'Task name');
   moveRenameLabel.append(moveRenameText, moveRenameInput);
-  const moveTitle = document.createElement('p');
-  moveTitle.className = 'mobile-tasks__move-title';
-  moveTitle.textContent = 'Move to project';
-  const moveList = document.createElement('div');
-  moveList.className = 'mobile-tasks__move-list';
+
+  const moveProjectLabel = document.createElement('label');
+  moveProjectLabel.className = 'mobile-tasks__move-rename-label';
+  const moveProjectText = document.createElement('span');
+  moveProjectText.className = 'mobile-tasks__move-title';
+  moveProjectText.textContent = 'Project';
+  const moveProjectSelect = document.createElement('select');
+  moveProjectSelect.className = 'mobile-tasks__input mobile-tasks__move-select';
+  moveProjectSelect.setAttribute('aria-label', 'Move to project');
+  moveProjectLabel.append(moveProjectText, moveProjectSelect);
+
+  const moveTagsLabel = document.createElement('div');
+  moveTagsLabel.className = 'mobile-tasks__move-rename-label';
+  const moveTagsText = document.createElement('span');
+  moveTagsText.className = 'mobile-tasks__move-title';
+  moveTagsText.textContent = 'Tags';
+  const moveTagsChips = document.createElement('div');
+  moveTagsChips.className = 'mobile-tasks__move-tags';
+  moveTagsChips.style.cssText = 'display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:0.5rem;';
+  const moveTagAddRow = document.createElement('div');
+  moveTagAddRow.className = 'mobile-tasks__move-tag-add';
+  moveTagAddRow.style.cssText = 'display:flex;gap:0.4rem;';
+  const moveTagInput = document.createElement('input');
+  moveTagInput.type = 'text';
+  moveTagInput.className = 'mobile-tasks__input mobile-tasks__move-tag-input';
+  moveTagInput.placeholder = 'Add tag…';
+  moveTagInput.maxLength = 120;
+  moveTagInput.autocomplete = 'off';
+  moveTagInput.style.flex = '1';
+  const moveTagList = document.createElement('datalist');
+  moveTagList.id = 'mobile-tasks-tag-options';
+  moveTagInput.setAttribute('list', moveTagList.id);
+  const moveTagAddBtn = document.createElement('button');
+  moveTagAddBtn.type = 'button';
+  moveTagAddBtn.className = 'mobile-tasks__add-btn';
+  moveTagAddBtn.textContent = 'Add';
+  moveTagAddRow.append(moveTagInput, moveTagAddBtn, moveTagList);
+  moveTagsLabel.append(moveTagsText, moveTagsChips, moveTagAddRow);
+
+  const moveActions = document.createElement('div');
+  moveActions.className = 'mobile-tasks__move-actions';
+  moveActions.style.cssText = 'display:flex;gap:0.5rem;margin-top:0.55rem;';
+  const moveSave = document.createElement('button');
+  moveSave.type = 'button';
+  moveSave.className = 'mobile-tasks__add-btn mobile-tasks__move-save';
+  moveSave.textContent = 'Save';
+  moveSave.style.flex = '1';
   const moveCancel = document.createElement('button');
   moveCancel.type = 'button';
   moveCancel.className = 'mobile-tasks__move-cancel';
   moveCancel.textContent = 'Cancel';
-  moveOverlay.append(moveRenameLabel, moveTitle, moveList, moveCancel);
+  moveCancel.style.cssText = 'flex:1;margin-top:0;';
+  moveActions.append(moveSave, moveCancel);
+
+  moveOverlay.append(moveRenameLabel, moveProjectLabel, moveTagsLabel, moveActions);
   root.append(moveOverlay);
 
   /** @type {Array<{ id: number, title: string, position?: number }>} */
@@ -369,11 +406,14 @@ export function mountTasksMobile(root, config = {}) {
   /** @type {number | null} */
   let projectPointerId = null;
   /** @type {string | null} */
-  let draggingTaskId = null;
-  /** @type {number | null} */
-  let taskPointerId = null;
-  /** @type {number | null} */
-  let moveTargetProjectId = null;
+  let editTaskId = null;
+  /** @type {Array<{ id: number, title: string }>} */
+  let allLabels = [];
+  let allLabelsLoaded = false;
+  /** @type {Array<{ id: number, title: string }>} */
+  let editLabels = [];
+  /** @type {Array<{ id: number, title: string }>} */
+  let editLabelsOriginal = [];
 
 
   function highlightTaskFromRandom(task) {
@@ -522,12 +562,6 @@ export function mountTasksMobile(root, config = {}) {
     }
   }
 
-  function clearMoveTargetHighlight() {
-    moveList
-      .querySelectorAll('.mobile-tasks__move-target--hover')
-      .forEach((el) => el.classList.remove('mobile-tasks__move-target--hover'));
-  }
-
   /**
    * @param {string} taskId
    * @param {string} text
@@ -555,14 +589,177 @@ export function mountTasksMobile(root, config = {}) {
     }
   }
 
+  async function loadAllLabels() {
+    if (allLabelsLoaded) {
+      renderTagOptions();
+      return;
+    }
+    try {
+      const r = await fetch('/api/vikunja/labels?per_page=100', { cache: 'no-store' });
+      const j = await r.json().catch(() => null);
+      if (!Array.isArray(j)) return;
+      allLabels = j
+        .map((l) => ({ id: Number(l?.id), title: String(l?.title || '').trim() }))
+        .filter((l) => Number.isFinite(l.id) && l.id > 0 && l.title);
+      allLabelsLoaded = true;
+      renderTagOptions();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function renderTagOptions() {
+    moveTagList.replaceChildren();
+    for (const l of allLabels) {
+      const opt = document.createElement('option');
+      opt.value = l.title;
+      moveTagList.append(opt);
+    }
+  }
+
   /**
    * @param {string} taskId
    */
-  async function commitMoveOverlayRename(taskId) {
-    const next = moveRenameInput.value.trim();
-    const prev = items.find((it) => it.id === taskId)?.text || '';
-    if (!next || next === prev) return true;
-    return renameTask(taskId, next);
+  async function loadTaskLabels(taskId) {
+    try {
+      const r = await fetch(`/api/vikunja/tasks/${encodeURIComponent(taskId)}`, {
+        cache: 'no-store',
+      });
+      const j = await r.json().catch(() => null);
+      if (editTaskId !== taskId) return;
+      const labels = Array.isArray(j?.labels) ? j.labels : [];
+      editLabels = labels
+        .map((l) => ({ id: Number(l?.id), title: String(l?.title || '').trim() }))
+        .filter((l) => Number.isFinite(l.id) && l.id > 0 && l.title);
+      editLabelsOriginal = editLabels.slice();
+      renderMoveTagChips();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function renderMoveTagChips() {
+    moveTagsChips.replaceChildren();
+    if (!editLabels.length) {
+      const empty = document.createElement('span');
+      empty.className = 'mobile-tasks__move-empty muted';
+      empty.textContent = 'No tags.';
+      moveTagsChips.append(empty);
+      return;
+    }
+    for (const l of editLabels) {
+      const chip = document.createElement('span');
+      chip.className = 'mobile-tasks__tag-chip';
+      chip.style.cssText =
+        'display:inline-flex;align-items:center;gap:0.3rem;padding:0.25rem 0.5rem;border-radius:999px;border:1px solid rgba(120,150,200,0.35);background:rgba(110,181,255,0.12);font-size:0.85em;';
+      const name = document.createElement('span');
+      name.className = 'mobile-tasks__tag-chip-text';
+      name.textContent = l.title;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'mobile-tasks__tag-chip-remove';
+      remove.textContent = '×';
+      remove.setAttribute('aria-label', `Remove ${l.title}`);
+      remove.style.cssText =
+        'font:inherit;line-height:1;padding:0;border:0;background:none;color:inherit;cursor:pointer;';
+      remove.addEventListener('click', () => {
+        editLabels = editLabels.filter((x) => x.id !== l.id);
+        renderMoveTagChips();
+      });
+      chip.append(name, remove);
+      moveTagsChips.append(chip);
+    }
+  }
+
+  function addTagFromInput() {
+    const raw = moveTagInput.value.trim();
+    if (!raw) return;
+    const existing = allLabels.find((l) => l.title.toLowerCase() === raw.toLowerCase());
+    if (existing) {
+      if (!editLabels.some((l) => l.id === existing.id)) editLabels = [...editLabels, existing];
+    } else if (!editLabels.some((l) => l.title.toLowerCase() === raw.toLowerCase())) {
+      editLabels = [...editLabels, { id: -Date.now(), title: raw }];
+    }
+    moveTagInput.value = '';
+    renderMoveTagChips();
+  }
+
+  /**
+   * @param {string} title
+   * @returns {Promise<{ id: number, title: string } | null>}
+   */
+  async function createLabel(title) {
+    try {
+      const r = await fetch('/api/vikunja/labels', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j?.id) return null;
+      const created = { id: Number(j.id), title: String(j.title || title).trim() };
+      allLabels = [...allLabels, created];
+      renderTagOptions();
+      return created;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * @param {string} taskId
+   */
+  async function syncTaskLabels(taskId) {
+    const toRemove = editLabelsOriginal.filter((o) => !editLabels.some((e) => e.id === o.id));
+    const toAdd = editLabels.filter((e) => !editLabelsOriginal.some((o) => o.id === e.id));
+    for (const l of toRemove) {
+      await fetch(`/api/vikunja/tasks/${encodeURIComponent(taskId)}/labels/${l.id}`, {
+        method: 'DELETE',
+      });
+    }
+    for (const l of toAdd) {
+      let labelId = l.id;
+      if (labelId < 0) {
+        const created = await createLabel(l.title);
+        if (!created) continue;
+        labelId = created.id;
+      }
+      await fetch(`/api/vikunja/tasks/${encodeURIComponent(taskId)}/labels`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label_id: labelId }),
+      });
+    }
+    editLabelsOriginal = editLabels.slice();
+  }
+
+  async function saveTaskEdits() {
+    const taskId = editTaskId;
+    if (!taskId) return;
+    const targetProjectId = Number(moveProjectSelect.value);
+
+    const nextText = moveRenameInput.value.trim();
+    const prevText = items.find((it) => it.id === taskId)?.text || '';
+    if (nextText && nextText !== prevText) {
+      if (!(await renameTask(taskId, nextText))) return;
+    }
+
+    try {
+      await syncTaskLabels(taskId);
+    } catch {
+      showStatus('Could not update tags.', true);
+    }
+
+    if (
+      Number.isFinite(targetProjectId) &&
+      targetProjectId > 0 &&
+      targetProjectId !== projectId
+    ) {
+      hideMoveOverlay();
+      void moveTask(taskId, targetProjectId);
+      return;
+    }
+    hideMoveOverlay();
   }
 
   /**
@@ -570,33 +767,25 @@ export function mountTasksMobile(root, config = {}) {
    */
   function showMoveOverlay(taskId) {
     const task = items.find((it) => it.id === taskId);
+    editTaskId = taskId;
     moveRenameInput.value = task?.text || '';
-    moveList.replaceChildren();
-    const others = projects.filter((p) => p.id !== projectId);
-    if (!others.length) {
-      const empty = document.createElement('p');
-      empty.className = 'mobile-tasks__move-empty muted';
-      empty.textContent = 'No other projects to move into.';
-      moveList.append(empty);
-    } else {
-      for (const p of others) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'mobile-tasks__move-target';
-        btn.dataset.projectId = String(p.id);
-        btn.textContent = p.title;
-        btn.addEventListener('click', () => {
-          void (async () => {
-            if (!(await commitMoveOverlayRename(taskId))) return;
-            void moveTask(taskId, p.id);
-            hideMoveOverlay();
-          })();
-        });
-        moveList.append(btn);
-      }
+
+    moveProjectSelect.replaceChildren();
+    for (const p of projects) {
+      const opt = document.createElement('option');
+      opt.value = String(p.id);
+      opt.textContent = p.title;
+      if (p.id === projectId) opt.selected = true;
+      moveProjectSelect.append(opt);
     }
-    draggingTaskId = taskId;
-    moveTargetProjectId = null;
+
+    editLabels = [];
+    editLabelsOriginal = [];
+    moveTagInput.value = '';
+    renderMoveTagChips();
+    void loadAllLabels();
+    void loadTaskLabels(taskId);
+
     moveOverlay.hidden = false;
     root.classList.add('mobile-tasks--moving');
     if (!isMobileNavApplying() && projectId != null) {
@@ -615,25 +804,9 @@ export function mountTasksMobile(root, config = {}) {
 
   function hideMoveOverlay(fromPop = false) {
     moveOverlay.hidden = true;
-    draggingTaskId = null;
-    taskPointerId = null;
-    moveTargetProjectId = null;
-    clearMoveTargetHighlight();
+    editTaskId = null;
     root.classList.remove('mobile-tasks--moving');
-    detailPane
-      .querySelectorAll('.mobile-tasks__task--dragging')
-      .forEach((el) => el.classList.remove('mobile-tasks__task--dragging'));
     if (!fromPop && history.state?.overlay === 'task-move') mobileNavBack();
-  }
-
-  function highlightMoveTarget(clientX, clientY) {
-    clearMoveTargetHighlight();
-    moveTargetProjectId = null;
-    const el = document.elementFromPoint(clientX, clientY)?.closest('.mobile-tasks__move-target');
-    if (!(el instanceof HTMLElement)) return;
-    el.classList.add('mobile-tasks__move-target--hover');
-    const id = Number(el.dataset.projectId);
-    if (Number.isFinite(id) && id > 0) moveTargetProjectId = id;
   }
 
   function showList() {
@@ -982,7 +1155,7 @@ export function mountTasksMobile(root, config = {}) {
 
     const canDrag = !item.done && !pendingDone.has(item.id);
     if (canDrag) {
-      const handle = makeDragHandle('mobile-tasks__task-drag', 'Move to another project');
+      const handle = makeDragHandle('mobile-tasks__task-drag', 'Edit task');
       handle.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1002,25 +1175,13 @@ export function mountTasksMobile(root, config = {}) {
     const text = document.createElement('span');
     text.className = 'mobile-tasks__task-text';
     text.textContent = item.text;
-    text.title = 'Long-press to rename or move to another project';
+    text.title = 'Long-press to edit task';
 
     label.append(cb, text);
     row.append(label);
 
     if (canDrag) {
       attachTaskLongPress(li, item.id, () => showMoveOverlay(item.id));
-      li.draggable = true;
-      li.addEventListener('dragstart', (e) => {
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData(DND_TASK_MIME, item.id);
-        e.dataTransfer.setData('text/plain', item.id);
-        li.classList.add('mobile-tasks__task--dragging');
-        showMoveOverlay(item.id);
-      });
-      li.addEventListener('dragend', () => {
-        li.classList.remove('mobile-tasks__task--dragging');
-        hideMoveOverlay();
-      });
     }
 
     cb.addEventListener('change', () => {
@@ -1245,11 +1406,7 @@ export function mountTasksMobile(root, config = {}) {
         void deleteProject(p.id);
       });
 
-      const chevron = document.createElement('span');
-      chevron.className = 'mobile-tasks__chevron';
-      chevron.setAttribute('aria-hidden', 'true');
-      chevron.textContent = '›';
-      li.append(handle, name, delBtn, chevron);
+      li.append(handle, name, delBtn);
       li.addEventListener('click', () => {
         if (projectDragMoved) {
           projectDragMoved = false;
@@ -1428,7 +1585,7 @@ export function mountTasksMobile(root, config = {}) {
   }
 
   attachPullToRefresh(root, async () => {
-    if (draggingProjectId != null || draggingTaskId != null || !moveOverlay.hidden) {
+    if (draggingProjectId != null || !moveOverlay.hidden) {
       return;
     }
     if (view === 'detail') await refreshTodos();
@@ -1485,69 +1642,6 @@ export function mountTasksMobile(root, config = {}) {
   projectsList.addEventListener('pointerup', finishProjectPointerDrag);
   projectsList.addEventListener('pointercancel', finishProjectPointerDrag);
 
-  detailPane.addEventListener('pointerdown', (e) => {
-    const handle = e.target.closest('.mobile-tasks__task-drag');
-    if (!handle) return;
-    const li = handle.closest('.mobile-tasks__task');
-    if (!li || li.classList.contains('mobile-tasks__task--done')) return;
-    const taskId = String(li.dataset.id || '');
-    if (!taskId) return;
-    taskPointerId = e.pointerId;
-    li.classList.add('mobile-tasks__task--dragging');
-    showMoveOverlay(taskId);
-    handle.setPointerCapture(e.pointerId);
-    e.preventDefault();
-  });
-
-  detailPane.addEventListener('pointermove', (e) => {
-    if (taskPointerId == null || e.pointerId !== taskPointerId) return;
-    highlightMoveTarget(e.clientX, e.clientY);
-  });
-
-  function finishTaskPointerDrag(e) {
-    if (taskPointerId == null || e.pointerId !== taskPointerId) return;
-    const taskId = draggingTaskId;
-    const targetProjectId = moveTargetProjectId;
-    hideMoveOverlay();
-    if (taskId && targetProjectId != null) {
-      void (async () => {
-        if (!(await commitMoveOverlayRename(taskId))) return;
-        void moveTask(taskId, targetProjectId);
-      })();
-    }
-  }
-
-  detailPane.addEventListener('pointerup', finishTaskPointerDrag);
-  detailPane.addEventListener('pointercancel', () => hideMoveOverlay(true));
-
-  moveOverlay.addEventListener('pointerup', (e) => {
-    if (taskPointerId == null) return;
-    highlightMoveTarget(e.clientX, e.clientY);
-    finishTaskPointerDrag(e);
-  });
-
-  moveList.addEventListener('dragover', (e) => {
-    if (![...e.dataTransfer.types].includes(DND_TASK_MIME)) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    highlightMoveTarget(e.clientX, e.clientY);
-  });
-
-  moveList.addEventListener('drop', (e) => {
-    e.preventDefault();
-    const taskId = String(e.dataTransfer.getData(DND_TASK_MIME) || draggingTaskId || '').trim();
-    highlightMoveTarget(e.clientX, e.clientY);
-    const targetProjectId = moveTargetProjectId;
-    hideMoveOverlay();
-    if (taskId && targetProjectId != null) {
-      void (async () => {
-        if (!(await commitMoveOverlayRename(taskId))) return;
-        void moveTask(taskId, targetProjectId);
-      })();
-    }
-  });
-
-
   randomBtn.addEventListener('click', () => {
     openRandomTaskPicker({
       root,
@@ -1573,10 +1667,28 @@ export function mountTasksMobile(root, config = {}) {
   });
 
   moveRenameInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && draggingTaskId) {
+    if (e.key === 'Enter' && editTaskId) {
       e.preventDefault();
-      void commitMoveOverlayRename(draggingTaskId);
+      void saveTaskEdits();
     }
+  });
+
+  moveTagInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addTagFromInput();
+    }
+  });
+
+  moveTagAddBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    addTagFromInput();
+  });
+
+  moveSave.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    void saveTaskEdits();
   });
 
   moveCancel.addEventListener('click', (e) => {

@@ -1,7 +1,11 @@
 /**
  * Ticket price parsing for Events finder (display + dedupe).
- * Free / unknown → no display label. Paid → "$25" or "$25–$40".
+ * Free → "Free". Donation → "Donation" or "$10 donation". Paid → "$25" or "$25–$40".
+ * Unknown → no display label.
  */
+
+/** Matches donation / pay-what-you-can style pricing. */
+const DONATION_RE = /\b(donations?|pay\s*what\s*you\s*(?:can|want|wish)|pwyc|notaflof|sliding\s*scale)\b/i;
 
 /**
  * @param {unknown} raw
@@ -90,6 +94,36 @@ function formatPriceLabel(min, max) {
 }
 
 /**
+ * Collect price-relevant text from an event so we can detect donation wording
+ * (which may sit alongside an actual suggested amount).
+ * @param {object} event
+ * @returns {string}
+ */
+function collectPriceText(event) {
+  /** @type {string[]} */
+  const bits = [];
+  const push = (v) => {
+    if (v != null && typeof v !== 'object') bits.push(String(v));
+  };
+  const ev = /** @type {Record<string, unknown>} */ (event);
+  push(ev.price);
+  push(ev.ticketPrice);
+  push(ev.minPrice);
+  push(ev.priceMin);
+  push(ev.priceMax);
+  push(ev.maxPrice);
+  const tickets =
+    /** @type {{ ticketsInfo?: unknown }} */ (event).ticketsInfo
+    ?? /** @type {{ raw?: { ticketsInfo?: unknown } }} */ (event).raw?.ticketsInfo;
+  if (tickets && typeof tickets === 'object') {
+    const ti = /** @type {Record<string, unknown>} */ (tickets);
+    push(ti.price);
+    push(ti.subtitle);
+  }
+  return bits.join(' | ');
+}
+
+/**
  * Resolve ticket price from a normalized event (and nested raw/schema).
  * @param {object} event
  * @returns {{
@@ -97,12 +131,15 @@ function formatPriceLabel(min, max) {
  *   priceMax: number | null,
  *   priceLabel: string | null,
  *   isFree: boolean,
+ *   isDonation: boolean,
  * }}
  */
 export function resolveEventPrice(event) {
   if (!event || typeof event !== 'object') {
-    return { price: null, priceMax: null, priceLabel: null, isFree: false };
+    return { price: null, priceMax: null, priceLabel: null, isFree: false, isDonation: false };
   }
+
+  const isDonation = DONATION_RE.test(collectPriceText(event));
 
   /** @type {{ min: number, max: number } | null} */
   let range = null;
@@ -146,7 +183,7 @@ export function resolveEventPrice(event) {
       .map((p) => String(p || ''))
       .join(' ');
     if (/\bfree\b/i.test(blob) && !/\$\s*\d/.test(blob)) {
-      return { price: 0, priceMax: 0, priceLabel: null, isFree: true };
+      return donationOrFree(isDonation);
     }
     const fromText = parseMoneyRange(
       blob.match(/\$\s*\d+(?:\.\d{1,2})?(?:\s*[-–—to]+\s*\$?\s*\d+(?:\.\d{1,2})?)?/i)?.[0],
@@ -155,22 +192,37 @@ export function resolveEventPrice(event) {
   }
 
   if (!range) {
-    return { price: null, priceMax: null, priceLabel: null, isFree: false };
+    // No amount found. A donation ask still counts as a (donation) price.
+    if (isDonation) return donationOrFree(true);
+    return { price: null, priceMax: null, priceLabel: null, isFree: false, isDonation: false };
   }
 
-  const isFree = range.min <= 0 && range.max <= 0;
-  if (isFree) {
-    return { price: 0, priceMax: 0, priceLabel: null, isFree: true };
+  const noAmount = range.min <= 0 && range.max <= 0;
+  if (noAmount) {
+    return donationOrFree(isDonation);
   }
 
   const min = range.min > 0 ? range.min : range.max;
   const max = range.max;
+  const amountLabel = formatPriceLabel(min, max);
   return {
     price: min,
     priceMax: max,
-    priceLabel: formatPriceLabel(min, max),
+    priceLabel: isDonation && amountLabel ? `${amountLabel} donation` : amountLabel,
     isFree: false,
+    isDonation,
   };
+}
+
+/**
+ * Zero-cost result: "Donation" when a donation ask is present, else "Free".
+ * @param {boolean} isDonation
+ */
+function donationOrFree(isDonation) {
+  if (isDonation) {
+    return { price: 0, priceMax: 0, priceLabel: 'Donation', isFree: false, isDonation: true };
+  }
+  return { price: 0, priceMax: 0, priceLabel: 'Free', isFree: true, isDonation: false };
 }
 
 /**
@@ -186,6 +238,7 @@ export function withEventPrice(event) {
     priceMax: resolved.priceMax,
     priceLabel: resolved.priceLabel,
     isFree: resolved.isFree,
+    isDonation: resolved.isDonation,
   };
 }
 
@@ -197,7 +250,7 @@ export function withEventPrice(event) {
  */
 export function eventTicketPriceRank(event) {
   const resolved = resolveEventPrice(event);
-  if (resolved.isFree) return 0;
+  if (resolved.isFree || resolved.isDonation) return 0;
   if (resolved.priceMax != null && resolved.priceMax > 0) return resolved.priceMax;
   if (resolved.price != null && resolved.price > 0) return resolved.price;
   return null;

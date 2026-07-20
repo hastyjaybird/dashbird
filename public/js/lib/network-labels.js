@@ -22,5 +22,4 @@ export const NETWORK_LABELS = {
 
 export const TASKS_LABELS = {
   random: 'Random',
-  openTaskManager: 'Open task manager',
 };

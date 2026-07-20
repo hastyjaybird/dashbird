@@ -173,6 +173,69 @@ function parseEruptionStats(text) {
 }
 
 /**
+ * Detect a forecast for the NEXT Kīlauea eruption / episode in the update text.
+ * USGS episodic-eruption updates usually include a sentence like
+ * "The next episode … is likely to begin between …" or a precursory-activity window.
+ * @param {string} text
+ * @returns {{ hasForecast: boolean, forecast: string | null, forecastWhen: string | null }}
+ */
+function parseNextEruptionForecast(text) {
+  const blob = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!blob) return { hasForecast: false, forecast: null, forecastWhen: null };
+
+  // Split into sentences and look for one describing the next episode/eruption timing.
+  const sentences = blob.split(/(?<=[.!?])\s+(?=[A-Z0-9])/);
+  const keyword = /\bnext\s+(?:episode|eruption|eruptive\s+episode)\b|\bnext\s+episode\b/i;
+  const timing =
+    /\b(?:likely|expected|anticipated|forecast(?:ed)?|could|may|projected|estimated)\b[^.]*\b(?:begin|start|resume|occur|erupt)/i;
+  const windowRe =
+    /\b(?:between|by|before|on|around|as early as|within the next)\b[^.]*\b(?:\d{1,2}(?::\d{2})?\s*(?:a\.m\.|p\.m\.|hst)|[A-Z][a-z]+\.?\s+\d{1,2}|\d+\s*(?:hours?|days?|weeks?))/i;
+
+  for (const raw of sentences) {
+    const s = raw.trim();
+    if (!s) continue;
+    if (keyword.test(s) && (timing.test(s) || windowRe.test(s))) {
+      const forecast = s.replace(/\s+/g, ' ').trim().slice(0, 220);
+      const whenMatch = s.match(windowRe);
+      return {
+        hasForecast: true,
+        forecast,
+        forecastWhen: whenMatch ? whenMatch[0].replace(/\s+/g, ' ').trim().slice(0, 80) : null,
+      };
+    }
+  }
+
+  // Secondary: explicit forecast phrasing even without the word "next".
+  for (const raw of sentences) {
+    const s = raw.trim();
+    if (!s) continue;
+    if (/\bforecast(?:ed)?\s+to\s+(?:begin|resume|erupt|start)\b/i.test(s)) {
+      return {
+        hasForecast: true,
+        forecast: s.replace(/\s+/g, ' ').trim().slice(0, 220),
+        forecastWhen: null,
+      };
+    }
+  }
+
+  return { hasForecast: false, forecast: null, forecastWhen: null };
+}
+
+/**
+ * Reduce the full volcano-updates page HTML to its readable activity text.
+ * @param {string} html
+ */
+function extractKilaueaUpdateText(html) {
+  const raw = String(html || '');
+  // Prefer the Volcanic Activity Summary / activity region when present, else whole page.
+  const region =
+    raw.match(/Volcanic\s+Activity\s+Summary[\s\S]{0,4000}/i)?.[0] ||
+    raw.match(/Activity\s+Summary[\s\S]{0,4000}/i)?.[0] ||
+    raw;
+  return stripHtml(region).slice(0, 6000);
+}
+
+/**
  * @param {string} html
  */
 function parseHvoMessages(html) {
@@ -324,15 +387,23 @@ export async function buildKilaueaDashboardPayload() {
 
   const upstream = {};
 
-  const [elevatedSettled, capSettled, newestSettled, messagesSettled, quakeSettled, camerasSettled] =
-    await Promise.allSettled([
-      fetchJson(HANS_ELEVATED),
-      fetchJson(HANS_CAP),
-      fetchJson(HANS_NEWEST),
-      fetchText(HVO_MESSAGES_URL, { accept: 'text/html', timeoutMs: 18_000 }),
-      fetchStrongestKilaueaQuake(),
-      Promise.all(CAM_SHORT_LINKS.map(resolveCamera)),
-    ]);
+  const [
+    elevatedSettled,
+    capSettled,
+    newestSettled,
+    updatesSettled,
+    messagesSettled,
+    quakeSettled,
+    camerasSettled,
+  ] = await Promise.allSettled([
+    fetchJson(HANS_ELEVATED),
+    fetchJson(HANS_CAP),
+    fetchJson(HANS_NEWEST),
+    fetchText(KILAUEA_UPDATES_URL, { accept: 'text/html', timeoutMs: 18_000 }),
+    fetchText(HVO_MESSAGES_URL, { accept: 'text/html', timeoutMs: 18_000 }),
+    fetchStrongestKilaueaQuake(),
+    Promise.all(CAM_SHORT_LINKS.map(resolveCamera)),
+  ]);
 
   let alertLevel = null;
   let colorCode = null;
@@ -392,6 +463,14 @@ export async function buildKilaueaDashboardPayload() {
     upstream.newest = String(newestSettled.reason?.message || newestSettled.reason);
   }
 
+  // Primary content source: the main volcano-updates page.
+  let updatesText = '';
+  if (updatesSettled.status === 'fulfilled') {
+    updatesText = extractKilaueaUpdateText(updatesSettled.value.text);
+  } else {
+    upstream.updates = String(updatesSettled.reason?.message || updatesSettled.reason);
+  }
+
   /** @type {{ title: string, body: string }[]} */
   let messages = [];
   if (messagesSettled.status === 'fulfilled') {
@@ -401,16 +480,22 @@ export async function buildKilaueaDashboardPayload() {
   }
 
   const latestMessage = messages[0]?.body || '';
-  const textBlob = [latestMessage, synopsis, noticeSummary].filter(Boolean).join(' · ');
+  const textBlob = [updatesText, latestMessage, synopsis, noticeSummary].filter(Boolean).join(' · ');
+  const statsFromUpdates = parseEruptionStats(updatesText);
   const statsFromMessage = parseEruptionStats(latestMessage);
   const statsFromNotice = parseEruptionStats(`${synopsis} ${noticeSummary}`);
   const stats = {
-    episode: statsFromMessage.episode ?? statsFromNotice.episode,
-    startedRaw: statsFromMessage.startedRaw || statsFromNotice.startedRaw,
-    startedShort: statsFromMessage.startedShort || statsFromNotice.startedShort,
-    fountainFt: statsFromMessage.fountainFt ?? statsFromNotice.fountainFt,
-    fountainM: statsFromMessage.fountainM ?? statsFromNotice.fountainM,
+    episode: statsFromUpdates.episode ?? statsFromMessage.episode ?? statsFromNotice.episode,
+    startedRaw: statsFromUpdates.startedRaw || statsFromMessage.startedRaw || statsFromNotice.startedRaw,
+    startedShort:
+      statsFromUpdates.startedShort || statsFromMessage.startedShort || statsFromNotice.startedShort,
+    fountainFt: statsFromUpdates.fountainFt ?? statsFromMessage.fountainFt ?? statsFromNotice.fountainFt,
+    fountainM: statsFromUpdates.fountainM ?? statsFromMessage.fountainM ?? statsFromNotice.fountainM,
   };
+
+  const forecast = parseNextEruptionForecast(
+    [updatesText, latestMessage, synopsis, noticeSummary].filter(Boolean).join(' '),
+  );
 
   const erupting = isEruptingAlert(alertLevel, colorCode, textBlob);
   const cameras =
@@ -434,7 +519,7 @@ export async function buildKilaueaDashboardPayload() {
   /** @type {object[]} */
   const items = [];
 
-  if (erupting || alertLevel || colorCode) {
+  if (erupting || alertLevel || colorCode || forecast.hasForecast) {
     const parts = [];
     if (erupting) parts.push('Erupting');
     else if (alertLevel || colorCode) {
@@ -448,19 +533,34 @@ export async function buildKilaueaDashboardPayload() {
           ? `fountain ${stats.fountainFt} ft (${stats.fountainM} m)`
           : `fountain ${stats.fountainFt} ft`,
       );
-    } else {
+    } else if (erupting || alertLevel || colorCode) {
       parts.push(`summit ${elevationFt} ft`);
     }
     if (erupting && (alertLevel || colorCode)) {
       parts.push([alertLevel, colorCode].filter(Boolean).join('/'));
     }
+    // 📅 next-eruption forecast segment (shown between episodes and during episodic eruptions).
+    if (forecast.hasForecast) {
+      parts.push(`📅 next: ${forecast.forecastWhen || forecast.forecast}`);
+    }
+
+    // ! when erupting, 📅 when a next-eruption forecast is available.
+    const marks = [];
+    if (erupting) marks.push('❗');
+    if (forecast.hasForecast) marks.push('📅');
+    const label = marks.length ? `Kīlauea ${marks.join('')}` : 'Kīlauea';
 
     items.push({
       earthType: 'kilauea_volcano',
-      label: 'Kīlauea',
+      label,
       detailLine: parts.join(' · '),
       forecastUrl: noticeUrl || KILAUEA_UPDATES_URL,
       erupting,
+      eruptingMark: erupting ? '❗' : null,
+      forecast: forecast.forecast,
+      forecastWhen: forecast.forecastWhen,
+      hasEruptionForecast: forecast.hasForecast,
+      forecastMark: forecast.hasForecast ? '📅' : null,
       alertLevel: alertLevel || null,
       colorCode: colorCode || null,
       episode: stats.episode,
@@ -483,6 +583,11 @@ export async function buildKilaueaDashboardPayload() {
     cameras,
     status: {
       erupting,
+      eruptingMark: erupting ? '❗' : null,
+      forecast: forecast.forecast,
+      forecastWhen: forecast.forecastWhen,
+      hasEruptionForecast: forecast.hasForecast,
+      forecastMark: forecast.hasForecast ? '📅' : null,
       alertLevel: alertLevel || null,
       colorCode: colorCode || null,
       episode: stats.episode,

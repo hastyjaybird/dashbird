@@ -202,6 +202,61 @@ function saveOffset(next, env = process.env) {
 }
 
 /**
+ * Per-chat pointer to the last event created via Telegram, so a follow-up
+ * `/more <details>` can append to it. Persisted so it survives restarts.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function lastEventPath(env = process.env) {
+  const override = String(env.TELEGRAM_LAST_EVENT_PATH || '').trim();
+  if (override) {
+    return path.isAbsolute(override) ? override : path.join(PKG_ROOT, override);
+  }
+  return path.join(PKG_ROOT, 'data', 'telegram-last-event.json');
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Record<string, { eventId: string, at: string }>}
+ */
+function readLastEventMap(env = process.env) {
+  try {
+    const j = JSON.parse(fs.readFileSync(lastEventPath(env), 'utf8'));
+    return j && typeof j === 'object' ? j : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * @param {number|string|null|undefined} chatId
+ * @param {string|null|undefined} eventId
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function recordLastTelegramEvent(chatId, eventId, env = process.env) {
+  if (chatId == null || !eventId) return;
+  try {
+    const map = readLastEventMap(env);
+    map[String(chatId)] = { eventId: String(eventId), at: new Date().toISOString() };
+    const fp = lastEventPath(env);
+    fs.mkdirSync(path.dirname(fp), { recursive: true });
+    fs.writeFileSync(fp, JSON.stringify(map, null, 2));
+  } catch (e) {
+    console.warn('[telegram-events] last-event pointer write failed', e?.message || e);
+  }
+}
+
+/**
+ * @param {number|string|null|undefined} chatId
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {string | null}
+ */
+function getLastTelegramEvent(chatId, env = process.env) {
+  if (chatId == null) return null;
+  const rec = readLastEventMap(env)[String(chatId)];
+  return rec?.eventId ? String(rec.eventId) : null;
+}
+
+/**
  * @param {string} method
  * @param {Record<string, unknown>} [body]
  * @param {NodeJS.ProcessEnv} [env]
@@ -577,6 +632,63 @@ function formatIngestReply(event) {
 }
 
 /**
+ * `/more <details>` — append extra info to the last event created in this chat.
+ * @param {number|string} chatId
+ * @param {string} extraText
+ * @param {NodeJS.ProcessEnv} env
+ * @param {{ notifyUser?: boolean }} [opts]
+ */
+async function appendToLastTelegramEvent(chatId, extraText, env = process.env, opts = {}) {
+  const notifyUser = opts.notifyUser !== false;
+  const addition = String(extraText || '').replace(/\s+/g, ' ').trim();
+  if (!addition) {
+    await notifyIntake(
+      chatId,
+      'Send /more followed by the extra details to add to your last event, e.g. /more parking is around back.',
+      env,
+      { notifyUser },
+    );
+    return { ok: false, error: 'more_empty', type: 'more' };
+  }
+
+  const lastId = getLastTelegramEvent(chatId, env);
+  if (!lastId) {
+    await notifyIntake(
+      chatId,
+      'No recent event to add to. Send an event (flyer or text) first, then reply /more <details>.',
+      env,
+      { notifyUser },
+    );
+    return { ok: false, error: 'more_no_target', type: 'more' };
+  }
+
+  const event = getEventsFinderEventById(lastId, env);
+  if (!event) {
+    await notifyIntake(chatId, 'Could not find your last event to update.', env, { notifyUser });
+    return { ok: false, error: 'more_event_missing', type: 'more' };
+  }
+
+  const existing = clean(event.description) || '';
+  const nextDescription = existing ? `${existing} — ${addition}` : addition;
+  /** @type {Record<string, unknown>} */
+  const updated = { ...event, description: nextDescription };
+  if (!updated.raw || typeof updated.raw !== 'object') updated.raw = {};
+  const raw = /** @type {Record<string, unknown>} */ (updated.raw);
+  const prior = Array.isArray(raw.moreNotes) ? raw.moreNotes : [];
+  raw.moreNotes = [...prior, { text: addition, at: new Date().toISOString() }];
+
+  upsertEventsFinderEvents([updated], env);
+  const verified = requirePersistedEvent(updated, env);
+  recordLastTelegramEvent(chatId, verified.id, env);
+  await telegramSendMessage(
+    chatId,
+    `Added to ${clean(verified.title) || 'event'}:\n${addition.slice(0, 400)}`,
+    env,
+  );
+  return { ok: true, type: 'more', event: verified };
+}
+
+/**
  * @param {object} contact
  * @param {{ photoSet?: boolean }} [opts]
  */
@@ -935,6 +1047,7 @@ export async function processTelegramAlbum(messages, env = process.env) {
 
   const upsert = upsertEventsFinderEvents([event], env);
   const verified = requirePersistedEvent(event, env);
+  recordLastTelegramEvent(chatId, verified.id, env);
   const reply = formatIngestReply(verified);
   const albumNote = downloaded.length > 1 ? `\n(${downloaded.length} screenshots → one event)` : '';
   await telegramSendMessage(chatId, `${reply}${albumNote}`, env);
@@ -1243,17 +1356,17 @@ export async function processTelegramEventMessage(message, env = process.env, op
     await telegramSendMessage(
       chatId,
       allowed
-        ? 'Dashbird intake is ready. Send text, voice, flyer, business card, LinkedIn screenshot, guest list, headshot, or company logo.\nI classify as event / todo / note / contact / company.\nOverrides: /event /todo /note /contact /company …\nAlbums of screenshots → one event.'
+        ? 'Dashbird intake is ready. Send text, voice, flyer, business card, LinkedIn screenshot, guest list, headshot, or company logo.\nI classify as event / todo / note / contact / company.\nOverrides: /event /todo /note /contact /company …\nAdd details to your last event: /more <details>.\nAlbums of screenshots → one event.\nSend "help" any time for the full list.'
         : `Your Telegram chat id is ${chatId}.\nAdd it to TELEGRAM_ALLOWED_CHAT_IDS in Dashbird .env, then restart.`,
       env,
     );
     return { ok: true, skipped: true, reason: 'start' };
   }
 
-  if (text === '/help') {
+  if (/^\/help(@\w+)?$/i.test(text) || /^help[!.?]*$/i.test(text)) {
     await telegramSendMessage(
       chatId,
-      'Send:\n• Flyer photo / album → event\n• Business card / LinkedIn / headshot → contact\n• Guest list screenshot → contacts (everyone listed)\n• Company logo → company card\n• Voice or text → auto-classified\n• Name + phone → contact\n• /todo buy milk\n• /note idea for weekend\n• /contact Sam, met at party, 555-…\n• /company Acme Labs, acme.com\n• /event July 18 Rooftop Jazz invited by Maya',
+      'Send:\n• Flyer photo / album → event\n• Business card / LinkedIn / headshot → contact\n• Guest list screenshot → contacts (everyone listed)\n• Company logo → company card\n• Voice or text → auto-classified\n• Name + phone → contact\n• /more extra details → adds to your LAST event (e.g. send a flyer, then /more parking around back)\n• /todo buy milk\n• /note idea for weekend\n• /contact Sam, met at party, 555-…\n• /company Acme Labs, acme.com\n• /event July 18 Rooftop Jazz invited by Maya',
       env,
     );
     return { ok: true, skipped: true, reason: 'help' };
@@ -1267,6 +1380,13 @@ export async function processTelegramEventMessage(message, env = process.env, op
       { notifyUser },
     );
     return { ok: false, error: 'chat_not_allowed' };
+  }
+
+  // `/more <details>` (or a photo caption) appends to the last event in this chat.
+  const moreSource = text || caption;
+  const moreMatch = moreSource.match(/^\/more(?:@\w+)?\b([\s\S]*)$/i);
+  if (moreMatch) {
+    return appendToLastTelegramEvent(chatId, moreMatch[1], env, { notifyUser });
   }
 
   // Albums arrive as separate messages sharing media_group_id — merge them as events.
@@ -2230,6 +2350,7 @@ async function ingestTelegramEventFromText(text, message, env, meta = {}) {
   }
   const upsert = upsertEventsFinderEvents([event], env);
   const verified = requirePersistedEvent(event, env);
+  recordLastTelegramEvent(chatId, verified.id, env);
   await telegramSendMessage(chatId, formatIngestReply(verified), env);
   return {
     ok: true,
@@ -2448,6 +2569,7 @@ async function ingestTelegramEventFromMessage(message, env, media) {
   });
   const upsert = upsertEventsFinderEvents([event], env);
   const verified = requirePersistedEvent(event, env);
+  recordLastTelegramEvent(chatId, verified.id, env);
   await telegramSendMessage(chatId, formatIngestReply(verified), env);
   return {
     ok: true,

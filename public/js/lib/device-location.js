@@ -14,6 +14,121 @@ let bootPromise = null;
 
 const MIN_MOVE_M = 400;
 const REVERSE_DEBOUNCE_MS = 800;
+const LAST_KNOWN_KEY = 'dashbird-last-known-place';
+const SERVER_POST_MIN_MS = 60_000;
+
+/** @type {number} */
+let lastServerPostAt = 0;
+
+/**
+ * Best-effort publish of a real device fix to the shared server store so a
+ * laptop with no geolocation can seed its location from the phone.
+ * @param {{ lat:number, lon:number, shortLabel:string, timeZone?:string }} place
+ */
+function postServerPlace(place) {
+  const now = Date.now();
+  if (now - lastServerPostAt < SERVER_POST_MIN_MS) return;
+  lastServerPostAt = now;
+  try {
+    fetch('/api/device-place', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      keepalive: true,
+      body: JSON.stringify({
+        lat: place.lat,
+        lon: place.lon,
+        shortLabel: place.shortLabel,
+        timeZone: typeof place.timeZone === 'string' ? place.timeZone : '',
+      }),
+    }).catch(() => {});
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Read the shared last-known place from the server (phone → laptop transfer).
+ * @returns {Promise<DevicePlace | null>}
+ */
+async function fetchServerPlace() {
+  try {
+    const r = await fetch('/api/device-place', { cache: 'no-store' });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const p = j?.place;
+    const lat = Number(p?.lat);
+    const lon = Number(p?.lon);
+    const label = typeof p?.shortLabel === 'string' ? p.shortLabel.trim() : '';
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !label) return null;
+    return {
+      lat,
+      lon,
+      shortLabel: label,
+      timeZone: typeof p?.timeZone === 'string' ? p.timeZone : '',
+      source: 'config',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist the last real device GPS fix so a later session can seed location
+ * before/without a fresh fix. Saves to localStorage (same-browser) and, when
+ * only GPS-derived, publishes to the server so a different laptop can reuse it.
+ * @param {DevicePlace} place
+ */
+function persistLastKnownPlace(place) {
+  try {
+    const label = typeof place.shortLabel === 'string' ? place.shortLabel.trim() : '';
+    if (!label || label === 'Locating…' || label === 'Location unavailable') return;
+    if (!Number.isFinite(place.lat) || !Number.isFinite(place.lon)) return;
+    localStorage.setItem(
+      LAST_KNOWN_KEY,
+      JSON.stringify({
+        lat: place.lat,
+        lon: place.lon,
+        shortLabel: label,
+        timeZone: typeof place.timeZone === 'string' ? place.timeZone : '',
+        savedAt: Date.now(),
+      }),
+    );
+    postServerPlace({
+      lat: place.lat,
+      lon: place.lon,
+      shortLabel: label,
+      timeZone: place.timeZone,
+    });
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+/**
+ * Read the phone's last-known place from local storage (best-effort).
+ * @returns {DevicePlace | null}
+ */
+function readLastKnownPlace() {
+  try {
+    const raw = localStorage.getItem(LAST_KNOWN_KEY);
+    if (!raw) return null;
+    const j = JSON.parse(raw);
+    const lat = Number(j?.lat);
+    const lon = Number(j?.lon);
+    const label = typeof j?.shortLabel === 'string' ? j.shortLabel.trim() : '';
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !label) return null;
+    return {
+      lat,
+      lon,
+      shortLabel: label,
+      timeZone: typeof j?.timeZone === 'string' ? j.timeZone : '',
+      source: 'config',
+    };
+  } catch {
+    return null;
+  }
+}
 
 /** @type {ReturnType<typeof setTimeout> | null} */
 let reverseTimer = null;
@@ -49,6 +164,7 @@ function cityStateLabel(candidate, fallback) {
 function setCurrent(place) {
   if (!place) return;
   current = place;
+  if (place.source === 'device') persistLastKnownPlace(place);
   for (const fn of listeners) fn(place);
 }
 
@@ -168,9 +284,17 @@ export function startDeviceLocation(config) {
   if (bootPromise) return bootPromise;
 
   bootPromise = new Promise((resolve) => {
-    const fallback = placeFromConfig(config);
+    const fallback = readLastKnownPlace() || placeFromConfig(config);
     current = fallback;
     let settled = false;
+
+    // Cross-device seed: if this browser has no live GPS yet, adopt the phone's
+    // last-known place from the shared server store. Never overrides a real fix.
+    if (!readLastKnownPlace()) {
+      fetchServerPlace().then((serverPlace) => {
+        if (serverPlace && current?.source !== 'device') setCurrent(serverPlace);
+      });
+    }
     const finish = (place) => {
       if (settled) return;
       settled = true;

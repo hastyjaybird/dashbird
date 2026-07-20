@@ -8,7 +8,7 @@ import {
 
 const MOBILE_TAB_KEY = 'dashbirdMobileTab';
 /** Bump when any mobile panel module changes (cache-bust dynamic imports). */
-const MOBILE_PANELS_V = 'mobile-panels-20260717-4';
+const MOBILE_PANELS_V = 'mobile-panels-20260719-3';
 
 /**
  * @returns {import('../lib/mobile-history.js').MobileTab}
@@ -91,32 +91,32 @@ export function mountMobileShell(mounts = {}) {
 
   const notesBtn = document.createElement('button');
   notesBtn.type = 'button';
-  notesBtn.className = 'mobile-shell__tab';
+  notesBtn.className = 'mobile-shell__tab mobile-shell__tab--notes';
   notesBtn.textContent = 'Notes';
 
   const tasksBtn = document.createElement('button');
   tasksBtn.type = 'button';
-  tasksBtn.className = 'mobile-shell__tab';
+  tasksBtn.className = 'mobile-shell__tab mobile-shell__tab--tasks';
   tasksBtn.textContent = 'Tasks';
 
   const gmailBtn = document.createElement('button');
   gmailBtn.type = 'button';
-  gmailBtn.className = 'mobile-shell__tab';
+  gmailBtn.className = 'mobile-shell__tab mobile-shell__tab--mail';
   gmailBtn.textContent = 'Mail';
 
   const eventsBtn = document.createElement('button');
   eventsBtn.type = 'button';
-  eventsBtn.className = 'mobile-shell__tab';
+  eventsBtn.className = 'mobile-shell__tab mobile-shell__tab--events';
   eventsBtn.textContent = 'Events';
 
   const networkBtn = document.createElement('button');
   networkBtn.type = 'button';
-  networkBtn.className = 'mobile-shell__tab';
+  networkBtn.className = 'mobile-shell__tab mobile-shell__tab--contacts';
   networkBtn.textContent = 'Contacts';
 
   const groupsBtn = document.createElement('button');
   groupsBtn.type = 'button';
-  groupsBtn.className = 'mobile-shell__tab';
+  groupsBtn.className = 'mobile-shell__tab mobile-shell__tab--groups';
   groupsBtn.textContent = 'Groups';
 
   tabsRoot.append(notesBtn, tasksBtn, gmailBtn, eventsBtn, networkBtn, groupsBtn);

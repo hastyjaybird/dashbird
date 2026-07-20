@@ -88,11 +88,7 @@ export function buildDevRequestForm(opts) {
   prioritySelect.className = 'dev-request-form__select';
   prioritySelect.title = 'Priority';
 
-  const areaSelect = document.createElement('select');
-  areaSelect.className = 'dev-request-form__select dev-request-form__select--area';
-  areaSelect.title = 'Area';
-
-  row1.append(prioritySelect, areaSelect);
+  row1.append(prioritySelect);
 
   const attachZone = document.createElement('div');
   attachZone.className = 'dev-request-form__attach';
@@ -131,9 +127,6 @@ export function buildDevRequestForm(opts) {
 
   footer.append(viewBtn, submitBtn);
   form.append(bodyInput, row1, attachZone, footer);
-
-  /** @type {DevAreasMap} */
-  let areas = { desktop: [], mobile: [] };
 
   function syncSubmitState() {
     submitBtn.disabled = submitting || !bodyInput.value.trim();
@@ -208,23 +201,6 @@ export function buildDevRequestForm(opts) {
     });
   }
 
-  function populateAreas() {
-    areaSelect.replaceChildren();
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = 'Pick one (optional)';
-    placeholder.selected = true;
-    areaSelect.append(placeholder);
-    const list = areas[platform] || [];
-    for (const a of list) {
-      const opt = document.createElement('option');
-      opt.value = a.id;
-      opt.textContent = a.label;
-      areaSelect.append(opt);
-    }
-    areaSelect.value = '';
-  }
-
   /** @param {DevPriority[]} priorities */
   function populatePriorities(priorities) {
     prioritySelect.replaceChildren();
@@ -282,7 +258,7 @@ export function buildDevRequestForm(opts) {
         title: deriveTitle(changeText),
         body: changeText,
         platform,
-        area: areaSelect.value,
+        area: detectDevRequestArea(platform),
         priority: Number(prioritySelect.value) || 2,
         attachments: attachments.map((a) => ({ dataUrl: a.dataUrl, filename: a.filename })),
       };
@@ -306,19 +282,12 @@ export function buildDevRequestForm(opts) {
   });
 
   void loadDevRequestMeta()
-    .then(({ areas: loadedAreas, priorities }) => {
-      areas = loadedAreas;
+    .then(({ priorities }) => {
       populatePriorities(priorities);
-      populateAreas();
       syncSubmitState();
     })
     .catch(() => {
-      areas = {
-        desktop: [{ id: 'events', label: 'Events' }, { id: 'network', label: 'Network' }],
-        mobile: [{ id: 'events', label: 'Events' }, { id: 'network', label: 'Contacts' }],
-      };
       populatePriorities(defaultPriorities());
-      populateAreas();
       syncSubmitState();
     });
 

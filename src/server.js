@@ -67,13 +67,16 @@ import { startFacebookEventsWeeklyScheduler } from './lib/events-finder-facebook
 import { startTelegramEventsPoller } from './lib/events-finder-telegram.js';
 import { startToolsContactsBackupScheduler, startDailyDataBackupScheduler } from './lib/data-backup-schedule.js';
 import { startLocalNewsScheduler } from './lib/local-news-scheduler.js';
+import { startBigEventsDailyRefreshScheduler } from './lib/events-finder-conference-watchlist-schedule.js';
 
 import { startGmailWeeklySummaryScheduler } from './lib/gmail-weekly-summary-synth.js';
 import eventsFinderTelegramRouter from './routes/events-finder-telegram.js';
+import eventsFinderBigEventsRouter from './routes/events-finder-big-events.js';
 import gmailWeeklySummaryRouter from './routes/gmail-weekly-summary.js';
 import networkRouter from './routes/network.js';
 import devNotesRouter from './routes/dev-notes.js';
 import devRequestsRouter from './routes/dev-requests.js';
+import devicePlaceRouter from './routes/device-place.js';
 import keepNotesRouter from './routes/keep-notes.js';
 import bookmarksRouter from './routes/bookmarks.js';
 import devAgentLogRouter from './routes/dev-agent-log.js';
@@ -179,6 +182,7 @@ app.use('/api/events-finder-gmail', eventsFinderGmailRouter);
 app.use('/api/events-finder-sources', eventsFinderSourcesRouter);
 app.use('/api/events-finder/events', eventsFinderEventsRouter);
 app.use('/api/events-finder/telegram', eventsFinderTelegramRouter);
+app.use('/api/events-finder/big-events', eventsFinderBigEventsRouter);
 app.use('/api/gmail-daily-summary', gmailWeeklySummaryRouter);
 app.use('/api/gmail-weekly-summary', gmailWeeklySummaryRouter); // legacy alias
 app.use('/api/network', networkRouter);
@@ -188,6 +192,7 @@ app.use('/api/local-news', localNewsRouter);
 app.use('/api/web-catalog', webCatalogRouter);
 app.use('/api/dev-notes', devNotesRouter);
 app.use('/api/dev-requests', devRequestsRouter);
+app.use('/api/device-place', devicePlaceRouter);
 app.use('/api/keep-notes', keepNotesRouter);
 app.use('/api/bookmarks', bookmarksRouter);
 app.use('/api/dev-agent-log', devAgentLogRouter);
@@ -237,6 +242,7 @@ app.listen(port, '0.0.0.0', () => {
   kick(() => startToolsContactsBackupScheduler(), 1100);
   kick(() => startDailyDataBackupScheduler(), 1125);
   kick(() => startLocalNewsScheduler(), 1150);
+  kick(() => startBigEventsDailyRefreshScheduler(), 1175);
   kick(() => startGmailWeeklySummaryScheduler(), 1250);
   kick(() => warmGoogleCalendarCache(), 1200);
   kick(() => startCalendarPresenceIndexScheduler(), 1500);

@@ -124,6 +124,73 @@ async function apifyFetch(token, apiPath, init = {}) {
   return { ok: r.ok, status: r.status, json, text };
 }
 
+const APIFY_TERMINAL_STATUSES = new Set([
+  'SUCCEEDED',
+  'FAILED',
+  'ABORTED',
+  'TIMED-OUT',
+]);
+
+/**
+ * @param {{ status?: string } | null} runData
+ */
+function apifyRunIsTerminal(runData) {
+  return Boolean(runData) && APIFY_TERMINAL_STATUSES.has(String(runData.status || '').toUpperCase());
+}
+
+/**
+ * @param {unknown} json
+ * @returns {object | null}
+ */
+function apifyRunFromJson(json) {
+  if (json && typeof json === 'object') {
+    const withData = /** @type {Record<string, any>} */ (json);
+    if (withData.data && typeof withData.data === 'object') return withData.data;
+    if (withData.id) return withData;
+  }
+  return null;
+}
+
+/**
+ * Fetch a single run object. Token exposes usageUsd / usageTotalUsd.
+ * @param {string} token
+ * @param {string} runId
+ * @param {number} [waitForFinish] seconds, capped at 60 by the API
+ */
+async function fetchApifyRun(token, runId, waitForFinish = 0) {
+  const wff = Number.isFinite(waitForFinish)
+    ? Math.max(0, Math.min(60, Math.round(waitForFinish)))
+    : 0;
+  const res = await apifyFetch(token, `/actor-runs/${encodeURIComponent(runId)}?waitForFinish=${wff}`);
+  return { res, run: apifyRunFromJson(res.json) };
+}
+
+/**
+ * Poll a run until it reaches a terminal status or the budget expires.
+ * The API's waitForFinish maxes out at 60s per call, so a multi-minute
+ * Facebook scrape must be polled — otherwise the dataset is read while the
+ * run is still RUNNING (partial/empty results, usageTotalUsd not yet accrued).
+ * @param {string} token
+ * @param {object} initialRun
+ * @param {number} budgetSecs
+ */
+async function waitForApifyRunFinish(token, initialRun, budgetSecs) {
+  let runData = initialRun;
+  const runId = runData?.id ? String(runData.id) : '';
+  if (!runId || apifyRunIsTerminal(runData)) return runData;
+  const deadline = Date.now() + Math.max(0, budgetSecs) * 1000;
+  while (Date.now() < deadline && !apifyRunIsTerminal(runData)) {
+    const remainingSecs = Math.ceil((deadline - Date.now()) / 1000);
+    const { res, run } = await fetchApifyRun(token, runId, Math.max(1, remainingSecs));
+    if (run) {
+      runData = run;
+    } else if (!res.ok) {
+      break;
+    }
+  }
+  return runData;
+}
+
 /**
  * Build searchQueries for Apify.
  * Prefer explicit scrape.searchQueries (editable in Settings). Env override wins.
@@ -552,11 +619,13 @@ async function runApifyFacebookScrape(env = process.env, opts = {}) {
     maxEvents,
   };
 
-  // Start a run (so we can read usageTotalUsd), wait, then fetch dataset items.
+  // Start a run, then poll to completion. waitForFinish caps at 60s server-side,
+  // so a multi-minute scrape must be polled — reading the dataset/usage before
+  // the run finishes yields partial events and a $0 usageTotalUsd.
   const startPath =
     `/acts/${encodeURIComponent(actorId)}/runs`
-    + `?waitForFinish=${wait}`
-    + `&timeout=${wait + 30}`
+    + `?waitForFinish=${Math.min(wait, 60)}`
+    + `&timeout=${wait + 60}`
     + `&maxTotalChargeUsd=${encodeURIComponent(String(maxChargeUsd))}`
     + `&maxItems=${encodeURIComponent(String(maxEvents))}`;
 
@@ -565,13 +634,9 @@ async function runApifyFacebookScrape(env = process.env, opts = {}) {
     body: JSON.stringify(input),
   });
 
-  const runData = runRes.json?.data && typeof runRes.json.data === 'object'
-    ? runRes.json.data
-    : runRes.json && typeof runRes.json === 'object' && runRes.json.id
-      ? runRes.json
-      : null;
+  let runData = apifyRunFromJson(runRes.json);
 
-  if (!runRes.ok || !runData?.defaultDatasetId) {
+  if (!runRes.ok || !runData?.id) {
     const errMsg =
       runRes.json?.error?.message
       || runRes.json?.error
@@ -582,6 +647,36 @@ async function runApifyFacebookScrape(env = process.env, opts = {}) {
       ok: false,
       error: 'apify_run_failed',
       hint: String(errMsg).slice(0, 240),
+      events: [],
+      fromCache: false,
+      searchQueries,
+      startUrls,
+    };
+  }
+
+  runData = await waitForApifyRunFinish(token, runData, wait);
+  const runStatus = String(runData.status || '').toUpperCase();
+
+  // Usage/costs can lag a beat after the run flips terminal — one short re-read.
+  if (runStatus === 'SUCCEEDED' && !(Number(runData.usageTotalUsd) > 0) && runData.id) {
+    await new Promise((resolve) => { setTimeout(resolve, 4000); });
+    const { run: refreshed } = await fetchApifyRun(token, String(runData.id));
+    if (refreshed) runData = refreshed;
+  }
+
+  if (!apifyRunIsTerminal(runData)) {
+    console.warn(
+      `[facebook-events] Apify run did not finish within ${wait}s (status=${runStatus || 'unknown'}); dataset may be partial`,
+    );
+  } else if (runStatus !== 'SUCCEEDED') {
+    console.warn(`[facebook-events] Apify run ended status=${runStatus}`);
+  }
+
+  if (!runData?.defaultDatasetId) {
+    return {
+      ok: false,
+      error: 'apify_run_failed',
+      hint: `Apify run has no dataset (status=${runStatus || 'unknown'})`,
       events: [],
       fromCache: false,
       searchQueries,
@@ -611,6 +706,20 @@ async function runApifyFacebookScrape(env = process.env, opts = {}) {
     : Array.isArray(itemsRes.json?.data)
       ? itemsRes.json.data
       : [];
+
+  // A failed/aborted run with an empty dataset must not overwrite a good cache.
+  if (!items.length && runStatus !== 'SUCCEEDED') {
+    return {
+      ok: false,
+      error: 'apify_run_failed',
+      hint: `Apify run ${runStatus || 'did not finish'} with no events`,
+      events: [],
+      fromCache: false,
+      searchQueries,
+      startUrls,
+    };
+  }
+
   /** @type {object[]} */
   const eventsRaw = [];
   const seen = new Set();
@@ -729,58 +838,6 @@ export async function fetchFacebookEvents(env = process.env, opts = {}) {
     const timeZone =
       String(env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim() || 'America/Los_Angeles';
     const events = filterEventsByIngestWindow(cache.events, scrape, timeZone);
-    // #region agent log
-    {
-      const debugEid = '2179524519500835';
-      const cacheHit = (cache.events || []).some(
-        (e) => String(e?.id || '').includes(debugEid) || String(e?.url || '').includes(debugEid),
-      );
-      const windowHit = events.some(
-        (e) => String(e?.id || '').includes(debugEid) || String(e?.url || '').includes(debugEid),
-      );
-      const hostUrls = (cache.startUrls || []).map((u) => String(u || '').toLowerCase());
-      const makerfarmPinned = hostUrls.some((u) => u.includes('makerfarm') || u.includes('maker-farm'));
-      const payload = {
-        sessionId: '02a20c',
-          runId: 'post-fix',
-          hypothesisId: 'A-B',
-          location: 'events-finder-facebook.js:cacheHit',
-          message: 'facebook cache vs debug event',
-        data: {
-          debugEid,
-          cacheHit,
-          windowHit,
-          cacheCount: cache.events?.length ?? 0,
-          windowCount: events.length,
-          cachedAt: cache.cachedAt || null,
-          chargeUsd: cache.chargeUsd ?? null,
-          makerfarmPinned,
-          potluckQueries: (cache.searchQueries || []).filter((q) =>
-            String(q || '').toLowerCase().includes('potluck'),
-          ),
-          sampleIds: (cache.events || []).slice(0, 5).map((e) => e?.id),
-        },
-        timestamp: Date.now(),
-      };
-      fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '02a20c' },
-        body: JSON.stringify(payload),
-      }).catch(() => {});
-      fetch('http://172.17.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '02a20c' },
-        body: JSON.stringify(payload),
-      }).catch(() => {});
-      import('node:fs').then((fs) => {
-        try {
-          fs.appendFileSync('/app/data/debug-02a20c.ndjson', `${JSON.stringify(payload)}\n`);
-        } catch {
-          /* ignore */
-        }
-      }).catch(() => {});
-    }
-    // #endregion
     return {
       ok: true,
       events,
@@ -848,56 +905,6 @@ export async function fetchFacebookEvents(env = process.env, opts = {}) {
 
   // Daily schedule owns paid runs — don't scrape on every sidebar open.
   if (facebookWeeklyEnabled(env) && cache?.events?.length) {
-    // #region agent log
-    {
-      const debugEids = ['2179524519500835', '1005106102497320'];
-      const hostUrls = (cache.startUrls || []).map((u) => String(u || '').toLowerCase());
-      /** @type {Record<string, boolean>} */
-      const cacheHits = {};
-      for (const debugEid of debugEids) {
-        cacheHits[debugEid] = (cache.events || []).some(
-          (e) => String(e?.id || '').includes(debugEid) || String(e?.url || '').includes(debugEid),
-        );
-      }
-      const payload = {
-        sessionId: '02a20c',
-        runId: 'tiny-garage-pre',
-        hypothesisId: 'A-B',
-        location: 'events-finder-facebook.js:staleDaily',
-        message: 'stale facebook cache vs debug event',
-        data: {
-          cacheHits,
-          cacheCount: cache.events?.length ?? 0,
-          cachedAt: cache.cachedAt || null,
-          chargeUsd: cache.chargeUsd ?? null,
-          townePinned: hostUrls.some((u) => u.includes('towne') || u.includes('the-towne-cycles')),
-          makerfarmPinned: hostUrls.some((u) => u.includes('makerfarm') || u.includes('maker-farm')),
-          potluckQueries: (cache.searchQueries || []).filter((q) =>
-            String(q || '').toLowerCase().includes('potluck'),
-          ),
-          sampleIds: (cache.events || []).slice(0, 5).map((e) => e?.id),
-        },
-        timestamp: Date.now(),
-      };
-      fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '02a20c' },
-        body: JSON.stringify(payload),
-      }).catch(() => {});
-      fetch('http://172.17.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '02a20c' },
-        body: JSON.stringify(payload),
-      }).catch(() => {});
-      import('node:fs').then((fs) => {
-        try {
-          fs.appendFileSync('/app/data/debug-02a20c.ndjson', `${JSON.stringify(payload)}\n`);
-        } catch {
-          /* ignore */
-        }
-      }).catch(() => {});
-    }
-    // #endregion
     return {
       ok: true,
       events: cache.events,

@@ -370,7 +370,16 @@ export function mountNetworkContactsMobile(root) {
     hasTaskFilter.wrapEl,
     defaultFilters,
   );
-  toolbar.append(search, filterBar);
+
+  const listActions = document.createElement('div');
+  listActions.className = 'mobile-network__toolbar-actions';
+  const newContactBtn = document.createElement('button');
+  newContactBtn.type = 'button';
+  newContactBtn.className = 'mobile-network__action';
+  newContactBtn.textContent = 'New contact';
+  listActions.append(newContactBtn);
+
+  toolbar.append(search, listActions, filterBar);
 
   const selectionBar = document.createElement('div');
   selectionBar.className = 'mobile-network__selection-bar';
@@ -645,6 +654,132 @@ export function mountNetworkContactsMobile(root) {
   }
 
   /**
+   * Mobile-friendly create-contact form (replaces desktop prompt()).
+   * @returns {Promise<object | null>} POST body for a new contact, or null when cancelled.
+   */
+  function openCreateContactSheet() {
+    return new Promise((resolve) => {
+      const backdrop = document.createElement('div');
+      backdrop.className = 'mobile-network__sheet-backdrop';
+      backdrop.setAttribute('role', 'presentation');
+
+      const sheet = document.createElement('div');
+      sheet.className = 'mobile-network__sheet';
+      sheet.setAttribute('role', 'dialog');
+      sheet.setAttribute('aria-modal', 'true');
+      sheet.setAttribute('aria-label', 'New contact');
+
+      const header = document.createElement('div');
+      header.className = 'mobile-network__sheet-head';
+      const title = document.createElement('h3');
+      title.className = 'mobile-network__sheet-title';
+      title.textContent = 'New contact';
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'mobile-network__sheet-close';
+      closeBtn.textContent = 'Cancel';
+      header.append(title, closeBtn);
+
+      const form = document.createElement('form');
+      form.className = 'mobile-network__form';
+
+      const nameField = field('Name', 'displayName', '', { placeholder: 'Full name' });
+      const kindsBox = document.createElement('div');
+      kindsBox.className = 'mobile-network__checks';
+      const kindsLabel = document.createElement('span');
+      kindsLabel.className = 'mobile-network__field-label';
+      kindsLabel.textContent = 'Type';
+      kindsBox.append(kindsLabel);
+      for (const k of ['friend', 'organizer', 'business', 'family']) {
+        const lab = document.createElement('label');
+        lab.className = 'mobile-network__check';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.name = `kind-${k}`;
+        cb.value = k;
+        cb.checked = k === 'friend';
+        lab.append(cb, document.createTextNode(` ${k[0].toUpperCase()}${k.slice(1)}`));
+        kindsBox.append(lab);
+      }
+
+      form.append(
+        nameField,
+        field('Nickname', 'nickname', ''),
+        field(NETWORK_LABELS.organization, 'org', ''),
+        field(NETWORK_LABELS.location, 'location', ''),
+        field('Relationship', 'relationshipStatus', '', { options: relationshipOptions }),
+        field('Status', 'rating', '', { options: RATINGS }),
+        kindsBox,
+      );
+
+      const saveRow = document.createElement('div');
+      saveRow.className = 'mobile-network__save-row';
+      const createBtn = document.createElement('button');
+      createBtn.type = 'submit';
+      createBtn.className = 'mobile-network__save';
+      createBtn.textContent = 'Create';
+      const createStatus = document.createElement('p');
+      createStatus.className = 'mobile-network__save-status';
+      createStatus.hidden = true;
+      saveRow.append(createBtn, createStatus);
+      form.append(saveRow);
+
+      let settled = false;
+      /** @param {object | null} body */
+      function finish(body) {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener('keydown', onKey);
+        backdrop.remove();
+        resolve(body);
+      }
+
+      /** @param {KeyboardEvent} e */
+      function onKey(e) {
+        if (e.key === 'Escape') finish(null);
+      }
+
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const fd = new FormData(form);
+        const displayName = String(fd.get('displayName') || '').trim();
+        if (!displayName) {
+          createStatus.hidden = false;
+          createStatus.textContent = 'Name is required';
+          createStatus.classList.add('mobile-network__save-status--err');
+          const input = nameField.querySelector('input');
+          if (input instanceof HTMLInputElement) input.focus();
+          return;
+        }
+        const kinds = ['friend', 'organizer', 'business', 'family'].filter(
+          (k) => form.querySelector(`[name="kind-${k}"]`)?.checked,
+        );
+        finish({
+          displayName,
+          nickname: String(fd.get('nickname') || '').trim(),
+          org: String(fd.get('org') || '').trim(),
+          location: String(fd.get('location') || '').trim(),
+          relationshipStatus: String(fd.get('relationshipStatus') || '').trim(),
+          rating: String(fd.get('rating') || '').trim(),
+          kinds: kinds.length ? kinds : ['friend'],
+        });
+      });
+
+      closeBtn.addEventListener('click', () => finish(null));
+      backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) finish(null);
+      });
+
+      sheet.append(header, form);
+      backdrop.append(sheet);
+      document.body.append(backdrop);
+      document.addEventListener('keydown', onKey);
+      const input = nameField.querySelector('input');
+      if (input instanceof HTMLInputElement) input.focus();
+    });
+  }
+
+  /**
    * @param {HTMLFormElement} form
    * @param {object} current
    */
@@ -868,9 +1003,6 @@ export function mountNetworkContactsMobile(root) {
 
     const linksBox = document.createElement('div');
     linksBox.className = 'mobile-network__pref-links';
-    const linksEmpty = document.createElement('p');
-    linksEmpty.className = 'mobile-network__empty';
-    linksEmpty.textContent = 'No preferred methods yet — tap Edit to add.';
 
     const editBox = document.createElement('div');
     editBox.className = 'mobile-network__pref-edit';
@@ -904,7 +1036,6 @@ export function mountNetworkContactsMobile(root) {
       linksBox.replaceChildren();
       const items = preferredOpenActions(contact);
       if (!items.length) {
-        linksBox.append(linksEmpty);
         return;
       }
       for (const a of items) {
@@ -1282,6 +1413,37 @@ export function mountNetworkContactsMobile(root) {
   clearSelectionBtn.addEventListener('click', () => {
     selectedContactIds.clear();
     renderList();
+  });
+
+  newContactBtn.addEventListener('click', async () => {
+    const draft = await openCreateContactSheet();
+    if (!draft) return;
+    newContactBtn.disabled = true;
+    status.hidden = false;
+    status.textContent = 'Creating…';
+    try {
+      const r = await fetch('/api/network/contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...draft, source: 'manual' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false || !j.contact) {
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      contacts.unshift(j.contact);
+      contacts.sort((a, b) =>
+        contactName(a).localeCompare(contactName(b), undefined, { sensitivity: 'base' }),
+      );
+      refreshLocationFilterOptions();
+      status.hidden = true;
+      showDetail(j.contact);
+    } catch (err) {
+      status.hidden = false;
+      status.textContent = `Could not create contact: ${err?.message || err}`;
+    } finally {
+      newContactBtn.disabled = false;
+    }
   });
 
   addToGroupBtn.addEventListener('click', async () => {

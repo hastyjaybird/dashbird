@@ -1,5 +1,5 @@
 const POLL_MS = 10 * 60 * 1000;
-const PURPLEAIR_HOME = 'https://www.purpleair.com/map';
+const AIR_QUALITY_MAP_HOME = 'https://www.windy.com/-Air-quality-pm2p5';
 
 /**
  * @param {HTMLElement} card
@@ -64,7 +64,7 @@ function applyPayload(card, mount, data) {
   const mapHref =
     typeof data.mapPageUrl === 'string' && /^https?:\/\//i.test(data.mapPageUrl)
       ? data.mapPageUrl
-      : PURPLEAIR_HOME;
+      : AIR_QUALITY_MAP_HOME;
 
   cap.replaceChildren();
   const line = document.createElement('span');
@@ -103,8 +103,9 @@ export function mountAirQuality(card, mount) {
 
   const iframe = document.createElement('iframe');
   iframe.className = 'air-quality__iframe';
-  iframe.title = 'Neighborhood air quality map';
+  iframe.title = 'Air quality map (Windy PM2.5)';
   iframe.setAttribute('loading', 'lazy');
+  iframe.setAttribute('allow', 'fullscreen');
   iframe.referrerPolicy = 'no-referrer-when-downgrade';
   clip.append(iframe);
   frame.append(clip);

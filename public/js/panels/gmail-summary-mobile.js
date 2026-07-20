@@ -83,24 +83,6 @@ function clampSeeMoreSection(sectionKey) {
 }
 
 /**
- * What changes on future refreshes — not how thumbs/guide storage works.
- * @param {'up' | 'down'} vibe
- * @param {string} [sectionKey]
- */
-function guideBehaviorExplainer(vibe, sectionKey) {
-  if (vibe === 'down') {
-    return (
-      'Next refresh should show fewer items matching this pattern. '
-      + 'Repeated 👎 on similar mail tightens the filter (Soft skip at 3×, Never show at 5×).'
-    );
-  }
-  if (clampSeeMoreSection(sectionKey) === 'show_these') {
-    return 'Next refresh is more likely to surface matching mail as action items.';
-  }
-  return 'Next refresh will rank similar mail higher in Daily Summary.';
-}
-
-/**
  * @param {string} sectionKey
  */
 function guideSaveMessageUp(sectionKey) {
@@ -247,19 +229,37 @@ async function openFeedbackSheet(scrollEl, item, vibe, showStatus) {
 
   let saveSection = vibe === 'down' ? 'prefer_less' : 'prefer_more';
 
-  const hint = document.createElement('p');
-  hint.className = 'mobile-mail__sheet-hint';
-  hint.textContent = guideBehaviorExplainer(vibe, saveSection);
-
-  const syncExplainer = () => {
-    hint.textContent = guideBehaviorExplainer(vibe, saveSection);
-  };
+  const fieldWrap = document.createElement('div');
+  fieldWrap.className = 'mobile-mail__sheet-field';
 
   const lineArea = document.createElement('textarea');
   lineArea.className = 'mobile-mail__sheet-input';
   lineArea.rows = 3;
   lineArea.spellcheck = true;
   lineArea.placeholder = 'Guide pattern…';
+
+  const pending = document.createElement('div');
+  pending.className = 'mobile-mail__sheet-pending';
+  const pendingLabel = document.createElement('span');
+  pendingLabel.className = 'mobile-mail__sheet-pending-label';
+  pendingLabel.textContent = 'Tailoring to this email';
+  const pendingDots = document.createElement('span');
+  pendingDots.className = 'daily-summary__chase-dots';
+  pendingDots.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < 3; i += 1) {
+    const dot = document.createElement('span');
+    dot.textContent = '.';
+    pendingDots.append(dot);
+  }
+  pending.append(pendingLabel, pendingDots);
+
+  fieldWrap.append(lineArea, pending);
+
+  const setFieldLoading = () => fieldWrap.classList.add('mobile-mail__sheet-field--loading');
+  const clearFieldLoading = () => fieldWrap.classList.remove('mobile-mail__sheet-field--loading');
+
+  let userEditedLine = false;
+  lineArea.addEventListener('input', () => { userEditedLine = true; });
 
   const msg = document.createElement('p');
   msg.className = 'mobile-mail__sheet-msg';
@@ -280,30 +280,33 @@ async function openFeedbackSheet(scrollEl, item, vibe, showStatus) {
     if (e.target === backdrop) close();
   });
 
-  sheet.append(head, itemLabel, hint, lineArea, msg, actions);
+  sheet.append(head, itemLabel, fieldWrap, msg, actions);
   backdrop.append(sheet);
   document.body.append(backdrop);
 
+  // No draft/example text until the tailored suggestion is ready — just the loader.
+  setFieldLoading();
   try {
     const r = await fetch('/api/gmail-daily-summary/guide/suggest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ vibe, item, skipLlm: true }),
+      body: JSON.stringify({ vibe, item }),
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) throw new Error(j.error || 'suggest_failed');
     saveSection = vibe === 'down' ? 'prefer_less' : clampSeeMoreSection(j.section);
-    lineArea.value = String(j.proposedLines || j.append || '').trim();
-    syncExplainer();
-    saveBtn.disabled = false;
-    lineArea.focus();
+    if (!userEditedLine) lineArea.value = String(j.proposedLines || j.append || '').trim();
   } catch (e) {
-    lineArea.value =
-      vibe === 'down'
-        ? '- FYI or automated notices that do not need a reply or decision'
-        : '- Important follow-ups that deserve a dedicated action item';
+    if (!userEditedLine) {
+      lineArea.value =
+        vibe === 'down'
+          ? '- FYI or automated notices that do not need a reply or decision'
+          : '- Important follow-ups that deserve a dedicated action item';
+    }
     msg.hidden = false;
     msg.textContent = 'Using a local draft — edit if needed.';
+  } finally {
+    clearFieldLoading();
     saveBtn.disabled = false;
     lineArea.focus();
   }
@@ -584,10 +587,21 @@ export function mountGmailSummaryMobile(root) {
 
     const primary = Array.isArray(item.sources) && item.sources.length ? item.sources[0] : null;
     const webUrl = gmailWebMessageUrl(primary) || String(item.replyUrl || '').trim();
+    // Intake mailboxes come in over IMAP, so threadId/messageId are decimal UIDs.
+    // A googlegmail:///cv?th=<decimal> link is unroutable and lands on nothing, so
+    // strip non-hex ids and let the native handoff fall back to the reliable
+    // rfc822msgid search deep link built from the web URL.
+    const nativeSource = primary ? { ...primary } : null;
+    if (nativeSource) {
+      const hexId = (v) => /^[0-9a-f]+$/i.test(String(v || '')) && !/^\d+$/.test(String(v || ''));
+      if (!hexId(nativeSource.threadId)) nativeSource.threadId = '';
+      if (!hexId(nativeSource.gmailId)) nativeSource.gmailId = '';
+      if (!hexId(nativeSource.messageId)) nativeSource.messageId = '';
+    }
     const openLink = document.createElement(webUrl ? 'a' : 'button');
     if (webUrl) {
       /** @type {HTMLAnchorElement} */ (openLink).href = isMobileGmailClient()
-        ? gmailMobileOpenUrl(webUrl, primary)
+        ? gmailMobileOpenUrl(webUrl, nativeSource)
         : webUrl;
       if (!isMobileGmailClient()) {
         /** @type {HTMLAnchorElement} */ (openLink).target = '_blank';
@@ -598,6 +612,7 @@ export function mountGmailSummaryMobile(root) {
       /** @type {HTMLButtonElement} */ (openLink).disabled = true;
     }
     openLink.className = 'mobile-mail__action mobile-mail__action--open';
+    openLink.title = 'Open in Gmail';
     openLink.textContent = 'Open';
 
     actions.append(upBtn, downBtn, dismissBtn, openLink);

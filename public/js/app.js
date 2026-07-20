@@ -35,20 +35,15 @@ async function loadConfigPreferLive() {
 function renderTopbarContext(el, place) {
   if (!el || !place) return;
 
-  const tz = (place.timeZone || '').trim() || '—';
   const loc = (place.shortLabel || '').trim() || '—';
   const live = place.source === 'device';
 
   el.replaceChildren();
-  const lineTz = document.createElement('span');
-  lineTz.className = 'topbar__context-line topbar__context-tz';
-  lineTz.textContent = tz;
-
   const lineLoc = document.createElement('span');
   lineLoc.className = 'topbar__context-line topbar__context-loc';
   lineLoc.textContent = live ? `${loc} · live` : loc;
 
-  el.append(lineTz, lineLoc);
+  el.append(lineLoc);
   el.title = live
     ? `Your current location (${place.label || loc}). Rain alert uses this point.`
     : 'Server default location (WEATHER_ZIP). Allow location in the browser for live updates.';
@@ -175,6 +170,14 @@ async function mountDeferredPanels(config) {
         );
       }),
     ),
+    mountWhenReady('air-quality', () =>
+      import('./panels/air-quality.js').then(({ mountAirQuality }) => {
+        mountAirQuality(
+          document.getElementById('air-quality-card'),
+          document.getElementById('mount-air-quality'),
+        );
+      }),
+    ),
     mountWhenReady('magnetosphere', () =>
       import('./panels/magnetosphere.js').then(({ mountMagnetosphere }) => {
         mountMagnetosphere(
@@ -199,7 +202,7 @@ async function mountDeferredPanels(config) {
       }),
     ),
     mountWhenReady('events-finder', () =>
-      import('./panels/events-finder.js?v=multi-dates-7').then(({ mountEventsFinder }) => {
+      import('./panels/events-finder.js?v=big-events-2').then(({ mountEventsFinder }) => {
         mountEventsFinder(document.getElementById('mount-events-finder'));
       }),
     ),
@@ -221,7 +224,7 @@ async function mainMobile() {
 
   const [{ mountViewModeToggle }, { mountMobileShell }] = await Promise.all([
     import('./panels/view-mode-toggle.js'),
-    import('./panels/mobile-shell.js?v=mobile-panels-20260717-4'),
+    import('./panels/mobile-shell.js?v=mobile-panels-20260719-3'),
   ]);
 
   mountViewModeToggle(document.getElementById('mount-view-mode'));
@@ -247,6 +250,10 @@ async function mainMobile() {
         subscribeDevicePlace((place) => renderTopbarContext(topbarEl, place));
         const { mountMobileAircraftHeader } = await import('./lib/mobile-aircraft-header.js');
         mountMobileAircraftHeader(document.getElementById('mount-topbar-aircraft'));
+        const { mountMobileWeatherHeader } = await import('./lib/mobile-weather-header.js');
+        mountMobileWeatherHeader(document.getElementById('mount-topbar-weather'));
+        const { mountMobileConditionAlerts } = await import('./lib/mobile-condition-alerts.js');
+        mountMobileConditionAlerts(document.getElementById('mount-topbar-conditions'));
       } catch (e) {
         console.error('Mobile location context failed:', e);
       }

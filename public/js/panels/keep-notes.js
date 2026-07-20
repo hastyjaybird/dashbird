@@ -26,9 +26,52 @@ export function mountKeepNotes(root) {
   composeBody.rows = 1;
   composeBody.maxLength = 20000;
 
+  const PIN_ICON =
+    '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H8c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1.03-1 1.03 1v-7H19v-2c-1.66 0-3-1.34-3-3z"/></svg>';
+  const IMAGE_ICON =
+    '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>';
+  const VOICE_ICON =
+    '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>';
+  const CHECKLIST_ICON =
+    '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M22 5.18L10.59 16.6l-4.24-4.24 1.41-1.41 2.83 2.83 10-10L22 5.18zM12 20c-4.41 0-8-3.59-8-8s3.59-8 8-8c1.57 0 3.04.46 4.28 1.25l1.45-1.45A9.9 9.9 0 0012 2C6.48 2 2 6.48 2 12s4.48 10 10 10c1.73 0 3.36-.44 4.78-1.22l-1.5-1.5A7.93 7.93 0 0112 20z"/></svg>';
+
   const composeActions = document.createElement('div');
   composeActions.className = 'keep-notes__compose-actions';
   composeActions.hidden = true;
+
+  const composePinBtn = document.createElement('button');
+  composePinBtn.type = 'button';
+  composePinBtn.className = 'keep-notes__btn keep-notes__btn--icon';
+  composePinBtn.title = 'Pin';
+  composePinBtn.setAttribute('aria-label', 'Pin');
+  composePinBtn.setAttribute('aria-pressed', 'false');
+  composePinBtn.innerHTML = PIN_ICON;
+
+  const composeImageInput = document.createElement('input');
+  composeImageInput.type = 'file';
+  composeImageInput.accept = 'image/jpeg,image/png,image/webp,image/gif';
+  composeImageInput.hidden = true;
+
+  const composeImageBtn = document.createElement('button');
+  composeImageBtn.type = 'button';
+  composeImageBtn.className = 'keep-notes__btn keep-notes__btn--icon';
+  composeImageBtn.title = 'Add image';
+  composeImageBtn.setAttribute('aria-label', 'Add image');
+  composeImageBtn.innerHTML = IMAGE_ICON;
+
+  const composeVoiceBtn = document.createElement('button');
+  composeVoiceBtn.type = 'button';
+  composeVoiceBtn.className = 'keep-notes__btn keep-notes__btn--icon';
+  composeVoiceBtn.title = 'Record voice note';
+  composeVoiceBtn.setAttribute('aria-label', 'Record voice note');
+  composeVoiceBtn.innerHTML = VOICE_ICON;
+
+  const composeChecklistBtn = document.createElement('button');
+  composeChecklistBtn.type = 'button';
+  composeChecklistBtn.className = 'keep-notes__btn keep-notes__btn--icon';
+  composeChecklistBtn.title = 'Checklist (coming soon)';
+  composeChecklistBtn.setAttribute('aria-label', 'Checklist (coming soon)');
+  composeChecklistBtn.innerHTML = CHECKLIST_ICON;
 
   const composeClose = document.createElement('button');
   composeClose.type = 'button';
@@ -40,8 +83,9 @@ export function mountKeepNotes(root) {
   composeSave.className = 'keep-notes__btn keep-notes__btn--primary';
   composeSave.textContent = 'Add';
 
-  composeActions.append(composeClose, composeSave);
+  composeActions.append(composePinBtn, composeImageBtn, composeVoiceBtn, composeChecklistBtn, composeClose, composeSave);
   compose.append(composeTitle, composeBody, composeActions);
+  document.body.append(composeImageInput);
 
   const scroll = document.createElement('div');
   scroll.className = 'keep-notes__scroll';
@@ -113,6 +157,12 @@ export function mountKeepNotes(root) {
   /** @type {Blob[]} */
   let recordChunks = [];
   /** @type {boolean} */
+  let composePinned = false;
+  /** @type {MediaRecorder | null} */
+  let composeRecorder = null;
+  /** @type {Blob[]} */
+  let composeRecordChunks = [];
+  /** @type {boolean} */
   let selectMode = false;
   /** @type {Set<string>} */
   const selectedIds = new Set();
@@ -120,6 +170,8 @@ export function mountKeepNotes(root) {
   let cardClickTimer = null;
   /** @type {boolean} */
   let noteDragActive = false;
+  /** @type {Map<string, ReturnType<typeof setTimeout>>} */
+  const pendingDeletes = new Map();
 
   /**
    * @param {object} a
@@ -466,6 +518,7 @@ export function mountKeepNotes(root) {
     card.addEventListener('click', () => {
       const id = card.dataset.id;
       if (noteDragActive) return;
+      if (pendingDeletes.has(id)) return;
       if (selectMode) {
         toggleSelected(id);
         return;
@@ -514,7 +567,71 @@ export function mountKeepNotes(root) {
       fillCard(card, note);
       othersGrid.append(card);
     }
+    for (const id of pendingDeletes.keys()) markCardPendingDelete(id);
     syncSelectBar();
+  }
+
+  /**
+   * @param {string} id
+   */
+  function markCardPendingDelete(id) {
+    const card = root.querySelector(`.keep-notes__card[data-id="${CSS.escape(id)}"]`);
+    if (!card) return;
+    card.classList.add('keep-notes__card--pending-delete');
+    if (card.querySelector('.keep-notes__card-undo')) return;
+    const undo = document.createElement('button');
+    undo.type = 'button';
+    undo.className = 'keep-notes__btn keep-notes__card-undo';
+    undo.textContent = 'Undo';
+    undo.setAttribute('aria-label', 'Undo delete');
+    undo.addEventListener('click', (e) => {
+      e.stopPropagation();
+      cancelPendingDelete(id);
+    });
+    card.append(undo);
+  }
+
+  /**
+   * @param {string} id
+   */
+  function beginPendingDelete(id) {
+    if (pendingDeletes.has(id)) return;
+    const timer = setTimeout(() => {
+      void performDelete(id);
+    }, 3000);
+    pendingDeletes.set(id, timer);
+    markCardPendingDelete(id);
+  }
+
+  /**
+   * @param {string} id
+   */
+  function cancelPendingDelete(id) {
+    const timer = pendingDeletes.get(id);
+    if (timer) clearTimeout(timer);
+    pendingDeletes.delete(id);
+    const card = root.querySelector(`.keep-notes__card[data-id="${CSS.escape(id)}"]`);
+    if (!card) return;
+    card.classList.remove('keep-notes__card--pending-delete');
+    card.querySelector('.keep-notes__card-undo')?.remove();
+  }
+
+  /**
+   * @param {string} id
+   */
+  async function performDelete(id) {
+    if (!pendingDeletes.has(id)) return;
+    pendingDeletes.delete(id);
+    try {
+      const r = await fetch(`/api/keep-notes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.error || 'delete failed');
+      notes = notes.filter((n) => n.id !== id);
+      renderNotes();
+    } catch (err) {
+      showStatus(String(err?.message || err), true);
+      cancelPendingDelete(id);
+    }
   }
 
   async function loadNotes() {
@@ -551,6 +668,69 @@ export function mountKeepNotes(root) {
     }
   }
 
+  /**
+   * @param {Blob} file
+   * @returns {Promise<string>}
+   */
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(/** @type {string} */ (reader.result));
+      reader.onerror = () => reject(reader.error || new Error('read failed'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /**
+   * @param {{ title?: string, body?: string, pinned?: boolean }} fields
+   * @returns {Promise<object>}
+   */
+  async function createNote(fields) {
+    const r = await fetch('/api/keep-notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(fields),
+    });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error || 'create failed');
+    notes.push(data.note);
+    sortNotes();
+    return data.note;
+  }
+
+  /**
+   * @param {string} noteId
+   * @param {object} payload
+   * @returns {Promise<object>}
+   */
+  async function uploadAttachment(noteId, payload) {
+    const r = await fetch(`/api/keep-notes/${encodeURIComponent(noteId)}/attachment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error || 'upload failed');
+    notes = notes.map((n) => (n.id === data.note.id ? data.note : n));
+    if (editingNote?.id === noteId) {
+      editingNote = data.note;
+      renderEditorMedia(data.note);
+    }
+    return data.note;
+  }
+
+  function resetCompose() {
+    composeTitle.value = '';
+    composeBody.value = '';
+    composePinned = false;
+    composePinBtn.setAttribute('aria-pressed', 'false');
+    composePinBtn.title = 'Pin';
+    composePinBtn.setAttribute('aria-label', 'Pin');
+    composeVoiceBtn.classList.remove('keep-notes__btn--recording');
+    composeVoiceBtn.title = 'Record voice note';
+    expandCompose(false);
+  }
+
   function expandCompose(on) {
     compose.classList.toggle('keep-notes__compose--expanded', on);
     composeActions.hidden = !on;
@@ -565,10 +745,116 @@ export function mountKeepNotes(root) {
   composeTitle.addEventListener('focus', () => expandCompose(true));
   composeClose.addEventListener('click', (e) => {
     e.stopPropagation();
-    composeTitle.value = '';
-    composeBody.value = '';
+    if (composeRecorder && composeRecorder.state !== 'inactive') composeRecorder.stop();
     composeBody.blur();
-    expandCompose(false);
+    resetCompose();
+  });
+
+  composePinBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    composePinned = !composePinned;
+    composePinBtn.setAttribute('aria-pressed', composePinned ? 'true' : 'false');
+    composePinBtn.title = composePinned ? 'Unpin' : 'Pin';
+    composePinBtn.setAttribute('aria-label', composePinned ? 'Unpin' : 'Pin');
+  });
+
+  composeImageBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    expandCompose(true);
+    composeImageInput.click();
+  });
+
+  composeChecklistBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    expandCompose(true);
+    showStatus('Checklists are coming soon');
+  });
+
+  composeImageInput.addEventListener('change', async () => {
+    const file = composeImageInput.files?.[0];
+    composeImageInput.value = '';
+    if (!file) return;
+    if (file.size > 8_000_000) {
+      showStatus('Image too large (max 8 MB)', true);
+      return;
+    }
+    composeImageBtn.disabled = true;
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      const note = await createNote({
+        title: composeTitle.value.trim(),
+        body: composeBody.value.trim(),
+        pinned: composePinned,
+      });
+      await uploadAttachment(note.id, {
+        kind: 'image',
+        dataUrl,
+        mimeType: file.type,
+        filename: file.name,
+      });
+      renderNotes();
+      resetCompose();
+      showStatus('');
+    } catch (e) {
+      showStatus(String(e?.message || e), true);
+    } finally {
+      composeImageBtn.disabled = false;
+    }
+  });
+
+  composeVoiceBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (composeRecorder && composeRecorder.state === 'recording') {
+      composeRecorder.stop();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      showStatus('Microphone not available in this browser', true);
+      return;
+    }
+    expandCompose(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      composeRecordChunks = [];
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+      composeRecorder = new MediaRecorder(stream, { mimeType });
+      composeRecorder.ondataavailable = (ev) => {
+        if (ev.data.size > 0) composeRecordChunks.push(ev.data);
+      };
+      composeRecorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        composeVoiceBtn.classList.remove('keep-notes__btn--recording');
+        composeVoiceBtn.title = 'Record voice note';
+        const blob = new Blob(composeRecordChunks, { type: composeRecorder?.mimeType || 'audio/webm' });
+        composeRecorder = null;
+        if (blob.size === 0) return;
+        try {
+          const dataUrl = await readFileAsDataUrl(blob);
+          const note = await createNote({
+            title: composeTitle.value.trim(),
+            body: composeBody.value.trim(),
+            pinned: composePinned,
+          });
+          await uploadAttachment(note.id, {
+            kind: 'voice',
+            dataUrl,
+            mimeType: blob.type || 'audio/webm',
+          });
+          renderNotes();
+          resetCompose();
+          showStatus('Voice note saved');
+        } catch (err) {
+          showStatus(String(err?.message || err), true);
+        }
+      };
+      composeRecorder.start();
+      composeVoiceBtn.classList.add('keep-notes__btn--recording');
+      composeVoiceBtn.title = 'Stop recording';
+    } catch (err) {
+      showStatus(String(err?.message || err), true);
+    }
   });
 
   composeSave.addEventListener('click', async () => {
@@ -577,19 +863,9 @@ export function mountKeepNotes(root) {
     if (!title && !body) return;
     composeSave.disabled = true;
     try {
-      const r = await fetch('/api/keep-notes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, body }),
-      });
-      const data = await r.json();
-      if (!data.ok) throw new Error(data.error || 'create failed');
-      notes.push(data.note);
-      sortNotes();
+      await createNote({ title, body, pinned: composePinned });
       renderNotes();
-      composeTitle.value = '';
-      composeBody.value = '';
-      expandCompose(false);
+      resetCompose();
       showStatus('');
     } catch (e) {
       showStatus(String(e?.message || e), true);
@@ -823,23 +1099,12 @@ export function mountKeepNotes(root) {
     syncPinEditorBtn(refreshed);
   });
 
-  deleteBtn.addEventListener('click', async (e) => {
+  deleteBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (!editingNote) return;
     const noteId = editingNote.id;
-    if (!window.confirm('Delete this note?')) return;
-    try {
-      const r = await fetch(`/api/keep-notes/${encodeURIComponent(noteId)}`, {
-        method: 'DELETE',
-      });
-      const data = await r.json();
-      if (!data.ok) throw new Error(data.error || 'delete failed');
-      notes = notes.filter((n) => n.id !== noteId);
-      renderNotes();
-      closeEditor();
-    } catch (err) {
-      showStatus(String(err?.message || err), true);
-    }
+    closeEditor();
+    beginPendingDelete(noteId);
   });
 
   imageBtn.addEventListener('click', (e) => {

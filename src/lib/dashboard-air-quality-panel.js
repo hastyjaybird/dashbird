@@ -1,34 +1,74 @@
 /**
- * Sidebar Air Quality panel: US AQI at WEATHER_ZIP / WEATHER_LAT+LON; PurpleAir map when above threshold.
+ * Sidebar Air Quality panel: US AQI at WEATHER_ZIP / WEATHER_LAT+LON; embeddable air-quality map when above threshold.
+ *
+ * Map: Windy PM2.5 overlay. PurpleAir's current map (map.purpleair.com) blocks iframe embedding
+ * ("Unsupported browser"), so we use Windy's embed which is purpose-built for iframes and needs no key.
  */
 import { fetchOpenMeteoCurrentUsAqi, usAqiCategoryStyle } from './dashboard-air-quality.js';
 import { resolveDashboardWeatherLatLon } from './hero-weather-location.js';
 
-/** Show panel when current US AQI is strictly above this value. */
-export const AQI_SHOW_THRESHOLD = 80;
+/** Show panel when current US AQI is strictly above this value (>50 = Moderate or worse). */
+export const AQI_SHOW_THRESHOLD = 50;
 
 /**
+ * Windy embed showing the PM2.5 (fine particulate) air-quality overlay centered on the location.
  * @param {number} lat
  * @param {number} lon
  * @param {number} [zoom]
  */
-export function purpleAirMapEmbedUrl(lat, lon, zoom = 12) {
+export function airQualityMapEmbedUrl(lat, lon, zoom = 8) {
   const la = Number(lat);
   const lo = Number(lon);
-  const z = Math.min(14, Math.max(5, Math.round(Number(zoom) || 11)));
+  const z = Math.min(11, Math.max(4, Math.round(Number(zoom) || 8)));
   if (!Number.isFinite(la) || !Number.isFinite(lo)) {
-    return 'https://map.purpleair.com/map';
+    return 'https://embed.windy.com/embed2.html?overlay=pm2p5&type=map';
   }
-  return `https://map.purpleair.com/map?opt=1/loc/${la.toFixed(4)}/${lo.toFixed(4)}/${z}`;
+  const p = new URLSearchParams({
+    lat: la.toFixed(4),
+    lon: lo.toFixed(4),
+    detailLat: la.toFixed(4),
+    detailLon: lo.toFixed(4),
+    zoom: String(z),
+    level: 'surface',
+    overlay: 'pm2p5',
+    menu: '',
+    message: '',
+    marker: 'true',
+    calendar: '',
+    pressure: '',
+    type: 'map',
+    location: 'coordinates',
+    detail: '',
+    metricWind: 'mph',
+    metricTemp: '°F',
+    radarRange: '-1',
+  });
+  return `https://embed.windy.com/embed2.html?${p.toString()}`;
+}
+
+/**
+ * Windy full-site air-quality page (opens in a new tab for the "Full map" link).
+ * @param {number} lat
+ * @param {number} lon
+ * @param {number} [zoom]
+ */
+export function airQualityMapPageUrl(lat, lon, zoom = 8) {
+  const la = Number(lat);
+  const lo = Number(lon);
+  const z = Math.min(11, Math.max(4, Math.round(Number(zoom) || 8)));
+  if (!Number.isFinite(la) || !Number.isFinite(lo)) {
+    return 'https://www.windy.com/-Air-quality-pm2p5';
+  }
+  return `https://www.windy.com/-Air-quality-pm2p5?pm2p5,${la.toFixed(3)},${lo.toFixed(3)},${z}`;
 }
 
 function airQualityDisabled(env = process.env) {
   return String(env.AIR_QUALITY || '').trim() === '0';
 }
 
-/** Default on until unset — local testing visibility. */
+/** Off by default — panel stays hidden until AQI is Moderate or worse. Set AIR_QUALITY_FORCE_SHOW=1 to force it on for testing. */
 function airQualityForceShow(env = process.env) {
-  const v = String(env.AIR_QUALITY_FORCE_SHOW ?? '1').trim().toLowerCase();
+  const v = String(env.AIR_QUALITY_FORCE_SHOW ?? '0').trim().toLowerCase();
   return v === '1' || v === 'true' || v === 'yes';
 }
 
@@ -43,8 +83,8 @@ export async function getAirQualityPanelPayload() {
   const forceShow = airQualityForceShow();
   const { lat, lon, zip } = await resolveDashboardWeatherLatLon();
   const timeZone = (process.env.WEATHER_TIME_ZONE || '').trim() || 'America/Los_Angeles';
-  const mapUrl = purpleAirMapEmbedUrl(lat, lon);
-  const mapPageUrl = mapUrl;
+  const mapUrl = airQualityMapEmbedUrl(lat, lon);
+  const mapPageUrl = airQualityMapPageUrl(lat, lon);
 
   const aqi = await fetchOpenMeteoCurrentUsAqi({ lat, lon, timeZone });
   if (!aqi.ok) {
@@ -80,8 +120,9 @@ export async function getAirQualityPanelPayload() {
     timeIso: aqi.timeIso,
     mapUrl,
     mapPageUrl,
-    productUrl: 'https://www.purpleair.com/map',
+    productUrl: 'https://www.windy.com/-Air-quality-pm2p5',
     aqiSource: 'Open-Meteo air-quality API (US EPA AQI)',
+    mapSource: 'Windy PM2.5 overlay',
     threshold: AQI_SHOW_THRESHOLD,
   };
 }

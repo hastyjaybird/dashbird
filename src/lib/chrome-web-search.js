@@ -94,6 +94,30 @@ function decodeBraveImageProxy(proxyUrl) {
 }
 
 /**
+ * Bing wraps results in bing.com/ck/a redirects; the destination is base64url in
+ * the `u` param (prefixed with "a1"). Decode back to the real URL.
+ * @param {string} href
+ * @returns {string}
+ */
+function decodeBingRedirect(href) {
+  const s = String(href || '').trim();
+  if (!s) return s;
+  try {
+    const u = new URL(s);
+    if (!/(^|\.)bing\.com$/i.test(u.hostname)) return s;
+    const p = u.searchParams.get('u');
+    if (!p) return s;
+    let b64 = p.startsWith('a1') ? p.slice(2) : p;
+    b64 = b64.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const decoded = Buffer.from(b64, 'base64').toString('utf8');
+    return /^https?:\/\//i.test(decoded) ? decoded : s;
+  } catch {
+    return s;
+  }
+}
+
+/**
  * @param {string} url
  */
 function isNoiseHost(url) {
@@ -155,6 +179,10 @@ export async function searchGoogleResultUrls(query, limit = 6, env = process.env
 }
 
 /**
+ * Web search via headless Chrome. Tries Brave first and falls back to Bing when
+ * Brave returns nothing or serves a bot-challenge (HTTP 429 / "not a bot").
+ * Multi-engine keeps the Big Events preview / conference research reliable even
+ * when one engine rate-limits the container.
  * @param {string} query
  * @param {number} [limit]
  * @param {NodeJS.ProcessEnv} [env]
@@ -166,6 +194,18 @@ export async function searchChromeResultUrls(query, limit = 6, env = process.env
   if (!q) return [];
   const max = Math.max(1, Math.min(12, Number(limit) || 6));
 
+  const brave = await braveSearchResultUrls(q, max).catch(() => []);
+  if (brave.length) return brave;
+  const bing = await bingSearchResultUrls(q, max).catch(() => []);
+  return bing;
+}
+
+/**
+ * @param {string} q
+ * @param {number} max
+ * @returns {Promise<string[]>}
+ */
+function braveSearchResultUrls(q, max) {
   return withPageSlot(async () => {
     let context = null;
     try {
@@ -179,9 +219,15 @@ export async function searchChromeResultUrls(query, limit = 6, env = process.env
       const page = await context.newPage();
       page.setDefaultTimeout(14_000);
       const searchUrl = `https://search.brave.com/search?q=${encodeURIComponent(q)}&source=web`;
-      await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 14_000 });
+      const resp = await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 14_000 });
+      // Bot-challenge / rate-limit → bail so the caller can fall back to Bing.
+      if (resp && resp.status() === 429) return [];
       await page.waitForSelector('#results, main a[href^="http"]', { timeout: 8_000 }).catch(() => {});
       await page.waitForTimeout(400);
+      const challenged = await page
+        .evaluate(() => /not a bot|verify you're|verifying you/i.test(document.body?.innerText || ''))
+        .catch(() => false);
+      if (challenged) return [];
 
       const raw = await page.evaluate((lim) => {
         /** @type {string[]} */
@@ -218,23 +264,81 @@ export async function searchChromeResultUrls(query, limit = 6, env = process.env
         return out;
       }, max * 3);
 
-      /** @type {string[]} */
-      const urls = [];
-      for (const href of raw) {
-        if (!href || isNoiseHost(href)) continue;
-        if (isLowValueResultUrl(href)) continue;
-        if (urls.includes(href)) continue;
-        urls.push(href);
-        if (urls.length >= max) break;
-      }
-      return urls;
+      return filterResultUrls(raw, max);
     } catch (e) {
-      console.warn('[chrome-web-search] web search failed', String(e?.message || e).slice(0, 160));
+      console.warn('[chrome-web-search] brave web search failed', String(e?.message || e).slice(0, 160));
       return [];
     } finally {
       await context?.close().catch(() => {});
     }
   });
+}
+
+/**
+ * @param {string} q
+ * @param {number} max
+ * @returns {Promise<string[]>}
+ */
+function bingSearchResultUrls(q, max) {
+  return withPageSlot(async () => {
+    let context = null;
+    try {
+      const b = await getBrowser();
+      context = await b.newContext({
+        viewport: { width: 1280, height: 900 },
+        userAgent: BROWSER_UA,
+        locale: 'en-US',
+        extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' },
+      });
+      const page = await context.newPage();
+      page.setDefaultTimeout(14_000);
+      const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(q)}&setlang=en-us&cc=US`;
+      await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 14_000 });
+      await page.waitForSelector('#b_results', { timeout: 8_000 }).catch(() => {});
+      await page.waitForTimeout(300);
+
+      const raw = await page.evaluate((lim) => {
+        /** @type {string[]} */
+        const out = [];
+        const push = (href) => {
+          const s = String(href || '').trim();
+          if (!s || !/^https?:\/\//i.test(s)) return;
+          if (out.includes(s)) return;
+          out.push(s);
+        };
+        for (const a of document.querySelectorAll('#b_results h2 a, #b_results .b_algo a[href^="http"]')) {
+          push(/** @type {HTMLAnchorElement} */ (a).href);
+          if (out.length >= lim) break;
+        }
+        return out;
+      }, max * 3);
+
+      return filterResultUrls(raw.map(decodeBingRedirect), max);
+    } catch (e) {
+      console.warn('[chrome-web-search] bing web search failed', String(e?.message || e).slice(0, 160));
+      return [];
+    } finally {
+      await context?.close().catch(() => {});
+    }
+  });
+}
+
+/**
+ * @param {string[]} raw
+ * @param {number} max
+ * @returns {string[]}
+ */
+function filterResultUrls(raw, max) {
+  /** @type {string[]} */
+  const urls = [];
+  for (const href of raw) {
+    if (!href || isNoiseHost(href)) continue;
+    if (isLowValueResultUrl(href)) continue;
+    if (urls.includes(href)) continue;
+    urls.push(href);
+    if (urls.length >= max) break;
+  }
+  return urls;
 }
 
 /**
@@ -395,4 +499,59 @@ export async function searchChromeImageResults(query, limit = 10, opts = {}, env
 export async function searchGoogleImages(query, limit = 10, env = process.env) {
   const rows = await searchChromeImageResults(query, limit, {}, env);
   return rows.map((r) => r.url);
+}
+
+/**
+ * Capture an above-the-fold PNG screenshot of a web page (for Big Events preview).
+ * @param {string} url
+ * @param {{ width?: number, height?: number, fullPage?: boolean, timeoutMs?: number }} [opts]
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<Buffer | null>}
+ */
+export async function capturePageScreenshot(url, opts = {}, env = process.env) {
+  if (!chromeSearchEnabled(env)) return null;
+  const href = String(url || '').trim();
+  if (!/^https?:\/\//i.test(href)) return null;
+  const width = Math.max(320, Math.min(1920, Number(opts.width) || 1200));
+  const height = Math.max(240, Math.min(2200, Number(opts.height) || 750));
+  const timeoutMs = Math.max(5_000, Math.min(30_000, Number(opts.timeoutMs) || 18_000));
+
+  return withPageSlot(async () => {
+    let context = null;
+    try {
+      const b = await getBrowser();
+      context = await b.newContext({
+        viewport: { width, height },
+        userAgent: BROWSER_UA,
+        locale: 'en-US',
+        deviceScaleFactor: 1,
+        extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' },
+      });
+      const page = await context.newPage();
+      page.setDefaultTimeout(timeoutMs);
+      await page.goto(href, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+      await page.waitForTimeout(1400);
+      // Strip cookie / consent overlays that otherwise cover the hero image.
+      await page
+        .evaluate(() => {
+          /** @type {Element[]} */
+          const kill = [];
+          const sel =
+            '[id*="cookie" i],[class*="cookie" i],[id*="consent" i],[class*="consent" i],[class*="gdpr" i],[id*="gdpr" i]';
+          for (const el of document.querySelectorAll(sel)) {
+            const r = el.getBoundingClientRect();
+            if (r.height > 40 && r.width > 200) kill.push(el);
+          }
+          for (const el of kill.slice(0, 8)) el.remove();
+        })
+        .catch(() => {});
+      const buf = await page.screenshot({ type: 'png', fullPage: Boolean(opts.fullPage) });
+      return Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+    } catch (e) {
+      console.warn('[chrome-web-search] screenshot failed', String(e?.message || e).slice(0, 160));
+      return null;
+    } finally {
+      await context?.close().catch(() => {});
+    }
+  });
 }

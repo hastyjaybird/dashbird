@@ -33,18 +33,7 @@ export function mountTasks(root, config = {}) {
   randomBtn.className = 'tasks-panel__header-btn';
   randomBtn.textContent = TASKS_LABELS.random;
 
-  const openLink = document.createElement('a');
-  openLink.className = 'tasks-panel__open';
-  openLink.target = '_blank';
-  openLink.rel = 'noopener noreferrer';
-  openLink.textContent = TASKS_LABELS.openTaskManager;
-  const publicUrl = String(config.vikunjaPublicUrl || '').trim();
-  if (publicUrl) {
-    openLink.href = publicUrl;
-  } else {
-    openLink.hidden = true;
-  }
-  headerActions.append(randomBtn, openLink);
+  headerActions.append(randomBtn);
   header.append(headerActions);
 
   const vikunjaConfigured = config.vikunjaConfigured !== false;

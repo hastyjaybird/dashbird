@@ -15,12 +15,150 @@ const EVENTS_CACHE_MAX_MS = 6 * 60 * 60 * 1000;
 const CRITERIA_CACHE_KEY = 'events-finder:criteria';
 const CRITERIA_CACHE_MAX_MS = 6 * 60 * 60 * 1000;
 const SHOW_SKIPPED_KEY = 'dashbird.events.showSkipped';
+const TITLE_OVERRIDES_KEY = 'dashbird.events.titleOverrides';
 
 const DEFAULT_GOOGLE_CALENDAR = {
   name: 'Random Events',
   authuser: '',
   src: '',
 };
+
+/** @type {Promise<any> | null} */
+let leafletPromise = null;
+
+/**
+ * @returns {Promise<any>}
+ */
+function loadLeaflet() {
+  if (leafletPromise) return leafletPromise;
+  leafletPromise = (async () => {
+    if (!document.querySelector('link[data-dashbird-leaflet]')) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = '/vendor/leaflet/leaflet.css';
+      link.dataset.dashbirdLeaflet = '1';
+      document.head.append(link);
+    }
+    if (/** @type {any} */ (window).L) return /** @type {any} */ (window).L;
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = '/vendor/leaflet/leaflet.js';
+      s.async = true;
+      s.onload = () => resolve(undefined);
+      s.onerror = () => reject(new Error('leaflet_load_failed'));
+      document.head.append(s);
+    });
+    const L = /** @type {any} */ (window).L;
+    if (!L) throw new Error('leaflet_missing');
+    return L;
+  })();
+  return leafletPromise;
+}
+
+/**
+ * @returns {Record<string, string>}
+ */
+function readTitleOverrides() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TITLE_OVERRIDES_KEY) || '{}');
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * @param {Record<string, string>} overrides
+ */
+function writeTitleOverrides(overrides) {
+  try {
+    localStorage.setItem(TITLE_OVERRIDES_KEY, JSON.stringify(overrides || {}));
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Suggest taste lines seeded from an event for the thumbs up/down modal.
+ * @param {object} ev
+ * @param {'up' | 'down'} vibe
+ * @returns {string}
+ */
+function suggestPreferenceLines(ev, vibe) {
+  const title = String(ev.title || '').trim();
+  const venue = String(ev.venue || ev.location || '').trim();
+  const desc = String(ev.description || ev.raw?.description || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const lines = [];
+  if (title) {
+    const shortTitle = title
+      .replace(/\s*[-–—|].*$/, '')
+      .replace(/\s*\([^)]*\)\s*$/, '')
+      .trim()
+      .slice(0, 60);
+    if (shortTitle) lines.push(shortTitle);
+  }
+  const blob = `${title} ${desc}`;
+  const hits = blob.match(
+    /\b(hack[- ]?a[- ]?thons?|climate|sustainability|immersive|acro|yoga|founder|startup|ai|comedy|circus|burlesque|queer|pride|maker|festival|salon|retreat|nightlife)\b/gi,
+  );
+  if (hits) {
+    for (const h of hits) {
+      const n = h.toLowerCase();
+      if (!lines.some((l) => l.toLowerCase() === n)) lines.push(n);
+      if (lines.length >= 5) break;
+    }
+  }
+  if (vibe === 'down' && venue) {
+    const vShort = venue.split(',')[0].trim().slice(0, 40);
+    if (vShort && !lines.some((l) => l.toLowerCase() === vShort.toLowerCase())) {
+      lines.push(vShort);
+    }
+  }
+  return lines.slice(0, 6).join('\n');
+}
+
+/**
+ * Append unique lines to a newline-separated taste list.
+ * @param {string} existing
+ * @param {string} additions
+ * @returns {string}
+ */
+function mergeTasteLines(existing, additions) {
+  const seen = new Set();
+  const out = [];
+  for (const line of String(existing || '')
+    .split(/\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)) {
+    const key = line.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(line);
+  }
+  for (const line of String(additions || '')
+    .split(/\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)) {
+    const key = line.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+/**
+ * @param {string} block
+ * @returns {string[]}
+ */
+function tasteLinesFromBlock(block) {
+  return String(block || '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/#.*$/, '').trim())
+    .filter((line) => line && !line.startsWith('//'));
+}
 
 /**
  * @returns {boolean}
@@ -332,7 +470,15 @@ export function mountEventsFinderMobile(root) {
   filterToggle.innerHTML =
     '<span class="mobile-events__filter-toggle-label">Filters</span><span class="mobile-events__filter-toggle-arrow" aria-hidden="true">▾</span>';
 
-  toolbar.append(filterToggle);
+  const viewBtn = document.createElement('button');
+  viewBtn.type = 'button';
+  viewBtn.className = 'mobile-events__view-toggle';
+  viewBtn.textContent = 'Map';
+  viewBtn.setAttribute('aria-pressed', 'false');
+  viewBtn.setAttribute('aria-label', 'Open events map');
+  viewBtn.title = 'Open events on a map';
+
+  toolbar.append(filterToggle, viewBtn);
 
   const filterPanel = document.createElement('div');
   filterPanel.className = 'mobile-events__filters';
@@ -437,7 +583,7 @@ export function mountEventsFinderMobile(root) {
   conferenceToggle.className = 'mobile-events__conferences-toggle';
   conferenceToggle.setAttribute('aria-expanded', 'false');
   conferenceToggle.setAttribute('aria-haspopup', 'dialog');
-  conferenceToggle.textContent = 'Big conferences & festivals';
+  conferenceToggle.textContent = 'Big events';
 
   const conferenceInput = document.createElement('textarea');
   conferenceInput.className = 'mobile-events__conferences-input';
@@ -527,10 +673,7 @@ export function mountEventsFinderMobile(root) {
 
   function syncConferenceToggleLabel() {
     const count = readConferenceWatchlistFromForm().length;
-    conferenceToggle.textContent =
-      count > 0
-        ? `Big conferences & festivals (${count})`
-        : 'Big conferences & festivals';
+    conferenceToggle.textContent = count > 0 ? `Big events (${count})` : 'Big events';
   }
 
   /**
@@ -566,37 +709,91 @@ export function mountEventsFinderMobile(root) {
     return item.displayActive ? 'Active' : 'Inactive';
   }
 
+  function bigEventTicketText(item) {
+    if (item.researching) return 'Looking up…';
+    if (item.ticketLabel) return String(item.ticketLabel);
+    if (item.ticketPrice) return String(item.ticketPrice);
+    if (item.dataFetched === 'failed' || item.error) return 'Not found';
+    return '—';
+  }
+
   /**
    * @param {object} item
    * @returns {HTMLElement}
    */
-  function buildConferenceWatchStatusRow(item) {
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'events-finder__conference-status-row';
-    row.title = 'View details';
+  function buildBigEventRow(item) {
+    const row = document.createElement('div');
+    row.className = 'events-finder__big-events-row events-finder__big-events-row--mobile';
 
+    const main = document.createElement('button');
+    main.type = 'button';
+    main.className = 'events-finder__big-events-mobile-main';
+    main.title = 'View details';
+    if (item.screenshotUrl) {
+      const thumb = document.createElement('img');
+      thumb.className = 'events-finder__big-events-thumb';
+      thumb.src = String(item.screenshotUrl);
+      thumb.alt = '';
+      thumb.loading = 'lazy';
+      main.append(thumb);
+    }
+    const textWrap = document.createElement('div');
+    textWrap.className = 'events-finder__big-events-mobile-text';
     const name = document.createElement('span');
-    name.className = 'events-finder__conference-status-name';
-    name.textContent = String(item.title || item.query || 'Conference');
+    name.className = 'events-finder__big-events-name-text';
+    name.textContent = String(item.title || item.query || 'Big event');
+    const when = document.createElement('span');
+    when.className = 'events-finder__big-events-mobile-when muted';
+    when.textContent = String(item.whenLabel || (item.researching ? 'Looking up…' : 'Dates TBD'));
+    const priceLine = document.createElement('span');
+    priceLine.className = 'events-finder__big-events-mobile-price';
+    const price = document.createElement('span');
+    price.textContent = item.priceEstimated && item.ticketPrice
+      ? String(item.ticketPrice)
+      : bigEventTicketText(item);
+    priceLine.append(price);
+    if (item.priceEstimated) {
+      const badge = document.createElement('span');
+      badge.className = 'events-finder__big-events-badge events-finder__big-events-badge--est';
+      badge.textContent = 'estimated from last year';
+      priceLine.append(badge);
+    }
+    const statusPill = document.createElement('span');
+    statusPill.className = `events-finder__big-events-status events-finder__big-events-status--${item.salesStatusKind || 'unknown'}`;
+    statusPill.textContent = String(item.salesStatus || '—');
+    priceLine.append(statusPill);
+    textWrap.append(name, when, priceLine);
+    if (item.earlyBirdNote) {
+      const eb = document.createElement('span');
+      eb.className = 'events-finder__big-events-earlybird';
+      eb.textContent = String(item.earlyBirdNote);
+      textWrap.append(eb);
+    }
+    if (item.ticketUrl) {
+      const tlink = document.createElement('a');
+      tlink.className = 'events-finder__big-events-ticketlink';
+      tlink.href = String(item.ticketUrl);
+      tlink.target = '_blank';
+      tlink.rel = 'noopener noreferrer';
+      tlink.textContent = 'Tickets ↗';
+      tlink.addEventListener('click', (e) => e.stopPropagation());
+      textWrap.append(tlink);
+    }
+    main.append(textWrap);
+    main.addEventListener('click', () => openConferenceDetailPopout(item));
 
-    const status = document.createElement('span');
-    status.className = 'events-finder__conference-status-meta';
-    status.textContent = [
-      `URL ${conferenceUrlStatusLabel(item)}`,
-      `Data ${conferenceDataStatusLabel(item)}`,
-      `Display ${conferenceDisplayStatusLabel(item)}`,
-    ].join(' · ');
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'events-finder__big-events-remove';
+    del.setAttribute('aria-label', `Remove ${item.title || item.query || 'event'}`);
+    del.title = 'Remove';
+    del.textContent = '×';
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void removeBigEvent(item);
+    });
 
-    const summary = document.createElement('span');
-    summary.className = 'events-finder__conference-status-summary muted';
-    const bits = [String(item.whenLabel || '')];
-    if (item.earlyBirdLine) bits.push(String(item.earlyBirdLine));
-    else if (item.ticketPrice) bits.push(String(item.ticketPrice));
-    summary.textContent = bits.filter(Boolean).join(' · ');
-
-    row.append(name, status, summary);
-    row.addEventListener('click', () => openConferenceDetailPopout(item));
+    row.append(main, del);
     return row;
   }
 
@@ -604,18 +801,16 @@ export function mountEventsFinderMobile(root) {
    * @param {object[]} items
    * @param {HTMLElement} listEl
    */
-  function paintConferenceWatchStatusList(items, listEl) {
+  function paintBigEventsTable(items, listEl) {
     listEl.replaceChildren();
     if (!items.length) {
       const empty = document.createElement('p');
-      empty.className = 'events-finder__conference-status-empty muted';
-      empty.textContent = 'No conferences tracked yet — add names below.';
+      empty.className = 'events-finder__big-events-empty muted';
+      empty.textContent = 'No big events tracked yet — add one above.';
       listEl.append(empty);
       return;
     }
-    for (const item of items) {
-      listEl.append(buildConferenceWatchStatusRow(item));
-    }
+    for (const item of items) listEl.append(buildBigEventRow(item));
   }
 
   /**
@@ -627,61 +822,246 @@ export function mountEventsFinderMobile(root) {
     return [];
   }
 
+  function syncConferenceNamesFromPayload() {
+    const names = Array.isArray(lastEventsPayload?.conferenceWatchlist)
+      ? lastEventsPayload.conferenceWatchlist.map(String)
+      : null;
+    if (names) {
+      conferenceInput.value = names.join('\n');
+      if (taste) taste.conferenceWatchlist = names;
+      syncConferenceToggleLabel();
+    }
+  }
+
   function refreshConferencePopoutIfOpen() {
+    syncConferenceNamesFromPayload();
     if (!conferencePopoutStatusList) return;
-    paintConferenceWatchStatusList(conferenceWatchItemsFromPayload(), conferencePopoutStatusList);
+    paintBigEventsTable(conferenceWatchItemsFromPayload(), conferencePopoutStatusList);
+  }
+
+  function reloadBigEventsSoon() {
+    void loadEvents();
+    for (const delay of [4000, 9000, 16000]) {
+      setTimeout(() => {
+        if (conferencePopoutStatusList) void loadEvents();
+      }, delay);
+    }
+  }
+
+  async function removeBigEvent(item) {
+    const slug = String(item?.slug || '').trim();
+    if (!slug) return;
+    if (!window.confirm(`Remove "${item.title || item.query || 'this event'}" from Big events?`)) return;
+    try {
+      const res = await fetch(`/api/events-finder/big-events/${encodeURIComponent(slug)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      void loadEvents();
+    } catch (e) {
+      window.alert(`Could not remove: ${String(e?.message || e)}`);
+    }
   }
 
   function openConferenceWatchlistPopout() {
     const wrap = document.createElement('div');
-    wrap.className = 'events-finder__conference-popout-manage';
+    wrap.className = 'events-finder__big-events events-finder__big-events--mobile';
 
-    const listHeading = document.createElement('p');
-    listHeading.className = 'events-finder__conference-popout-section-title';
-    listHeading.textContent = 'Tracked conferences';
+    const addBar = document.createElement('div');
+    addBar.className = 'events-finder__big-events-addbar';
+    const addToggle = document.createElement('button');
+    addToggle.type = 'button';
+    addToggle.className = 'events-finder__big-events-add';
+    addToggle.textContent = '+ Add event';
+    addBar.append(addToggle);
 
-    const statusList = document.createElement('div');
-    statusList.className = 'events-finder__conference-status-list';
-    conferencePopoutStatusList = statusList;
-    paintConferenceWatchStatusList(conferenceWatchItemsFromPayload(), statusList);
+    const form = document.createElement('div');
+    form.className = 'events-finder__big-events-form';
+    form.hidden = true;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'events-finder__big-events-input';
+    input.placeholder = 'e.g. open sauce';
+    input.autocomplete = 'off';
+    const searchBtn = document.createElement('button');
+    searchBtn.type = 'button';
+    searchBtn.className = 'events-finder__big-events-search';
+    searchBtn.textContent = 'Search';
+    form.append(input, searchBtn);
 
-    const editHeading = document.createElement('p');
-    editHeading.className = 'events-finder__conference-popout-section-title';
-    editHeading.textContent = 'Add or edit names';
+    const msg = document.createElement('p');
+    msg.className = 'events-finder__big-events-msg muted';
+    msg.hidden = true;
 
-    const hint = document.createElement('p');
-    hint.className = 'mobile-events__conferences-hint muted';
-    hint.textContent = 'One name per line — ~2 month heads-up with ticket and early bird dates.';
+    const preview = document.createElement('div');
+    preview.className = 'events-finder__big-events-preview';
+    preview.hidden = true;
 
-    const area = document.createElement('textarea');
-    area.className = 'mobile-events__conferences-input mobile-events__conferences-input--popout';
-    area.rows = 8;
-    area.placeholder = 'e.g. open sauce';
-    area.value = conferenceInput.value;
+    const list = document.createElement('div');
+    list.className = 'events-finder__big-events-list';
+    conferencePopoutStatusList = list;
+    paintBigEventsTable(conferenceWatchItemsFromPayload(), list);
 
-    wrap.append(listHeading, statusList, editHeading, hint, area);
+    wrap.append(addBar, form, msg, preview, list);
+
+    /** @type {{ query: string, url: string|null, screenshotPath: string|null }|null} */
+    let pendingPreview = null;
+
+    function setMsg(text, kind) {
+      msg.hidden = !text;
+      msg.textContent = text || '';
+      msg.className = `events-finder__big-events-msg${kind ? ` events-finder__big-events-msg--${kind}` : ' muted'}`;
+    }
+
+    function resetAddFlow() {
+      form.hidden = true;
+      addToggle.hidden = false;
+      preview.hidden = true;
+      preview.replaceChildren();
+      pendingPreview = null;
+      input.value = '';
+      setMsg('');
+    }
+
+    async function runSearch() {
+      const query = input.value.trim();
+      if (!query) {
+        input.focus();
+        return;
+      }
+      searchBtn.disabled = true;
+      searchBtn.textContent = 'Searching…';
+      setMsg('Searching the web and grabbing a snapshot…');
+      preview.hidden = true;
+      preview.replaceChildren();
+      try {
+        const res = await fetch('/api/events-finder/big-events/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        pendingPreview = {
+          query,
+          url: data.preview?.url || null,
+          homepageUrl: data.preview?.homepageUrl || data.preview?.url || null,
+          ticketUrl: data.preview?.ticketUrl || null,
+          screenshotPath: data.preview?.screenshotPath || null,
+        };
+        renderPreview(data.preview || {});
+        setMsg('');
+      } catch (e) {
+        setMsg(`Search failed: ${String(e?.message || e)}`, 'error');
+      } finally {
+        searchBtn.disabled = false;
+        searchBtn.textContent = 'Search';
+      }
+    }
+
+    function renderPreview(p) {
+      preview.replaceChildren();
+      preview.hidden = false;
+      if (p.screenshotUrl) {
+        const shot = document.createElement('img');
+        shot.className = 'events-finder__big-events-shot';
+        shot.src = String(p.screenshotUrl);
+        shot.alt = `Snapshot of ${p.url || p.query}`;
+        shot.loading = 'lazy';
+        preview.append(shot);
+      } else {
+        const noShot = document.createElement('p');
+        noShot.className = 'events-finder__big-events-noshot muted';
+        noShot.textContent = 'No snapshot available — you can still add it.';
+        preview.append(noShot);
+      }
+      const nameEl = document.createElement('p');
+      nameEl.className = 'events-finder__big-events-preview-name';
+      nameEl.textContent = String(p.name || p.query || '');
+      preview.append(nameEl);
+      if (p.url) {
+        const link = document.createElement('a');
+        link.className = 'events-finder__big-events-preview-url';
+        link.href = String(p.url);
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = String(p.url);
+        preview.append(link);
+      }
+      if (p.ticketUrl && p.ticketUrl !== p.url) {
+        const tlink = document.createElement('a');
+        tlink.className = 'events-finder__big-events-preview-url events-finder__big-events-preview-tickets';
+        tlink.href = String(p.ticketUrl);
+        tlink.target = '_blank';
+        tlink.rel = 'noopener noreferrer';
+        tlink.textContent = 'Tickets ↗';
+        preview.append(tlink);
+      }
+      const actions = document.createElement('div');
+      actions.className = 'events-finder__big-events-preview-actions';
+      const confirmBtn = document.createElement('button');
+      confirmBtn.type = 'button';
+      confirmBtn.className = 'events-finder__big-events-confirm';
+      confirmBtn.textContent = 'Add event';
+      confirmBtn.addEventListener('click', () => void confirmAdd(confirmBtn));
+      const againBtn = document.createElement('button');
+      againBtn.type = 'button';
+      againBtn.className = 'events-finder__big-events-again';
+      againBtn.textContent = 'Search again';
+      againBtn.addEventListener('click', () => {
+        preview.hidden = true;
+        preview.replaceChildren();
+        input.focus();
+        input.select();
+      });
+      actions.append(confirmBtn, againBtn);
+      preview.append(actions);
+    }
+
+    async function confirmAdd(btn) {
+      if (!pendingPreview) return;
+      btn.disabled = true;
+      btn.textContent = 'Adding…';
+      try {
+        const res = await fetch('/api/events-finder/big-events/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(pendingPreview),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        resetAddFlow();
+        setMsg('Added — looking up dates, price, and early bird…');
+        setTimeout(() => setMsg(''), 6000);
+        reloadBigEventsSoon();
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Add event';
+        setMsg(`Could not add: ${String(e?.message || e)}`, 'error');
+      }
+    }
+
+    addToggle.addEventListener('click', () => {
+      form.hidden = false;
+      addToggle.hidden = true;
+      input.focus();
+    });
+    searchBtn.addEventListener('click', () => void runSearch());
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        void runSearch();
+      }
+    });
 
     openConferencePopout({
-      title: 'Big conferences & festivals',
+      title: 'Big events',
       body: wrap,
       onClose: () => {
-        conferenceInput.value = area.value;
         conferencePopoutStatusList = null;
-        syncConferenceToggleLabel();
       },
     });
-
-    area.addEventListener('input', () => {
-      conferenceInput.value = area.value;
-      syncConferenceToggleLabel();
-      if (!criteriaReady || applyingCriteria) return;
-      if (conferenceAutosaveTimer) clearTimeout(conferenceAutosaveTimer);
-      conferenceAutosaveTimer = setTimeout(() => {
-        conferenceAutosaveTimer = null;
-        void autosaveConferenceWatchlist();
-      }, 650);
-    });
-    area.focus();
   }
 
   conferenceToggle.addEventListener('click', () => {
@@ -742,6 +1122,26 @@ export function mountEventsFinderMobile(root) {
   let applyingCriteria = false;
   let saveInFlight = false;
   let showSkipped = readShowSkipped();
+  /** @type {Record<string, string>} */
+  let titleOverrides = readTitleOverrides();
+  /** @type {object[]} */
+  let lastFilteredEvents = [];
+  /** @type {any} */
+  let mapInstance = null;
+  /** @type {any} */
+  let markersLayer = null;
+  /** @type {{ lat: number, lng: number, zoom: number } | null} */
+  let mapViewBeforePopup = null;
+  let mapDidInitialFit = false;
+  let mapSyncGen = 0;
+  /** @type {HTMLElement | null} */
+  let mapBackdrop = null;
+  /** @type {HTMLElement | null} */
+  let mapNoteEl = null;
+  /** @type {HTMLElement | null} */
+  let mapMountEl = null;
+  /** @type {((e: KeyboardEvent) => void) | null} */
+  let mapKeyHandler = null;
   /** @type {ReturnType<typeof setTimeout> | null} */
   let filterAutosaveTimer = null;
   let filterAutosaveReload = false;
@@ -883,7 +1283,7 @@ export function mountEventsFinderMobile(root) {
   }
 
   /**
-   * @param {{ skippedEvents?: object[], unskipEventIds?: string[], favoriteEventIds?: string[], calendarAddedEventIds?: string[], conferenceWatchlist?: string[], includeFilters?: boolean, silent?: boolean }} [patch]
+   * @param {{ lookFor?: string, skip?: string, blacklist?: string, skippedEvents?: object[], unskipEventIds?: string[], favoriteEventIds?: string[], calendarAddedEventIds?: string[], conferenceWatchlist?: string[], includeFilters?: boolean, silent?: boolean }} [patch]
    * @returns {Promise<boolean>}
    */
   async function saveCriteria(patch = {}) {
@@ -906,9 +1306,9 @@ export function mountEventsFinderMobile(root) {
     try {
       /** @type {Record<string, unknown>} */
       const body = {
-        lookFor: taste.lookFor,
-        skip: taste.skip,
-        blacklist: taste.blacklist,
+        lookFor: patch.lookFor !== undefined ? patch.lookFor : taste.lookFor,
+        skip: patch.skip !== undefined ? patch.skip : taste.skip,
+        blacklist: patch.blacklist !== undefined ? patch.blacklist : taste.blacklist,
         scrape: taste.scrape,
       };
       // Only write favorites / calendar-added when this patch intends to change them.
@@ -1218,31 +1618,29 @@ export function mountEventsFinderMobile(root) {
    * @param {object} item
    */
   function openConferenceDetailPopout(item) {
-    const eventUrl = String(item.url || '').trim();
+    const eventUrl = String(item.homepageUrl || item.url || '').trim();
+    const ticketHref = String(item.ticketUrl || '').trim();
     const body = document.createElement('div');
     body.className = 'events-finder__conference-detail';
 
-    const badge = document.createElement('p');
-    badge.className = 'mobile-events__conference-badge';
-    badge.textContent = '2-month heads-up';
-
-    const statusRow = document.createElement('p');
-    statusRow.className = 'events-finder__conference-detail-status';
-    statusRow.textContent = [
-      `URL ${conferenceUrlStatusLabel(item)}`,
-      `Data ${conferenceDataStatusLabel(item)}`,
-      `Display ${conferenceDisplayStatusLabel(item)}`,
-    ].join(' · ');
-
     const title = document.createElement('h3');
     title.className = 'events-finder__conference-detail-title';
-    title.textContent = String(item.title || item.query || 'Conference');
+    title.textContent = String(item.title || item.query || 'Big event');
+    body.append(title);
+
+    if (item.screenshotUrl) {
+      const shot = document.createElement('img');
+      shot.className = 'events-finder__conference-detail-shot';
+      shot.src = String(item.screenshotUrl);
+      shot.alt = `Snapshot of ${item.title || item.query}`;
+      shot.loading = 'lazy';
+      body.append(shot);
+    }
 
     const whenEl = document.createElement('p');
     whenEl.className = 'events-finder__conference-detail-when';
     whenEl.textContent = String(item.whenLabel || 'Dates TBD');
-
-    body.append(badge, statusRow, title, whenEl);
+    body.append(whenEl);
 
     if (item.placeLabel) {
       const placeEl = document.createElement('p');
@@ -1251,18 +1649,66 @@ export function mountEventsFinderMobile(root) {
       body.append(placeEl);
     }
 
+    if (item.salesStatus) {
+      const statusWrap = document.createElement('p');
+      statusWrap.className = 'events-finder__conference-detail-place';
+      const statusPill = document.createElement('span');
+      statusPill.className = `events-finder__big-events-status events-finder__big-events-status--${item.salesStatusKind || 'unknown'}`;
+      statusPill.textContent = String(item.salesStatus);
+      statusWrap.append(statusPill);
+      body.append(statusWrap);
+    }
+
     const ticket = document.createElement('p');
     ticket.className = 'mobile-events__conference-ticket';
     if (item.researching) {
       ticket.textContent = 'Looking up dates and tickets…';
-    } else if (item.earlyBirdLine) {
-      ticket.textContent = String(item.earlyBirdLine);
-    } else if (item.ticketPrice) {
-      ticket.textContent = String(item.ticketPrice);
+      ticket.classList.add('muted');
+    } else if (item.ticketLabel) {
+      ticket.textContent = String(item.ticketLabel);
+    } else if (item.error) {
+      ticket.textContent = 'Could not find ticket details yet — will retry.';
+      ticket.classList.add('muted');
     } else {
-      ticket.hidden = true;
+      ticket.textContent = 'Ticket price not found yet.';
+      ticket.classList.add('muted');
     }
-    if (!ticket.hidden) body.append(ticket);
+    body.append(ticket);
+
+    if (item.earlyBirdNote) {
+      const ebNote = document.createElement('p');
+      ebNote.className = 'mobile-events__conference-ticket events-finder__conference-ticket--active';
+      ebNote.textContent = String(item.earlyBirdNote);
+      body.append(ebNote);
+    } else if (item.earlyBirdLine && item.earlyBirdKind !== 'price') {
+      const ebNote = document.createElement('p');
+      ebNote.className = 'mobile-events__conference-ticket';
+      if (item.earlyBirdKind === 'active') {
+        ebNote.classList.add('events-finder__conference-ticket--active');
+      }
+      ebNote.textContent = String(item.earlyBirdLine);
+      body.append(ebNote);
+    }
+
+    if (item.earlyBirdStart || item.earlyBirdEnd) {
+      const eb = document.createElement('dl');
+      eb.className = 'events-finder__conference-detail-dates';
+      if (item.earlyBirdStart) {
+        const dt = document.createElement('dt');
+        dt.textContent = 'Early bird starts';
+        const dd = document.createElement('dd');
+        dd.textContent = String(item.earlyBirdStart);
+        eb.append(dt, dd);
+      }
+      if (item.earlyBirdEnd) {
+        const dt = document.createElement('dt');
+        dt.textContent = 'Early bird ends';
+        const dd = document.createElement('dd');
+        dd.textContent = String(item.earlyBirdEnd);
+        eb.append(dt, dd);
+      }
+      body.append(eb);
+    }
 
     if (item.notes && !item.researching) {
       const notesEl = document.createElement('p');
@@ -1271,20 +1717,662 @@ export function mountEventsFinderMobile(root) {
       body.append(notesEl);
     }
 
-    if (eventUrl) {
-      const link = document.createElement('a');
-      link.className = 'events-finder__conference-detail-link';
-      link.href = eventUrl;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.textContent = 'Official site';
-      body.append(link);
+    if (eventUrl || ticketHref) {
+      const links = document.createElement('div');
+      links.className = 'events-finder__conference-detail-links';
+      if (eventUrl) {
+        const link = document.createElement('a');
+        link.className = 'events-finder__conference-detail-link';
+        link.href = eventUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = 'Official site';
+        links.append(link);
+      }
+      if (ticketHref && ticketHref !== eventUrl) {
+        const tlink = document.createElement('a');
+        tlink.className = 'events-finder__conference-detail-link events-finder__conference-detail-link--tickets';
+        tlink.href = ticketHref;
+        tlink.target = '_blank';
+        tlink.rel = 'noopener noreferrer';
+        tlink.textContent = 'Tickets ↗';
+        links.append(tlink);
+      }
+      body.append(links);
     }
 
     openConferencePopout({
       title: String(item.title || item.query || 'Conference'),
       body,
     });
+  }
+
+  /**
+   * Rename an event locally. No cross-device sync until a backend title-override
+   * field exists (see summary note); overrides persist in localStorage.
+   * @param {string} eventId
+   * @param {string} nextTitle
+   * @param {string} baseTitle
+   */
+  function saveTitleOverride(eventId, nextTitle, baseTitle) {
+    const trimmed = String(nextTitle || '').trim();
+    if (!trimmed || trimmed === baseTitle) {
+      delete titleOverrides[eventId];
+    } else {
+      titleOverrides[eventId] = trimmed;
+    }
+    writeTitleOverrides(titleOverrides);
+  }
+
+  /**
+   * Event names are display-only until a double-click (desktop) or long-press
+   * (touch) opens an inline editor.
+   * @param {HTMLElement} displayEl
+   * @param {object} ev
+   * @param {HTMLElement} headEl
+   */
+  function attachTitleEdit(displayEl, ev, headEl) {
+    const eventId = String(ev.id || '').trim();
+    if (!eventId) return;
+    const baseTitle = String(ev.title || '').trim() || 'Untitled event';
+    displayEl.classList.add('mobile-events__title--editable');
+    displayEl.title = 'Double-click or long-press to rename';
+
+    const beginEdit = () => {
+      if (headEl.dataset.editing === '1') return;
+      headEl.dataset.editing = '1';
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'mobile-events__title-edit';
+      input.value = displayEl.textContent || baseTitle;
+
+      const editActions = document.createElement('div');
+      editActions.className = 'mobile-events__title-edit-actions';
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button';
+      saveBtn.className = 'mobile-events__title-edit-save';
+      saveBtn.textContent = 'Save';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'mobile-events__title-edit-cancel';
+      cancelBtn.textContent = 'Cancel';
+      editActions.append(saveBtn, cancelBtn);
+
+      const wrap = document.createElement('div');
+      wrap.className = 'mobile-events__title-edit-wrap';
+      wrap.append(input, editActions);
+      wrap.addEventListener('click', (e) => e.stopPropagation());
+
+      displayEl.replaceWith(wrap);
+      input.focus();
+      input.select();
+
+      const restore = () => {
+        wrap.replaceWith(displayEl);
+        headEl.dataset.editing = '';
+      };
+      const commit = () => {
+        const value = input.value.trim();
+        saveTitleOverride(eventId, value, baseTitle);
+        displayEl.textContent = value || baseTitle;
+        restore();
+      };
+      cancelBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        restore();
+      });
+      saveBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        commit();
+      });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commit();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          restore();
+        }
+      });
+    };
+
+    const eventUrl = String(ev.url || '').trim();
+    let lastPointerType = 'mouse';
+    let longPressed = false;
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    let openTimer = null;
+    const cancelOpen = () => {
+      if (openTimer) {
+        clearTimeout(openTimer);
+        openTimer = null;
+      }
+    };
+
+    displayEl.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelOpen();
+      beginEdit();
+    });
+
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    let pressTimer = null;
+    const cancelPress = () => {
+      if (pressTimer) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+      }
+    };
+    displayEl.addEventListener('pointerdown', (e) => {
+      lastPointerType = e.pointerType || 'mouse';
+      if (e.pointerType === 'mouse') return;
+      longPressed = false;
+      cancelPress();
+      pressTimer = setTimeout(() => {
+        pressTimer = null;
+        longPressed = true;
+        beginEdit();
+      }, 500);
+    });
+    displayEl.addEventListener('pointermove', cancelPress);
+    displayEl.addEventListener('pointerup', cancelPress);
+    displayEl.addEventListener('pointercancel', cancelPress);
+
+    displayEl.addEventListener('click', (e) => {
+      // Long-press on a link would otherwise navigate on release.
+      if (longPressed) {
+        e.preventDefault();
+        e.stopPropagation();
+        longPressed = false;
+        return;
+      }
+      // Mouse: defer opening briefly so a double-click edits instead of opening a tab.
+      if (lastPointerType === 'mouse' && eventUrl) {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelOpen();
+        openTimer = setTimeout(() => {
+          openTimer = null;
+          window.open(eventUrl, '_blank', 'noopener,noreferrer');
+        }, 220);
+      }
+    });
+  }
+
+  /**
+   * Thumbs up/down taste feedback — mirrors the desktop preference modal.
+   * @param {object} ev
+   * @param {'up' | 'down'} vibe
+   */
+  function openPreferenceModal(ev, vibe) {
+    const wantMore = vibe === 'up';
+    const backdrop = document.createElement('div');
+    backdrop.className = 'events-finder__modal-backdrop';
+    const modal = document.createElement('div');
+    modal.className = wantMore
+      ? 'events-finder__modal'
+      : 'events-finder__modal events-finder__modal--taste-down';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+
+    const title = document.createElement('h3');
+    title.className = 'events-finder__modal-title';
+    title.textContent = wantMore ? 'See more like this?' : 'See less like this?';
+
+    const hint = document.createElement('p');
+    hint.className = 'events-finder__modal-hint';
+    hint.textContent = wantMore
+      ? 'Add ideas to Look for (one per line). These steer discovery toward similar events.'
+      : 'This event is skipped. Add grey-list and/or black-list words (one per line). Grey hides only when no Look for word matches; black always hides.';
+
+    const eventLabel = document.createElement('p');
+    eventLabel.className = 'events-finder__modal-event';
+    eventLabel.textContent = ev.title || 'Untitled event';
+
+    /** @type {HTMLTextAreaElement} */
+    let area;
+    /** @type {HTMLTextAreaElement | null} */
+    let greyArea = null;
+    /** @type {HTMLTextAreaElement | null} */
+    let blackArea = null;
+    /** @type {HTMLElement[]} */
+    const fieldNodes = [];
+
+    if (wantMore) {
+      area = document.createElement('textarea');
+      area.className = 'events-finder__modal-textarea';
+      area.rows = 6;
+      area.spellcheck = true;
+      area.placeholder = 'One idea per line…';
+      area.value = suggestPreferenceLines(ev, vibe);
+      fieldNodes.push(area);
+    } else {
+      const suggested = suggestPreferenceLines(ev, vibe);
+
+      const greyLabel = document.createElement('label');
+      greyLabel.className = 'events-finder__modal-field-label';
+      greyLabel.htmlFor = 'mobile-events-pref-grey';
+      greyLabel.textContent = 'Grey list';
+      const greyHint = document.createElement('p');
+      greyHint.className = 'events-finder__modal-field-hint';
+      greyHint.textContent = 'Hide matching events only if no Look for word also matches.';
+      greyArea = document.createElement('textarea');
+      greyArea.id = 'mobile-events-pref-grey';
+      greyArea.className = 'events-finder__modal-textarea events-finder__modal-textarea--compact';
+      greyArea.rows = 4;
+      greyArea.spellcheck = true;
+      greyArea.placeholder = 'One idea per line…';
+      greyArea.value = suggested;
+
+      const blackLabel = document.createElement('label');
+      blackLabel.className = 'events-finder__modal-field-label';
+      blackLabel.htmlFor = 'mobile-events-pref-black';
+      blackLabel.textContent = 'Black list';
+      const blackHint = document.createElement('p');
+      blackHint.className = 'events-finder__modal-field-hint';
+      blackHint.textContent = 'Always hide matching events, even if a Look for word matches.';
+      blackArea = document.createElement('textarea');
+      blackArea.id = 'mobile-events-pref-black';
+      blackArea.className = 'events-finder__modal-textarea events-finder__modal-textarea--compact';
+      blackArea.rows = 4;
+      blackArea.spellcheck = true;
+      blackArea.placeholder = 'One idea per line…';
+      blackArea.value = '';
+
+      fieldNodes.push(greyLabel, greyHint, greyArea, blackLabel, blackHint, blackArea);
+      area = greyArea;
+    }
+
+    const msg = document.createElement('p');
+    msg.className = 'events-finder__modal-msg';
+    msg.hidden = true;
+
+    const actions = document.createElement('div');
+    actions.className = 'events-finder__modal-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'events-finder__modal-btn';
+    cancel.textContent = 'Cancel';
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'events-finder__modal-btn events-finder__modal-btn--primary';
+    save.textContent = wantMore ? 'Add to Look for' : 'Skip event';
+
+    const close = () => backdrop.remove();
+    cancel.addEventListener('click', close);
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) close();
+    });
+    save.addEventListener('click', async () => {
+      if (!criteriaReady || !taste) {
+        msg.hidden = false;
+        msg.textContent = 'Filters still loading — try again in a moment.';
+        return;
+      }
+      const lookAdditions = wantMore ? area.value : '';
+      const greyAdditions = wantMore ? '' : (greyArea?.value || '');
+      const blackAdditions = wantMore ? '' : (blackArea?.value || '');
+      const hasLook = Boolean(String(lookAdditions).trim());
+      const hasGrey = Boolean(String(greyAdditions).trim());
+      const hasBlack = Boolean(String(blackAdditions).trim());
+      if (wantMore && !hasLook) {
+        msg.hidden = false;
+        msg.textContent = 'Add at least one preference line.';
+        return;
+      }
+      save.disabled = true;
+      msg.hidden = false;
+      msg.textContent = 'Saving…';
+
+      const nextLook = wantMore
+        ? mergeTasteLines(taste.lookFor ?? '', lookAdditions)
+        : taste.lookFor ?? '';
+      const nextSkip = wantMore
+        ? taste.skip ?? ''
+        : hasGrey
+          ? mergeTasteLines(taste.skip ?? '', greyAdditions)
+          : taste.skip ?? '';
+      const nextBlacklist = wantMore
+        ? taste.blacklist ?? ''
+        : hasBlack
+          ? mergeTasteLines(taste.blacklist ?? '', blackAdditions)
+          : taste.blacklist ?? '';
+
+      /** @type {{ lookFor: string, skip: string, blacklist: string, skippedEvents?: object[], silent: boolean }} */
+      const patch = {
+        lookFor: nextLook,
+        skip: nextSkip,
+        blacklist: nextBlacklist,
+        silent: true,
+      };
+
+      const prevSkipped = [...taste.skippedEvents];
+      // Thumbs-down also skips this event, tagging it with the new grey/black words.
+      if (!wantMore) {
+        const record = skippedRecordFromEvent(ev);
+        if (record) {
+          if (hasGrey) record.tasteGrey = tasteLinesFromBlock(greyAdditions);
+          if (hasBlack) record.tasteBlack = tasteLinesFromBlock(blackAdditions);
+          const skipBatch = [record];
+          patch.skippedEvents = skipBatch;
+          const batchIds = new Set(skipBatch.map((s) => String(s?.id || '')).filter(Boolean));
+          taste.skippedEvents = [
+            ...skipBatch,
+            ...prevSkipped.filter((s) => !batchIds.has(String(s?.id || ''))),
+          ];
+          if (lastEventsPayload && Array.isArray(lastEventsPayload.events)) {
+            lastEventsPayload = {
+              ...lastEventsPayload,
+              events: lastEventsPayload.events.filter(
+                (e) => !eventMatchesSkipRecord(e, record),
+              ),
+              skippedCount: taste.skippedEvents.length,
+            };
+            paint(lastEventsPayload);
+          }
+        }
+      }
+
+      const ok = await saveCriteria(patch);
+      if (!ok) {
+        taste.skippedEvents = prevSkipped;
+        msg.textContent = 'Could not save preferences.';
+        save.disabled = false;
+        return;
+      }
+      close();
+      void loadEvents();
+    });
+
+    actions.append(cancel, save);
+    modal.append(title, hint, eventLabel, ...fieldNodes, msg, actions);
+    backdrop.append(modal);
+    document.body.append(backdrop);
+    area.focus();
+  }
+
+  /**
+   * @param {object} ev
+   * @returns {{ lat: number, lon: number } | null}
+   */
+  function eventCoords(ev) {
+    const lat = Number(ev?.lat);
+    const lon = Number(ev?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    // Null Island (0,0) = missing geo from APIs — do not pin the map in the Atlantic.
+    if (Math.abs(lat) < 0.01 && Math.abs(lon) < 0.01) return null;
+    return { lat, lon };
+  }
+
+  /** Round coords so near-identical venue pins group together (~11 m). */
+  function coordGroupKey(lat, lon) {
+    return `${lat.toFixed(4)},${lon.toFixed(4)}`;
+  }
+
+  /**
+   * Fan co-located pins into a small circle so each is tappable.
+   * @param {number} lat
+   * @param {number} lon
+   * @param {number} index
+   * @param {number} total
+   * @returns {[number, number]}
+   */
+  function offsetCoLocatedPin(lat, lon, index, total) {
+    if (total <= 1) return [lat, lon];
+    const radiusM = 28 + Math.max(0, total - 4) * 6;
+    const angle = (2 * Math.PI * index) / total - Math.PI / 2;
+    const metersPerDegLat = 111320;
+    const metersPerDegLon = Math.max(1e-6, 111320 * Math.cos((lat * Math.PI) / 180));
+    return [
+      lat + (radiusM * Math.sin(angle)) / metersPerDegLat,
+      lon + (radiusM * Math.cos(angle)) / metersPerDegLon,
+    ];
+  }
+
+  /**
+   * @param {object} ev
+   * @returns {HTMLElement}
+   */
+  function buildMapPopup(ev) {
+    const wrap = document.createElement('div');
+    wrap.className = 'events-finder__map-popup';
+    wrap.append(buildCard(ev));
+    return wrap;
+  }
+
+  /**
+   * @param {object[]} events
+   * @param {object | null} data
+   * @returns {Promise<void>}
+   */
+  function syncMap(events, data) {
+    if (!mapBackdrop || !mapMountEl) return Promise.resolve();
+    const gen = ++mapSyncGen;
+    const mappable = events.filter((ev) => eventCoords(ev));
+    const unmapped = events.length - mappable.length;
+    if (mapNoteEl) {
+      mapNoteEl.hidden = false;
+      if (!events.length) {
+        mapNoteEl.textContent = 'No events to show on the map.';
+      } else if (!mappable.length) {
+        mapNoteEl.textContent = 'No mapped locations for these events (missing coordinates).';
+      } else if (unmapped > 0) {
+        mapNoteEl.textContent = `${mappable.length} on map · ${unmapped} without coordinates`;
+      } else {
+        mapNoteEl.textContent = `${mappable.length} event${mappable.length === 1 ? '' : 's'} on map`;
+      }
+    }
+    if (!mappable.length) {
+      if (markersLayer) markersLayer.clearLayers();
+      return Promise.resolve();
+    }
+
+    return loadLeaflet()
+      .then((L) => {
+        if (gen !== mapSyncGen || !mapBackdrop || !mapMountEl) return;
+        if (!mapInstance) {
+          mapInstance = L.map(mapMountEl, {
+            zoomControl: true,
+            attributionControl: false,
+          });
+          L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+            attribution: '',
+            subdomains: 'abcd',
+            maxZoom: 18,
+            minZoom: 3,
+          }).addTo(mapInstance);
+          markersLayer = L.layerGroup().addTo(mapInstance);
+          mapInstance.on('popupclose', () => {
+            const saved = mapViewBeforePopup;
+            if (!saved) return;
+            requestAnimationFrame(() => {
+              if (!mapInstance) return;
+              if (mapInstance.isPopupOpen()) return;
+              mapViewBeforePopup = null;
+              mapInstance.setView([saved.lat, saved.lng], saved.zoom, { animate: true });
+            });
+          });
+        }
+        markersLayer.clearLayers();
+        /** @type {Map<string, { ev: object, c: { lat: number, lon: number } }[]>} */
+        const byLocation = new Map();
+        for (const ev of mappable) {
+          const c = eventCoords(ev);
+          if (!c) continue;
+          const key = coordGroupKey(c.lat, c.lon);
+          let group = byLocation.get(key);
+          if (!group) {
+            group = [];
+            byLocation.set(key, group);
+          }
+          group.push({ ev, c });
+        }
+        /** @type {any[]} */
+        const latLngs = [];
+        for (const group of byLocation.values()) {
+          const total = group.length;
+          group.forEach(({ ev, c }, index) => {
+            const ll = offsetCoLocatedPin(c.lat, c.lon, index, total);
+            latLngs.push(ll);
+            if (total > 1) {
+              L.polyline([[c.lat, c.lon], ll], {
+                color: '#6ec8ff',
+                weight: 1.5,
+                opacity: 0.55,
+                interactive: false,
+              }).addTo(markersLayer);
+            }
+            const marker = L.circleMarker(ll, {
+              radius: 8,
+              color: '#6ec8ff',
+              weight: 2,
+              fillColor: '#7bffce',
+              fillOpacity: 0.85,
+            });
+            marker.on('click', () => {
+              if (!mapInstance || mapViewBeforePopup) return;
+              const center = mapInstance.getCenter();
+              mapViewBeforePopup = {
+                lat: center.lat,
+                lng: center.lng,
+                zoom: mapInstance.getZoom(),
+              };
+            });
+            marker.bindPopup(buildMapPopup(ev), {
+              maxWidth: 320,
+              minWidth: 260,
+              className: 'events-finder__map-popup-tip',
+              autoPanPadding: [24, 24],
+            });
+            markersLayer.addLayer(marker);
+          });
+        }
+        const homeLat = Number(data?.geo?.lat);
+        const homeLon = Number(data?.geo?.lon);
+        if (!mapDidInitialFit) {
+          const fit = () => {
+            if (gen !== mapSyncGen || !mapInstance) return;
+            mapInstance.invalidateSize();
+            if (latLngs.length === 1) {
+              mapInstance.setView(latLngs[0], 13);
+            } else if (latLngs.length > 1) {
+              mapInstance.fitBounds(L.latLngBounds(latLngs).pad(0.18), { maxZoom: 14 });
+            } else if (Number.isFinite(homeLat) && Number.isFinite(homeLon)) {
+              mapInstance.setView([homeLat, homeLon], 11);
+            }
+            mapDidInitialFit = true;
+          };
+          requestAnimationFrame(() => {
+            fit();
+            setTimeout(fit, 50);
+            setTimeout(fit, 200);
+          });
+        } else {
+          requestAnimationFrame(() => mapInstance?.invalidateSize());
+        }
+      })
+      .catch(() => {
+        if (gen !== mapSyncGen || !mapNoteEl) return;
+        mapNoteEl.hidden = false;
+        mapNoteEl.textContent = 'Could not load map library.';
+      });
+  }
+
+  function destroyMapInstance() {
+    mapSyncGen += 1;
+    mapViewBeforePopup = null;
+    mapDidInitialFit = false;
+    if (mapInstance) {
+      mapInstance.remove();
+      mapInstance = null;
+    }
+    markersLayer = null;
+  }
+
+  function closeMapWindow() {
+    if (!mapBackdrop) return;
+    destroyMapInstance();
+    if (mapKeyHandler) {
+      document.removeEventListener('keydown', mapKeyHandler);
+      mapKeyHandler = null;
+    }
+    mapBackdrop.remove();
+    mapBackdrop = null;
+    mapNoteEl = null;
+    mapMountEl = null;
+    viewBtn.classList.remove('mobile-events__view-toggle--on');
+    viewBtn.setAttribute('aria-pressed', 'false');
+    viewBtn.setAttribute('aria-label', 'Open events map');
+    if (!isMobileNavApplying() && history.state?.overlay === 'map') mobileNavBack();
+  }
+
+  function openMapWindow() {
+    if (mapBackdrop) {
+      void syncMap(lastFilteredEvents, lastEventsPayload);
+      return;
+    }
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'events-finder__map-backdrop';
+    const shell = document.createElement('div');
+    shell.className = 'events-finder__map-window';
+    shell.setAttribute('role', 'dialog');
+    shell.setAttribute('aria-modal', 'true');
+    shell.setAttribute('aria-labelledby', 'mobile-events-map-title');
+
+    const bar = document.createElement('div');
+    bar.className = 'events-finder__map-window-bar';
+    const title = document.createElement('h2');
+    title.id = 'mobile-events-map-title';
+    title.className = 'events-finder__map-window-title';
+    title.textContent = 'Events map';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'events-finder__map-window-close';
+    closeBtn.setAttribute('aria-label', 'Close events map');
+    closeBtn.title = 'Close';
+    closeBtn.innerHTML =
+      '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M4 4l8 8M12 4l-8 8"/></svg>';
+    bar.append(title, closeBtn);
+
+    const note = document.createElement('p');
+    note.className = 'events-finder__map-note muted';
+    note.textContent = 'Loading map…';
+
+    const mount = document.createElement('div');
+    mount.className = 'events-finder__map';
+    mount.setAttribute('role', 'img');
+    mount.setAttribute('aria-label', 'Events map');
+
+    shell.append(bar, note, mount);
+    backdrop.append(shell);
+    document.body.append(backdrop);
+
+    mapBackdrop = backdrop;
+    mapNoteEl = note;
+    mapMountEl = mount;
+
+    viewBtn.classList.add('mobile-events__view-toggle--on');
+    viewBtn.setAttribute('aria-pressed', 'true');
+    viewBtn.setAttribute('aria-label', 'Close events map');
+
+    closeBtn.addEventListener('click', closeMapWindow);
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) closeMapWindow();
+    });
+    mapKeyHandler = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeMapWindow();
+      }
+    };
+    document.addEventListener('keydown', mapKeyHandler);
+    if (!isMobileNavApplying()) {
+      pushMobileNav({ tab: 'events', pane: 'list', overlay: 'map' });
+    }
+    void syncMap(lastFilteredEvents, lastEventsPayload);
   }
 
   /**
@@ -1330,14 +2418,18 @@ export function mountEventsFinderMobile(root) {
     const head = document.createElement('div');
     head.className = 'mobile-events__head';
 
+    const baseTitle = String(ev.title || '').trim() || 'Untitled event';
+    const displayTitle =
+      (eventId && titleOverrides[eventId] ? titleOverrides[eventId] : '') || baseTitle;
     const title = document.createElement(eventUrl ? 'a' : 'h3');
     title.className = 'mobile-events__title';
-    title.textContent = String(ev.title || '').trim() || 'Untitled event';
+    title.textContent = displayTitle;
     if (eventUrl && title instanceof HTMLAnchorElement) {
       title.href = eventUrl;
       title.target = '_blank';
       title.rel = 'noopener noreferrer';
     }
+    if (eventId) attachTitleEdit(title, ev, head);
 
     const favBtn = document.createElement('button');
     favBtn.type = 'button';
@@ -1360,10 +2452,36 @@ export function mountEventsFinderMobile(root) {
     if (ev.online || ev.isOnline) bits.push('Online');
     else if (ev.city) bits.push(String(ev.city));
     if (Number.isFinite(ev.distanceMiles)) bits.push(`${Math.round(ev.distanceMiles)} mi`);
+    const priceLabel = String(ev.priceLabel || '').trim();
+    if (priceLabel) bits.push(priceLabel);
     meta.textContent = bits.filter(Boolean).join(' · ');
 
     const actions = document.createElement('div');
     actions.className = 'mobile-events__actions';
+
+    const upBtn = document.createElement('button');
+    upBtn.type = 'button';
+    upBtn.className = 'mobile-events__action mobile-events__action--up';
+    upBtn.setAttribute('aria-label', 'See more like this');
+    upBtn.title = 'See more like this?';
+    upBtn.textContent = '👍';
+    upBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openPreferenceModal(ev, 'up');
+    });
+
+    const downBtn = document.createElement('button');
+    downBtn.type = 'button';
+    downBtn.className = 'mobile-events__action mobile-events__action--down';
+    downBtn.setAttribute('aria-label', 'See less like this');
+    downBtn.title = 'See less like this?';
+    downBtn.textContent = '👎';
+    downBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openPreferenceModal(ev, 'down');
+    });
 
     const hideBtn = document.createElement('button');
     hideBtn.type = 'button';
@@ -1401,7 +2519,8 @@ export function mountEventsFinderMobile(root) {
       void markCalendarAdded(ev, calBtn);
     });
 
-    actions.append(hideBtn, calBtn);
+    if (showSkipped) actions.append(hideBtn, calBtn);
+    else actions.append(upBtn, downBtn, hideBtn, calBtn);
     body.append(head, meta, actions);
     row.append(icon, body);
     card.append(row);
@@ -1500,6 +2619,9 @@ export function mountEventsFinderMobile(root) {
     const pool = showSkipped ? skippedList : mainEvents;
     const events = pool.filter(passesClientFilters);
 
+    lastFilteredEvents = events;
+    if (mapBackdrop) void syncMap(events, data);
+
     list.replaceChildren();
     refreshConferencePopoutIfOpen();
     if (!events.length) {
@@ -1525,6 +2647,11 @@ export function mountEventsFinderMobile(root) {
     writeShowSkipped(showSkipped);
     syncShowSkippedButton();
     if (lastEventsPayload) paint(lastEventsPayload);
+  });
+
+  viewBtn.addEventListener('click', () => {
+    if (mapBackdrop) closeMapWindow();
+    else openMapWindow();
   });
 
   zipInput.addEventListener('change', () => scheduleFilterAutosave({ reload: true }));
@@ -1603,6 +2730,7 @@ export function mountEventsFinderMobile(root) {
   document.addEventListener('dashbird:mobile-nav', (e) => {
     const s = e.detail;
     if (!s || s.tab !== 'events') return;
+    if (mapBackdrop && s.overlay !== 'map') closeMapWindow();
     if (s.overlay === 'filters') {
       filterPanel.hidden = true;
       filterToggle.setAttribute('aria-expanded', 'false');

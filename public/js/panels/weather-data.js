@@ -93,7 +93,7 @@ export async function fetchNextPrecipCaption(lat, lon, timeZone) {
 
 /**
  * Current conditions via dashbird `/api/hero-weather` (Open-Meteo with NWS fallback, cached).
- * @returns {Promise<{ tempF: number, apparentF: number | null, code: number, windMph: number | null, windDirectionFromDeg: number | null, uvIndex: number | null, usAqi: number | null }>}
+ * @returns {Promise<{ tempF: number, apparentF: number | null, code: number, windMph: number | null, windDirectionFromDeg: number | null, highF: number | null, lowF: number | null, uvIndex: number | null, usAqi: number | null }>}
  */
 export async function fetchCurrentWeather(lat, lon) {
   const qs = new URLSearchParams({
@@ -119,6 +119,8 @@ export async function fetchCurrentWeather(lat, lon) {
     windMph: typeof data.windMph === 'number' ? data.windMph : null,
     windDirectionFromDeg:
       typeof data.windDirectionFromDeg === 'number' ? data.windDirectionFromDeg : null,
+    highF: typeof data.highF === 'number' ? data.highF : null,
+    lowF: typeof data.lowF === 'number' ? data.lowF : null,
     uvIndex,
     usAqi,
   };

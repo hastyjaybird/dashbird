@@ -2446,6 +2446,120 @@ function buildEventsFinderSourcesBlock(root) {
 }
 
 /**
+ * Focused editor modal for the Gmail Daily Summary markdown filter.
+ * Same guide as the inline Daily Summary editor, in a larger dedicated surface.
+ */
+function openGmailFilterGuideModal() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'settings-page__modal-backdrop';
+  backdrop.setAttribute('role', 'presentation');
+
+  const modal = document.createElement('div');
+  modal.className = 'settings-page__modal settings-page__modal--gmail-filter';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'settings-gmail-filter-title');
+
+  const header = document.createElement('div');
+  header.className = 'settings-page__modal-header';
+  const title = document.createElement('h3');
+  title.id = 'settings-gmail-filter-title';
+  title.className = 'settings-page__modal-title';
+  title.textContent = 'Gmail email filter (markdown)';
+  const hint = document.createElement('p');
+  hint.className = 'settings-page__modal-hint';
+  hint.textContent =
+    'Markdown guide that decides which intake mail becomes Daily Summary action items. Same guide as data/gmail-daily-summary-guide.md.';
+  header.append(title, hint);
+
+  const body = document.createElement('div');
+  body.className = 'settings-page__modal-scroll';
+
+  const guideArea = document.createElement('textarea');
+  guideArea.className = 'settings-page__modal-textarea settings-page__modal-textarea--guide';
+  guideArea.rows = 24;
+  guideArea.spellcheck = true;
+  guideArea.placeholder = 'Loading…';
+  guideArea.disabled = true;
+  body.append(guideArea);
+
+  const footer = document.createElement('div');
+  footer.className = 'settings-page__modal-footer';
+  const msg = document.createElement('p');
+  msg.className = 'settings-page__rain-msg';
+  msg.hidden = true;
+  msg.setAttribute('aria-live', 'polite');
+  const actions = document.createElement('div');
+  actions.className = 'settings-page__modal-actions settings-page__modal-actions--footer';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'settings-page__secondary-cancel';
+  cancelBtn.textContent = 'Close';
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.className = 'settings-page__rain-save';
+  saveBtn.textContent = 'Save filter';
+  saveBtn.disabled = true;
+  actions.append(cancelBtn, saveBtn);
+  footer.append(msg, actions);
+
+  modal.append(header, body, footer);
+  backdrop.append(modal);
+  document.body.append(backdrop);
+
+  function close() {
+    backdrop.remove();
+    document.removeEventListener('keydown', onKey);
+  }
+  function onKey(e) {
+    if (e.key === 'Escape') close();
+  }
+  document.addEventListener('keydown', onKey);
+  cancelBtn.addEventListener('click', close);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  fetch('/api/gmail-daily-summary/guide', { cache: 'no-store' })
+    .then(async (r) => {
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      guideArea.value = String(j.guide || '');
+      guideArea.disabled = false;
+      guideArea.placeholder = '';
+      saveBtn.disabled = false;
+      guideArea.focus();
+    })
+    .catch((e) => {
+      msg.hidden = false;
+      msg.classList.add('settings-page__rain-msg--err');
+      msg.textContent = String(e?.message || e);
+    });
+
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    msg.hidden = false;
+    msg.classList.remove('settings-page__rain-msg--err');
+    msg.textContent = 'Saving…';
+    try {
+      const r = await fetch('/api/gmail-daily-summary/guide', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guide: guideArea.value }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      guideArea.value = String(j.guide || guideArea.value);
+      close();
+    } catch (e) {
+      msg.classList.add('settings-page__rain-msg--err');
+      msg.textContent = String(e?.message || e);
+      saveBtn.disabled = false;
+    }
+  });
+}
+
+/**
  * Daily Summary email ingestion guide (markdown).
  * @param {HTMLElement} root
  */
@@ -2474,6 +2588,12 @@ function buildGmailWeeklySummaryBlock(root) {
 
   const actions = document.createElement('div');
   actions.className = 'settings-page__events-toolbar';
+  const openFilterBtn = document.createElement('button');
+  openFilterBtn.type = 'button';
+  openFilterBtn.className = 'settings-page__rain-save';
+  openFilterBtn.textContent = 'Open email filter';
+  openFilterBtn.title = 'Open the Gmail markdown filter in a focused editor';
+  openFilterBtn.addEventListener('click', () => openGmailFilterGuideModal());
   const saveBtn = document.createElement('button');
   saveBtn.type = 'button';
   saveBtn.className = 'settings-page__rain-save';
@@ -2483,7 +2603,7 @@ function buildGmailWeeklySummaryBlock(root) {
   status.setAttribute('aria-live', 'polite');
   status.textContent = 'Loading…';
 
-  actions.append(saveBtn);
+  actions.append(openFilterBtn, saveBtn);
   body.append(guideLabel, guideArea, actions, status);
   root.append(block);
 
@@ -2531,6 +2651,173 @@ function buildGmailWeeklySummaryBlock(root) {
   void load();
 }
 
+const BIG_EVENT_LEAD_OPTIONS = [
+  { value: '', label: 'Default (~2 months)' },
+  { value: '7', label: '1 week before' },
+  { value: '14', label: '2 weeks before' },
+  { value: '21', label: '3 weeks before' },
+  { value: '30', label: '1 month before' },
+  { value: '45', label: '6 weeks before' },
+  { value: '60', label: '2 months before' },
+  { value: '90', label: '3 months before' },
+  { value: '120', label: '4 months before' },
+  { value: '180', label: '6 months before' },
+];
+
+/**
+ * Per-big-event reminder lead time — how far ahead the event website heads-up card
+ * should surface in the Events feed.
+ * @param {HTMLElement} root
+ */
+function buildBigEventsRemindersBlock(root) {
+  const { details: block, body } = createCollapsibleSection({
+    title: 'Big event reminders',
+    headingId: 'settings-big-events-heading',
+    className: 'settings-page__big-events-block',
+  });
+
+  const intro = document.createElement('p');
+  intro.className = 'settings-page__intro';
+  intro.textContent =
+    'Tracked big events (Burning Man, Coachella, SXSW…). Choose how far in advance each event’s website reminder should appear in the Events feed. Default is about two months ahead.';
+  body.append(intro);
+
+  const loadStatus = document.createElement('p');
+  loadStatus.className = 'settings-page__load-status';
+  loadStatus.setAttribute('aria-live', 'polite');
+  loadStatus.textContent = 'Loading big events…';
+  body.append(loadStatus);
+
+  const table = document.createElement('table');
+  table.className = 'settings-page__table settings-page__table--big-events';
+  table.setAttribute('aria-labelledby', 'settings-big-events-heading');
+  table.hidden = true;
+
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  for (const label of ['Event', 'When', 'Remind ahead']) {
+    const th = document.createElement('th');
+    th.scope = 'col';
+    th.textContent = label;
+    hr.append(th);
+  }
+  thead.append(hr);
+  table.append(thead);
+  const tbody = document.createElement('tbody');
+  table.append(tbody);
+  body.append(table);
+
+  root.append(block);
+
+  /**
+   * @param {HTMLSelectElement} select
+   * @param {number | null} leadDays
+   */
+  function fillLeadOptions(select, leadDays) {
+    select.replaceChildren();
+    const value = leadDays == null ? '' : String(leadDays);
+    const known = BIG_EVENT_LEAD_OPTIONS.some((o) => o.value === value);
+    const options = known
+      ? BIG_EVENT_LEAD_OPTIONS
+      : [...BIG_EVENT_LEAD_OPTIONS, { value, label: `${leadDays} days before` }];
+    for (const opt of options) {
+      const el = document.createElement('option');
+      el.value = opt.value;
+      el.textContent = opt.label;
+      if (opt.value === value) el.selected = true;
+      select.append(el);
+    }
+  }
+
+  /**
+   * @param {Array<object>} items
+   */
+  function populate(items) {
+    tbody.replaceChildren();
+    for (const item of items) {
+      const slug = String(item.slug || '').trim();
+      if (!slug) continue;
+      const tr = document.createElement('tr');
+
+      const tdName = document.createElement('td');
+      tdName.className = 'settings-page__type-label';
+      tdName.textContent = String(item.title || item.query || slug);
+
+      const tdWhen = document.createElement('td');
+      tdWhen.className = 'settings-page__value';
+      tdWhen.textContent = String(item.whenLabel || 'Dates TBD');
+
+      const tdLead = document.createElement('td');
+      tdLead.className = 'settings-page__big-events-lead';
+      const select = document.createElement('select');
+      select.className = 'settings-page__costs-select';
+      select.setAttribute('aria-label', `Reminder lead time for ${item.title || slug}`);
+      fillLeadOptions(select, item.reminderLeadDays == null ? null : Number(item.reminderLeadDays));
+      const savedNote = document.createElement('span');
+      savedNote.className = 'settings-page__big-events-saved';
+      savedNote.hidden = true;
+      savedNote.setAttribute('aria-live', 'polite');
+
+      select.addEventListener('change', async () => {
+        const raw = select.value;
+        const reminderLeadDays = raw === '' ? null : Number(raw);
+        select.disabled = true;
+        savedNote.hidden = false;
+        savedNote.classList.remove('settings-page__err');
+        savedNote.textContent = 'Saving…';
+        try {
+          const r = await fetch(
+            `/api/events-finder/big-events/${encodeURIComponent(slug)}`,
+            {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ reminderLeadDays }),
+            },
+          );
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+          const next = j.item?.reminderLeadDays == null ? null : Number(j.item.reminderLeadDays);
+          fillLeadOptions(select, next);
+          savedNote.textContent = 'Saved';
+          setTimeout(() => {
+            if (savedNote.textContent === 'Saved') savedNote.hidden = true;
+          }, 1800);
+        } catch (e) {
+          savedNote.classList.add('settings-page__err');
+          savedNote.textContent = String(e?.message || e);
+        } finally {
+          select.disabled = false;
+        }
+      });
+
+      tdLead.append(select, savedNote);
+      tr.append(tdName, tdWhen, tdLead);
+      tbody.append(tr);
+    }
+  }
+
+  fetch('/api/events-finder/big-events', { cache: 'no-store' })
+    .then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false || !Array.isArray(data.items)) {
+        throw new Error(data.error || `HTTP ${r.status}`);
+      }
+      if (!data.items.length) {
+        loadStatus.textContent = 'No big events tracked yet — add some from the Events panel.';
+        return;
+      }
+      populate(data.items);
+      table.hidden = false;
+      loadStatus.hidden = true;
+      loadStatus.textContent = '';
+    })
+    .catch((e) => {
+      loadStatus.className = 'settings-page__err';
+      loadStatus.textContent =
+        e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+    });
+}
+
 /**
  * @param {HTMLElement | null} mount
  */
@@ -2541,6 +2828,7 @@ export async function mountSettingsPage(mount) {
   buildSecondaryWatchBlock(mount);
   buildEventsFinderSourcesBlock(mount);
   buildGmailWeeklySummaryBlock(mount);
+  buildBigEventsRemindersBlock(mount);
   buildCostsBlock(mount);
   mount.setAttribute('aria-busy', 'true');
 

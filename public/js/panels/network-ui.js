@@ -26,7 +26,6 @@ import {
   warmNetworkPages,
 } from '../lib/network-prefetch.js';
 import { mountNetworkManageTable } from './network-manage-table.js?v=family-type-1';
-import { NETWORK_LABELS } from '../lib/network-labels.js';
 import { openPickContactDialog } from '../lib/network-add-contacts-dialog.js?v=pick-contact-1';
 import {
   fetchHowWeMetSuggestion,
@@ -187,7 +186,7 @@ export function mountNetworkUi(root) {
   const addBtn = document.createElement('button');
   addBtn.type = 'button';
   addBtn.className = 'network-crm__btn';
-  addBtn.textContent = 'Add person';
+  addBtn.textContent = 'New contact';
 
   const addCompanyBtn = document.createElement('button');
   addCompanyBtn.type = 'button';
@@ -5929,7 +5928,7 @@ export function mountNetworkUi(root) {
   });
 
   addBtn.addEventListener('click', async () => {
-    const displayName = prompt('Person name?');
+    const displayName = prompt('New contact name?');
     if (!displayName?.trim()) return;
     showStatus('Creating…');
     try {

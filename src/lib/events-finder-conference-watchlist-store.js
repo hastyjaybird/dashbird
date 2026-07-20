@@ -18,6 +18,50 @@ export function conferenceWatchlistStorePath(env = process.env) {
 }
 
 /**
+ * Directory for cached Big Events website screenshots.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function bigEventsShotsDir(env = process.env) {
+  const override = String(env.EVENTS_FINDER_BIG_EVENTS_SHOTS_DIR || '').trim();
+  if (override) return path.isAbsolute(override) ? override : path.join(PKG_ROOT, override);
+  return path.join(PKG_ROOT, 'data/big-events-shots');
+}
+
+/**
+ * Persist a PNG screenshot for a Big Event, returning the stored filename.
+ * @param {string} slug
+ * @param {Buffer} buffer
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<string | null>}
+ */
+export async function saveBigEventShot(slug, buffer, env = process.env) {
+  const key = String(slug || '').trim().slice(0, 100);
+  if (!key || !buffer || !buffer.length) return null;
+  const dir = bigEventsShotsDir(env);
+  await fs.mkdir(dir, { recursive: true });
+  const file = `${key}.png`;
+  const target = path.join(dir, file);
+  const staging = `${target}.tmp.${process.pid}.${Date.now()}`;
+  await fs.writeFile(staging, buffer);
+  await fs.rename(staging, target);
+  return file;
+}
+
+/**
+ * @param {string | null | undefined} file
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function removeBigEventShot(file, env = process.env) {
+  const name = String(file || '').trim();
+  if (!name || name.includes('/') || name.includes('..')) return;
+  try {
+    await fs.rm(path.join(bigEventsShotsDir(env), name), { force: true });
+  } catch {
+    // ignore
+  }
+}
+
+/**
  * @param {unknown} raw
  * @returns {string | null}
  */
@@ -46,18 +90,43 @@ function normalizeRecord(raw) {
     query,
     name: String(r.name || query).trim().slice(0, 160) || query,
     url: String(r.url || '').trim().slice(0, 500) || null,
+    // Official homepage root (holds dates) + ticketing/pricing subpage (holds
+    // ticket info). `url` mirrors the homepage for backward compatibility.
+    homepageUrl: String(r.homepageUrl || r.url || '').trim().slice(0, 500) || null,
+    ticketUrl: String(r.ticketUrl || '').trim().slice(0, 500) || null,
     eventStart: normalizeDate(r.eventStart),
     eventEnd: normalizeDate(r.eventEnd),
     venue: String(r.venue || '').trim().slice(0, 160) || null,
     city: String(r.city || '').trim().slice(0, 80) || null,
     ticketPrice: String(r.ticketPrice || '').trim().slice(0, 120) || null,
+    ticketPriceEstimated: r.ticketPriceEstimated === true,
+    estimatedFromYear:
+      r.estimatedFromYear != null && Number(r.estimatedFromYear) > 1900
+        ? Number(r.estimatedFromYear)
+        : null,
+    earlyBirdPrice: String(r.earlyBirdPrice || '').trim().slice(0, 120) || null,
     earlyBirdStart: normalizeDate(r.earlyBirdStart),
     earlyBirdEnd: normalizeDate(r.earlyBirdEnd),
+    screenshotPath: String(r.screenshotPath || '').trim().slice(0, 200) || null,
     notes: String(r.notes || '').trim().slice(0, 400) || null,
+    // How many days before the event to start reminding from the event website.
+    // null = use the default heads-up window.
+    reminderLeadDays: normalizeLeadDays(r.reminderLeadDays),
     error: String(r.error || '').trim().slice(0, 200) || null,
     researching: r.researching === true,
     researchedAt: String(r.researchedAt || '').trim().slice(0, 40) || null,
   };
+}
+
+/**
+ * @param {unknown} raw
+ * @returns {number | null}
+ */
+export function normalizeLeadDays(raw) {
+  if (raw == null || raw === '') return null;
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.min(n, 365);
 }
 
 /**

@@ -84,7 +84,7 @@
         } catch (e) {}
       })();
     </script>
-    <link rel="stylesheet" href="/styles.css?v=mobile-panels-20260717-4" />
+    <link rel="stylesheet" href="/styles.css?v=mobile-panels-20260719-3" />
     <!-- Instant search: no modules — Enter opens a new tab before app.js loads. -->
     <script>
       window.__dashbirdSearch = (function () {
@@ -176,6 +176,18 @@
           id="mount-topbar-context"
           class="topbar__context"
           aria-label="Current location (live GPS when allowed, else server default)"
+        ></div>
+        <div
+          id="mount-topbar-weather"
+          class="topbar__weather"
+          hidden
+          aria-label="Current weather"
+        ></div>
+        <div
+          id="mount-topbar-conditions"
+          class="topbar__conditions"
+          hidden
+          aria-label="Active condition alerts"
         ></div>
         <div
           id="mount-topbar-aircraft"
@@ -505,37 +517,6 @@
             </div>
           </section>
           <section
-            class="sky-sidebar__card sky-sidebar__card--sky panel panel--glass"
-            aria-labelledby="h-sky-sidebar"
-          >
-            <h2 id="h-sky-sidebar" class="sky-sidebar__card-heading">Sky &amp; Space</h2>
-            <div
-              id="mount-sky-strip"
-              class="sky-sidebar__card-body sky-sidebar__card-body--sky"
-              role="region"
-              aria-labelledby="h-sky-sidebar"
-            >
-              <div class="boot-skeleton-stack" aria-hidden="true">
-                <div class="boot-skeleton-line boot-skeleton-line--md"></div>
-                <div class="boot-skeleton-line"></div>
-              </div>
-            </div>
-          </section>
-          <section
-            id="earth-sidebar-card"
-            class="sky-sidebar__card sky-sidebar__card--earth panel panel--glass"
-            aria-labelledby="h-earth-sidebar"
-            hidden
-          >
-            <h2 id="h-earth-sidebar" class="sky-sidebar__card-heading">Earth</h2>
-            <div
-              id="mount-earth-strip"
-              class="sky-sidebar__card-body sky-sidebar__card-body--earth"
-              role="region"
-              aria-labelledby="h-earth-sidebar"
-            ></div>
-          </section>
-          <section
             id="kilauea-live-card"
             class="sky-sidebar__card sky-sidebar__card--kilauea-live panel panel--glass"
             aria-labelledby="h-kilauea-live"
@@ -592,6 +573,51 @@
             ></div>
           </section>
           <section
+            id="air-quality-card"
+            class="sky-sidebar__card sky-sidebar__card--air-quality panel panel--glass"
+            aria-labelledby="h-air-quality"
+            hidden
+          >
+            <h2 id="h-air-quality" class="sky-sidebar__card-heading">Air Quality</h2>
+            <div
+              id="mount-air-quality"
+              class="sky-sidebar__card-body sky-sidebar__card-body--air-quality"
+              role="region"
+              aria-labelledby="h-air-quality"
+            ></div>
+          </section>
+          <section
+            class="sky-sidebar__card sky-sidebar__card--sky panel panel--glass"
+            aria-labelledby="h-sky-sidebar"
+          >
+            <h2 id="h-sky-sidebar" class="sky-sidebar__card-heading">Sky &amp; Space</h2>
+            <div
+              id="mount-sky-strip"
+              class="sky-sidebar__card-body sky-sidebar__card-body--sky"
+              role="region"
+              aria-labelledby="h-sky-sidebar"
+            >
+              <div class="boot-skeleton-stack" aria-hidden="true">
+                <div class="boot-skeleton-line boot-skeleton-line--md"></div>
+                <div class="boot-skeleton-line"></div>
+              </div>
+            </div>
+          </section>
+          <section
+            id="earth-sidebar-card"
+            class="sky-sidebar__card sky-sidebar__card--earth panel panel--glass"
+            aria-labelledby="h-earth-sidebar"
+            hidden
+          >
+            <h2 id="h-earth-sidebar" class="sky-sidebar__card-heading">Earth</h2>
+            <div
+              id="mount-earth-strip"
+              class="sky-sidebar__card-body sky-sidebar__card-body--earth"
+              role="region"
+              aria-labelledby="h-earth-sidebar"
+            ></div>
+          </section>
+          <section
             id="market-sidebar-card"
             class="sky-sidebar__card sky-sidebar__card--market panel panel--glass"
             aria-labelledby="h-market-sidebar"
@@ -633,6 +659,6 @@
       </section>
     </div>
     </div>
-    <script type="module" src="/js/app.js?v=mobile-panels-20260716-4"></script>
+    <script type="module" src="/js/app.js?v=mobile-panels-20260719-3"></script>
   </body>
 </html>

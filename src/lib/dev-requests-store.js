@@ -324,7 +324,7 @@ export async function createDevRequest(input, env = process.env) {
 
 /**
  * @param {string} id
- * @param {{ status?: string, priority?: number }} patch
+ * @param {{ status?: string, priority?: number, title?: string, body?: string }} patch
  * @param {NodeJS.ProcessEnv} [env]
  */
 export async function updateDevRequest(id, patch, env = process.env) {
@@ -337,12 +337,15 @@ export async function updateDevRequest(id, patch, env = process.env) {
 
   const status = patch?.status != null ? String(patch.status).trim() : existing.status;
   const priority = patch?.priority != null ? normalizePriority(patch.priority) : existing.priority;
+  const nextTitle = patch?.title != null ? String(patch.title).trim() : existing.title;
+  const title = nextTitle || existing.title;
+  const body = patch?.body != null ? String(patch.body).trim() : existing.body;
   const now = new Date().toISOString();
 
   const db = openDb(env);
   db.prepare(
-    `UPDATE dev_requests SET status = ?, priority = ?, updated_at = ? WHERE id = ?`,
-  ).run(status, priority, now, id);
+    `UPDATE dev_requests SET status = ?, priority = ?, title = ?, body = ?, updated_at = ? WHERE id = ?`,
+  ).run(status, priority, title, body, now, id);
 
   try {
     const jsonPath = path.join(devRequestsRoot(env), existing.folder, 'request.json');
@@ -351,6 +354,8 @@ export async function updateDevRequest(id, patch, env = process.env) {
     parsed.status = status;
     parsed.priority = priority;
     parsed.priorityLabel = DEV_REQUEST_PRIORITIES[priority]?.label || 'Med';
+    parsed.title = title;
+    parsed.body = body;
     parsed.updatedAt = now;
     await writeFile(jsonPath, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
   } catch {

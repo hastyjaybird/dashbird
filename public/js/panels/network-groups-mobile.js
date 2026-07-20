@@ -545,6 +545,8 @@ export function mountNetworkGroupsMobile(root) {
         checkWrap.append(check);
         li.append(checkWrap);
       }
+      const avatarWrap = document.createElement('div');
+      avatarWrap.className = 'mobile-network__avatar-wrap';
       const avatar = document.createElement('div');
       avatar.className = 'mobile-network__avatar';
       const avatarUrl = String(c.avatarUrl || '').trim();
@@ -558,6 +560,7 @@ export function mountNetworkGroupsMobile(root) {
       } else {
         avatar.textContent = contactName(c).slice(0, 1).toUpperCase();
       }
+      avatarWrap.append(avatar);
       const body = document.createElement('div');
       body.className = 'mobile-network__row-body';
       const name = document.createElement('div');
@@ -574,7 +577,7 @@ export function mountNetworkGroupsMobile(root) {
       const openContact = () => openContactDetail(c);
       avatar.addEventListener('click', openContact);
       body.addEventListener('click', openContact);
-      li.append(avatar, body);
+      li.append(avatarWrap, body);
       members.append(li);
     }
 
@@ -645,6 +648,8 @@ export function mountNetworkGroupsMobile(root) {
       for (const c of candidates) {
         const li = document.createElement('li');
         li.className = 'mobile-network__row mobile-groups__member-row';
+        const avatarWrap = document.createElement('div');
+        avatarWrap.className = 'mobile-network__avatar-wrap';
         const avatar = document.createElement('div');
         avatar.className = 'mobile-network__avatar';
         const avatarUrl = String(c.avatarUrl || '').trim();
@@ -658,6 +663,7 @@ export function mountNetworkGroupsMobile(root) {
         } else {
           avatar.textContent = contactName(c).slice(0, 1).toUpperCase();
         }
+        avatarWrap.append(avatar);
         const body = document.createElement('div');
         body.className = 'mobile-network__row-body';
         const name = document.createElement('div');
@@ -704,7 +710,7 @@ export function mountNetworkGroupsMobile(root) {
             addBtn.disabled = false;
           }
         });
-        li.append(avatar, body, addBtn);
+        li.append(avatarWrap, body, addBtn);
         addList.append(li);
       }
     }
@@ -738,11 +744,9 @@ export function mountNetworkGroupsMobile(root) {
           upsertGroup(current);
           dirty = false;
           saveStatus.textContent = 'Saved';
-          setTimeout(() => {
-            if (saveStatus.textContent === 'Saved') saveStatus.hidden = true;
-          }, 1500);
           renderList();
           paintMembers();
+          mobileNavBack();
         } catch (err) {
           saveStatus.textContent = `Save failed: ${err?.message || err}`;
           saveStatus.classList.add('mobile-network__save-status--err');
