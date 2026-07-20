@@ -2,12 +2,15 @@
  * Research + 2-month heads-up cards for user-added big conferences / festivals.
  */
 import { searchWeb, normalizeEventPageUrl } from './events-finder-event-url.js';
-import { capturePageScreenshot, searchChromeResultUrls } from './chrome-web-search.js';
+import {
+  searchChromeResultUrls,
+  searchChromeImageResults,
+} from './chrome-web-search.js';
 import {
   loadConferenceWatchlistStore,
   slugFromQuery,
   upsertConferenceWatchlistRecords,
-  saveBigEventShot,
+  saveBigEventFlier,
 } from './events-finder-conference-watchlist-store.js';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
@@ -35,6 +38,7 @@ Return JSON only:
   "venue": string | null,
   "city": string | null,
   "ticketPrice": string | null,
+  "ticketSalesStart": "YYYY-MM-DD" | null,
   "earlyBirdPrice": string | null,
   "earlyBirdStart": "YYYY-MM-DD" | null,
   "earlyBirdEnd": "YYYY-MM-DD" | null,
@@ -42,6 +46,7 @@ Return JSON only:
 }
 Report facts about the NEXT (upcoming) edition of the event.
 Use ISO dates only. ticketPrice is the regular/standard ticket price as a short label like "$299" or "$120–$1,553".
+ticketSalesStart is the date general/standard tickets go on sale for the upcoming edition (null if unknown or already on sale).
 earlyBirdPrice is the cheaper early bird / advance ticket price if one is offered (e.g. "$99"); null if none.
 If unsure, use null. Prefer the official event site over aggregators/resellers.`;
 
@@ -380,6 +385,107 @@ export function homepageRootFromUrl(rawUrl) {
 }
 
 /**
+ * Add whole years to a YYYY-MM-DD date string.
+ * @param {string | null | undefined} ymd
+ * @param {number} years
+ * @returns {string | null}
+ */
+function addYearsToYmd(ymd, years) {
+  const s = String(ymd || '').trim().slice(0, 10);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]) + Math.round(years);
+  return `${String(y).padStart(4, '0')}-${m[2]}-${m[3]}`;
+}
+
+/** How many years to add so a past date lands on/after `nowMs`. */
+function yearsUntilFuture(ymd, nowMs) {
+  const ms = parseYmd(ymd);
+  if (ms == null) return 0;
+  if (ms >= nowMs) return 0;
+  let add = 1;
+  while (add < 25) {
+    const rolled = parseYmd(addYearsToYmd(ymd, add));
+    if (rolled != null && rolled >= nowMs) return add;
+    add += 1;
+  }
+  return 1;
+}
+
+const FLIER_IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif)(?:[?#]|$)/i;
+const MAX_FLIER_BYTES = 6 * 1024 * 1024;
+
+/**
+ * Fetch an image URL into a Buffer, returning bytes + extension. Rejects
+ * non-images, huge files, and tiny (likely-icon) payloads.
+ * @param {string} url
+ * @returns {Promise<{ buffer: Buffer, ext: string } | null>}
+ */
+async function fetchImageBuffer(url) {
+  const href = String(url || '').trim();
+  if (!/^https?:\/\//i.test(href)) return null;
+  try {
+    const r = await fetch(href, {
+      headers: { 'User-Agent': BROWSER_UA, Accept: 'image/*' },
+      signal: AbortSignal.timeout(12_000),
+      redirect: 'follow',
+    });
+    if (!r.ok) return null;
+    const type = String(r.headers.get('content-type') || '').toLowerCase();
+    if (type && !type.startsWith('image/')) return null;
+    const ab = await r.arrayBuffer();
+    const buffer = Buffer.from(ab);
+    if (buffer.length < 3000 || buffer.length > MAX_FLIER_BYTES) return null;
+    let ext = 'jpg';
+    if (type.includes('png')) ext = 'png';
+    else if (type.includes('webp')) ext = 'webp';
+    else if (type.includes('gif')) ext = 'gif';
+    else if (type.includes('jpeg') || type.includes('jpg')) ext = 'jpg';
+    else {
+      const m = href.match(FLIER_IMAGE_EXT_RE);
+      if (m) ext = m[1].toLowerCase().replace('jpeg', 'jpg');
+    }
+    return { buffer, ext };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Find a flier / promotional graphic for the upcoming edition and download it.
+ * @param {string} name
+ * @param {number | null} eventYear
+ * @param {string} slug
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {Promise<string | null>} saved flier filename, or null
+ */
+async function findAndSaveFlier(name, eventYear, slug, env) {
+  const nm = String(name || '').trim();
+  if (!nm) return null;
+  const yr = Number.isFinite(Number(eventYear)) ? Number(eventYear) : new Date().getFullYear();
+  const queries = [
+    `${nm} ${yr} official poster flyer`,
+    `${nm} ${yr} lineup poster`,
+    `${nm} festival flyer`,
+  ];
+  for (const q of queries) {
+    let hits = [];
+    try {
+      hits = await searchChromeImageResults(q, 8, {}, env);
+    } catch {
+      hits = [];
+    }
+    for (const hit of hits) {
+      const img = await fetchImageBuffer(hit.url);
+      if (!img) continue;
+      const saved = await saveBigEventFlier(slug, img.buffer, img.ext, env).catch(() => null);
+      if (saved) return saved;
+    }
+  }
+  return null;
+}
+
+/**
  * Pull the first $ price (or range) from free text.
  * @param {string} text
  * @returns {string | null}
@@ -392,21 +498,35 @@ function extractPriceLabel(text) {
 }
 
 /**
- * Search + capture a website snapshot for a Big Event, without committing it to
- * the watchlist. Used by the "Add event → Search" preview step.
+ * Search the web for a Big Event's official site (URL only — no snapshot). Used
+ * by the "Add event → Search" preview step. In `deep` mode it runs more query
+ * variants and inspects more hits so a "search again" can dig deeper when the
+ * first pass could not find an official URL.
  * @param {string} query
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ deep?: boolean }} [opts]
  */
-export async function previewBigEvent(query, env = process.env) {
+export async function previewBigEvent(query, env = process.env, opts = {}) {
   const q = String(query || '').trim().slice(0, 120);
   const slug = slugFromQuery(q);
   if (!slug) return { ok: false, error: 'invalid_query' };
+  const deep = opts.deep === true;
   const year = new Date().getFullYear();
-  const queries = [
-    `${q} official site tickets ${year}`,
-    `${q} conference festival official website`,
-    `${q} tickets ${year}`,
-  ];
+  const queries = deep
+    ? [
+        `${q} official website`,
+        `${q} official site tickets ${year}`,
+        `${q} ${year} tickets buy passes`,
+        `${q} ${year + 1} tickets`,
+        `${q} conference festival homepage`,
+        `${q} event dates lineup ${year}`,
+        `"${q}" official`,
+      ]
+    : [
+        `${q} official site tickets ${year}`,
+        `${q} conference festival official website`,
+        `${q} tickets ${year}`,
+      ];
   /** @type {Array<{ url: string, title: string }>} */
   const hits = [];
   let pair = { homepageUrl: null, ticketUrl: null, officialHost: null, confident: false };
@@ -418,21 +538,26 @@ export async function previewBigEvent(query, env = process.env) {
     }
     pair = pickOfficialSitePair(q, hits);
     // Stop as soon as we have a confident official-domain match (avoids extra
-    // Brave queries that would trip its rate limit and fall back to weaker engines).
-    if (pair.confident) break;
+    // Brave queries that would trip its rate limit and fall back to weaker
+    // engines). A deep pass keeps going even when confident, to surface a
+    // stronger homepage/ticket pair.
+    if (pair.confident && !deep) break;
   }
 
   const homepageUrl =
     pair.homepageUrl || homepageRootFromUrl(pickOfficialSiteUrl(q, hits)) || hits[0]?.url || null;
   const ticketUrl = pair.ticketUrl || null;
-  // Snapshot the homepage/main page — it's the recognizable card image.
-  const url = homepageUrl;
-  let screenshotPath = null;
-  if (url) {
-    const buf = await capturePageScreenshot(url, {}, env).catch(() => null);
-    if (buf) screenshotPath = await saveBigEventShot(slug, buf, env).catch(() => null);
-  }
-  return { ok: true, slug, query: q, name: q, url, homepageUrl, ticketUrl, screenshotPath };
+  return {
+    ok: true,
+    slug,
+    query: q,
+    name: q,
+    url: homepageUrl,
+    homepageUrl,
+    ticketUrl,
+    deep,
+    urlFound: Boolean(homepageUrl),
+  };
 }
 
 /**
@@ -715,6 +840,9 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       String(firstNonEmpty(ticketParsed?.earlyBirdPrice, homeParsed?.earlyBirdPrice) || '').trim().slice(0, 120) || null;
     const earlyBirdStart = normalizeYmd(firstNonEmpty(ticketParsed?.earlyBirdStart, homeParsed?.earlyBirdStart));
     const earlyBirdEnd = normalizeYmd(firstNonEmpty(ticketParsed?.earlyBirdEnd, homeParsed?.earlyBirdEnd));
+    const ticketSalesStart = normalizeYmd(
+      firstNonEmpty(ticketParsed?.ticketSalesStart, homeParsed?.ticketSalesStart),
+    );
 
     let ticketPrice =
       String(firstNonEmpty(ticketParsed?.ticketPrice, homeParsed?.ticketPrice) || '').trim().slice(0, 120) || null;
@@ -756,11 +884,63 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       estimatedFromYear = existing.estimatedFromYear ?? null;
     }
 
-    // Capture the homepage snapshot (the recognizable card image) if missing.
-    const snapUrl = homepageUrl || seedUrl;
-    if (!screenshotPath && snapUrl) {
-      const buf = await capturePageScreenshot(snapUrl, {}, env).catch(() => null);
-      if (buf) screenshotPath = await saveBigEventShot(slug, buf, env).catch(() => null);
+    // Resolve the NEXT edition's dates. If the best dates we found are already in
+    // the past, first try a targeted next-year lookup; if that turns up nothing,
+    // estimate the next edition as exactly one year after the previous one.
+    const nowMs = Date.now();
+    let finalStart = eventStart || existing.eventStart || null;
+    let finalEnd = eventEnd || existing.eventEnd || null;
+    let nextEditionEstimated = false;
+    if (finalStart && parseYmd(finalStart) != null && parseYmd(finalStart) < nowMs) {
+      const pastYear = Number(finalStart.slice(0, 4));
+      const lookupYear = Math.max(pastYear + 1, new Date().getFullYear());
+      let nextStart = null;
+      let nextEnd = null;
+      try {
+        const nextHits = await searchConferenceHits(`${q} ${lookupYear} dates`, env);
+        /** @type {Array<{ url: string, title: string, text: string }>} */
+        const nextPages = [];
+        for (const h of nextHits.slice(0, 4)) {
+          const text = await fetchPageText(h.url);
+          if (text.length > 120) nextPages.push({ url: h.url, title: h.title || q, text });
+          if (nextPages.length >= 3) break;
+        }
+        const nextParsed = nextPages.length
+          ? (await extractWithOpenRouter(`${q} ${lookupYear}`, nextPages, env))
+            || extractHeuristic(`${q} ${lookupYear}`, nextPages)
+          : null;
+        const ns = normalizeYmd(nextParsed?.eventStart);
+        if (ns && parseYmd(ns) != null && parseYmd(ns) >= nowMs) {
+          nextStart = ns;
+          nextEnd = normalizeYmd(nextParsed?.eventEnd);
+        }
+      } catch {
+        /* fall through to estimate */
+      }
+      if (nextStart) {
+        finalStart = nextStart;
+        finalEnd = nextEnd || null;
+      } else {
+        // No announced next edition → assume one year (or more) after the last.
+        const add = yearsUntilFuture(finalStart, nowMs) || 1;
+        finalStart = addYearsToYmd(finalStart, add) || finalStart;
+        finalEnd = finalEnd ? addYearsToYmd(finalEnd, add) : null;
+        nextEditionEstimated = true;
+      }
+    }
+
+    // Find + download a flier / promo graphic for the upcoming edition (used as
+    // the sidebar card image). Retry at most daily so polls stay cheap.
+    let flierPath = existing.flierPath || null;
+    let flierCheckedAt = existing.flierCheckedAt || null;
+    const flierCheckedMs = Date.parse(String(flierCheckedAt || ''));
+    const flierStale =
+      !Number.isFinite(flierCheckedMs) || nowMs - flierCheckedMs > RETRY_MS;
+    if (!flierPath && flierStale) {
+      const flierYear = finalStart ? Number(finalStart.slice(0, 4)) : new Date().getFullYear();
+      const found = await findAndSaveFlier(parsedName || existing.name || q, flierYear, slug, env);
+      if (found) flierPath = found;
+      flierCheckedAt = new Date().toISOString();
     }
 
     const resolvedHomepage = homepageUrl || seedHomepage || existing.homepageUrl || null;
@@ -771,8 +951,8 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       url: resolvedHomepage || existing.url || null,
       homepageUrl: resolvedHomepage,
       ticketUrl: ticketUrl || existing.ticketUrl || null,
-      eventStart: eventStart || existing.eventStart || null,
-      eventEnd: eventEnd || existing.eventEnd || null,
+      eventStart: finalStart,
+      eventEnd: finalEnd,
       venue: venue || existing.venue || null,
       city: city || existing.city || null,
       ticketPrice,
@@ -781,11 +961,15 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       earlyBirdPrice: earlyBirdPrice || existing.earlyBirdPrice || null,
       earlyBirdStart: earlyBirdStart || existing.earlyBirdStart || null,
       earlyBirdEnd: earlyBirdEnd || existing.earlyBirdEnd || null,
+      ticketSalesStart: ticketSalesStart || existing.ticketSalesStart || null,
       screenshotPath: screenshotPath || existing.screenshotPath || null,
+      flierPath,
+      flierCheckedAt,
+      nextEditionEstimated,
       notes: notes || existing.notes || null,
       researching: false,
       error:
-        eventStart || existing.eventStart || ticketPrice || allPages.length ? null : 'no_pages_found',
+        finalStart || ticketPrice || allPages.length ? null : 'no_pages_found',
       researchedAt: nowIso,
     };
 
@@ -861,10 +1045,16 @@ export function buildTicketSalesStatus(record, now = new Date()) {
   const ebStart = parseYmd(record.earlyBirdStart);
   const ebEnd = parseYmd(record.earlyBirdEnd);
 
+  const salesStart = parseYmd(record.ticketSalesStart);
+
   if (endMs && t > endMs + DAY) return { text: 'Event passed', kind: 'ended' };
   if (ebStart && t < ebStart) return { text: 'Early bird soon', kind: 'soon' };
   if (ebStart && ebEnd && t >= ebStart && t < ebEnd) {
     return { text: 'Early bird on sale', kind: 'earlybird' };
+  }
+  // A known future on-sale date → tickets aren't out yet.
+  if (salesStart && t < salesStart) {
+    return { text: `Tickets ${formatMd(record.ticketSalesStart)}`, kind: 'soon' };
   }
   // Price only found on last year's edition → this year isn't on sale yet.
   if (record.ticketPriceEstimated) return { text: 'Not on sale yet', kind: 'soon' };
@@ -921,15 +1111,22 @@ export function conferenceRecordToHeadsUp(record, now = new Date()) {
   /** @type {string[]} */
   const whenBits = [];
   if (record.eventStart) {
-    whenBits.push(
+    const range =
       endMs && endMs !== startMs
         ? `${formatMd(record.eventStart)} – ${formatMd(record.eventEnd)}`
-        : formatMd(record.eventStart),
-    );
+        : formatMd(record.eventStart);
+    whenBits.push(record.nextEditionEstimated ? `${range} (est.)` : range);
   } else {
     whenBits.push('Dates TBD');
   }
   const placeBits = [record.venue, record.city].filter(Boolean);
+
+  // "Tickets go on sale …" line for the upcoming edition, when known & future.
+  let salesStartLine = null;
+  const salesStartMs = parseYmd(record.ticketSalesStart);
+  if (salesStartMs && now.getTime() < salesStartMs) {
+    salesStartLine = `Tickets on sale ${formatMd(record.ticketSalesStart)}`;
+  }
 
   const priceEstimated = record.ticketPriceEstimated === true;
   let ticketLabel = null;
@@ -948,6 +1145,9 @@ export function conferenceRecordToHeadsUp(record, now = new Date()) {
   }
   const screenshotUrl = record.screenshotPath
     ? `/api/events-finder/big-events/shot/${encodeURIComponent(record.screenshotPath)}`
+    : null;
+  const flierUrl = record.flierPath
+    ? `/api/events-finder/big-events/shot/${encodeURIComponent(record.flierPath)}`
     : null;
   const sales = buildTicketSalesStatus(record, now);
 
@@ -975,9 +1175,14 @@ export function conferenceRecordToHeadsUp(record, now = new Date()) {
     earlyBirdEnd: record.earlyBirdEnd || null,
     earlyBirdLine: eb?.text || null,
     earlyBirdKind: eb?.kind || null,
+    ticketSalesStart: record.ticketSalesStart || null,
+    salesStartLine,
     salesStatus: sales.text,
     salesStatusKind: sales.kind,
     screenshotUrl,
+    flierUrl,
+    flierImageUrl: flierUrl || screenshotUrl,
+    nextEditionEstimated: record.nextEditionEstimated === true,
     notes: record.notes || null,
     reminderLeadDays: record.reminderLeadDays ?? null,
     researching: record.researching === true,

@@ -1860,6 +1860,34 @@ body.dashy--deferred-ready .boot-deferred {
   overflow: hidden;
 }
 
+.events-finder__card--big-event {
+  border-color: rgba(120, 170, 255, 0.4);
+  background: linear-gradient(160deg, rgba(50, 85, 160, 0.28), rgba(0, 0, 0, 0.3));
+}
+
+.events-finder__card--big-event .events-finder__card-snap {
+  height: 8.5rem;
+}
+
+.events-finder__card-bigbadge {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(210, 228, 255, 0.95);
+  background: rgba(90, 140, 255, 0.35);
+  white-space: nowrap;
+}
+
+.mobile-events__card--big-event {
+  border-color: rgba(120, 170, 255, 0.4);
+  background: linear-gradient(160deg, rgba(50, 85, 160, 0.26), rgba(0, 0, 0, 0.28));
+}
+
 .events-finder__card-snap {
   width: 100%;
   height: 5.4rem;
@@ -3981,14 +4009,62 @@ body.chat-sidebar-resizer--dragging {
 
 .topbar {
   display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  flex-wrap: wrap;
-  gap: 0.5rem 1rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
   padding: 0.65rem clamp(0.75rem, 2vw, 1.5rem);
   position: sticky;
   top: 0;
   z-index: 5;
+}
+
+.topbar__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  width: 100%;
+}
+
+.topbar__row--top {
+  justify-content: space-between;
+}
+
+/* Bottom row (active event icons) only appears in mobile view when populated. */
+html:not(.dashbird-view-mobile) .topbar__row--bottom {
+  display: none;
+}
+
+html.dashbird-view-mobile .topbar__row--bottom {
+  display: flex;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+html.dashbird-view-mobile .topbar__row--bottom:not(:has(> :not([hidden]))) {
+  display: none;
+}
+
+/* Mobile view: dashbird left, weather centered, view toggle right. */
+html.dashbird-view-mobile .topbar__row--top {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+
+html.dashbird-view-mobile .topbar__head {
+  justify-self: start;
+}
+
+html.dashbird-view-mobile .topbar__weather {
+  justify-self: center;
+}
+
+html.dashbird-view-mobile .topbar__end {
+  justify-self: end;
+  width: auto;
+  margin-left: 0;
+  justify-content: flex-end;
 }
 
 .topbar.glass {
@@ -4260,6 +4336,10 @@ html.dashbird-view-mobile .topbar__context {
   background: rgba(255, 255, 255, 0.04);
   cursor: pointer;
   flex-shrink: 0;
+}
+
+.mobile-alert-header__btn[hidden] {
+  display: none;
 }
 
 .mobile-alert-header__btn:hover,

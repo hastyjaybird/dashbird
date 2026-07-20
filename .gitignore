@@ -25,6 +25,7 @@ data/market-watch-settings.json
 data/rain-alert-address.json
 data/secondary-watch-zip.json
 data/events-finder-criteria.json
+data/events-finder-conference-watchlist.json
 data/gmail-intake-token.json
 data/gmail-intake-tokens/
 data/gmail-events-cache.json

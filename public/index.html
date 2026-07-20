@@ -167,22 +167,31 @@
   </head>
   <body class="dashy">
     <header class="topbar glass" role="banner">
-      <div class="topbar__head">
-        <span class="brand">dashbird</span>
-        <nav id="mount-page-tabs" class="topbar__tabs-mount" aria-label="Dashboard pages"></nav>
-      </div>
-      <div class="topbar__end">
-        <div
-          id="mount-topbar-context"
-          class="topbar__context"
-          aria-label="Current location (live GPS when allowed, else server default)"
-        ></div>
+      <div class="topbar__row topbar__row--top">
+        <div class="topbar__head">
+          <span class="brand">dashbird</span>
+          <nav id="mount-page-tabs" class="topbar__tabs-mount" aria-label="Dashboard pages"></nav>
+        </div>
         <div
           id="mount-topbar-weather"
           class="topbar__weather"
           hidden
           aria-label="Current weather"
         ></div>
+        <div class="topbar__end">
+          <div
+            id="mount-topbar-context"
+            class="topbar__context"
+            aria-label="Current location (live GPS when allowed, else server default)"
+          ></div>
+          <div
+            id="mount-view-mode"
+            class="topbar__view-mode"
+            aria-label="Desktop or mobile view"
+          ></div>
+        </div>
+      </div>
+      <div class="topbar__row topbar__row--bottom">
         <div
           id="mount-topbar-conditions"
           class="topbar__conditions"
@@ -194,11 +203,6 @@
           class="topbar__aircraft"
           hidden
           aria-label="Nearby aircraft"
-        ></div>
-        <div
-          id="mount-view-mode"
-          class="topbar__view-mode"
-          aria-label="Desktop or mobile view"
         ></div>
       </div>
     </header>

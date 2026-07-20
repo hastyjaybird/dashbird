@@ -790,10 +790,11 @@ export function mountEventsFinder(root) {
     nameBtn.type = 'button';
     nameBtn.className = 'events-finder__big-events-name';
     nameBtn.title = 'View details';
-    if (item.screenshotUrl) {
+    const rowThumb = item.flierImageUrl || item.flierUrl || item.screenshotUrl;
+    if (rowThumb) {
       const thumb = document.createElement('img');
       thumb.className = 'events-finder__big-events-thumb';
-      thumb.src = String(item.screenshotUrl);
+      thumb.src = String(rowThumb);
       thumb.alt = '';
       thumb.loading = 'lazy';
       thumb.decoding = 'async';
@@ -838,6 +839,11 @@ export function mountEventsFinder(root) {
       eb.className = 'events-finder__big-events-earlybird';
       eb.textContent = String(item.earlyBirdLine);
       priceWrap.append(eb);
+    } else if (item.salesStartLine) {
+      const sl = document.createElement('span');
+      sl.className = 'events-finder__big-events-earlybird';
+      sl.textContent = String(item.salesStartLine);
+      priceWrap.append(sl);
     }
     if (item.ticketUrl) {
       const tlink = document.createElement('a');
@@ -923,12 +929,35 @@ export function mountEventsFinder(root) {
     paintBigEventsTable(conferenceWatchItemsFromPayload(), conferencePopoutStatusList);
   }
 
-  /** Re-pull the feed a few times so async research fills the table. */
+  /**
+   * Load the tracked Big Events straight from their own persistent store. This
+   * keeps the list visible across page refreshes / deploys and even when the
+   * main events feed hasn't loaded yet (or failed), because it reads the saved
+   * watchlist directly instead of waiting on a full scrape.
+   */
+  async function refreshBigEventsFromStore() {
+    try {
+      const res = await fetch('/api/events-finder/big-events/', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok || !Array.isArray(data.items)) return;
+      if (lastEventsPayload) lastEventsPayload.conferenceWatchlistItems = data.items;
+      if (conferencePopoutStatusList) paintBigEventsTable(data.items, conferencePopoutStatusList);
+    } catch {
+      /* keep whatever is already painted from cache */
+    }
+  }
+
+  /**
+   * Re-pull the tracked list + feed a few times so async research (dates, price,
+   * flier) fills the popout table and surfaces the sidebar card once ready.
+   */
   function reloadBigEventsSoon() {
+    void refreshBigEventsFromStore();
     void loadEvents({ catalogOnly: true, quiet: true });
-    for (const delay of [4000, 9000, 16000]) {
+    for (const delay of [5000, 12000, 25000, 40000]) {
       setTimeout(() => {
-        if (conferencePopoutStatusList) void loadEvents({ catalogOnly: true, quiet: true });
+        if (conferencePopoutStatusList) void refreshBigEventsFromStore();
+        void loadEvents({ catalogOnly: true, quiet: true });
       }, delay);
     }
   }
@@ -943,6 +972,7 @@ export function mountEventsFinder(root) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      void refreshBigEventsFromStore();
       void loadEvents({ catalogOnly: true, quiet: true });
     } catch (e) {
       window.alert(`Could not remove: ${String(e?.message || e)}`);
@@ -996,6 +1026,9 @@ export function mountEventsFinder(root) {
     const tbody = document.createElement('tbody');
     conferencePopoutStatusList = tbody;
     paintBigEventsTable(conferenceWatchItemsFromPayload(), tbody);
+    // Always confirm against the persistent store so a stale/empty feed payload
+    // never leaves the list looking wiped after a refresh or deploy.
+    void refreshBigEventsFromStore();
     table.append(thead, tbody);
     tableWrap.append(table);
 
@@ -1026,7 +1059,7 @@ export function mountEventsFinder(root) {
       setMsg('');
     }
 
-    async function runSearch() {
+    async function runSearch(deep = false) {
       const query = input.value.trim();
       if (!query) {
         input.focus();
@@ -1034,14 +1067,14 @@ export function mountEventsFinder(root) {
       }
       searchBtn.disabled = true;
       searchBtn.textContent = 'Searching…';
-      setMsg('Searching the web and grabbing a snapshot…');
+      setMsg(deep ? 'Digging deeper for the official site…' : 'Searching the web for the official site…');
       preview.hidden = true;
       preview.replaceChildren();
       try {
         const res = await fetch('/api/events-finder/big-events/search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query }),
+          body: JSON.stringify({ query, deep }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -1050,9 +1083,8 @@ export function mountEventsFinder(root) {
           url: data.preview?.url || null,
           homepageUrl: data.preview?.homepageUrl || data.preview?.url || null,
           ticketUrl: data.preview?.ticketUrl || null,
-          screenshotPath: data.preview?.screenshotPath || null,
         };
-        renderPreview(data.preview || {});
+        renderPreview({ ...(data.preview || {}), deep });
         setMsg('');
       } catch (e) {
         setMsg(`Search failed: ${String(e?.message || e)}`, 'error');
@@ -1066,26 +1098,13 @@ export function mountEventsFinder(root) {
       preview.replaceChildren();
       preview.hidden = false;
 
-      if (p.screenshotUrl) {
-        const shot = document.createElement('img');
-        shot.className = 'events-finder__big-events-shot';
-        shot.src = String(p.screenshotUrl);
-        shot.alt = `Snapshot of ${p.url || p.query}`;
-        shot.loading = 'lazy';
-        preview.append(shot);
-      } else {
-        const noShot = document.createElement('p');
-        noShot.className = 'events-finder__big-events-noshot muted';
-        noShot.textContent = 'No snapshot available — you can still add it.';
-        preview.append(noShot);
-      }
-
       const nameEl = document.createElement('p');
       nameEl.className = 'events-finder__big-events-preview-name';
       nameEl.textContent = String(p.name || p.query || '');
       preview.append(nameEl);
 
-      if (p.url) {
+      const urlFound = Boolean(p.url);
+      if (urlFound) {
         const link = document.createElement('a');
         link.className = 'events-finder__big-events-preview-url';
         link.href = String(p.url);
@@ -1096,7 +1115,9 @@ export function mountEventsFinder(root) {
       } else {
         const noUrl = document.createElement('p');
         noUrl.className = 'events-finder__big-events-preview-url muted';
-        noUrl.textContent = 'No official site found.';
+        noUrl.textContent = p.deep
+          ? 'Still no official site found. You can add it anyway and details will be researched.'
+          : 'No official site found — try “Search deeper”.';
         preview.append(noUrl);
       }
 
@@ -1117,17 +1138,29 @@ export function mountEventsFinder(root) {
       confirmBtn.className = 'events-finder__big-events-confirm';
       confirmBtn.textContent = 'Add event';
       confirmBtn.addEventListener('click', () => void confirmAdd(confirmBtn));
+      actions.append(confirmBtn);
+
+      // If no URL was found, offer a deeper search (more query variants + hits).
+      if (!urlFound && !p.deep) {
+        const deeperBtn = document.createElement('button');
+        deeperBtn.type = 'button';
+        deeperBtn.className = 'events-finder__big-events-again';
+        deeperBtn.textContent = 'Search deeper';
+        deeperBtn.addEventListener('click', () => void runSearch(true));
+        actions.append(deeperBtn);
+      }
+
       const againBtn = document.createElement('button');
       againBtn.type = 'button';
       againBtn.className = 'events-finder__big-events-again';
-      againBtn.textContent = 'Search again';
+      againBtn.textContent = 'Edit search';
       againBtn.addEventListener('click', () => {
         preview.hidden = true;
         preview.replaceChildren();
         input.focus();
         input.select();
       });
-      actions.append(confirmBtn, againBtn);
+      actions.append(againBtn);
       preview.append(actions);
     }
 
@@ -2507,11 +2540,12 @@ export function mountEventsFinder(root) {
 
     body.append(title);
 
-    if (item.screenshotUrl) {
+    const detailImage = item.flierImageUrl || item.flierUrl || item.screenshotUrl;
+    if (detailImage) {
       const shot = document.createElement('img');
       shot.className = 'events-finder__conference-detail-shot';
-      shot.src = String(item.screenshotUrl);
-      shot.alt = `Snapshot of ${item.title || item.query}`;
+      shot.src = String(detailImage);
+      shot.alt = `Flier for ${item.title || item.query}`;
       shot.loading = 'lazy';
       body.append(shot);
     }
@@ -2569,6 +2603,13 @@ export function mountEventsFinder(root) {
       body.append(ebNote);
     }
 
+    if (item.salesStartLine) {
+      const sl = document.createElement('p');
+      sl.className = 'events-finder__conference-ticket';
+      sl.textContent = String(item.salesStartLine);
+      body.append(sl);
+    }
+
     if (item.earlyBirdStart || item.earlyBirdEnd) {
       const eb = document.createElement('dl');
       eb.className = 'events-finder__conference-detail-dates';
@@ -2624,6 +2665,84 @@ export function mountEventsFinder(root) {
       title: String(item.title || item.query || 'Conference'),
       body,
     });
+  }
+
+  /**
+   * A big-event heads-up card for the sidebar feed (flier + dates + ticket
+   * status). Clicking opens the detail popout; it deliberately omits the
+   * fav/skip/calendar actions that only apply to regular feed events.
+   * @param {object} item conference-watch heads-up item
+   * @returns {HTMLElement}
+   */
+  function buildBigEventFeedCard(item) {
+    const card = document.createElement('article');
+    card.className = 'events-finder__card events-finder__card--big-event';
+    card.title = 'View big event details';
+
+    const snap = document.createElement('div');
+    snap.className = 'events-finder__card-snap';
+    const flier = item.flierImageUrl || item.flierUrl || item.screenshotUrl;
+    if (flier) {
+      const img = document.createElement('img');
+      img.src = String(flier);
+      img.alt = '';
+      img.loading = 'lazy';
+      img.referrerPolicy = 'no-referrer';
+      img.addEventListener('error', () => {
+        snap.replaceChildren();
+        snap.classList.add('events-finder__card-snap--empty');
+        const ph = document.createElement('span');
+        ph.className = 'events-finder__card-snap-label';
+        ph.textContent = String(item.title || 'B').slice(0, 1).toUpperCase();
+        snap.append(ph);
+      });
+      snap.append(img);
+    } else {
+      snap.classList.add('events-finder__card-snap--empty');
+      const ph = document.createElement('span');
+      ph.className = 'events-finder__card-snap-label';
+      ph.textContent = String(item.title || 'B').slice(0, 1).toUpperCase();
+      snap.append(ph);
+    }
+
+    const head = document.createElement('div');
+    head.className = 'events-finder__card-head';
+    const title = document.createElement('div');
+    title.className = 'events-finder__card-title';
+    title.textContent = item.title || item.query || 'Big event';
+    const badge = document.createElement('span');
+    badge.className = 'events-finder__card-bigbadge';
+    badge.textContent = 'Big event';
+    head.append(title, badge);
+
+    const cityEl = document.createElement('p');
+    cityEl.className = 'events-finder__card-city';
+    if (item.placeLabel) cityEl.textContent = String(item.placeLabel);
+    else cityEl.hidden = true;
+
+    const meta = document.createElement('p');
+    meta.className = 'events-finder__card-meta';
+    const metaBits = [item.whenLabel || 'Dates TBD'];
+    if (item.ticketLabel) metaBits.push(String(item.ticketLabel));
+    meta.textContent = metaBits.filter(Boolean).join(' · ');
+
+    const status = document.createElement('p');
+    status.className = 'events-finder__card-meta';
+    const statusPill = document.createElement('span');
+    statusPill.className = `events-finder__big-events-status events-finder__big-events-status--${item.salesStatusKind || 'unknown'}`;
+    statusPill.textContent = String(item.salesStatus || '—');
+    status.append(statusPill);
+    const extraLine = item.earlyBirdNote || item.salesStartLine || item.earlyBirdLine;
+    if (extraLine) {
+      const ex = document.createElement('span');
+      ex.className = 'events-finder__big-events-earlybird';
+      ex.textContent = String(extraLine);
+      status.append(ex);
+    }
+
+    card.append(snap, head, cityEl, meta, status);
+    card.addEventListener('click', () => openConferenceDetailPopout(item));
+    return card;
   }
 
   /**
@@ -3044,6 +3163,13 @@ export function mountEventsFinder(root) {
       });
     const events = showSkipped ? skippedList : mainEvents;
     lastFilteredEvents = events;
+    // Active tracked big events surface at the top of the feed with their flier.
+    const bigEventItems = Array.isArray(data.conferenceWatchlistItems)
+      ? data.conferenceWatchlistItems
+      : [];
+    const activeBigEvents = showSkipped
+      ? []
+      : bigEventItems.filter((it) => it && it.displayActive && !it.researching);
     const gmail = data.sources?.gmail;
     const facebook = data.sources?.facebook;
     const hadCards = listEl.querySelector('.events-finder__card') != null;
@@ -3055,7 +3181,7 @@ export function mountEventsFinder(root) {
       updating.textContent = 'Updating from sources…';
       listEl.append(updating);
     }
-    if (!events.length) {
+    if (!events.length && !activeBigEvents.length) {
       if ((opts.fromCache || data.ingestPending || dateReloadPending) && !showSkipped) {
         if (dateReloadPending) {
           // Ensure catalog reload catches up when UI dates aren't in this payload yet.
@@ -3098,6 +3224,9 @@ export function mountEventsFinder(root) {
       note.className = 'events-finder__skipped-note muted';
       note.textContent = `${events.length} skipped — Unskip to bring one back.`;
       listEl.append(note);
+    }
+    for (const item of activeBigEvents) {
+      listEl.append(buildBigEventFeedCard(item));
     }
     for (const ev of events) {
       listEl.append(buildEventCard(ev, { ...opts, skippedMode: showSkipped }));

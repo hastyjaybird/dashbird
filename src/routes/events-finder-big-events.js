@@ -38,11 +38,6 @@ router.use(
   }),
 );
 
-function shotUrl(path) {
-  const p = String(path || '').trim();
-  return p ? `/api/events-finder/big-events/shot/${encodeURIComponent(p)}` : null;
-}
-
 /** GET the current tracked Big Events table. */
 router.get('/', async (_req, res) => {
   try {
@@ -55,7 +50,7 @@ router.get('/', async (_req, res) => {
   }
 });
 
-/** POST /search { query } — find the official site + capture a snapshot (no commit). */
+/** POST /search { query, deep? } — find the official site URL (no snapshot, no commit). */
 router.post('/search', async (req, res) => {
   try {
     const query = String(req.body?.query || '').trim().slice(0, 120);
@@ -63,7 +58,8 @@ router.post('/search', async (req, res) => {
       res.status(400).json({ ok: false, error: 'missing_query' });
       return;
     }
-    const preview = await previewBigEvent(query, process.env);
+    const deep = req.body?.deep === true;
+    const preview = await previewBigEvent(query, process.env, { deep });
     if (!preview.ok) {
       res.status(422).json(preview);
       return;
@@ -78,8 +74,8 @@ router.post('/search', async (req, res) => {
         url: preview.url,
         homepageUrl: preview.homepageUrl || preview.url || null,
         ticketUrl: preview.ticketUrl || null,
-        screenshotPath: preview.screenshotPath || null,
-        screenshotUrl: shotUrl(preview.screenshotPath),
+        urlFound: preview.urlFound === true,
+        deep: preview.deep === true,
       },
     });
   } catch (e) {
@@ -242,6 +238,7 @@ router.delete('/:slug', async (req, res) => {
     }
 
     if (rec?.screenshotPath) await removeBigEventShot(rec.screenshotPath, process.env);
+    if (rec?.flierPath) await removeBigEventShot(rec.flierPath, process.env);
     await removeConferenceWatchlistSlugs([slug], process.env);
 
     res.setHeader('Cache-Control', 'private, no-store');

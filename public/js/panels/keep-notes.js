@@ -32,8 +32,6 @@ export function mountKeepNotes(root) {
     '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>';
   const VOICE_ICON =
     '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>';
-  const CHECKLIST_ICON =
-    '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M22 5.18L10.59 16.6l-4.24-4.24 1.41-1.41 2.83 2.83 10-10L22 5.18zM12 20c-4.41 0-8-3.59-8-8s3.59-8 8-8c1.57 0 3.04.46 4.28 1.25l1.45-1.45A9.9 9.9 0 0012 2C6.48 2 2 6.48 2 12s4.48 10 10 10c1.73 0 3.36-.44 4.78-1.22l-1.5-1.5A7.93 7.93 0 0112 20z"/></svg>';
 
   const composeActions = document.createElement('div');
   composeActions.className = 'keep-notes__compose-actions';
@@ -66,13 +64,6 @@ export function mountKeepNotes(root) {
   composeVoiceBtn.setAttribute('aria-label', 'Record voice note');
   composeVoiceBtn.innerHTML = VOICE_ICON;
 
-  const composeChecklistBtn = document.createElement('button');
-  composeChecklistBtn.type = 'button';
-  composeChecklistBtn.className = 'keep-notes__btn keep-notes__btn--icon';
-  composeChecklistBtn.title = 'Checklist (coming soon)';
-  composeChecklistBtn.setAttribute('aria-label', 'Checklist (coming soon)');
-  composeChecklistBtn.innerHTML = CHECKLIST_ICON;
-
   const composeClose = document.createElement('button');
   composeClose.type = 'button';
   composeClose.className = 'keep-notes__btn keep-notes__btn--ghost';
@@ -83,7 +74,7 @@ export function mountKeepNotes(root) {
   composeSave.className = 'keep-notes__btn keep-notes__btn--primary';
   composeSave.textContent = 'Add';
 
-  composeActions.append(composePinBtn, composeImageBtn, composeVoiceBtn, composeChecklistBtn, composeClose, composeSave);
+  composeActions.append(composePinBtn, composeImageBtn, composeVoiceBtn, composeClose, composeSave);
   compose.append(composeTitle, composeBody, composeActions);
   document.body.append(composeImageInput);
 
@@ -762,12 +753,6 @@ export function mountKeepNotes(root) {
     e.stopPropagation();
     expandCompose(true);
     composeImageInput.click();
-  });
-
-  composeChecklistBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    expandCompose(true);
-    showStatus('Checklists are coming soon');
   });
 
   composeImageInput.addEventListener('change', async () => {

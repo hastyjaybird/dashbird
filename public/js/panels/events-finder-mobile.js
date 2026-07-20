@@ -729,10 +729,11 @@ export function mountEventsFinderMobile(root) {
     main.type = 'button';
     main.className = 'events-finder__big-events-mobile-main';
     main.title = 'View details';
-    if (item.screenshotUrl) {
+    const rowThumb = item.flierImageUrl || item.flierUrl || item.screenshotUrl;
+    if (rowThumb) {
       const thumb = document.createElement('img');
       thumb.className = 'events-finder__big-events-thumb';
-      thumb.src = String(item.screenshotUrl);
+      thumb.src = String(rowThumb);
       thumb.alt = '';
       thumb.loading = 'lazy';
       main.append(thumb);
@@ -768,6 +769,11 @@ export function mountEventsFinderMobile(root) {
       eb.className = 'events-finder__big-events-earlybird';
       eb.textContent = String(item.earlyBirdNote);
       textWrap.append(eb);
+    } else if (item.salesStartLine) {
+      const sl = document.createElement('span');
+      sl.className = 'events-finder__big-events-earlybird';
+      sl.textContent = String(item.salesStartLine);
+      textWrap.append(sl);
     }
     if (item.ticketUrl) {
       const tlink = document.createElement('a');
@@ -839,11 +845,30 @@ export function mountEventsFinderMobile(root) {
     paintBigEventsTable(conferenceWatchItemsFromPayload(), conferencePopoutStatusList);
   }
 
+  /**
+   * Load the tracked Big Events straight from their own persistent store so the
+   * list stays visible across refreshes / deploys and even before the main
+   * events feed finishes loading (or if it fails).
+   */
+  async function refreshBigEventsFromStore() {
+    try {
+      const res = await fetch('/api/events-finder/big-events/', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok || !Array.isArray(data.items)) return;
+      if (lastEventsPayload) lastEventsPayload.conferenceWatchlistItems = data.items;
+      if (conferencePopoutStatusList) paintBigEventsTable(data.items, conferencePopoutStatusList);
+    } catch {
+      /* keep whatever is already painted from cache */
+    }
+  }
+
   function reloadBigEventsSoon() {
+    void refreshBigEventsFromStore();
     void loadEvents();
-    for (const delay of [4000, 9000, 16000]) {
+    for (const delay of [5000, 12000, 25000, 40000]) {
       setTimeout(() => {
-        if (conferencePopoutStatusList) void loadEvents();
+        if (conferencePopoutStatusList) void refreshBigEventsFromStore();
+        void loadEvents();
       }, delay);
     }
   }
@@ -858,6 +883,7 @@ export function mountEventsFinderMobile(root) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      void refreshBigEventsFromStore();
       void loadEvents();
     } catch (e) {
       window.alert(`Could not remove: ${String(e?.message || e)}`);
@@ -902,6 +928,9 @@ export function mountEventsFinderMobile(root) {
     list.className = 'events-finder__big-events-list';
     conferencePopoutStatusList = list;
     paintBigEventsTable(conferenceWatchItemsFromPayload(), list);
+    // Always confirm against the persistent store so a stale/empty feed payload
+    // never leaves the list looking wiped after a refresh or deploy.
+    void refreshBigEventsFromStore();
 
     wrap.append(addBar, form, msg, preview, list);
 
@@ -924,7 +953,7 @@ export function mountEventsFinderMobile(root) {
       setMsg('');
     }
 
-    async function runSearch() {
+    async function runSearch(deep = false) {
       const query = input.value.trim();
       if (!query) {
         input.focus();
@@ -932,14 +961,14 @@ export function mountEventsFinderMobile(root) {
       }
       searchBtn.disabled = true;
       searchBtn.textContent = 'Searching…';
-      setMsg('Searching the web and grabbing a snapshot…');
+      setMsg(deep ? 'Digging deeper for the official site…' : 'Searching the web for the official site…');
       preview.hidden = true;
       preview.replaceChildren();
       try {
         const res = await fetch('/api/events-finder/big-events/search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query }),
+          body: JSON.stringify({ query, deep }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -948,9 +977,8 @@ export function mountEventsFinderMobile(root) {
           url: data.preview?.url || null,
           homepageUrl: data.preview?.homepageUrl || data.preview?.url || null,
           ticketUrl: data.preview?.ticketUrl || null,
-          screenshotPath: data.preview?.screenshotPath || null,
         };
-        renderPreview(data.preview || {});
+        renderPreview({ ...(data.preview || {}), deep });
         setMsg('');
       } catch (e) {
         setMsg(`Search failed: ${String(e?.message || e)}`, 'error');
@@ -963,24 +991,12 @@ export function mountEventsFinderMobile(root) {
     function renderPreview(p) {
       preview.replaceChildren();
       preview.hidden = false;
-      if (p.screenshotUrl) {
-        const shot = document.createElement('img');
-        shot.className = 'events-finder__big-events-shot';
-        shot.src = String(p.screenshotUrl);
-        shot.alt = `Snapshot of ${p.url || p.query}`;
-        shot.loading = 'lazy';
-        preview.append(shot);
-      } else {
-        const noShot = document.createElement('p');
-        noShot.className = 'events-finder__big-events-noshot muted';
-        noShot.textContent = 'No snapshot available — you can still add it.';
-        preview.append(noShot);
-      }
       const nameEl = document.createElement('p');
       nameEl.className = 'events-finder__big-events-preview-name';
       nameEl.textContent = String(p.name || p.query || '');
       preview.append(nameEl);
-      if (p.url) {
+      const urlFound = Boolean(p.url);
+      if (urlFound) {
         const link = document.createElement('a');
         link.className = 'events-finder__big-events-preview-url';
         link.href = String(p.url);
@@ -988,6 +1004,13 @@ export function mountEventsFinderMobile(root) {
         link.rel = 'noopener noreferrer';
         link.textContent = String(p.url);
         preview.append(link);
+      } else {
+        const noUrl = document.createElement('p');
+        noUrl.className = 'events-finder__big-events-preview-url muted';
+        noUrl.textContent = p.deep
+          ? 'Still no official site found. You can add it anyway and details will be researched.'
+          : 'No official site found — try “Search deeper”.';
+        preview.append(noUrl);
       }
       if (p.ticketUrl && p.ticketUrl !== p.url) {
         const tlink = document.createElement('a');
@@ -1005,17 +1028,26 @@ export function mountEventsFinderMobile(root) {
       confirmBtn.className = 'events-finder__big-events-confirm';
       confirmBtn.textContent = 'Add event';
       confirmBtn.addEventListener('click', () => void confirmAdd(confirmBtn));
+      actions.append(confirmBtn);
+      if (!urlFound && !p.deep) {
+        const deeperBtn = document.createElement('button');
+        deeperBtn.type = 'button';
+        deeperBtn.className = 'events-finder__big-events-again';
+        deeperBtn.textContent = 'Search deeper';
+        deeperBtn.addEventListener('click', () => void runSearch(true));
+        actions.append(deeperBtn);
+      }
       const againBtn = document.createElement('button');
       againBtn.type = 'button';
       againBtn.className = 'events-finder__big-events-again';
-      againBtn.textContent = 'Search again';
+      againBtn.textContent = 'Edit search';
       againBtn.addEventListener('click', () => {
         preview.hidden = true;
         preview.replaceChildren();
         input.focus();
         input.select();
       });
-      actions.append(confirmBtn, againBtn);
+      actions.append(againBtn);
       preview.append(actions);
     }
 
@@ -1628,11 +1660,12 @@ export function mountEventsFinderMobile(root) {
     title.textContent = String(item.title || item.query || 'Big event');
     body.append(title);
 
-    if (item.screenshotUrl) {
+    const detailImage = item.flierImageUrl || item.flierUrl || item.screenshotUrl;
+    if (detailImage) {
       const shot = document.createElement('img');
       shot.className = 'events-finder__conference-detail-shot';
-      shot.src = String(item.screenshotUrl);
-      shot.alt = `Snapshot of ${item.title || item.query}`;
+      shot.src = String(detailImage);
+      shot.alt = `Flier for ${item.title || item.query}`;
       shot.loading = 'lazy';
       body.append(shot);
     }
@@ -1688,6 +1721,13 @@ export function mountEventsFinderMobile(root) {
       }
       ebNote.textContent = String(item.earlyBirdLine);
       body.append(ebNote);
+    }
+
+    if (item.salesStartLine) {
+      const sl = document.createElement('p');
+      sl.className = 'mobile-events__conference-ticket';
+      sl.textContent = String(item.salesStartLine);
+      body.append(sl);
     }
 
     if (item.earlyBirdStart || item.earlyBirdEnd) {
@@ -2379,6 +2419,81 @@ export function mountEventsFinderMobile(root) {
    * @param {object} ev
    * @returns {HTMLElement}
    */
+  /**
+   * A big-event heads-up card for the mobile feed (flier + dates + ticket
+   * status). Tapping opens the detail popout.
+   * @param {object} item conference-watch heads-up item
+   * @returns {HTMLElement}
+   */
+  function buildBigEventCard(item) {
+    const card = document.createElement('article');
+    card.className = 'mobile-events__card mobile-events__card--big-event';
+
+    const row = document.createElement('div');
+    row.className = 'mobile-events__row';
+
+    const icon = document.createElement('div');
+    icon.className = 'mobile-events__icon';
+    const flier = item.flierImageUrl || item.flierUrl || item.screenshotUrl;
+    if (flier) {
+      const img = document.createElement('img');
+      img.src = String(flier);
+      img.alt = '';
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      img.referrerPolicy = 'no-referrer';
+      img.addEventListener('error', () => {
+        icon.replaceChildren();
+        icon.classList.add('mobile-events__icon--empty');
+        icon.textContent = String(item.title || 'B').slice(0, 1).toUpperCase();
+      });
+      icon.append(img);
+    } else {
+      icon.classList.add('mobile-events__icon--empty');
+      icon.textContent = String(item.title || 'B').slice(0, 1).toUpperCase();
+    }
+
+    const body = document.createElement('div');
+    body.className = 'mobile-events__body';
+
+    const head = document.createElement('div');
+    head.className = 'mobile-events__head';
+    const title = document.createElement('h3');
+    title.className = 'mobile-events__title';
+    title.textContent = String(item.title || item.query || 'Big event');
+    const badge = document.createElement('span');
+    badge.className = 'events-finder__card-bigbadge';
+    badge.textContent = 'Big event';
+    head.append(title, badge);
+
+    const meta = document.createElement('p');
+    meta.className = 'mobile-events__meta';
+    const bits = [item.whenLabel || 'Dates TBD'];
+    if (item.placeLabel) bits.push(String(item.placeLabel));
+    if (item.ticketLabel) bits.push(String(item.ticketLabel));
+    meta.textContent = bits.filter(Boolean).join(' · ');
+
+    const statusLine = document.createElement('p');
+    statusLine.className = 'mobile-events__meta';
+    const statusPill = document.createElement('span');
+    statusPill.className = `events-finder__big-events-status events-finder__big-events-status--${item.salesStatusKind || 'unknown'}`;
+    statusPill.textContent = String(item.salesStatus || '—');
+    statusLine.append(statusPill);
+    const extra = item.earlyBirdNote || item.salesStartLine || item.earlyBirdLine;
+    if (extra) {
+      const ex = document.createElement('span');
+      ex.className = 'events-finder__big-events-earlybird';
+      ex.textContent = String(extra);
+      statusLine.append(ex);
+    }
+
+    body.append(head, meta, statusLine);
+    row.append(icon, body);
+    card.append(row);
+    card.addEventListener('click', () => openConferenceDetailPopout(item));
+    return card;
+  }
+
   function buildCard(ev) {
     const card = document.createElement('article');
     card.className = 'mobile-events__card';
@@ -2622,9 +2737,16 @@ export function mountEventsFinderMobile(root) {
     lastFilteredEvents = events;
     if (mapBackdrop) void syncMap(events, data);
 
+    const bigEventItems = Array.isArray(data?.conferenceWatchlistItems)
+      ? data.conferenceWatchlistItems
+      : [];
+    const activeBigEvents = showSkipped
+      ? []
+      : bigEventItems.filter((it) => it && it.displayActive && !it.researching);
+
     list.replaceChildren();
     refreshConferencePopoutIfOpen();
-    if (!events.length) {
+    if (!events.length && !activeBigEvents.length) {
       status.hidden = false;
       status.textContent = showSkipped
         ? 'No skipped events match these filters.'
@@ -2632,6 +2754,9 @@ export function mountEventsFinderMobile(root) {
       return;
     }
     status.hidden = true;
+    for (const item of activeBigEvents) {
+      list.append(buildBigEventCard(item));
+    }
     for (const ev of events) {
       list.append(buildCard(ev));
     }

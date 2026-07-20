@@ -47,6 +47,32 @@ export async function saveBigEventShot(slug, buffer, env = process.env) {
   return file;
 }
 
+/** Image extensions we accept for a downloaded event flier / graphic. */
+const FLIER_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif']);
+
+/**
+ * Persist a downloaded flier / promotional graphic for a Big Event.
+ * @param {string} slug
+ * @param {Buffer} buffer
+ * @param {string} ext file extension (png/jpg/jpeg/webp/gif)
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<string | null>}
+ */
+export async function saveBigEventFlier(slug, buffer, ext, env = process.env) {
+  const key = String(slug || '').trim().slice(0, 100);
+  if (!key || !buffer || !buffer.length) return null;
+  const clean = String(ext || 'jpg').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  const useExt = FLIER_EXTS.has(clean) ? clean : 'jpg';
+  const dir = bigEventsShotsDir(env);
+  await fs.mkdir(dir, { recursive: true });
+  const file = `${key}-flier.${useExt}`;
+  const target = path.join(dir, file);
+  const staging = `${target}.tmp.${process.pid}.${Date.now()}`;
+  await fs.writeFile(staging, buffer);
+  await fs.rename(staging, target);
+  return file;
+}
+
 /**
  * @param {string | null | undefined} file
  * @param {NodeJS.ProcessEnv} [env]
@@ -107,7 +133,14 @@ function normalizeRecord(raw) {
     earlyBirdPrice: String(r.earlyBirdPrice || '').trim().slice(0, 120) || null,
     earlyBirdStart: normalizeDate(r.earlyBirdStart),
     earlyBirdEnd: normalizeDate(r.earlyBirdEnd),
+    // Date general (non-early-bird) ticket sales open, when announced.
+    ticketSalesStart: normalizeDate(r.ticketSalesStart),
     screenshotPath: String(r.screenshotPath || '').trim().slice(0, 200) || null,
+    // Downloaded flier / promo graphic for the upcoming edition (sidebar image).
+    flierPath: String(r.flierPath || '').trim().slice(0, 200) || null,
+    flierCheckedAt: String(r.flierCheckedAt || '').trim().slice(0, 40) || null,
+    // True when dates were estimated (+1 year) because no next-edition info exists.
+    nextEditionEstimated: r.nextEditionEstimated === true,
     notes: String(r.notes || '').trim().slice(0, 400) || null,
     // How many days before the event to start reminding from the event website.
     // null = use the default heads-up window.
