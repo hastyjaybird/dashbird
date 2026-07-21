@@ -1098,11 +1098,12 @@ body.dashy--deferred-ready .boot-deferred {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
+  align-items: center;
 }
 
-/* Name + button share the first row; the optional URL wraps to its own row. */
+/* Name + Search + Add manually on the first row; optional URL wraps below. */
 .events-finder__big-events-input--url {
-  order: 3;
+  order: 4;
   flex: 1 1 100%;
   font-size: 0.82rem;
 }

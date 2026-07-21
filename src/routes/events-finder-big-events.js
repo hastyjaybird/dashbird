@@ -91,7 +91,12 @@ router.post('/search', async (req, res) => {
   }
 });
 
-/** POST /add { query, url?, screenshotPath? } — commit to the watchlist + research. */
+/**
+ * POST /add { query, url?, homepageUrl?, ticketUrl?, manual? }
+ * Commit to the watchlist. `manual: true` is for events that cannot be found
+ * via search — locks the record as hand-edited and only runs research when a
+ * URL was provided (scrape that page; do not rediscover a wrong site).
+ */
 router.post('/add', async (req, res) => {
   try {
     const query = String(req.body?.query || '').trim().slice(0, 120);
@@ -103,6 +108,7 @@ router.post('/add', async (req, res) => {
     const homepageUrl = String(req.body?.homepageUrl || '').trim().slice(0, 500) || url || null;
     const ticketUrl = String(req.body?.ticketUrl || '').trim().slice(0, 500) || null;
     const screenshotPath = String(req.body?.screenshotPath || '').trim().slice(0, 200) || null;
+    const manual = req.body?.manual === true;
     const slug = slugFromQuery(query);
     if (!slug) {
       res.status(400).json({ ok: false, error: 'invalid_query' });
@@ -131,6 +137,10 @@ router.post('/add', async (req, res) => {
     // (and unless) research completes. Only overlay the new url/screenshot.
     const priorStore = await loadConferenceWatchlistStore(process.env);
     const priorRec = priorStore.bySlug[slug] || {};
+    const hasSite = Boolean(homepageUrl || url);
+    // Manual name-only add: lock so daily research cannot invent a wrong site.
+    // Manual + pasted URL: still scrape that page, but keep the manual lock.
+    const runResearch = !manual || hasSite;
     await upsertConferenceWatchlistRecords(
       {
         [slug]: {
@@ -142,27 +152,37 @@ router.post('/add', async (req, res) => {
           homepageUrl: homepageUrl || priorRec.homepageUrl || null,
           ticketUrl: ticketUrl || priorRec.ticketUrl || null,
           screenshotPath: screenshotPath || priorRec.screenshotPath || null,
-          researching: true,
+          manualEdit: manual || priorRec.manualEdit === true,
+          researching: runResearch,
           researchedAt: new Date().toISOString(),
         },
       },
       process.env,
     );
 
-    // Kick off full research (dates, price, early bird, estimate) in the background.
-    setImmediate(() => {
-      void researchConferenceQuery(query, process.env, {
-        url,
-        homepageUrl,
-        ticketUrl,
-        screenshotPath,
-      }).catch((err) => {
-        console.warn('[big-events] research failed:', String(err?.message || err).slice(0, 160));
+    if (runResearch) {
+      setImmediate(() => {
+        void researchConferenceQuery(query, process.env, {
+          url,
+          homepageUrl,
+          ticketUrl,
+          screenshotPath,
+        }).catch((err) => {
+          console.warn('[big-events] research failed:', String(err?.message || err).slice(0, 160));
+        });
       });
-    });
+    }
 
     const store = await loadConferenceWatchlistStore(process.env);
-    const rec = store.bySlug[slug] || { slug, query, name: query, url, screenshotPath, researching: true };
+    const rec = store.bySlug[slug] || {
+      slug,
+      query,
+      name: query,
+      url,
+      screenshotPath,
+      manualEdit: manual,
+      researching: runResearch,
+    };
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, item: conferenceRecordToWatchItem(rec, new Date()) });
   } catch (e) {

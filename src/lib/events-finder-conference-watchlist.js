@@ -1837,12 +1837,6 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
   const existingStore = await loadConferenceWatchlistStore(env);
   const existing = existingStore.bySlug[slug] || {};
 
-  // Hand-edited records are locked: auto/daily research must not overwrite the
-  // user's corrections. A forced re-research (opts.force) clears the lock.
-  if (existing.manualEdit === true && opts.force !== true) {
-    researchInFlight.delete(slug);
-    return { ok: true, slug, skipped: true, manualEdit: true };
-  }
   const seedHomepage =
     homepageRootFromUrl(opts.homepageUrl)
     || homepageRootFromUrl(existing.homepageUrl)
@@ -1860,6 +1854,14 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
   const urlProvidedNow = Boolean(
     normalizeEventPageUrl(opts.url) || homepageRootFromUrl(opts.homepageUrl),
   );
+  // Hand-edited records are locked: auto/daily research must not overwrite the
+  // user's corrections. Exceptions: forced re-research, or this call just
+  // provided a seed URL (manual add with a pasted link — scrape that page).
+  if (existing.manualEdit === true && opts.force !== true && !urlProvidedNow) {
+    researchInFlight.delete(slug);
+    return { ok: true, slug, skipped: true, manualEdit: true };
+  }
+  const keepManualEdit = existing.manualEdit === true && opts.force !== true;
   let screenshotPath =
     String(opts.screenshotPath || '').trim() || existing.screenshotPath || null;
 
@@ -2165,6 +2167,8 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       nextEditionEstimated,
       notes: notes || existing.notes || null,
       researching: false,
+      // Preserve hand-edit lock (manual add / Edit save). Force clears it.
+      manualEdit: keepManualEdit,
       // Preserve user snooze/skip state across background re-research.
       snoozedUntil: existing.snoozedUntil || null,
       skipped: existing.skipped === true,
@@ -2186,6 +2190,7 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
         homepageUrl: seedHomepage,
         ticketUrl: seedTicket,
         screenshotPath,
+        manualEdit: keepManualEdit,
         researching: false,
         error: String(e?.message || e || 'research_failed').slice(0, 200),
         researchedAt: nowIso,

@@ -1200,13 +1200,18 @@ export function mountEventsFinderMobile(root) {
     const urlInput = document.createElement('input');
     urlInput.type = 'url';
     urlInput.className = 'events-finder__big-events-input events-finder__big-events-input--url';
-    urlInput.placeholder = 'Event URL (optional — leave blank to auto-find)';
+    urlInput.placeholder = 'Event URL (optional — paste if you already have it)';
     urlInput.autocomplete = 'off';
     const searchBtn = document.createElement('button');
     searchBtn.type = 'button';
     searchBtn.className = 'events-finder__big-events-search';
     searchBtn.textContent = 'Search';
-    form.append(input, urlInput, searchBtn);
+    const manualBtn = document.createElement('button');
+    manualBtn.type = 'button';
+    manualBtn.className = 'events-finder__big-events-again';
+    manualBtn.textContent = 'Add manually';
+    manualBtn.title = 'Skip search — add by name (and optional URL), then fill details in Edit';
+    form.append(input, searchBtn, manualBtn, urlInput);
 
     const msg = document.createElement('p');
     msg.className = 'events-finder__big-events-msg muted';
@@ -1226,7 +1231,7 @@ export function mountEventsFinderMobile(root) {
 
     wrap.append(addBar, form, msg, preview, list);
 
-    /** @type {{ query: string, url: string|null, screenshotPath: string|null }|null} */
+    /** @type {{ query: string, url: string|null, homepageUrl?: string|null, ticketUrl?: string|null, screenshotPath?: string|null, manual?: boolean }|null} */
     let pendingPreview = null;
 
     function setMsg(text, kind) {
@@ -1242,10 +1247,6 @@ export function mountEventsFinderMobile(root) {
       return /^https?:\/\//i.test(v) ? v : `https://${v}`;
     }
 
-    function updatePrimaryLabel() {
-      searchBtn.textContent = urlInput.value.trim() ? 'Add' : 'Search';
-    }
-
     function resetAddFlow() {
       form.hidden = true;
       addToggle.hidden = false;
@@ -1254,35 +1255,42 @@ export function mountEventsFinderMobile(root) {
       pendingPreview = null;
       input.value = '';
       urlInput.value = '';
-      updatePrimaryLabel();
       setMsg('');
     }
 
     /**
-     * Primary action: with a URL typed, skip the web search and confirm that
-     * exact site (it gets scraped for details). Blank URL → auto-find as before.
+     * Skip web search — add by name (optional URL). Use for invite-only /
+     * unlisted events that search cannot find.
      */
-    function submitAdd() {
-      const manualUrl = normalizeManualUrl(urlInput.value);
-      if (manualUrl) {
-        const query = input.value.trim();
-        if (!query) {
-          input.focus();
-          return;
-        }
-        pendingPreview = { query, url: manualUrl, homepageUrl: manualUrl, ticketUrl: null };
-        renderPreview({
-          name: query,
-          query,
-          url: manualUrl,
-          homepageUrl: manualUrl,
-          urlFound: true,
-          manual: true,
-          deep: true,
-        });
-        setMsg('');
+    function startManualAdd() {
+      const query = input.value.trim();
+      if (!query) {
+        input.focus();
         return;
       }
+      const manualUrl = normalizeManualUrl(urlInput.value) || null;
+      pendingPreview = {
+        query,
+        url: manualUrl,
+        homepageUrl: manualUrl,
+        ticketUrl: null,
+        manual: true,
+      };
+      renderPreview({
+        name: query,
+        query,
+        url: manualUrl,
+        homepageUrl: manualUrl,
+        urlFound: Boolean(manualUrl),
+        manual: true,
+        deep: true,
+        candidates: [],
+        confident: true,
+      });
+      setMsg('');
+    }
+
+    function submitAdd() {
       void runSearch();
     }
 
@@ -1326,6 +1334,7 @@ export function mountEventsFinderMobile(root) {
     function renderPreview(p) {
       preview.replaceChildren();
       preview.hidden = false;
+      const isManual = p.manual === true || pendingPreview?.manual === true;
       const nameEl = document.createElement('p');
       nameEl.className = 'events-finder__big-events-preview-name';
       nameEl.textContent = String(p.name || p.query || '');
@@ -1334,10 +1343,26 @@ export function mountEventsFinderMobile(root) {
       const candidates = Array.isArray(p.candidates)
         ? p.candidates.filter((c) => c && c.url)
         : [];
-      const unsure = p.confident !== true && candidates.length >= 2;
+      const unsure = !isManual && p.confident !== true && candidates.length >= 2;
       const urlFound = Boolean(p.url) || candidates.length > 0;
 
-      if (unsure) {
+      if (isManual) {
+        const hint = document.createElement('p');
+        hint.className = 'events-finder__big-events-preview-hint muted';
+        hint.textContent = urlFound
+          ? 'Manual add — will scrape this URL for details (no web search).'
+          : 'Manual add — no site yet. Add it, then use Edit to fill dates, price, and a URL.';
+        preview.append(hint);
+        if (urlFound) {
+          const link = document.createElement('a');
+          link.className = 'events-finder__big-events-preview-url';
+          link.href = String(p.url || '');
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = String(p.url || '');
+          preview.append(link);
+        }
+      } else if (unsure) {
         const hint = document.createElement('p');
         hint.className = 'events-finder__big-events-preview-hint muted';
         hint.textContent = 'Not sure which site is official — pick one:';
@@ -1393,11 +1418,11 @@ export function mountEventsFinderMobile(root) {
         const noUrl = document.createElement('p');
         noUrl.className = 'events-finder__big-events-preview-url muted';
         noUrl.textContent = p.deep
-          ? 'Still no official site found. You can add it anyway and details will be researched.'
-          : 'No official site found — try “Search deeper”.';
+          ? 'Still no official site found. Add anyway, or switch to manual and paste a URL.'
+          : 'No official site found — try “Search deeper”, or add manually.';
         preview.append(noUrl);
       }
-      if (p.ticketUrl && p.ticketUrl !== (pendingPreview?.url || p.url)) {
+      if (!isManual && p.ticketUrl && p.ticketUrl !== (pendingPreview?.url || p.url)) {
         const tlink = document.createElement('a');
         tlink.className = 'events-finder__big-events-preview-url events-finder__big-events-preview-tickets';
         tlink.href = String(p.ticketUrl);
@@ -1411,10 +1436,14 @@ export function mountEventsFinderMobile(root) {
       const confirmBtn = document.createElement('button');
       confirmBtn.type = 'button';
       confirmBtn.className = 'events-finder__big-events-confirm';
-      confirmBtn.textContent = unsure ? 'Add selected' : 'Add event';
+      confirmBtn.textContent = isManual
+        ? 'Add event'
+        : unsure
+          ? 'Add selected'
+          : 'Add event';
       confirmBtn.addEventListener('click', () => void confirmAdd(confirmBtn));
       actions.append(confirmBtn);
-      if ((!urlFound || unsure) && !p.deep) {
+      if (!isManual && (!urlFound || unsure) && !p.deep) {
         const deeperBtn = document.createElement('button');
         deeperBtn.type = 'button';
         deeperBtn.className = 'events-finder__big-events-again';
@@ -1422,13 +1451,27 @@ export function mountEventsFinderMobile(root) {
         deeperBtn.addEventListener('click', () => void runSearch(true));
         actions.append(deeperBtn);
       }
+      if (!isManual && (unsure || !urlFound)) {
+        const noneBtn = document.createElement('button');
+        noneBtn.type = 'button';
+        noneBtn.className = 'events-finder__big-events-again';
+        noneBtn.textContent = unsure ? 'None of these' : 'Add manually';
+        noneBtn.title = 'Skip these results — add by name (optional URL)';
+        noneBtn.addEventListener('click', () => {
+          urlInput.value = '';
+          startManualAdd();
+          urlInput.focus();
+        });
+        actions.append(noneBtn);
+      }
       const againBtn = document.createElement('button');
       againBtn.type = 'button';
       againBtn.className = 'events-finder__big-events-again';
-      againBtn.textContent = 'Edit search';
+      againBtn.textContent = isManual ? 'Cancel' : 'Edit search';
       againBtn.addEventListener('click', () => {
         preview.hidden = true;
         preview.replaceChildren();
+        pendingPreview = null;
         input.focus();
         input.select();
       });
@@ -1440,6 +1483,8 @@ export function mountEventsFinderMobile(root) {
       if (!pendingPreview) return;
       btn.disabled = true;
       btn.textContent = 'Adding…';
+      const wasManual = pendingPreview.manual === true;
+      const hadUrl = Boolean(pendingPreview.url || pendingPreview.homepageUrl);
       try {
         const res = await fetch('/api/events-finder/big-events/add', {
           method: 'POST',
@@ -1449,8 +1494,12 @@ export function mountEventsFinderMobile(root) {
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
         resetAddFlow();
-        setMsg('Added — looking up dates, price, and early bird…');
-        setTimeout(() => setMsg(''), 6000);
+        if (wasManual && !hadUrl) {
+          setMsg('Added — open Edit on the row to fill dates, price, and a URL.');
+        } else {
+          setMsg('Added — looking up dates, price, and early bird…');
+        }
+        setTimeout(() => setMsg(''), 8000);
         reloadBigEventsSoon();
       } catch (e) {
         btn.disabled = false;
@@ -1465,11 +1514,12 @@ export function mountEventsFinderMobile(root) {
       input.focus();
     });
     searchBtn.addEventListener('click', () => submitAdd());
-    urlInput.addEventListener('input', updatePrimaryLabel);
+    manualBtn.addEventListener('click', () => startManualAdd());
     const onAddEnter = (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        submitAdd();
+        if (document.activeElement === urlInput) startManualAdd();
+        else submitAdd();
       }
     };
     input.addEventListener('keydown', onAddEnter);

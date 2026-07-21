@@ -1,16 +1,46 @@
 {
-  "summaryText": "Recent emails include confirmations for orders and inquiries about events.",
-  "generatedAt": "2026-07-21T03:59:59.229Z",
+  "summaryText": "You have two emails requiring action: a subscription confirmation and a contribution inquiry.",
+  "generatedAt": "2026-07-21T04:39:26.905Z",
   "lastScanYmd": "2026-07-20",
-  "lastScanAt": "2026-07-21T03:59:59.229Z",
+  "lastScanAt": "2026-07-21T04:39:26.905Z",
   "windowDays": 10,
   "items": [
     {
-      "id": "7620906d-755d-49d3-9d8f-63c016fba83c",
-      "title": "Respond to inquiry about contributing to Phage",
+      "id": "88d3b523-c919-4596-8333-5fcd4cc6ad4a",
+      "title": "Confirm Climatebase subscription",
+      "company": "Climatebase",
+      "detail": "Climatebase: confirm subscription to keep receiving updates.",
+      "deadline": "2026-07-23T03:40:15.000Z",
+      "deadlineSource": "response_48h",
+      "needsReply": true,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152584",
+          "threadId": "19f82c29b1f0210d",
+          "subject": "Hey...you still here?",
+          "date": "2026-07-21T03:40:15.000Z",
+          "gmailId": "19f82c29b1f0210d",
+          "rfc822MessageId": "j4JMuLpSQH-_RpLZZ-7SbQ@geopod-ismtpd-35"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-21T04:39:26.905Z",
+      "updatedAt": "2026-07-21T04:39:26.905Z",
+      "fingerprint": "cbecbcb8809c8d2d",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "d3098ad3-f6f7-4b29-abaa-c4e5be4be0e2",
+      "title": "Respond to Phage contribution inquiry",
       "company": "Phage",
-      "detail": "Phage: Samstorm is interested in contributing to the camp and wants to learn more.",
-      "deadline": "2026-07-23T00:00:00.000Z",
+      "detail": "Phage: reply to Samstorm about contributing to Phage.",
+      "deadline": "2026-07-23T03:13:47.000Z",
       "deadlineSource": "response_48h",
       "needsReply": true,
       "mailboxes": [
@@ -31,8 +61,8 @@
       "pinned": false,
       "unpinDeleteAt": null,
       "createdAt": "2026-07-21T03:59:59.229Z",
-      "updatedAt": "2026-07-21T03:59:59.229Z",
-      "fingerprint": "cbc2c929e1100348",
+      "updatedAt": "2026-07-21T04:39:26.905Z",
+      "fingerprint": "eac7b18ceb3acb12",
       "vikunjaTaskId": null
     },
     {
