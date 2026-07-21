@@ -115,23 +115,20 @@ event-page seeds.
 
 **Primary path:** In the Meetup account, set email notifications (group digests, event invites, RSVP mail) to **`jay.intake.box@gmail.com`**, then scrape via **Intake Gmail** (`from:meetup.com` + Meetup URLs already in the query).
 
-**Optional later:** Official API if credentials land and we want location/group pins beyond what email covers. Sample seed still in [`docs/events-sample-urls.md`](events-sample-urls.md).
+**Optional later:** Official API if credentials land and we want location search beyond pinned groups + email. Sample seed still in [`docs/events-sample-urls.md`](events-sample-urls.md).
 
-**Today:** Site up; HTML/API ingest **Not wired**. Gmail path is the intended live source.
-
-**Seed intent (API / pins — deferred)**
-
-- Pin candidates if we ever wire API: **SF Hardware Meetup**, **Noisebridge** (need `meetup.com/<slug>/` URLs; SF Hardware also on Luma).
+**Today (wired):** Pinned-group **HTML ingest is live** — `events-finder-meetup.js` fetches each group's public `/events/` page (`__NEXT_DATA__` / Apollo), cached ~6h in `data/meetup-events-cache.json`. Pins in [`docs/meetup-group-pins.md`](meetup-group-pins.md) (52+ groups incl. Noisebridge, Oakland Hardware, Ace Makerspace). Gmail (`from:meetup.com` + Meetup URLs) is the complementary path for invites/digests and RSVPs. What's still missing: city-wide `/find` discovery (only pinned groups) and the official GraphQL API (optional later).
 
 **Roadmap**
 
 | Phase | Work |
 | --- | --- |
-| P0 | Account: route Meetup notification email → `jay.intake.box@gmail.com`; confirm Gmail intake parses Meetup mailers / `.ics`. |
-| P1 | Normalize Gmail-sourced Meetup events → shared schema; criteria filter. |
-| P2 | Optional: Meetup OAuth / API for location search + pinned groups (only if email coverage is thin). |
+| P0 | ✅ Pinned-group `/events/` HTML ingest → normalized events (`events-finder-meetup.js`). |
+| P0b | Account: route Meetup notification email → `jay.intake.box@gmail.com`; confirm Gmail intake parses Meetup mailers / `.ics`. |
+| P1 | ✅ Normalize Meetup events → shared schema; criteria filter. |
+| P2 | Optional: Meetup OAuth / GraphQL API for city-wide location search (only if pins + email stay thin). |
 
-**Needs from you:** In Meetup settings, set notification email to `jay.intake.box@gmail.com` (one-time). API credentials only if we reopen P2.
+**Needs from you:** add group `meetup.com/<slug>/` URLs to [`docs/meetup-group-pins.md`](meetup-group-pins.md) as you find them, and (one-time) set Meetup notification email to `jay.intake.box@gmail.com`. API credentials only if we reopen P2.
 ---
 
 ## 5. Facebook Events (`facebook.com`) — Apify + Gmail invites + pinned hosts

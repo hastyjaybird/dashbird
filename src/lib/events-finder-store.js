@@ -860,15 +860,24 @@ export function pruneEventsFinderEvents(opts = {}) {
   const db = openEventsFinderDb(env);
   const now = opts.nowIso != null ? String(opts.nowIso) : new Date().toISOString();
   const startFallback = new Date(Date.parse(now) - 12 * 60 * 60 * 1000).toISOString();
+  // Dateless invites (kept from Gmail so we don't miss undated event mail) can't be
+  // pruned by start/end. Drop them once they stop being re-seen (rolled out of the
+  // intake mail window) so they don't accumulate forever.
+  const datelessStaleDays = Number(env.EVENTS_FINDER_DATELESS_TTL_DAYS);
+  const staleDays = Number.isFinite(datelessStaleDays) && datelessStaleDays > 0
+    ? datelessStaleDays
+    : 30;
+  const datelessCutoff = new Date(Date.parse(now) - staleDays * 24 * 60 * 60 * 1000).toISOString();
   const result = db
     .prepare(
       `
       DELETE FROM events
       WHERE (end_at IS NOT NULL AND end_at < ?)
          OR (end_at IS NULL AND start_at IS NOT NULL AND start_at < ?)
+         OR (start_at IS NULL AND last_seen_at IS NOT NULL AND last_seen_at < ?)
     `,
     )
-    .run(now, startFallback);
+    .run(now, startFallback, datelessCutoff);
   return Number(result.changes) || 0;
 }
 

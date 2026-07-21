@@ -7,7 +7,10 @@
 export const EVENTS_INGEST_PAST_DAYS = 2;
 
 /** Default Scrape ahead when criteria / env are unset (matches criteria-store). */
-export const DEFAULT_WINDOW_WEEKS = 4;
+export const DEFAULT_WINDOW_WEEKS = 6;
+
+/** Upper clamp for Scrape ahead (weeks). Higher = more events retained per source. */
+export const MAX_WINDOW_WEEKS = 12;
 
 /** @deprecated Prefer windowWeeks × 7 via eventsIngestWindowDays(env, { scrape }). */
 export const EVENTS_INGEST_FUTURE_DAYS = DEFAULT_WINDOW_WEEKS * 7;
@@ -15,13 +18,13 @@ export const EVENTS_INGEST_FUTURE_DAYS = DEFAULT_WINDOW_WEEKS * 7;
 /**
  * @param {unknown} raw
  * @param {number} [fallback]
- * @returns {1 | 2 | 3 | 4 | 5}
+ * @returns {number}
  */
 export function normalizeIngestWindowWeeks(raw, fallback = DEFAULT_WINDOW_WEEKS) {
   const n = Number(raw);
   const base = Number.isFinite(n) ? Math.trunc(n) : fallback;
-  const clamped = Math.min(5, Math.max(1, base));
-  return /** @type {1 | 2 | 3 | 4 | 5} */ (clamped);
+  const clamped = Math.min(MAX_WINDOW_WEEKS, Math.max(1, base));
+  return /** @type {number} */ (clamped);
 }
 
 /**
@@ -120,14 +123,15 @@ export function eventStartInIngestWindow(startIso, opts = {}) {
 /**
  * Filter a list of events to the ingest window.
  * @param {Array<{ start?: string | null }>} events
- * @param {{ now?: number, pastDays?: number, futureDays?: number }} [opts]
+ * @param {{ now?: number, pastDays?: number, futureDays?: number, allowMissingStart?: boolean }} [opts]
  */
 export function filterEventsToIngestWindow(events, opts = {}) {
   const list = Array.isArray(events) ? events : [];
+  const allowMissingStart = opts.allowMissingStart === true;
   return list.filter((ev) =>
     eventStartInIngestWindow(ev?.start, {
       ...opts,
-      allowMissingStart: false,
+      allowMissingStart,
     }),
   );
 }

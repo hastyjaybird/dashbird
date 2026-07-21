@@ -39,6 +39,9 @@ services:
     environment:
       PORT: '3000'
       NODE_ENV: production
+      # Retain events up to 8 weeks out (post-fetch filter only — no extra Apify/API cost).
+      # Defaulted here so the wider horizon ships with the cloud stack without a manual .env edit.
+      EVENTS_FINDER_INGEST_FUTURE_DAYS: ${EVENTS_FINDER_INGEST_FUTURE_DAYS:-56}
       TOOL_LIBRARY_SCREENSHOT: ${TOOL_LIBRARY_SCREENSHOT:-0}
       VIKUNJA_BASE_URL: ${VIKUNJA_BASE_URL:-http://vikunja:3456}
       DASHBOARD_BASIC_AUTH_USER: ${DASHBOARD_BASIC_AUTH_USER:?Set DASHBOARD_BASIC_AUTH_USER in .env}

@@ -279,8 +279,8 @@ function interpretProbe(source, probe) {
     if (probe.ok) {
       return {
         active: true,
-        value: `Reachable (${httpBit}) · page ingest pending`,
-        output: '0 public events parsed — page/calendar ingest not implemented yet.',
+        value: `Reachable (${httpBit}) · public-page ingest wired`,
+        output: 'Public listing/watchlist ingest is live (JSON-LD + /e/ + __NEXT_DATA__).',
       };
     }
     return {

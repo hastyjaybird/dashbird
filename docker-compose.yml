@@ -39,6 +39,10 @@ services:
       TELEGRAM_EVENTS_ENABLED: "0"
       # Cloud is the sole Facebook Apify scraper (daily 4am). LAN serves synced cache.
       FACEBOOK_EVENTS_WEEKLY: "0"
+      # Retain events up to 8 weeks out (post-fetch filter only; does NOT change paid
+      # Apify scrape depth). Widens Gmail/Luma/Meetup/Eventbrite/FB retention so we
+      # stop dropping already-fetched events that sit >3-4 weeks ahead.
+      EVENTS_FINDER_INGEST_FUTURE_DAYS: "56"
     depends_on:
       vikunja:
         condition: service_started

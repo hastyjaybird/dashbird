@@ -35,6 +35,8 @@ services:
     environment:
       PORT: '3000'
       NODE_ENV: production
+      # Retain events up to 8 weeks out (post-fetch filter only — no extra Apify/API cost).
+      EVENTS_FINDER_INGEST_FUTURE_DAYS: ${EVENTS_FINDER_INGEST_FUTURE_DAYS:-56}
     volumes:
       - ./public:/app/public
       - ./src:/app/src

@@ -110,7 +110,7 @@ function gmailCacheFresh(cache, fingerprint, env = process.env) {
 // keyword, sender not a platform domain) but carry a platform link in the body.
 // Downstream parsing + enrichment + window filter still gate what becomes an event.
 const DEFAULT_QUERY =
-  'newer_than:35d (filename:ics OR subject:(invite OR invitation OR RSVP OR event OR meetup OR "you\'re invited" OR "join us" OR "you\'re going" OR going OR attend OR attendance OR ticket OR tickets OR register OR registration OR "save the date") OR from:(partiful.com OR secretparty.io OR lu.ma OR eventbrite.com OR meetup.com OR facebookmail.com OR metamail.com OR facebook.com) OR "luma.com" OR "lu.ma" OR "eventbrite.com" OR "partiful.com" OR "secretparty.io" OR "meetup.com")';
+  'newer_than:60d (filename:ics OR subject:(invite OR invitation OR RSVP OR event OR events OR meetup OR party OR gathering OR celebration OR workshop OR screening OR festival OR "you\'re invited" OR "join us" OR "join me" OR "you\'re going" OR going OR attend OR attendance OR hosting OR ticket OR tickets OR "get tickets" OR register OR registration OR "save the date" OR "add to calendar" OR "reserve your spot" OR "happening") OR from:(partiful.com OR secretparty.io OR lu.ma OR eventbrite.com OR meetup.com OR facebookmail.com OR metamail.com OR facebook.com OR posh.vip OR dice.fm OR ra.co OR withfriends.co OR ticketleap.com OR splashthat.com) OR "luma.com" OR "lu.ma" OR "eventbrite.com" OR "partiful.com" OR "secretparty.io" OR "meetup.com")';
 
 /**
  * Public event / invite links. Facebook: /events/{id}, page hosted tabs, group events.
@@ -1674,10 +1674,21 @@ export async function fetchGmailEventAnnouncements(env = process.env, opts = {})
     }
 
     // Apply the ingest-window filter now (deferred above) so enrichment had a chance
-    // to supply start dates first. Dateless / out-of-window events are dropped here.
-    const windowed = filterEventsToIngestWindow(enriched, {
-      pastDays: windowDays.pastDays,
-      futureDays: windowDays.futureDays,
+    // to supply start dates first. Dated events outside the window are dropped; dateless
+    // events are KEPT when a real platform link / .ics anchored them (an invite we could
+    // not parse a start from) so we stop silently missing event emails. Pure
+    // subject-heuristic events with no link/date are still dropped as too noisy.
+    const nowMs = Date.now();
+    const pastMs = windowDays.pastDays * 24 * 60 * 60 * 1000;
+    const futureMs = windowDays.futureDays * 24 * 60 * 60 * 1000;
+    const windowed = enriched.filter((ev) => {
+      const ms = ev?.start ? Date.parse(ev.start) : Number.NaN;
+      if (Number.isFinite(ms)) {
+        return ms >= nowMs - pastMs && ms <= nowMs + futureMs;
+      }
+      const via = String(ev?.raw?.via || '');
+      const hasPlatformLink = Array.isArray(ev?.raw?.urls) && ev.raw.urls.length > 0;
+      return via === 'ics' || hasPlatformLink;
     });
 
     // Dedupe by platform URL when present, else by id
