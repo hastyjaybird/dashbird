@@ -28,6 +28,8 @@ import {
   annotateEventsWithSeriesInfo,
   countEventSeriesKeys,
   dedupeEventsByNameAndDate,
+  deleteEventsFinderByIds,
+  deleteEventsFinderByUrls,
   getEventsFinderStoreStats,
   listEventsFinderEvents,
   pruneEventsFinderEvents,
@@ -170,6 +172,20 @@ function scheduleEventsFinderIngest(opts) {
         skipped += r.skipped;
         ingestSkipped += r.ingestSkipped;
         batch.push(...r.batch);
+        // Multiverse: drop catalog rows for classes that filled up since last ingest.
+        if (name === 'multiverse') {
+          try {
+            const fullUrls = Array.isArray(result?.fullClassUrls) ? result.fullClassUrls : [];
+            const fullIds = Array.isArray(result?.removedFullIds) ? result.removedFullIds : [];
+            if (fullUrls.length) deleteEventsFinderByUrls(fullUrls, process.env);
+            if (fullIds.length) deleteEventsFinderByIds(fullIds, process.env);
+          } catch (delErr) {
+            console.warn(
+              '[events-finder] multiverse full-class delete failed:',
+              delErr?.message || delErr,
+            );
+          }
+        }
       } catch (e) {
         sources[name] = {
           ok: false,
@@ -513,51 +529,6 @@ router.get('/', async (req, res) => {
       const gate = telegramIntake
         ? eventPassesFeedFilters(event, telegramDateFilters, home, { timeZone })
         : eventPassesFeedFilters(event, filtersBase, home, { timeZone });
-      // #region agent log
-      {
-        const t = `${event?.title || ''} ${event?.url || ''}`.toLowerCase();
-        if (/climatebase|cohort 10|fellowship info|iug6lflp/.test(t)) {
-          const tasteProbe = scoreEventTaste(event, criteria);
-          const payload = {
-            sessionId: 'ab357a',
-            runId: 'pre-fix',
-            hypothesisId: 'H1-H3',
-            location: 'events-finder-events.js:feed-gate',
-            message: 'Climatebase/fellowship candidate feed gate',
-            data: {
-              id: eventId || null,
-              title: event?.title || null,
-              start: event?.start || null,
-              url: event?.url || null,
-              online: event?.online ?? null,
-              city: eventCityLabel(event),
-              gateOk: gate.ok,
-              gateReason: gate.reason || null,
-              tasteOk: tasteProbe.ok,
-              tasteReason: tasteProbe.reason || null,
-              filterDates: filtersBase.dates || null,
-              earliestLocalTime: filtersBase.earliestLocalTime || null,
-              attendance: filtersBase.attendance || null,
-              citiesCount: Array.isArray(filtersBase.cities) ? filtersBase.cities.length : 0,
-            },
-            timestamp: Date.now(),
-          };
-          fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'ab357a' },
-            body: JSON.stringify(payload),
-          }).catch(() => {});
-          import('node:fs').then((fs) => {
-            try {
-              fs.appendFileSync('/home/jaybird/jayprograms/dashbird/.cursor/debug-ab357a.log', `${JSON.stringify(payload)}\n`);
-              fs.appendFileSync('/app/data/debug-ab357a.ndjson', `${JSON.stringify(payload)}\n`);
-            } catch {
-              /* ignore */
-            }
-          }).catch(() => {});
-        }
-      }
-      // #endregion
       if (!gate.ok) continue;
       const taste = telegramIntake
         ? { ok: true, score: 1, matchedLookFor: ['telegram'] }
@@ -642,37 +613,6 @@ router.get('/', async (req, res) => {
     filtered.sort(byClosest);
     skippedFeed.sort(bySkippedAtDesc);
 
-    // #region agent log
-    {
-      const floorInFeed = filtered.filter((e) =>
-        String(e?.title || '').toLowerCase().includes('floor block'),
-      );
-      const floorInSkipped = skippedFeed.filter((e) =>
-        String(e?.title || '').toLowerCase().includes('floor block'),
-      );
-      const payload = {
-        sessionId: '6ae69a',
-        runId: 'feed',
-        hypothesisId: 'A',
-        location: 'events-finder-events.js:feed',
-        message: 'skip feed snapshot',
-        data: {
-          feedTotal: filtered.length,
-          skippedFeedTotal: skippedFeed.length,
-          skippedRecords: skippedRecords.length,
-          floorInFeed: floorInFeed.map((e) => ({ id: e.id, title: e.title })),
-          floorInSkipped: floorInSkipped.map((e) => ({ id: e.id, title: e.title })),
-        },
-        timestamp: Date.now(),
-      };
-      fetch('http://127.0.0.1:7876/ingest/1b066eee-66f3-47a1-b65d-c1c076370e22', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '6ae69a' },
-        body: JSON.stringify(payload),
-      }).catch(() => {});
-    }
-    // #endregion
-
     let store = null;
     try {
       store = {
@@ -755,6 +695,8 @@ router.get('/', async (req, res) => {
           calendarPage: multiverse.calendarPage || null,
           classIndexCount: multiverse.classIndexCount ?? null,
           withClassUrl: multiverse.withClassUrl ?? null,
+          droppedFull: multiverse.droppedFull ?? 0,
+          classDetailsRefreshed: multiverse.classDetailsRefreshed ?? 0,
           count: Array.isArray(multiverse.events) ? multiverse.events.length : 0,
         },
         luma: {

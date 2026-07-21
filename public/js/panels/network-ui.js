@@ -2174,7 +2174,6 @@ export function mountNetworkUi(root) {
       manageDetailOpen = false;
       groupsContactOpen = true;
       selectedId = id;
-      groupsUiApi?.setDetailPaneHidden?.(true);
       syncTabs();
       selectContact(id, { force: true });
       return;
@@ -5616,7 +5615,7 @@ export function mountNetworkUi(root) {
       return;
     }
     const [{ mountNetworkGroupsUi }, prefetched] = await Promise.all([
-      import('./network-groups-ui.js?v=member-bulk-2'),
+      import('./network-groups-ui.js?v=scene-tag-rw-1'),
       takeGroupsPrefetch().catch(() => groupsCache),
     ]);
     if (Array.isArray(prefetched)) groupsCache = prefetched;

@@ -5,6 +5,7 @@ import {
   isMobileNavApplying,
 } from '../lib/mobile-history.js';
 import {
+  createAttendanceChecks,
   createCityChecks,
   createRangeCalendar,
   normalizeLocalTime,
@@ -517,6 +518,18 @@ export function mountEventsFinderMobile(root) {
 
   areaRow.append(zipField, milesField);
   filterPanel.append(areaRow);
+
+  const attendanceField = document.createElement('div');
+  attendanceField.className = 'mobile-events__filter mobile-events__filter--block';
+  const attendanceLabel = document.createElement('span');
+  attendanceLabel.textContent = 'Attendance';
+  const attendanceChecks = createAttendanceChecks({
+    idPrefix: 'mobile-events-att',
+    classPrefix: 'mobile-events',
+    attendance: 'any',
+  });
+  attendanceField.append(attendanceLabel, attendanceChecks.root);
+  filterPanel.append(attendanceField);
 
   const citiesField = document.createElement('div');
   citiesField.className = 'mobile-events__filter mobile-events__filter--block';
@@ -1688,7 +1701,7 @@ export function mountEventsFinderMobile(root) {
       dateFrom: range.dateFrom,
       dateTo: range.dateTo,
       earliestLocalTime: normalizeLocalTime(earliestRaw) || null,
-      attendance: 'in_person',
+      attendance: attendanceChecks.getAttendance(),
       originZip: originZipDigits || null,
     };
   }
@@ -1714,6 +1727,7 @@ export function mountEventsFinderMobile(root) {
         filters.dates || [],
       );
       timeInput.value = normalizeLocalTime(filters.earliestLocalTime) || '';
+      attendanceChecks.setAttendance(filters.attendance || 'any');
       if (Array.isArray(filters.cities) && filters.cities.length) {
         savedCitySelection = filters.cities.map(String);
       } else {
@@ -3333,6 +3347,10 @@ export function mountEventsFinderMobile(root) {
   timeInput.addEventListener('change', () => {
     if (lastEventsPayload) paint(lastEventsPayload);
     scheduleFilterAutosave();
+  });
+  attendanceChecks.root.addEventListener('change', () => {
+    if (lastEventsPayload) paint(lastEventsPayload);
+    scheduleFilterAutosave({ reload: true });
   });
 
   const cachedEvents = readPanelCache(EVENTS_CACHE_KEY, EVENTS_CACHE_MAX_MS);

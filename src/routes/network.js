@@ -780,7 +780,8 @@ router.put('/groups/:id', async (req, res) => {
     }
     res.json({ ok: true, group });
   } catch (e) {
-    const code = e?.code === 'invalid_group' ? 400 : 500;
+    const code =
+      e?.code === 'invalid_group' ? 400 : e?.code === 'scene_group_readonly' ? 403 : 500;
     res.status(code).json({ ok: false, error: String(e?.message || e) });
   }
 });
@@ -848,14 +849,18 @@ router.post('/groups/:id/analyze', async (req, res) => {
 
 router.delete('/groups/:id', async (req, res) => {
   try {
-    const result = await deleteGroups([String(req.params.id || '')]);
+    // Scene delete strips the Scene tag from members, then removes the group row.
+    const result = await deleteGroups([String(req.params.id || '')], process.env, {
+      allowSceneDelete: true,
+    });
     if (!result.deleted) {
       res.status(404).json({ ok: false, error: 'not_found' });
       return;
     }
     res.json({ ok: true, deleted: result.deleted });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+    const code = e?.code === 'scene_group_readonly' ? 403 : 500;
+    res.status(code).json({ ok: false, error: String(e?.message || e) });
   }
 });
 

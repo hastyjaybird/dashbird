@@ -43,7 +43,9 @@ function sceneGroupReadonlyError(action) {
   const err = new Error(
     action === 'create'
       ? 'Scene groups are created automatically from contact Scene tags'
-      : 'Scene groups are read-only — edit Scene on contacts instead',
+      : action === 'delete'
+        ? 'Scene group delete is not allowed'
+        : 'Scene group membership must be changed via Scene tags on contacts',
   );
   err.code = 'scene_group_readonly';
   return err;
@@ -57,7 +59,9 @@ function assertSceneGroupMutable(group, patch = null) {
   if (!group || group.kind !== 'community') return;
   if (!patch) throw sceneGroupReadonlyError('mutate');
   const keys = Object.keys(patch).filter((k) => patch[k] !== undefined);
-  const allowed = new Set(['commonalities', 'suggestions']);
+  // name renames rewrite Scene tags on members; insights fields are analysis-only.
+  // memberIds stay blocked — membership goes through contact networkCircles.
+  const allowed = new Set(['name', 'commonalities', 'suggestions', 'commonalitiesUpdatedAt']);
   if (keys.some((k) => !allowed.has(k))) throw sceneGroupReadonlyError('mutate');
 }
 

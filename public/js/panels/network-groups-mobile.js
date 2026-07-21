@@ -472,10 +472,6 @@ export function mountNetworkGroupsMobile(root) {
       nameInput.addEventListener('blur', () => {
         void commitGroupName();
       });
-      const editHint = document.createElement('p');
-      editHint.className = 'mobile-network__field-hint mobile-groups__name-hint';
-      editHint.textContent = 'Long-press the name to rename.';
-      headerBlock.append(editHint);
     }
 
     // --- Members section (multi-select + bulk copy / remove). ---

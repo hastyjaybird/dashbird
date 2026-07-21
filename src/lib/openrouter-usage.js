@@ -48,7 +48,7 @@ export const OPENROUTER_PROGRAMS = Object.freeze([
     label: 'Network group commonality',
     area: 'Network',
     costMode: 'paid-default',
-    triggers: 'Analyze commonalities · auto when a group has >2 members',
+    triggers: 'Auto when a group has >2 members',
     notes: 'Defaults to OPENROUTER_MODEL / gpt-4o-mini — no free fallback chain.',
   },
   {

@@ -915,6 +915,42 @@ export function deleteEventsFinderByIds(ids, env = process.env) {
 }
 
 /**
+ * Delete catalog rows by exact event URL (e.g. Multiverse class pages that filled up).
+ * @param {string[]} urls
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {number}
+ */
+export function deleteEventsFinderByUrls(urls, env = process.env) {
+  const list = [
+    ...new Set(
+      (Array.isArray(urls) ? urls : [])
+        .map((u) => String(u || '').trim())
+        .filter(Boolean),
+    ),
+  ].slice(0, 500);
+  if (!list.length) return 0;
+  const db = openEventsFinderDb(env);
+  const stmt = db.prepare('DELETE FROM events WHERE url = ?');
+  let deleted = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const url of list) {
+      const r = stmt.run(url);
+      deleted += Number(r.changes) || 0;
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
+  return deleted;
+}
+
+/**
  * @typedef {{
  *   id: string,
  *   key: string | null,

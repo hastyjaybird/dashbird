@@ -4,6 +4,7 @@
  * Primary: public Google Calendar ICS (embed on /calendar).
  * Enrichment: scrape https://themultiverse.school/calendar (and homepage)
  * for /classes/{id} links so each listing gets a unique event URL.
+ * Class detail pages supply suggested price + full/sold-out (checked daily).
  */
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -13,6 +14,7 @@ import { parseIcsEvents } from './ical-parse.js';
 import { loadEventsFinderCriteria } from './events-finder-criteria-store.js';
 import { eventsIngestWindowDays } from './events-finder-window.js';
 import { normalizeEventTitleKey } from './events-finder-store.js';
+import { assertPublicHttpUrl } from './public-http-url.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..', '..');
@@ -26,8 +28,10 @@ export const MULTIVERSE_CALENDAR_PAGE_URL = 'https://themultiverse.school/calend
 export const MULTIVERSE_CLASSES_PAGE_URL = 'https://themultiverse.school/classes';
 
 const DEFAULT_CACHE_MS = 6 * 60 * 60 * 1000;
+/** Re-check class price / full status about once a day. */
+const DEFAULT_CLASS_DETAILS_CACHE_MS = 24 * 60 * 60 * 1000;
+const CLASS_DETAIL_CONCURRENCY = 4;
 const UA = 'Mozilla/5.0 (compatible; DashbirdEvents/1.0; +https://github.com/local/dashbird)';
-
 /**
  * @param {NodeJS.ProcessEnv} [env]
  */
@@ -53,6 +57,24 @@ function cacheMs(env = process.env) {
   const n = Number(env.MULTIVERSE_EVENTS_CACHE_MS);
   if (Number.isFinite(n) && n >= 60_000) return Math.min(n, 7 * 24 * 60 * 60 * 1000);
   return DEFAULT_CACHE_MS;
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function multiverseClassDetailsCachePath(env = process.env) {
+  const override = String(env.MULTIVERSE_CLASS_DETAILS_CACHE_PATH || '').trim();
+  if (override) return path.isAbsolute(override) ? override : path.join(root, override);
+  return path.join(root, 'data', 'multiverse-class-details-cache.json');
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function classDetailsCacheMs(env = process.env) {
+  const n = Number(env.MULTIVERSE_CLASS_DETAILS_CACHE_MS);
+  if (Number.isFinite(n) && n >= 60_000) return Math.min(n, 7 * 24 * 60 * 60 * 1000);
+  return DEFAULT_CLASS_DETAILS_CACHE_MS;
 }
 
 /**
@@ -205,6 +227,235 @@ export function parseMultiverseClassListings(html) {
 }
 
 /**
+ * Parse a Multiverse /classes/{id} detail page for suggested price + full badge.
+ * @param {string} html
+ * @returns {{ suggestedPrice: number | null, isFull: boolean, payWhatYouCan: boolean }}
+ */
+export function parseMultiverseClassPage(html) {
+  const text = String(html || '');
+  const isFull =
+    /class=["'][^"']*full-badge[^"']*["'][^>]*>\s*(?:This class is full|Full)\s*</i.test(text)
+    || /\bThis class is full\b/i.test(text);
+  const payWhatYouCan = /pay\s*what\s*you\s*can/i.test(text);
+  let suggestedPrice = null;
+  const priceNearSuggested = text.match(
+    /Suggested:\s*<\/span>\s*(?:<span[^>]*>\s*\$?\s*<\/span>\s*)?<span[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>\s*(\d+(?:\.\d{1,2})?)\s*</i,
+  );
+  if (priceNearSuggested) {
+    suggestedPrice = Number(priceNearSuggested[1]);
+  } else {
+    const priceSpan = text.match(
+      /<span[^>]*class=["'][^"']*\bprice\b[^"']*["'][^>]*>\s*(\d+(?:\.\d{1,2})?)\s*</i,
+    );
+    if (priceSpan) suggestedPrice = Number(priceSpan[1]);
+  }
+  if (suggestedPrice != null && !Number.isFinite(suggestedPrice)) suggestedPrice = null;
+  return {
+    suggestedPrice,
+    isFull,
+    payWhatYouCan,
+  };
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<Record<string, {
+ *   fetchedAt: string,
+ *   isFull: boolean,
+ *   suggestedPrice: number | null,
+ *   payWhatYouCan: boolean,
+ *   error?: string | null,
+ * }>>}
+ */
+async function readClassDetailsCache(env = process.env) {
+  try {
+    const raw = await readFile(multiverseClassDetailsCachePath(env), 'utf8');
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object' || !data.classes || typeof data.classes !== 'object') {
+      return {};
+    }
+    return /** @type {Record<string, any>} */ (data.classes);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * @param {Record<string, object>} classes
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function writeClassDetailsCache(classes, env = process.env) {
+  const p = multiverseClassDetailsCachePath(env);
+  await mkdir(path.dirname(p), { recursive: true });
+  await writeFile(
+    p,
+    `${JSON.stringify({ cachedAt: new Date().toISOString(), classes }, null, 2)}\n`,
+    'utf8',
+  );
+}
+
+/**
+ * @param {string} url
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function fetchOneClassDetail(url, env = process.env) {
+  const safe = await assertPublicHttpUrl(url);
+  const host = new URL(safe).hostname.replace(/^www\./, '');
+  if (host !== 'themultiverse.school') {
+    throw new Error('multiverse_host_mismatch');
+  }
+  const r = await fetch(safe, {
+    headers: { Accept: 'text/html,*/*', 'User-Agent': UA },
+    signal: AbortSignal.timeout(25_000),
+  });
+  if (!r.ok) throw new Error(`class_http_${r.status}`);
+  const html = await r.text();
+  const parsed = parseMultiverseClassPage(html);
+  return {
+    fetchedAt: new Date().toISOString(),
+    isFull: parsed.isFull,
+    suggestedPrice: parsed.suggestedPrice,
+    payWhatYouCan: parsed.payWhatYouCan,
+    error: null,
+  };
+}
+
+/**
+ * Refresh class detail cache for the given /classes/{id} URLs (stale or missing).
+ * @param {string[]} classUrls
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ forceRefresh?: boolean }} [opts]
+ */
+async function ensureMultiverseClassDetails(classUrls, env = process.env, opts = {}) {
+  const force = opts.forceRefresh === true;
+  const ttl = classDetailsCacheMs(env);
+  const now = Date.now();
+  const classes = await readClassDetailsCache(env);
+  const unique = [
+    ...new Set(
+      (Array.isArray(classUrls) ? classUrls : [])
+        .map((u) => String(u || '').trim())
+        .filter((u) => /\/classes\/\d+\/?$/i.test(u) || /\/classes\/\d+/i.test(u)),
+    ),
+  ];
+
+  /** @type {string[]} */
+  const need = [];
+  for (const url of unique) {
+    const row = classes[url];
+    if (force || !row?.fetchedAt) {
+      need.push(url);
+      continue;
+    }
+    const age = now - Date.parse(row.fetchedAt);
+    if (!Number.isFinite(age) || age < 0 || age >= ttl) need.push(url);
+  }
+
+  for (let i = 0; i < need.length; i += CLASS_DETAIL_CONCURRENCY) {
+    const slice = need.slice(i, i + CLASS_DETAIL_CONCURRENCY);
+    const results = await Promise.all(
+      slice.map(async (url) => {
+        try {
+          const detail = await fetchOneClassDetail(url, env);
+          return { url, detail };
+        } catch (err) {
+          console.warn('[multiverse] class detail fetch failed:', url, err?.message || err);
+          const prev = classes[url] || {};
+          return {
+            url,
+            detail: {
+              fetchedAt: new Date().toISOString(),
+              isFull: prev.isFull === true,
+              suggestedPrice:
+                typeof prev.suggestedPrice === 'number' ? prev.suggestedPrice : null,
+              payWhatYouCan: prev.payWhatYouCan === true,
+              error: String(err?.message || err),
+            },
+          };
+        }
+      }),
+    );
+    for (const { url, detail } of results) {
+      classes[url] = detail;
+    }
+  }
+
+  if (need.length) {
+    await writeClassDetailsCache(classes, env);
+  }
+
+  return {
+    classes,
+    refreshed: need.length,
+    checked: unique.length,
+  };
+}
+
+/**
+ * Attach price fields and drop full classes.
+ * @param {object[]} events
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ forceRefresh?: boolean }} [opts]
+ */
+async function enrichMultiverseEventsWithClassDetails(events, env = process.env, opts = {}) {
+  const list = Array.isArray(events) ? events : [];
+  const classUrls = list
+    .map((e) => String(e?.url || '').trim())
+    .filter((u) => /themultiverse\.school\/classes\/\d+/i.test(u));
+  const { classes, refreshed, checked } = await ensureMultiverseClassDetails(classUrls, env, opts);
+
+  /** @type {object[]} */
+  const kept = [];
+  /** @type {string[]} */
+  const removedFullIds = [];
+  /** @type {string[]} */
+  const fullClassUrls = [];
+
+  for (const ev of list) {
+    const url = String(ev?.url || '').trim();
+    const detail = classes[url];
+    if (!detail) {
+      kept.push(ev);
+      continue;
+    }
+    if (detail.isFull) {
+      removedFullIds.push(String(ev.id || ''));
+      if (url) fullClassUrls.push(url);
+      continue;
+    }
+    const next = { ...ev };
+    if (typeof detail.suggestedPrice === 'number' && detail.suggestedPrice >= 0) {
+      next.price = detail.suggestedPrice;
+      next.ticketPrice = detail.suggestedPrice;
+    }
+    if (detail.payWhatYouCan) {
+      const amt =
+        typeof detail.suggestedPrice === 'number' && detail.suggestedPrice > 0
+          ? `suggested $${detail.suggestedPrice}`
+          : 'suggested amount varies';
+      next.description = `Pay what you can — ${amt}. Multiverse School.`;
+      // So resolveEventPrice labels these as "$N donation" (PWYC).
+      next.ticketsInfo = {
+        price: detail.suggestedPrice,
+        subtitle: 'Pay what you can',
+      };
+    } else if (typeof detail.suggestedPrice === 'number' && detail.suggestedPrice > 0) {
+      next.description = `$${detail.suggestedPrice}. Multiverse School.`;
+    }
+    kept.push(next);
+  }
+
+  return {
+    events: kept,
+    removedFullIds: removedFullIds.filter(Boolean),
+    fullClassUrls: [...new Set(fullClassUrls)],
+    classDetailsRefreshed: refreshed,
+    classDetailsChecked: checked,
+    droppedFull: removedFullIds.length,
+  };
+}
+
+/**
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {Promise<Array<{ title: string, url: string, date: string | null, titleKey: string }>>}
  */
@@ -326,6 +577,39 @@ function toFinderEvent(ev, classIndex, timeZone) {
  * @param {NodeJS.ProcessEnv} [env]
  * @param {{ forceRefresh?: boolean }} [opts]
  */
+/**
+ * @param {object[]} rawEvents
+ * @param {object} base
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ forceRefresh?: boolean, fromCache?: boolean, stale?: boolean, error?: string | null }} [opts]
+ */
+async function finalizeMultiverseEvents(rawEvents, base, env = process.env, opts = {}) {
+  const enriched = await enrichMultiverseEventsWithClassDetails(rawEvents, env, {
+    forceRefresh: opts.forceRefresh === true,
+  });
+  const withClassUrl = enriched.events.filter((e) =>
+    /\/classes\/\d+/.test(String(e.url || '')),
+  ).length;
+  return {
+    ok: true,
+    events: enriched.events,
+    fromCache: opts.fromCache === true,
+    stale: opts.stale === true,
+    cachedAt: base.cachedAt || null,
+    count: enriched.events.length,
+    icalUrl: base.icalUrl,
+    calendarPage: MULTIVERSE_CALENDAR_PAGE_URL,
+    classIndexCount: base.classIndexCount ?? null,
+    withClassUrl,
+    droppedFull: enriched.droppedFull,
+    removedFullIds: enriched.removedFullIds,
+    fullClassUrls: enriched.fullClassUrls,
+    classDetailsRefreshed: enriched.classDetailsRefreshed,
+    classDetailsChecked: enriched.classDetailsChecked,
+    error: opts.error || null,
+  };
+}
+
 export async function fetchMultiverseSchoolEvents(env = process.env, opts = {}) {
   const force = opts.forceRefresh === true;
   const icalUrl = multiverseEventsIcalUrl(env);
@@ -333,15 +617,29 @@ export async function fetchMultiverseSchoolEvents(env = process.env, opts = {}) 
   if (!force && cache?.cachedAt) {
     const age = Date.now() - Date.parse(cache.cachedAt);
     if (Number.isFinite(age) && age >= 0 && age < cacheMs(env)) {
-      return {
-        ok: true,
-        events: cache.events,
+      const finalized = await finalizeMultiverseEvents(cache.events, cache, env, {
         fromCache: true,
-        cachedAt: cache.cachedAt,
-        count: cache.events.length,
-        icalUrl,
-        calendarPage: MULTIVERSE_CALENDAR_PAGE_URL,
-      };
+        forceRefresh: false,
+      });
+      // Keep ICS cache in sync when classes fill up or prices change.
+      if (
+        finalized.droppedFull > 0
+        || finalized.classDetailsRefreshed > 0
+        || finalized.count !== cache.events.length
+      ) {
+        await writeCache(
+          {
+            ...cache,
+            cachedAt: cache.cachedAt,
+            count: finalized.events.length,
+            withClassUrl: finalized.withClassUrl,
+            events: finalized.events,
+            droppedFull: finalized.droppedFull,
+          },
+          env,
+        );
+      }
+      return finalized;
     }
   }
 
@@ -353,16 +651,11 @@ export async function fetchMultiverseSchoolEvents(env = process.env, opts = {}) 
     });
     if (!r.ok) {
       if (cache?.events?.length) {
-        return {
-          ok: true,
-          events: cache.events,
+        return finalizeMultiverseEvents(cache.events, cache, env, {
           fromCache: true,
           stale: true,
-          cachedAt: cache.cachedAt,
-          count: cache.events.length,
-          icalUrl,
           error: `ical_http_${r.status}`,
-        };
+        });
       }
       return {
         ok: false,
@@ -370,21 +663,19 @@ export async function fetchMultiverseSchoolEvents(env = process.env, opts = {}) 
         fromCache: false,
         icalUrl,
         error: `ical_http_${r.status}`,
+        removedFullIds: [],
+        fullClassUrls: [],
+        droppedFull: 0,
       };
     }
     text = await r.text();
   } catch (e) {
     if (cache?.events?.length) {
-      return {
-        ok: true,
-        events: cache.events,
+      return finalizeMultiverseEvents(cache.events, cache, env, {
         fromCache: true,
         stale: true,
-        cachedAt: cache.cachedAt,
-        count: cache.events.length,
-        icalUrl,
         error: String(e?.message || e),
-      };
+      });
     }
     return {
       ok: false,
@@ -392,6 +683,9 @@ export async function fetchMultiverseSchoolEvents(env = process.env, opts = {}) 
       fromCache: false,
       icalUrl,
       error: String(e?.message || e),
+      removedFullIds: [],
+      fullClassUrls: [],
+      droppedFull: 0,
     };
   }
 
@@ -402,6 +696,9 @@ export async function fetchMultiverseSchoolEvents(env = process.env, opts = {}) 
       fromCache: false,
       icalUrl,
       error: 'ical_not_calendar',
+      removedFullIds: [],
+      fullClassUrls: [],
+      droppedFull: 0,
     };
   }
 
@@ -425,29 +722,32 @@ export async function fetchMultiverseSchoolEvents(env = process.env, opts = {}) 
     .sort((a, b) => a.startMs - b.startMs);
 
   const classIndex = await fetchMultiverseClassIndex(env);
-  const events = upcoming.map((ev) => toFinderEvent(ev, classIndex, tz));
-  const withClassUrl = events.filter((e) => /\/classes\/\d+/.test(String(e.url || ''))).length;
-  const payload = {
-    cachedAt: new Date().toISOString(),
-    icalUrl,
-    weeks: windowWeeks,
-    futureDays,
-    classIndexCount: classIndex.length,
-    withClassUrl,
-    count: events.length,
-    events,
-  };
-  await writeCache(payload, env);
+  const rawEvents = upcoming.map((ev) => toFinderEvent(ev, classIndex, tz));
+  const finalized = await finalizeMultiverseEvents(
+    rawEvents,
+    {
+      cachedAt: new Date().toISOString(),
+      icalUrl,
+      classIndexCount: classIndex.length,
+    },
+    env,
+    { fromCache: false, forceRefresh: force },
+  );
 
-  return {
-    ok: true,
-    events,
-    fromCache: false,
-    cachedAt: payload.cachedAt,
-    count: events.length,
-    icalUrl,
-    calendarPage: MULTIVERSE_CALENDAR_PAGE_URL,
-    classIndexCount: classIndex.length,
-    withClassUrl,
-  };
+  await writeCache(
+    {
+      cachedAt: finalized.cachedAt || new Date().toISOString(),
+      icalUrl,
+      weeks: windowWeeks,
+      futureDays,
+      classIndexCount: classIndex.length,
+      withClassUrl: finalized.withClassUrl,
+      count: finalized.events.length,
+      droppedFull: finalized.droppedFull,
+      events: finalized.events,
+    },
+    env,
+  );
+
+  return finalized;
 }

@@ -70,9 +70,14 @@ if [[ "$SYNC_DATA" == "1" ]]; then
   fi
 fi
 
-echo "[dashbird] Remote restart (${COMPOSE_FILE})"
-ssh "$HOST" "cd '${REMOTE_DIR}' && docker compose -f '${COMPOSE_FILE}' up -d --build"
+echo "[dashbird] Remote rebuild + recreate (${COMPOSE_FILE})"
+# src/ and public/ are bind-mounted. `up --build` alone often reuses the same
+# container when the image layer is unchanged, so Node keeps stale ESM modules
+# in memory even though the files on disk were rsynced. Force-recreate the
+# dashboard (and caddy, which depends on it) so the new code is actually loaded.
+ssh "$HOST" "cd '${REMOTE_DIR}' && docker compose -f '${COMPOSE_FILE}' up -d --build --force-recreate dashboard caddy"
 
 DOMAIN="$(ssh "$HOST" "grep -E '^DASHBOARD_DOMAIN=' '${REMOTE_DIR}/.env' 2>/dev/null | cut -d= -f2-" || true)"
 echo "[dashbird] Done. Open https://${DOMAIN:-dashbird.duckdns.org}/"
+echo "[dashbird] Hard-refresh the browser (or close the Big Events popout) so cached JS is not reused."
 echo "[dashbird] New tool Playwright snapshots: enrich on LAN, then SYNC_DATA=1 ./scripts/sync-to-cloud.sh"

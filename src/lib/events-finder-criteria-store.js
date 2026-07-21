@@ -57,7 +57,8 @@ const DEFAULT_FILTERS = /** @type {EventsFinderFilters} */ ({
   dateTo: null,
   dates: [],
   earliestLocalTime: null,
-  attendance: 'in_person',
+  // Include online sources (e.g. Multiverse School) unless the user unchecks Online.
+  attendance: 'any',
 });
 
 /** Defaults for Apify search budget (queries × events / query). */
@@ -275,7 +276,10 @@ function normalizeFilters(raw) {
       src.earliestLocalTime === undefined
         ? DEFAULT_FILTERS.earliestLocalTime
         : normalizeTime(src.earliestLocalTime),
-    attendance: 'in_person',
+    attendance:
+      src.attendance === undefined
+        ? DEFAULT_FILTERS.attendance
+        : normalizeAttendance(src.attendance),
   };
 }
 

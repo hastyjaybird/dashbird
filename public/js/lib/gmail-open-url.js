@@ -108,14 +108,65 @@ function gmailNativeAppUrl(source) {
 }
 
 /**
+ * Direct mail.google.com deep link (no AccountChooser hop).
+ * Used for Android intent:// handoff — the Gmail app already owns auth.
+ *
+ * @param {{
+ *   email?: string,
+ *   threadId?: string,
+ *   gmailId?: string,
+ *   messageId?: string,
+ *   rfc822MessageId?: string,
+ *   subject?: string,
+ * } | null | undefined} source
+ */
+function gmailDirectWebMessageUrl(source) {
+  if (!source?.email) return '';
+  const email = String(source.email).trim().toLowerCase();
+  const hash = gmailTargetHash(source);
+  if (!hash) return '';
+  return `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(email)}#${hash}`;
+}
+
+/**
+ * Android Gmail app via intent:// (package com.google.android.gm).
+ * Percent-encode `#` in the mail fragment so it does not collide with `#Intent`.
+ *
+ * @param {{
+ *   email?: string,
+ *   threadId?: string,
+ *   gmailId?: string,
+ *   messageId?: string,
+ *   rfc822MessageId?: string,
+ *   subject?: string,
+ * } | null | undefined} source
+ * @param {string} fallbackWebUrl
+ */
+function gmailAndroidAppUrl(source, fallbackWebUrl) {
+  const direct = gmailDirectWebMessageUrl(source);
+  if (!direct) return '';
+  const intentPath = direct.replace(/^https:\/\//i, '').replace(/#/g, '%23');
+  const fallback = encodeURIComponent(String(fallbackWebUrl || direct).trim());
+  return (
+    `intent://${intentPath}#Intent;`
+    + 'scheme=https;'
+    + 'action=android.intent.action.VIEW;'
+    + 'package=com.google.android.gm;'
+    + `S.browser_fallback_url=${fallback};`
+    + 'end'
+  );
+}
+
+/**
  * Resolve the best "Open" href for mobile.
  *
  * iOS: hand off to the Gmail app via its googlegmail:// scheme when possible.
- * Android: the googlegmail:// scheme is not supported and intent:// wrappers
- * break the AccountChooser hop, so use the web URL as-is.
+ * Android: intent:// into com.google.android.gm with a direct mail.google.com
+ * target (AccountChooser URLs break inside intent://). Falls back to web.
  *
  * @param {string} webUrl
  * @param {{
+ *   email?: string,
  *   threadId?: string,
  *   gmailId?: string,
  *   messageId?: string,
@@ -129,6 +180,10 @@ export function gmailMobileOpenUrl(webUrl, source = null) {
   if (/iPhone|iPad|iPod/i.test(ua)) {
     const native = gmailNativeAppUrl(source);
     if (native) return native;
+  }
+  if (/Android/i.test(ua)) {
+    const intent = gmailAndroidAppUrl(source, url);
+    if (intent) return intent;
   }
   return url;
 }

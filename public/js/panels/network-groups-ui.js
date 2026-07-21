@@ -1,10 +1,8 @@
-import { beginWaitCursor, endWaitCursor } from '../lib/wait-cursor.js';
 import {
   createGroupKindIconEl,
   groupKind,
   groupKindLabel,
   groupSectionLabel,
-  isEventGroup,
   isSceneGroup,
 } from '../lib/network-group-kind.js?v=scene-ux-1';
 import { NETWORK_LABELS } from '../lib/network-labels.js';
@@ -18,6 +16,7 @@ import {
   howWeMetStatusBit,
 } from '../lib/network-how-we-met-suggest.js?v=how-we-met-1';
 import { compareContactSearchNameRank } from '../lib/network-contact-search.js';
+import { addSceneToken, removeSceneToken } from '../lib/network-scene-tokens.js';
 
 /**
  * Network groups management screen.
@@ -537,11 +536,12 @@ export function mountNetworkGroupsUi(root, opts) {
     const gen = ++detailGeneration;
     /** @type {object} */
     let current = g;
-    const readOnly = isSceneGroup(g);
+    /** Scene groups mirror contact Scene tags; event groups use memberIds APIs. */
+    const isScene = isSceneGroup(g);
     detail.replaceChildren();
 
     const form = document.createElement('form');
-    form.className = 'network-crm__form';
+    form.className = 'network-crm__form network-crm__form--groups-detail';
 
     function field(label, name, value, opts = {}) {
       const wrapEl = document.createElement('label');
@@ -569,29 +569,18 @@ export function mountNetworkGroupsUi(root, opts) {
       return wrapEl;
     }
 
-    const kindNote = document.createElement('p');
-    kindNote.className = 'muted network-groups__kind-note';
-    kindNote.textContent = readOnly ? NETWORK_LABELS.sceneGroupNote : NETWORK_LABELS.eventGroupNote;
-
-    const topActions = document.createElement('div');
-    topActions.className = 'network-crm__actions network-groups__top-actions';
-    const analyzeBtn = document.createElement('button');
-    analyzeBtn.type = 'button';
-    analyzeBtn.className = 'network-crm__btn';
-    analyzeBtn.textContent = 'Analyze commonalities';
-    topActions.append(analyzeBtn);
-
-    if (readOnly) {
+    if (isScene) {
       const head = document.createElement('div');
-      head.className = 'network-groups__scene-head';
-      head.append(createGroupKindIconEl(g), document.createTextNode(' '));
-      const title = document.createElement('h3');
-      title.className = 'network-groups__scene-title';
-      title.textContent = g.name || 'Untitled scene';
-      head.append(title);
-      form.append(head, kindNote, topActions);
+      head.className = 'network-groups__scene-head network-groups__scene-head--edit';
+      head.append(createGroupKindIconEl(g));
+      const nameField = field('Scene tag', 'name', current.name, {
+        placeholder: 'Scene name',
+      });
+      nameField.classList.add('network-groups__scene-name-field');
+      head.append(nameField);
+      form.append(head);
     } else {
-      form.append(field('Name', 'name', current.name), kindNote, topActions);
+      form.append(field('Name', 'name', current.name));
     }
 
     const peopleCols = document.createElement('div');
@@ -599,26 +588,17 @@ export function mountNetworkGroupsUi(root, opts) {
 
     const membersBox = document.createElement('div');
     membersBox.className = 'network-groups__col network-groups__members-panel';
-    const membersTitle = document.createElement('div');
-    membersTitle.className = 'network-crm__checks-label';
-    membersTitle.textContent = 'Members';
 
     const memberBulk = document.createElement('div');
     memberBulk.className = 'network-groups__member-bulk';
 
-    const selectAllWrap = document.createElement('label');
-    selectAllWrap.className = 'network-crm__check network-groups__member-select-all';
-    const selectAllCb = document.createElement('input');
-    selectAllCb.type = 'checkbox';
-    selectAllCb.setAttribute('aria-label', 'Select all members');
-    selectAllWrap.append(selectAllCb, document.createTextNode(' Select all'));
-
     const bulkActions = document.createElement('div');
     bulkActions.className = 'network-crm__bulk-actions network-groups__member-bulk-actions';
+    bulkActions.hidden = true;
 
     const bulkRemoveBtn = document.createElement('button');
     bulkRemoveBtn.type = 'button';
-    bulkRemoveBtn.className = 'network-crm__btn network-crm__btn--tiny';
+    bulkRemoveBtn.className = 'network-crm__btn network-crm__btn--tiny network-crm__btn--danger';
     bulkRemoveBtn.textContent = 'Remove selected';
     bulkRemoveBtn.disabled = true;
 
@@ -628,22 +608,39 @@ export function mountNetworkGroupsUi(root, opts) {
 
     const bulkMoveBtn = document.createElement('button');
     bulkMoveBtn.type = 'button';
-    bulkMoveBtn.className = 'network-crm__btn network-crm__btn--tiny';
+    bulkMoveBtn.className = 'network-crm__btn network-crm__btn--tiny network-crm__btn--primary';
     bulkMoveBtn.textContent = 'Move to group';
     bulkMoveBtn.disabled = true;
 
     bulkActions.append(bulkRemoveBtn, moveSelect, bulkMoveBtn);
-    memberBulk.append(selectAllWrap, bulkActions);
-    membersBox.append(membersTitle, memberBulk);
-    if (readOnly) memberBulk.hidden = true;
+
+    const selectAllWrap = document.createElement('label');
+    selectAllWrap.className = 'network-crm__check network-groups__member-select-all';
+    const selectAllCb = document.createElement('input');
+    selectAllCb.type = 'checkbox';
+    selectAllCb.setAttribute('aria-label', 'Select all members');
+    const membersTitle = document.createElement('span');
+    membersTitle.className = 'network-groups__members-count';
+    selectAllWrap.append(selectAllCb, document.createTextNode(' '), membersTitle);
+
+    memberBulk.append(bulkActions, selectAllWrap);
 
     const memberList = document.createElement('div');
     memberList.className = 'network-groups__member-list';
+    membersBox.append(memberBulk, memberList);
     /** @type {string[]} */
     let memberIds = [...(g.memberIds || [])];
     const memberSet = new Set(memberIds);
     /** @type {Set<string>} */
     const selectedMemberIds = new Set();
+    /** @type {(() => void) | null} */
+    let paintInsights = null;
+
+    function syncMembersTitle() {
+      const n = memberIds.length;
+      membersTitle.textContent = n ? `Members (${n})` : 'Members';
+    }
+    syncMembersTitle();
 
     function fillMoveGroupOptions() {
       moveSelect.replaceChildren();
@@ -663,8 +660,12 @@ export function mountNetworkGroupsUi(root, opts) {
 
     function syncMemberBulkUi() {
       const n = selectedMemberIds.size;
-      bulkRemoveBtn.disabled = n === 0;
-      bulkMoveBtn.disabled = n === 0 || !moveSelect.value;
+      const active = n > 0;
+      bulkActions.hidden = !active;
+      bulkActions.classList.toggle('network-groups__member-bulk-actions--active', active);
+      bulkRemoveBtn.disabled = !active;
+      bulkMoveBtn.disabled = !active || !moveSelect.value;
+      moveSelect.disabled = !active || !groups.some((og) => og.id !== g.id);
       if (!memberIds.length) {
         selectAllCb.checked = false;
         selectAllCb.indeterminate = false;
@@ -692,21 +693,101 @@ export function mountNetworkGroupsUi(root, opts) {
     });
 
     /**
+     * @param {string} groupId
+     */
+    async function fetchGroupFresh(groupId) {
+      const r = await fetch(`/api/network/groups/${encodeURIComponent(groupId)}`, {
+        cache: 'no-store',
+      });
+      const j = await r.json();
+      if (!j.ok || !j.group) throw new Error(j.error || 'reload_failed');
+      return j.group;
+    }
+
+    /**
+     * @param {string} id
+     * @param {string} networkCircles
+     */
+    async function putContactSceneCircles(id, networkCircles) {
+      const r = await fetch(`/api/network/contacts/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ networkCircles }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      if (j.contact?.id) {
+        contactMap.set(j.contact.id, j.contact);
+        const i = contacts.findIndex((c) => c.id === j.contact.id);
+        if (i >= 0) contacts[i] = j.contact;
+      }
+    }
+
+    /**
+     * Add contacts to a group (Scene → networkCircles; Event → members API).
+     * @param {object} group
      * @param {string[]} ids
      */
-    async function removeMembers(ids) {
-      if (!ids.length) return;
-      showStatus(`Removing ${ids.length}…`);
-      const r = await fetch(`/api/network/groups/${encodeURIComponent(g.id)}/members`, {
+    async function addIdsToGroup(group, ids) {
+      if (!ids.length) return group;
+      if (isSceneGroup(group)) {
+        const sceneName = group.name || '';
+        for (const id of ids) {
+          const c = contactById(id);
+          const next = addSceneToken(c?.networkCircles, sceneName);
+          if (c && next === String(c.networkCircles || '')) continue;
+          await putContactSceneCircles(id, next);
+        }
+        await pullLatestContacts();
+        return fetchGroupFresh(group.id);
+      }
+      const r = await fetch(`/api/network/groups/${encodeURIComponent(group.id)}/members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactIds: ids }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'add_failed');
+      return j.group;
+    }
+
+    /**
+     * Remove contacts from a group (Scene → networkCircles; Event → members API).
+     * @param {object} group
+     * @param {string[]} ids
+     */
+    async function removeIdsFromGroup(group, ids) {
+      if (!ids.length) return group;
+      if (isSceneGroup(group)) {
+        const sceneName = group.name || '';
+        for (const id of ids) {
+          const c = contactById(id);
+          const next = removeSceneToken(c?.networkCircles, sceneName);
+          if (c && next === String(c.networkCircles || '')) continue;
+          await putContactSceneCircles(id, next);
+        }
+        await pullLatestContacts();
+        return fetchGroupFresh(group.id);
+      }
+      const r = await fetch(`/api/network/groups/${encodeURIComponent(group.id)}/members`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contactIds: ids }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'remove_failed');
+      return j.group;
+    }
+
+    /**
+     * @param {string[]} ids
+     */
+    async function removeMembers(ids) {
+      if (!ids.length) return;
+      showStatus(`Removing ${ids.length}…`);
+      const nextGroup = await removeIdsFromGroup(current, ids);
       for (const id of ids) selectedMemberIds.delete(id);
-      applyMembership(j.group);
-      if (groupKind(current) === 'community') await pullLatestContacts();
+      applyMembership(nextGroup);
       showStatus(`Removed ${ids.length}`);
       syncMemberBulkUi();
     }
@@ -728,32 +809,16 @@ export function mountNetworkGroupsUi(root, opts) {
       const targetId = moveSelect.value;
       const ids = [...selectedMemberIds];
       if (!targetId || !ids.length) return;
+      const target = groups.find((og) => og.id === targetId);
+      if (!target) return;
       bulkMoveBtn.disabled = true;
       showStatus(`Moving ${ids.length}…`);
       try {
-        const addRes = await fetch(`/api/network/groups/${encodeURIComponent(targetId)}/members`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contactIds: ids }),
-        });
-        const addJson = await addRes.json();
-        if (!addJson.ok) throw new Error(addJson.error || 'move_add_failed');
-        upsertGroup(addJson.group);
-
-        const rmRes = await fetch(`/api/network/groups/${encodeURIComponent(g.id)}/members`, {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contactIds: ids }),
-        });
-        const rmJson = await rmRes.json();
-        if (!rmJson.ok) throw new Error(rmJson.error || 'move_remove_failed');
-
+        const added = await addIdsToGroup(target, ids);
+        upsertGroup(added);
+        const removed = await removeIdsFromGroup(current, ids);
         for (const id of ids) selectedMemberIds.delete(id);
-        applyMembership(rmJson.group);
-        const sceneRefresh =
-          groupKind(current) === 'community'
-          || groupKind(addJson.group) === 'community';
-        if (sceneRefresh) await pullLatestContacts();
+        applyMembership(removed);
         moveSelect.value = '';
         showStatus(`Moved ${ids.length}`);
         syncMemberBulkUi();
@@ -771,21 +836,19 @@ export function mountNetworkGroupsUi(root, opts) {
       const row = document.createElement('div');
       row.className = 'network-groups__member';
       row.dataset.memberId = id;
-      if (!readOnly) {
-        const checkWrap = document.createElement('label');
-        checkWrap.className = 'network-crm__check network-groups__member-check';
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.checked = selectedMemberIds.has(id);
-        cb.setAttribute('aria-label', `Select ${contactName(id)}`);
-        cb.addEventListener('change', () => {
-          if (cb.checked) selectedMemberIds.add(id);
-          else selectedMemberIds.delete(id);
-          syncMemberBulkUi();
-        });
-        checkWrap.append(cb);
-        row.append(checkWrap);
-      }
+      const checkWrap = document.createElement('label');
+      checkWrap.className = 'network-crm__check network-groups__member-check';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = selectedMemberIds.has(id);
+      cb.setAttribute('aria-label', `Select ${contactName(id)}`);
+      cb.addEventListener('change', () => {
+        if (cb.checked) selectedMemberIds.add(id);
+        else selectedMemberIds.delete(id);
+        syncMemberBulkUi();
+      });
+      checkWrap.append(cb);
+      row.append(checkWrap);
       const avatar = avatarEl(person);
       wireAvatarOpenContact(avatar, id);
       const link = contactOpenBtn(id);
@@ -794,6 +857,7 @@ export function mountNetworkGroupsUi(root, opts) {
     }
 
     function paintMemberList() {
+      syncMembersTitle();
       memberList.replaceChildren();
       for (const id of [...selectedMemberIds]) {
         if (!memberSet.has(id)) selectedMemberIds.delete(id);
@@ -801,9 +865,7 @@ export function mountNetworkGroupsUi(root, opts) {
       if (!memberIds.length) {
         const p = document.createElement('p');
         p.className = 'muted';
-        p.textContent = readOnly
-          ? 'No contacts with this Scene tag yet.'
-          : 'No members yet — add people on the right.';
+        p.textContent = 'No members yet.';
         memberList.append(p);
         syncMemberBulkUi();
         return;
@@ -835,10 +897,10 @@ export function mountNetworkGroupsUi(root, opts) {
       for (const id of memberIds) memberSet.add(id);
       paintMemberList();
       renderAddCandidates();
+      if (paintInsights) paintInsights();
     }
 
     paintMemberList();
-    membersBox.append(memberList);
 
     const addPanel = document.createElement('div');
     addPanel.className = 'network-groups__col network-groups__add-panel';
@@ -907,15 +969,8 @@ export function mountNetworkGroupsUi(root, opts) {
           addPersonBtn.disabled = true;
           showStatus(`Adding ${c.displayName || 'person'}…`);
           try {
-            const r = await fetch(`/api/network/groups/${encodeURIComponent(g.id)}/members`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ contactIds: [c.id] }),
-            });
-            const j = await r.json();
-            if (!j.ok) throw new Error(j.error || 'add_failed');
-            applyMembership(j.group);
-            if (groupKind(current) === 'community') await pullLatestContacts();
+            const nextGroup = await addIdsToGroup(current, [c.id]);
+            applyMembership(nextGroup);
             showStatus('Added');
           } catch (err) {
             showStatus(String(err?.message || err), true);
@@ -993,15 +1048,9 @@ export function mountNetworkGroupsUi(root, opts) {
 
         if (createdIds.length) {
           showStatus(`Adding ${createdIds.length} to group…`);
-          const r = await fetch(`/api/network/groups/${encodeURIComponent(g.id)}/members`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contactIds: createdIds }),
-          });
-          const j = await r.json();
-          if (!j.ok) throw new Error(j.error || 'add_failed');
-          applyMembership(j.group);
           await pullLatestContacts();
+          const nextGroup = await addIdsToGroup(current, createdIds);
+          applyMembership(nextGroup);
         }
 
         if (gen !== detailGeneration) return;
@@ -1020,153 +1069,229 @@ export function mountNetworkGroupsUi(root, opts) {
     });
 
     addPanel.append(addLabel, addSearch, addNewContactsBtn, addList);
-    peopleCols.append(membersBox);
-    if (!readOnly) {
-      peopleCols.append(addPanel);
-      requestAnimationFrame(() => {
-        if (gen !== detailGeneration) return;
-        renderAddCandidates();
-      });
-    }
-
-    const toolsBox = document.createElement('div');
-    toolsBox.className = 'network-groups__tools';
-
-    if (!readOnly) {
-      const ingest = document.createElement('div');
-      ingest.className = 'network-crm__bulk network-groups__tools-ingest';
-      ingest.innerHTML = `
-      <label class="network-crm__field network-crm__field--full">
-        <span>Ingest people (one name per line — creates cards + adds to this event group; does not set Scene)</span>
-        <textarea class="network-crm__input" data-ingest rows="4" placeholder="Alex Chen&#10;Jordan Lee"></textarea>
-      </label>
-    `;
-    const ingestBtn = document.createElement('button');
-    ingestBtn.type = 'button';
-    ingestBtn.className = 'network-crm__btn network-crm__btn--primary';
-    ingestBtn.textContent = 'Ingest into group';
-    ingestBtn.addEventListener('click', async () => {
-      const text = ingest.querySelector('[data-ingest]')?.value || '';
-      showStatus('Ingesting…');
-      try {
-        const r = await fetch(`/api/network/groups/${encodeURIComponent(g.id)}/ingest`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ names: text }),
-        });
-        const j = await r.json();
-        if (!j.ok) throw new Error(j.error || 'ingest_failed');
-        upsertGroup(j.group);
-        await pullLatestContacts();
-        showStatus(`Ingested ${j.created?.length || 0} new, linked ${j.linked?.length || 0}`);
-        const ta = ingest.querySelector('[data-ingest]');
-        if (ta) ta.value = '';
-        selectGroup(g.id);
-      } catch (err) {
-        showStatus(String(err?.message || err), true);
-      }
+    peopleCols.append(membersBox, addPanel);
+    requestAnimationFrame(() => {
+      if (gen !== detailGeneration) return;
+      renderAddCandidates();
     });
-    ingest.append(ingestBtn);
-    toolsBox.append(ingest);
-    }
 
-    const commonBox = document.createElement('div');
-    commonBox.className = 'network-groups__analysis';
-    const commonTitle = document.createElement('div');
-    commonTitle.className = 'network-crm__checks-label';
-    commonTitle.textContent = 'Commonalities (auto when >2 members)';
-    commonBox.append(commonTitle);
-    const commons = Array.isArray(g.commonalities) ? g.commonalities : [];
-    if (!commons.length) {
-      const p = document.createElement('p');
-      p.className = 'muted';
-      p.textContent =
-        (g.memberIds || []).length > 2
-          ? 'No analysis yet — run Analyze.'
-          : 'Add more than 2 people to unlock commonality ranking.';
-      commonBox.append(p);
-    } else {
-      const ol = document.createElement('ol');
-      ol.className = 'network-groups__ranked';
-      for (const c of commons) {
-        const li = document.createElement('li');
-        li.textContent = `${c.label} (${Math.round((c.score || 0) * 100)}%) — ${c.evidence || ''}`;
-        ol.append(li);
+    form.append(peopleCols);
+
+    {
+      const insights = document.createElement('div');
+      insights.className = 'network-groups__insights';
+
+      const insightsHead = document.createElement('div');
+      insightsHead.className = 'network-groups__insights-head';
+      const insightsTitle = document.createElement('div');
+      insightsTitle.className = 'network-crm__checks-label';
+      insightsTitle.textContent = 'Insights';
+      const analyzeBtn = document.createElement('button');
+      analyzeBtn.type = 'button';
+      analyzeBtn.className = 'network-crm__btn network-crm__btn--tiny';
+      analyzeBtn.textContent = 'Analyze';
+      const insightsStamp = document.createElement('span');
+      insightsStamp.className = 'network-groups__insights-stamp muted';
+      insightsHead.append(insightsTitle, analyzeBtn, insightsStamp);
+
+      const commonalitiesBox = document.createElement('div');
+      commonalitiesBox.className = 'network-groups__insights-section';
+      const commonalitiesLabel = document.createElement('div');
+      commonalitiesLabel.className = 'network-groups__insights-sublabel';
+      commonalitiesLabel.textContent = 'Commonalities';
+      const commonalitiesList = document.createElement('div');
+      commonalitiesList.className = 'network-groups__commonality-list';
+      commonalitiesBox.append(commonalitiesLabel, commonalitiesList);
+
+      const suggestionsBox = document.createElement('div');
+      suggestionsBox.className = 'network-groups__insights-section';
+      const suggestionsLabel = document.createElement('div');
+      suggestionsLabel.className = 'network-groups__insights-sublabel';
+      suggestionsLabel.textContent = 'Suggested people';
+      const suggestionsList = document.createElement('div');
+      suggestionsList.className = 'network-groups__suggestion-list';
+      suggestionsBox.append(suggestionsLabel, suggestionsList);
+
+      insights.append(insightsHead, commonalitiesBox, suggestionsBox);
+      form.append(insights);
+
+      /**
+       * @param {string | null | undefined} iso
+       */
+      function formatInsightsStamp(iso) {
+        if (!iso) return '';
+        const t = Date.parse(iso);
+        if (!Number.isFinite(t)) return '';
+        try {
+          return `Updated ${new Date(t).toLocaleString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+          })}`;
+        } catch {
+          return '';
+        }
       }
-      commonBox.append(ol);
-    }
 
-    const suggestBox = document.createElement('div');
-    suggestBox.className = 'network-groups__analysis';
-    const suggestTitle = document.createElement('div');
-    suggestTitle.className = 'network-crm__checks-label';
-    suggestTitle.textContent = 'Suggested people (by commonality)';
-    suggestBox.append(suggestTitle);
-    const suggestions = Array.isArray(g.suggestions) ? g.suggestions : [];
-    if (!suggestions.length) {
-      const p = document.createElement('p');
-      p.className = 'muted';
-      p.textContent = 'No suggestions yet.';
-      suggestBox.append(p);
-    } else {
-      for (const s of suggestions) {
-        const row = document.createElement('div');
-        row.className = 'network-groups__member';
-        if (s.contactId) {
-          const avatar = avatarEl(contactById(s.contactId));
-          wireAvatarOpenContact(avatar, s.contactId);
-          row.append(avatar);
-          const link = contactOpenBtn(
-            s.contactId,
-            s.displayName || contactName(s.contactId),
-          );
-          const meta = document.createElement('span');
-          meta.className = 'muted';
-          meta.textContent = ` (${Math.round((s.score || 0) * 100)}%) — ${s.reason || ''}`;
-          row.append(link, meta);
+      /**
+       * @param {object} suggestion
+       */
+      async function addSuggestion(suggestion) {
+        const contactId = suggestion?.contactId ? String(suggestion.contactId) : '';
+        if (!contactId || memberSet.has(contactId)) return;
+        showStatus('Adding…');
+        try {
+          const nextGroup = await addIdsToGroup(current, [contactId]);
+          applyMembership(nextGroup);
+          showStatus(`Added ${contactName(contactId)}`);
+        } catch (err) {
+          showStatus(String(err?.message || err), true);
+        }
+      }
+
+      paintInsights = () => {
+        if (gen !== detailGeneration) return;
+        const commonalities = Array.isArray(current.commonalities) ? current.commonalities : [];
+        const suggestions = Array.isArray(current.suggestions) ? current.suggestions : [];
+        const stamp = formatInsightsStamp(current.commonalitiesUpdatedAt);
+        insightsStamp.textContent = stamp;
+        insightsStamp.hidden = !stamp;
+        analyzeBtn.textContent = commonalities.length || suggestions.length ? 'Refresh' : 'Analyze';
+
+        commonalitiesList.replaceChildren();
+        if (!commonalities.length) {
+          const empty = document.createElement('p');
+          empty.className = 'muted network-groups__insights-empty';
+          empty.textContent =
+            memberIds.length <= 2
+              ? 'Add at least 3 members, then run Analyze.'
+              : 'Run Analyze to find shared traits.';
+          commonalitiesList.append(empty);
         } else {
-          const label = document.createElement('span');
-          label.textContent = `${s.displayName || 'Unknown'} (${Math.round((s.score || 0) * 100)}%) — ${s.reason || ''}`;
-          row.append(label);
-        }
-        if (s.contactId) {
-          const add = document.createElement('button');
-          add.type = 'button';
-          add.className = 'network-crm__btn network-crm__btn--tiny';
-          add.textContent = 'Add';
-          add.addEventListener('click', async () => {
-            add.disabled = true;
-            showStatus('Adding…');
-            try {
-              const r = await fetch(`/api/network/groups/${encodeURIComponent(g.id)}/members`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ contactIds: [s.contactId] }),
-              });
-              const j = await r.json();
-              if (!j.ok) throw new Error(j.error || 'add_failed');
-              applyMembership(j.group);
-              if (isSceneGroup(current)) await pullLatestContacts();
-              showStatus('Added');
-            } catch (err) {
-              showStatus(String(err?.message || err), true);
-              add.disabled = false;
+          for (const c of commonalities) {
+            const row = document.createElement('div');
+            row.className = 'network-groups__commonality';
+            const label = document.createElement('div');
+            label.className = 'network-groups__commonality-label';
+            label.textContent = c.label || '';
+            row.append(label);
+            if (c.evidence) {
+              const ev = document.createElement('div');
+              ev.className = 'network-groups__commonality-evidence muted';
+              ev.textContent = c.evidence;
+              row.append(ev);
             }
-          });
-          if (!readOnly) row.append(add);
+            commonalitiesList.append(row);
+          }
         }
-        suggestBox.append(row);
-      }
-    }
 
-    toolsBox.append(commonBox, suggestBox);
-    form.append(peopleCols, toolsBox);
+        suggestionsList.replaceChildren();
+        const visible = suggestions.filter((s) => {
+          const id = s?.contactId ? String(s.contactId) : '';
+          return id ? !memberSet.has(id) : Boolean(s?.displayName);
+        });
+        if (!visible.length) {
+          const empty = document.createElement('p');
+          empty.className = 'muted network-groups__insights-empty';
+          empty.textContent = suggestions.length
+            ? 'All suggested people are already in this group.'
+            : 'Suggestions appear after Analyze.';
+          suggestionsList.append(empty);
+        } else {
+          for (const s of visible) {
+            const row = document.createElement('div');
+            row.className = 'network-groups__suggestion';
+            const body = document.createElement('div');
+            body.className = 'network-groups__suggestion-body';
+            const nameEl = document.createElement('div');
+            nameEl.className = 'network-groups__suggestion-name';
+            const cid = s.contactId ? String(s.contactId) : '';
+            if (cid && contactMap.has(cid)) {
+              nameEl.append(contactOpenBtn(cid, contactName(cid)));
+            } else {
+              nameEl.textContent = s.displayName || cid || 'Unknown';
+            }
+            body.append(nameEl);
+            if (s.reason) {
+              const reason = document.createElement('div');
+              reason.className = 'network-groups__suggestion-reason muted';
+              reason.textContent = s.reason;
+              body.append(reason);
+            }
+            row.append(body);
+            if (cid && contactMap.has(cid) && !memberSet.has(cid)) {
+              const addBtn = document.createElement('button');
+              addBtn.type = 'button';
+              addBtn.className = 'network-crm__btn network-crm__btn--tiny';
+              addBtn.textContent = 'Add';
+              addBtn.addEventListener('click', () => {
+                addBtn.disabled = true;
+                addSuggestion(s).finally(() => {
+                  if (gen === detailGeneration) paintInsights();
+                });
+              });
+              row.append(addBtn);
+            }
+            suggestionsList.append(row);
+          }
+        }
+      };
+
+      analyzeBtn.addEventListener('click', async () => {
+        if (memberIds.length <= 2) {
+          showStatus('Need more than 2 members to analyze', true);
+          return;
+        }
+        analyzeBtn.disabled = true;
+        showStatus('Analyzing…');
+        try {
+          const r = await fetch(`/api/network/groups/${encodeURIComponent(current.id)}/analyze`, {
+            method: 'POST',
+          });
+          const j = await r.json();
+          if (gen !== detailGeneration) return;
+          if (!j.ok) {
+            const err = j.error || 'analyze_failed';
+            if (err === 'openrouter_not_configured') {
+              throw new Error('OpenRouter is not configured');
+            }
+            throw new Error(err);
+          }
+          if (j.skipped) {
+            showStatus('Need more than 2 members to analyze', true);
+            return;
+          }
+          if (j.group) {
+            upsertGroup(j.group);
+            current = j.group;
+          } else {
+            current = {
+              ...current,
+              commonalities: j.commonalities || [],
+              suggestions: j.suggestions || [],
+              commonalitiesUpdatedAt: new Date().toISOString(),
+            };
+            upsertGroup(current);
+          }
+          paintInsights();
+          const nC = (current.commonalities || []).length;
+          const nS = (current.suggestions || []).length;
+          showStatus(`Analyzed · ${nC} commonalit${nC === 1 ? 'y' : 'ies'} · ${nS} suggestion${nS === 1 ? '' : 's'}`);
+        } catch (err) {
+          if (gen === detailGeneration) showStatus(String(err?.message || err), true);
+        } finally {
+          if (gen === detailGeneration) analyzeBtn.disabled = false;
+        }
+      });
+
+      paintInsights();
+    }
 
     let saveInFlight = false;
     let dirtyWhileSaving = false;
 
     async function persistGroup() {
-      if (readOnly) return;
       if (gen !== detailGeneration) {
         showStatus('Detail refreshed — try Save again');
         return;
@@ -1185,24 +1310,27 @@ export function mountNetworkGroupsUi(root, opts) {
         do {
           dirtyWhileSaving = false;
           const fd = new FormData(form);
+          const nextName = String(fd.get('name') || '').trim();
+          if (!nextName) throw new Error(isScene ? 'Scene tag is required' : 'Name is required');
+          /** @type {Record<string, string>} */
+          const body = { name: nextName };
+          // Scene groups only accept name (+ insights); keep kind out of the patch.
+          if (!isScene) body.kind = 'event';
           const r = await fetch(`/api/network/groups/${encodeURIComponent(current.id)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: String(fd.get('name') || '').trim(),
-              kind: 'event',
-            }),
+            body: JSON.stringify(body),
           });
           const j = await r.json();
           if (!j.ok) throw new Error(j.error || 'save_failed');
           if (gen !== detailGeneration) return;
           upsertGroup(j.group);
           current = j.group;
-          showStatus('Saved');
+          showStatus(isScene ? 'Scene tag saved' : 'Saved');
           renderList();
         } while (dirtyWhileSaving && gen === detailGeneration);
 
-        // Refresh contacts only when community Scene tags may have changed.
+        // Refresh contacts when Scene tags may have been rewritten on members.
         if (gen === detailGeneration) {
           const nextKind = groupKind(current);
           const nextName = String(current.name || '');
@@ -1210,6 +1338,7 @@ export function mountNetworkGroupsUi(root, opts) {
           const sceneMayChange =
             members.length > 0
             && (prevKind !== nextKind
+              || (isScene && prevName.toLowerCase() !== nextName.toLowerCase())
               || (nextKind === 'community' && prevName.toLowerCase() !== nextName.toLowerCase()));
           if (sceneMayChange) await pullLatestContacts();
         }
@@ -1222,8 +1351,11 @@ export function mountNetworkGroupsUi(root, opts) {
     }
 
     async function deleteGroup() {
-      if (readOnly) return;
-      if (!confirm(`Delete group ${g.name || ''}?`)) return;
+      const label = g.name || (isScene ? 'this scene' : 'this group');
+      const msg = isScene
+        ? `Delete scene “${label}”? This removes that Scene tag from all members.`
+        : `Delete group ${label}?`;
+      if (!confirm(msg)) return;
       try {
         const wasCommunity = groupKind(g) === 'community';
         const r = await fetch(`/api/network/groups/${encodeURIComponent(g.id)}`, { method: 'DELETE' });
@@ -1246,41 +1378,16 @@ export function mountNetworkGroupsUi(root, opts) {
       }
     }
 
-    detailActions = readOnly
-      ? null
-      : {
-          save: persistGroup,
-          delete: deleteGroup,
-          saving: () => saveInFlight,
-        };
+    detailActions = {
+      save: persistGroup,
+      delete: deleteGroup,
+      saving: () => saveInFlight,
+    };
     notifyToolbar();
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       await persistGroup();
-    });
-
-    analyzeBtn.addEventListener('click', async (ev) => {
-      analyzeBtn.disabled = true;
-      beginWaitCursor(ev);
-      showStatus('Analyzing…');
-      try {
-        const r = await fetch(`/api/network/groups/${encodeURIComponent(g.id)}/analyze`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-        const j = await r.json();
-        if (!j.ok) throw new Error(j.error || j.reason || 'analyze_failed');
-        if (j.group) upsertGroup(j.group);
-        showStatus(j.skipped ? 'Need more than 2 members' : 'Analysis updated');
-        selectGroup(g.id);
-      } catch (err) {
-        showStatus(String(err?.message || err), true);
-      } finally {
-        endWaitCursor();
-        analyzeBtn.disabled = false;
-      }
     });
 
     detail.append(form);
@@ -1389,8 +1496,7 @@ export function mountNetworkGroupsUi(root, opts) {
 
   function canEditSelected() {
     if (!detailActions || !selectedId || selectedId === UNGROUPED_ID) return false;
-    const g = groups.find((x) => x.id === selectedId);
-    return Boolean(g && isEventGroup(g));
+    return groups.some((x) => x.id === selectedId);
   }
 
   async function saveSelected() {

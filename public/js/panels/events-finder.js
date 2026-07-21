@@ -3,7 +3,12 @@
  * Browse filters share /api/events-finder-criteria with Settings ingestion criteria
  * (same JSON file; filters vs scrape/lookFor/skip are applied at different stages).
  */
-import { createCityChecks, createRangeCalendar, normalizeLocalTime } from './events-filter-ui.js?v=multi-dates-7';
+import {
+  createAttendanceChecks,
+  createCityChecks,
+  createRangeCalendar,
+  normalizeLocalTime,
+} from './events-filter-ui.js?v=attendance-online-1';
 import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
 import { beginWaitCursor, endWaitCursor } from '../lib/wait-cursor.js';
 
@@ -562,6 +567,20 @@ export function mountEventsFinder(root) {
 
   areaRow.append(zipField, milesField);
   filterPanel.append(areaRow);
+
+  const attendanceField = document.createElement('div');
+  attendanceField.className = 'events-finder__field';
+  const attendanceLabel = document.createElement('p');
+  attendanceLabel.className = 'events-finder__label';
+  attendanceLabel.textContent = 'Attendance';
+  attendanceField.append(attendanceLabel);
+  const attendanceChecks = createAttendanceChecks({
+    idPrefix: 'events-finder-att',
+    classPrefix: 'events-finder',
+    attendance: 'any',
+  });
+  attendanceField.append(attendanceChecks.root);
+  filterPanel.append(attendanceField);
 
   const citiesField = document.createElement('div');
   citiesField.className = 'events-finder__field';
@@ -2138,7 +2157,7 @@ export function mountEventsFinder(root) {
       dateFrom: range.dateFrom,
       dateTo: range.dateTo,
       earliestLocalTime: earliest || null,
-      attendance: 'in_person',
+      attendance: attendanceChecks.getAttendance(),
       originZip,
     };
   }
@@ -4106,6 +4125,7 @@ export function mountEventsFinder(root) {
         data.filters?.dates || [],
       );
       timeInput.value = normalizeLocalTime(data.filters?.earliestLocalTime) || '';
+      attendanceChecks.setAttendance(data.filters?.attendance || 'any');
       if (Array.isArray(data.filters?.cities) && data.filters.cities.length) {
         savedCitySelection = data.filters.cities.map(String);
       } else {
@@ -4116,6 +4136,7 @@ export function mountEventsFinder(root) {
         for (const el of controls) el.disabled = false;
         calendar.setDisabled(false);
         cityChecks.setDisabled(false);
+        attendanceChecks.setDisabled(false);
         filtersReady = true;
         filterMsg.hidden = true;
         filterMsg.textContent = '';
@@ -4197,4 +4218,8 @@ export function mountEventsFinder(root) {
     scheduleFilterAutosave({ reload: true });
   };
   timeInput.addEventListener('input', onTimeFilterChange);
+  attendanceChecks.root.addEventListener('change', () => {
+    if (lastEventsPayload) paintEvents(lastEventsPayload);
+    scheduleFilterAutosave({ reload: true });
+  });
 }

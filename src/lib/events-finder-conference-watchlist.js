@@ -487,13 +487,22 @@ function queryAcronym(tokens) {
   // Brand + place ("sesa san juan", "ces las vegas"): keep the lead brand; do
   // not mint ssj/clv from place initials.
   if (sig.some((t) => PLACE_WORDS.has(t))) return '';
-  // Query already ends with its acronym ("consumer electronics show ces") —
-  // use that token. Minting initials of ALL tokens wrongly yields "cesc".
+  // Trailing acronym: "consumer electronics show ces" — last token is the
+  // initials of the words before it. Minting ALL tokens wrongly yields "cesc".
   const lead = sig.slice(0, -1);
   if (lead.length >= 2) {
     const minted = lead.map((t) => t[0]).join('');
     const last = sig[sig.length - 1];
     if (last === minted) return last;
+  }
+  // Leading acronym: "ces consumer electronics show" — first token is the
+  // initials of the words after it. Without this, minting all tokens → "cces"
+  // and cces.org (schools) beats ces.tech.
+  const tail = sig.slice(1);
+  if (tail.length >= 2) {
+    const minted = tail.map((t) => t[0]).join('');
+    const first = sig[0];
+    if (first.length >= 3 && first.length <= 6 && first === minted) return first;
   }
   return sig.map((t) => t[0]).join('');
 }

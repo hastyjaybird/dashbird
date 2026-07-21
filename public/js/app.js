@@ -202,7 +202,7 @@ async function mountDeferredPanels(config) {
       }),
     ),
     mountWhenReady('events-finder', () =>
-      import('./panels/events-finder.js?v=big-events-2').then(({ mountEventsFinder }) => {
+      import('./panels/events-finder.js?v=attendance-online-1').then(({ mountEventsFinder }) => {
         mountEventsFinder(document.getElementById('mount-events-finder'));
       }),
     ),
@@ -224,7 +224,7 @@ async function mainMobile() {
 
   const [{ mountViewModeToggle }, { mountMobileShell }] = await Promise.all([
     import('./panels/view-mode-toggle.js'),
-    import('./panels/mobile-shell.js?v=mobile-panels-20260719-3'),
+    import('./panels/mobile-shell.js?v=mobile-panels-20260720-attendance-1'),
   ]);
 
   mountViewModeToggle(document.getElementById('mount-view-mode'));
