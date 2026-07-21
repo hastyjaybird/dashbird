@@ -12,6 +12,7 @@ LAN Docker ([`docker-compose.yml`](../docker-compose.yml)) remains for local des
 - **dashboard** — Node slim image; `data/` + `public/` bind-mounted
 - **Vikunja** — todos; internal only; Dashbird proxies `/api/vikunja`
 - **Tool images** — served from `data/tool-library-assets/` (snapshot once). `TOOL_LIBRARY_SCREENSHOT=0` on the VPS. New Playwright captures: enrich on LAN, then rsync.
+- **Big Events research** — LAN finds event URLs / fliers via headless Chrome; the slim cloud image can't. Set `BRAVE_SEARCH_API_KEY` (free tier ≈ 2k/mo, $0 — https://api.search.brave.com) + `OPENROUTER_API_KEY` on the VPS so events added on cloud still discover the official URL, correct the name, and pull a thumbnail (search via Brave API; page fetch + name/date extraction over plain HTTPS). Without the keys, research on cloud is a no-op — enrich on LAN and `SYNC_DATA=1 ./scripts/sync-to-cloud.sh` instead.
 
 ## One-time server setup
 

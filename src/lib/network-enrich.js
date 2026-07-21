@@ -487,6 +487,16 @@ export async function searchDuckDuckGoImageResults(query, limit = 10, opts = {})
   } catch (e) {
     console.warn('[network-enrich] chrome image search failed', String(e?.message || e).slice(0, 120));
   }
+  // Brave image API — works from a datacenter IP / the slim cloud image (no browser).
+  try {
+    const { braveApiEnabled, braveApiImageSearch } = await import('./brave-search-api.js');
+    if (braveApiEnabled()) {
+      const api = await braveApiImageSearch(query, limit);
+      if (api.length) return api;
+    }
+  } catch (e) {
+    console.warn('[network-enrich] brave api image search failed', String(e?.message || e).slice(0, 120));
+  }
   return searchDuckDuckGoImageResultsLegacy(query, limit, opts);
 }
 
@@ -819,6 +829,18 @@ async function searchWebResultUrls(query, limit = 6) {
     }
   } catch (e) {
     console.warn('[network-enrich] chrome web search failed', String(e?.message || e).slice(0, 120));
+  }
+  // Brave Search API — reliable from a datacenter IP / the slim cloud image where
+  // headless Chrome can't run. Only used when the browser path came up empty.
+  try {
+    const { braveApiEnabled, braveApiWebSearch } = await import('./brave-search-api.js');
+    if (braveApiEnabled()) {
+      const api = await braveApiWebSearch(query, limit);
+      const urls = api.map((h) => h.url).filter((u) => !isLikelyNonPersonEnrichUrl(u));
+      if (urls.length) return urls.slice(0, limit);
+    }
+  } catch (e) {
+    console.warn('[network-enrich] brave api web search failed', String(e?.message || e).slice(0, 120));
   }
   return searchDuckDuckGoResultUrls(query, limit);
 }

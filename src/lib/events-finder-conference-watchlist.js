@@ -13,6 +13,7 @@ import {
   saveBigEventFlier,
 } from './events-finder-conference-watchlist-store.js';
 import { assertPublicHttpUrl } from './public-http-url.js';
+import { braveApiEnabled, braveApiWebSearch, braveApiImageSearch } from './brave-search-api.js';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 const BROWSER_UA =
@@ -300,7 +301,17 @@ export async function searchConferenceHits(query, env = process.env) {
     const urls = await searchChromeResultUrls(q, 8, env);
     for (const u of urls) push(u);
   } catch {
-    /* fall through to HTML scrapers */
+    /* fall through to API / HTML scrapers */
+  }
+  // Brave Search API: reliable from a datacenter IP / the slim cloud image where
+  // headless Chrome can't run. Only hit it when the browser path came up short.
+  if (out.length < 3 && braveApiEnabled(env)) {
+    try {
+      const api = await braveApiWebSearch(q, 8, env);
+      for (const h of api) push(h.url, h.title);
+    } catch {
+      /* fall through to HTML scrapers */
+    }
   }
   if (out.length < 3) {
     try {
@@ -534,6 +545,15 @@ async function findAndSaveFlier(name, eventYear, slug, env) {
       hits = await searchChromeImageResults(q, 8, {}, env);
     } catch {
       hits = [];
+    }
+    // Browser image search is empty on the slim cloud image — fall back to the
+    // Brave image API (keyless-from-datacenter) so cloud can still grab a flier.
+    if (!hits.length && braveApiEnabled(env)) {
+      try {
+        hits = await braveApiImageSearch(q, 8, env);
+      } catch {
+        hits = [];
+      }
     }
     for (const hit of hits) {
       const img = await fetchImageBuffer(hit.url);

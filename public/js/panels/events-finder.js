@@ -1018,7 +1018,7 @@ export function mountEventsFinder(root) {
     const researchBtn = document.createElement('button');
     researchBtn.type = 'button';
     researchBtn.className = 'events-finder__big-events-again';
-    researchBtn.textContent = 'Re-research';
+    researchBtn.textContent = 'Enrich';
     researchBtn.title = 'Discard manual edits and re-fetch from the web';
     const editMsg = document.createElement('span');
     editMsg.className = 'events-finder__big-events-edit-msg muted';
@@ -1066,6 +1066,7 @@ export function mountEventsFinder(root) {
         );
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        tr.hidden = true; // close editor so the refresh below can repaint
         void refreshBigEventsFromStore();
         reloadBigEventsSoon();
       } catch (err) {
@@ -1079,7 +1080,7 @@ export function mountEventsFinder(root) {
       e.stopPropagation();
       if (!window.confirm('Discard manual edits and re-fetch this event from the web?')) return;
       researchBtn.disabled = true;
-      setMsg('Re-researching… this can take a moment.');
+      setMsg('Enriching… this can take a moment.');
       try {
         const res = await fetch('/api/events-finder/big-events/research', {
           method: 'POST',
@@ -1089,12 +1090,13 @@ export function mountEventsFinder(root) {
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
         setTimeout(() => {
+          tr.hidden = true; // close editor so the refresh can repaint
           void refreshBigEventsFromStore();
           reloadBigEventsSoon();
         }, 4000);
       } catch (err) {
         researchBtn.disabled = false;
-        setMsg(`Could not re-research: ${String(err?.message || err)}`, 'error');
+        setMsg(`Could not enrich: ${String(err?.message || err)}`, 'error');
       }
     });
 
@@ -1142,9 +1144,22 @@ export function mountEventsFinder(root) {
     }
   }
 
+  /**
+   * True while the user has a row's edit form open. Background refreshes must
+   * not repaint the table then, or they'd collapse the form and wipe edits.
+   */
+  function isBigEventEditorOpen() {
+    return Boolean(
+      conferencePopoutStatusList
+        && conferencePopoutStatusList.querySelector(
+          '.events-finder__big-events-editrow:not([hidden])',
+        ),
+    );
+  }
+
   function refreshConferencePopoutIfOpen() {
     syncConferenceNamesFromPayload();
-    if (!conferencePopoutStatusList) return;
+    if (!conferencePopoutStatusList || isBigEventEditorOpen()) return;
     paintBigEventsTable(conferenceWatchItemsFromPayload(), conferencePopoutStatusList);
   }
 
@@ -1160,7 +1175,11 @@ export function mountEventsFinder(root) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok || !Array.isArray(data.items)) return;
       if (lastEventsPayload) lastEventsPayload.conferenceWatchlistItems = data.items;
-      if (conferencePopoutStatusList) paintBigEventsTable(data.items, conferencePopoutStatusList);
+      // Don't clobber an open edit form; the fresh data is cached above and
+      // will paint once the form closes.
+      if (conferencePopoutStatusList && !isBigEventEditorOpen()) {
+        paintBigEventsTable(data.items, conferencePopoutStatusList);
+      }
     } catch {
       /* keep whatever is already painted from cache */
     }
