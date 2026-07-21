@@ -8,7 +8,10 @@ import {
   GMAIL_DAILY_SUMMARY_UNPIN_GRACE_MS,
   collapseDuplicateDailySummaryItems,
   dailySummaryItemsAreSameAsk,
+  dropOpenItemsMatchingClosed,
   keepNewestSourceOnly,
+  matchesClosedDailySummaryItem,
+  mergeSynthesizedDigest,
   pruneExpiredGmailDailySummary,
   openGmailWeeklyItems,
   scrubEventMentionsFromSummary,
@@ -312,5 +315,165 @@ assert.equal(collapsedOpen.length, 2);
 assert.equal(collapsedOpen.find((i) => i.company === 'Acme')?.id, 'p2');
 assert.equal(collapsedOpen.find((i) => i.company === 'Acme')?.sources.length, 1);
 assert.equal(collapsedOpen.find((i) => i.company === 'Acme')?.sources[0].messageId, '2');
+
+// Dismissed tombstone must block same message even when the model rephrases the title.
+const dismissedSource = {
+  email: 'a@x.com',
+  messageId: '152490',
+  threadId: 't1',
+  subject: 'Reminder: Your workspace "Jaybird\'s Workspace" will be deleted in 7 days',
+  date: fresh,
+  gmailId: '19f6747be37acb49',
+};
+const healed = dropOpenItemsMatchingClosed([
+  baseItem({
+    id: 'open-resurrect',
+    title: 'Confirm workspace deletion',
+    company: 'Workspace Provider',
+    status: 'open',
+    createdAt: fresh,
+    updatedAt: fresh,
+    fingerprint: 'newfp',
+    sources: [dismissedSource],
+  }),
+  baseItem({
+    id: 'dismissed-mislabel',
+    title: "Review Julia's USAA claim closure",
+    company: '',
+    status: 'dismissed',
+    createdAt: mid,
+    updatedAt: mid,
+    fingerprint: 'oldfp',
+    sources: [dismissedSource],
+  }),
+  baseItem({
+    id: 'unrelated',
+    title: 'Pay rent',
+    company: 'Landlord',
+    status: 'open',
+    createdAt: fresh,
+    updatedAt: fresh,
+    fingerprint: 'rent',
+    sources: [
+      { email: 'a@x.com', messageId: '99', threadId: '', subject: 'Rent due', date: fresh },
+    ],
+  }),
+]);
+assert.equal(
+  healed.filter((i) => i.status === 'open').map((i) => i.id).join(','),
+  'unrelated',
+);
+assert.equal(healed.find((i) => i.id === 'dismissed-mislabel')?.status, 'dismissed');
+
+assert.equal(
+  matchesClosedDailySummaryItem(
+    baseItem({
+      title: 'Confirm Zelle payment',
+      company: 'USAA',
+      fingerprint: 'zelle-new',
+      sources: [
+        {
+          email: 'a@x.com',
+          messageId: '77',
+          threadId: '',
+          subject: 'Zelle payment received',
+          date: fresh,
+        },
+      ],
+    }),
+    [
+      baseItem({
+        title: 'Confirm Zelle transaction',
+        company: 'USAA Federal Savings Bank',
+        status: 'dismissed',
+        fingerprint: 'zelle-old',
+        sources: [
+          {
+            email: 'a@x.com',
+            messageId: '76',
+            threadId: '',
+            subject: 'Zelle payment received',
+            date: mid,
+          },
+        ],
+      }),
+    ],
+  ),
+  true,
+);
+
+const merged = mergeSynthesizedDigest(
+  {
+    summaryText: '',
+    generatedAt: fresh,
+    lastScanYmd: '2026-07-14',
+    windowDays: 10,
+    lastError: null,
+    items: [
+      baseItem({
+        id: 'd1',
+        title: 'Confirm Zelle transaction',
+        company: 'USAA Federal Savings Bank',
+        status: 'dismissed',
+        createdAt: fresh,
+        updatedAt: fresh,
+        fingerprint: 'zelle-old',
+        sources: [
+          {
+            email: 'a@x.com',
+            messageId: '76',
+            threadId: '',
+            subject: 'Zelle payment received',
+            date: fresh,
+          },
+        ],
+      }),
+    ],
+  },
+  {
+    summaryText: 'ok',
+    windowDays: 10,
+    lastScanYmd: '2026-07-14',
+    items: [
+      {
+        title: 'Review your Zelle transaction',
+        company: 'USAA',
+        detail: '',
+        needsReply: false,
+        deadline: null,
+        deadlineSource: 'none',
+        sources: [
+          {
+            email: 'a@x.com',
+            messageId: '76',
+            threadId: '',
+            subject: 'Zelle payment received',
+            date: fresh,
+          },
+        ],
+      },
+      {
+        title: 'Ship package',
+        company: 'UPS',
+        detail: '',
+        needsReply: false,
+        deadline: null,
+        deadlineSource: 'none',
+        sources: [
+          {
+            email: 'a@x.com',
+            messageId: '88',
+            threadId: '',
+            subject: 'Your package is ready',
+            date: fresh,
+          },
+        ],
+      },
+    ],
+  },
+);
+assert.equal(merged.items.filter((i) => i.status === 'open').length, 1);
+assert.equal(merged.items.find((i) => i.status === 'open')?.company, 'UPS');
+assert.equal(merged.items.find((i) => i.status === 'dismissed')?.id, 'd1');
 
 console.log('validate-daily-summary: ok');

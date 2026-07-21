@@ -441,6 +441,91 @@ export function itemFingerprint(item) {
 }
 
 /**
+ * Stable keys for a source message so dismiss survives LLM title rephrases.
+ * @param {{ email?: string, messageId?: string, gmailId?: string | null, rfc822MessageId?: string | null } | null | undefined} source
+ * @returns {string[]}
+ */
+export function dailySummarySourceKeys(source) {
+  if (!source || typeof source !== 'object') return [];
+  const email = String(source.email || '').trim().toLowerCase();
+  /** @type {string[]} */
+  const keys = [];
+  const messageId = String(source.messageId || '').trim();
+  if (email && messageId) keys.push(`mid:${email}:${messageId}`);
+  const gmailId = String(source.gmailId || '').trim().toLowerCase();
+  if (email && gmailId && /^[0-9a-f]+$/.test(gmailId)) keys.push(`gid:${email}:${gmailId}`);
+  const rfc = String(source.rfc822MessageId || '').trim().toLowerCase();
+  if (rfc) keys.push(`rfc:${rfc}`);
+  return keys;
+}
+
+/**
+ * All source keys for an item.
+ * @param {{ sources?: GmailWeeklySource[] } | null | undefined} item
+ */
+export function itemSourceKeys(item) {
+  const sources = Array.isArray(item?.sources) ? item.sources : [];
+  /** @type {string[]} */
+  const keys = [];
+  for (const s of sources) keys.push(...dailySummarySourceKeys(s));
+  return keys;
+}
+
+/**
+ * True when a candidate matches a dismissed/tasked tombstone (fingerprint,
+ * same underlying message, or same company/ask).
+ * @param {{ title?: string, company?: string, fingerprint?: string, sources?: GmailWeeklySource[] }} candidate
+ * @param {Array<{ title?: string, company?: string, fingerprint?: string, sources?: GmailWeeklySource[] }>} closedItems
+ * @param {Set<string>} [closedFingerprints]
+ * @param {Set<string>} [closedSourceKeys]
+ */
+export function matchesClosedDailySummaryItem(
+  candidate,
+  closedItems,
+  closedFingerprints,
+  closedSourceKeys,
+) {
+  const fps =
+    closedFingerprints
+    || new Set(
+      (closedItems || [])
+        .map((it) => String(it?.fingerprint || '').trim())
+        .filter(Boolean),
+    );
+  const fp = String(candidate?.fingerprint || '').trim();
+  if (fp && fps.has(fp)) return true;
+
+  const srcKeys =
+    closedSourceKeys
+    || new Set((closedItems || []).flatMap((it) => itemSourceKeys(it)));
+  if (itemSourceKeys(candidate).some((k) => srcKeys.has(k))) return true;
+
+  const closed = Array.isArray(closedItems) ? closedItems : [];
+  return closed.some((it) => dailySummaryItemsAreSameAsk(it, candidate));
+}
+
+/**
+ * Drop open items that resurrect a dismissed/tasked ask (heal after rephrase).
+ * @param {GmailWeeklyItem[]} items
+ */
+export function dropOpenItemsMatchingClosed(items) {
+  const list = Array.isArray(items) ? items : [];
+  const closed = list.filter((it) => it.status === 'dismissed' || it.status === 'tasked');
+  if (!closed.length) return list;
+  const closedFingerprints = new Set(closed.map((it) => it.fingerprint).filter(Boolean));
+  const closedSourceKeys = new Set(closed.flatMap((it) => itemSourceKeys(it)));
+  const open = list.filter((it) => it.status === 'open');
+  const other = list.filter(
+    (it) => it.status !== 'open' && it.status !== 'dismissed' && it.status !== 'tasked',
+  );
+  const keptOpen = open.filter(
+    (it) =>
+      !matchesClosedDailySummaryItem(it, closed, closedFingerprints, closedSourceKeys),
+  );
+  return [...keptOpen, ...closed, ...other];
+}
+
+/**
  * @param {unknown} raw
  * @returns {GmailWeeklyItem | null}
  */
@@ -464,13 +549,16 @@ function normalizeItem(raw) {
     : [...new Set(sources.map((s) => s.email))];
   const createdAt = asIsoOrNull(raw.createdAt) || new Date().toISOString();
   const updatedAt = asIsoOrNull(raw.updatedAt) || createdAt;
-  const fingerprint = String(raw.fingerprint || '').trim() || itemFingerprint({ title, sources });
+  const company = String(raw.company || '').trim().slice(0, 80);
+  const fingerprint =
+    String(raw.fingerprint || '').trim()
+    || itemFingerprint({ title, company, sources });
   const pinned = Boolean(raw.pinned);
   const unpinDeleteAt = pinned ? null : asIsoOrNull(raw.unpinDeleteAt);
   return {
     id: String(raw.id || '').trim() || randomUUID(),
     title,
-    company: String(raw.company || '').trim().slice(0, 80),
+    company,
     detail: String(raw.detail || '').trim().slice(0, 400),
     deadline: asIsoOrNull(raw.deadline),
     deadlineSource,
@@ -613,10 +701,11 @@ export async function loadGmailWeeklySummary(env = process.env) {
     const loaded = normalizeDigest(JSON.parse(raw));
     const { digest, changed } = pruneExpiredGmailDailySummary(loaded);
     const collapsedItems = collapseDuplicateDailySummaryItems(digest.items);
-    const collapseChanged =
-      JSON.stringify(digest.items) !== JSON.stringify(collapsedItems);
-    const next = collapseChanged ? { ...digest, items: collapsedItems } : digest;
-    if (changed || collapseChanged) {
+    const healedItems = dropOpenItemsMatchingClosed(collapsedItems);
+    const itemsChanged =
+      JSON.stringify(digest.items) !== JSON.stringify(healedItems);
+    const next = itemsChanged ? { ...digest, items: healedItems } : digest;
+    if (changed || itemsChanged) {
       try {
         await saveGmailWeeklySummary(next, env);
       } catch {
@@ -638,7 +727,9 @@ export async function loadGmailWeeklySummary(env = process.env) {
  */
 export async function saveGmailWeeklySummary(digest, env = process.env) {
   const { digest: pruned } = pruneExpiredGmailDailySummary(normalizeDigest(digest));
-  const items = collapseDuplicateDailySummaryItems(pruned.items);
+  const items = dropOpenItemsMatchingClosed(
+    collapseDuplicateDailySummaryItems(pruned.items),
+  );
   const next = { ...pruned, items };
   const p = gmailWeeklySummaryStorePath(env);
   await fs.mkdir(path.dirname(p), { recursive: true });
@@ -648,7 +739,7 @@ export async function saveGmailWeeklySummary(digest, env = process.env) {
 
 /**
  * Merge newly synthesized items into the persisted digest.
- * Never resurrects dismissed/tasked fingerprints.
+ * Never resurrects dismissed/tasked items (fingerprint, source message, or same ask).
  * @param {GmailWeeklyDigest} prev
  * @param {{
  *   summaryText?: string,
@@ -661,14 +752,18 @@ export async function saveGmailWeeklySummary(digest, env = process.env) {
 export function mergeSynthesizedDigest(prev, synth) {
   const now = new Date().toISOString();
   const base = normalizeDigest(prev);
-  const closedFingerprints = new Set(
-    base.items
-      .filter((it) => it.status === 'dismissed' || it.status === 'tasked')
-      .map((it) => it.fingerprint),
+  const closed = base.items.filter(
+    (it) => it.status === 'dismissed' || it.status === 'tasked',
   );
+  const closedFingerprints = new Set(closed.map((it) => it.fingerprint).filter(Boolean));
+  const closedSourceKeys = new Set(closed.flatMap((it) => itemSourceKeys(it)));
   const openByFp = new Map(
     base.items
       .filter((it) => it.status === 'open')
+      .filter(
+        (it) =>
+          !matchesClosedDailySummaryItem(it, closed, closedFingerprints, closedSourceKeys),
+      )
       .map((it) => [it.fingerprint, withNewestSourceOnly(it)]),
   );
 
@@ -712,7 +807,16 @@ export function mergeSynthesizedDigest(prev, synth) {
     if (!normalized) continue;
     const candidate = withNewestSourceOnly(normalized);
     if (shouldExcludeDailySummaryItem(candidate)) continue;
-    if (closedFingerprints.has(candidate.fingerprint)) continue;
+    if (
+      matchesClosedDailySummaryItem(
+        candidate,
+        closed,
+        closedFingerprints,
+        closedSourceKeys,
+      )
+    ) {
+      continue;
+    }
     if (openByFp.has(candidate.fingerprint)) {
       const existing = openByFp.get(candidate.fingerprint);
       openByFp.set(candidate.fingerprint, mergeOpenItem(existing, candidate));
@@ -741,10 +845,9 @@ export function mergeSynthesizedDigest(prev, synth) {
     openByFp.set(candidate.fingerprint, candidate);
   }
 
-  const closed = base.items.filter((it) => it.status !== 'open');
   // Newest first — pin never floats an item. Collapse any remaining repeats.
-  const open = collapseDuplicateDailySummaryItems(
-    sortItemsChronological([...openByFp.values()]),
+  const open = dropOpenItemsMatchingClosed(
+    collapseDuplicateDailySummaryItems(sortItemsChronological([...openByFp.values()])),
   ).filter((it) => it.status === 'open');
 
   const merged = {
