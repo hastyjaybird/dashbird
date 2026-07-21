@@ -109,8 +109,11 @@ function gmailCacheFresh(cache, fingerprint, env = process.env) {
 // Wider net so we don't miss events that arrive from marketing senders (no invite
 // keyword, sender not a platform domain) but carry a platform link in the body.
 // Downstream parsing + enrichment + window filter still gate what becomes an event.
+const PRODUCER_GMAIL_QUERY_FRAGMENT =
+  ' OR from:(take3presents.com OR take3presents.us12.list-manage.com) OR subject:("room service" OR shindig OR "request for proposals" OR "on sale")';
+
 const DEFAULT_QUERY =
-  'newer_than:60d (filename:ics OR subject:(invite OR invitation OR RSVP OR event OR events OR meetup OR party OR gathering OR celebration OR workshop OR screening OR festival OR "you\'re invited" OR "join us" OR "join me" OR "you\'re going" OR going OR attend OR attendance OR hosting OR ticket OR tickets OR "get tickets" OR register OR registration OR "save the date" OR "add to calendar" OR "reserve your spot" OR "happening") OR from:(partiful.com OR secretparty.io OR lu.ma OR eventbrite.com OR meetup.com OR facebookmail.com OR metamail.com OR facebook.com OR posh.vip OR dice.fm OR ra.co OR withfriends.co OR ticketleap.com OR splashthat.com) OR "luma.com" OR "lu.ma" OR "eventbrite.com" OR "partiful.com" OR "secretparty.io" OR "meetup.com")';
+  `newer_than:60d (filename:ics OR subject:(invite OR invitation OR RSVP OR event OR events OR meetup OR party OR gathering OR celebration OR workshop OR screening OR festival OR "you're invited" OR "join us" OR "join me" OR "you're going" OR going OR attend OR attendance OR hosting OR ticket OR tickets OR "get tickets" OR register OR registration OR "save the date" OR "add to calendar" OR "reserve your spot" OR "happening" OR "request for proposals" OR announcement OR "on sale" OR "early bird") OR from:(partiful.com OR secretparty.io OR lu.ma OR eventbrite.com OR meetup.com OR facebookmail.com OR metamail.com OR facebook.com OR posh.vip OR dice.fm OR ra.co OR withfriends.co OR ticketleap.com OR splashthat.com OR take3presents.com OR take3presents.us12.list-manage.com) OR "luma.com" OR "lu.ma" OR "eventbrite.com" OR "partiful.com" OR "secretparty.io" OR "meetup.com")${PRODUCER_GMAIL_QUERY_FRAGMENT}`;
 
 /**
  * Public event / invite links. Facebook: /events/{id}, page hosted tabs, group events.
@@ -118,7 +121,7 @@ const DEFAULT_QUERY =
  * Eventbrite: include clicks.* / www.* subdomains (ESP trackers + listing hosts).
  */
 const PLATFORM_HOST_RE =
-  /(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?secretparty\.io(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?(?:partiful\.com|lu\.ma|luma\.com|eventbrite\.com|meetup\.com)(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:www\.)?facebook\.com\/(?:events\/[^\s"'<>)\]]+|[^/\s"'<>)\]]+\/(?:upcoming_hosted_events|past_hosted_events|events)|groups\/[^/\s"'<>)\]]+\/events)[^\s"'<>)\]]*/gi;
+  /(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?secretparty\.io(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?(?:partiful\.com|lu\.ma|luma\.com|eventbrite\.com|meetup\.com)(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:www\.)?facebook\.com\/(?:events\/[^\s"'<>)\]]+|[^/\s"'<>)\]]+\/(?:upcoming_hosted_events|past_hosted_events|events)|groups\/[^/\s"'<>)\]]+\/events)[^\s"'<>)\]]*|(?:https?:\/\/)?(?:www\.)?take3presents\.com(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?mailchi\.mp\/take3presents(?:\/[^\s"'<>)\]]*)?/gi;
 
 const GMAIL_FETCH_UA =
   'Mozilla/5.0 (compatible; DashbirdEvents/1.0; +https://github.com/local/dashbird)';
@@ -614,6 +617,12 @@ export function platformUrlScore(href) {
     if (host === 'facebook.com' || host.endsWith('.facebook.com')) {
       return /\/events\//i.test(path) ? 90 : 20;
     }
+    if (host === 'take3presents.com' || host.endsWith('.take3presents.com')) {
+      return path.length > 1 ? 85 : 70;
+    }
+    if (host === 'mailchi.mp' && /\/take3presents\//i.test(path)) {
+      return 75;
+    }
     return 10;
   } catch {
     return 0;
@@ -812,6 +821,8 @@ export function sourceFromPlatformUrls(urls, fallback = 'gmail') {
       if (host === 'eventbrite.com' || host.endsWith('.eventbrite.com')) return 'eventbrite';
       if (host === 'meetup.com' || host.endsWith('.meetup.com')) return 'meetup';
       if (host === 'facebook.com' || host.endsWith('.facebook.com')) return 'facebook';
+      if (host === 'take3presents.com' || host.endsWith('.take3presents.com')) return 'take3presents';
+      if (host === 'mailchi.mp' && /\/take3presents\//i.test(href)) return 'take3presents';
     } catch {
       /* ignore */
     }
@@ -840,12 +851,94 @@ export function secretPartyTitleFromUrl(href) {
   }
 }
 
+const MONTH_NAME_TO_INDEX = {
+  jan: 0,
+  january: 0,
+  feb: 1,
+  february: 1,
+  mar: 2,
+  march: 2,
+  apr: 3,
+  april: 3,
+  may: 4,
+  jun: 5,
+  june: 5,
+  jul: 6,
+  july: 6,
+  aug: 7,
+  august: 7,
+  sep: 8,
+  sept: 8,
+  september: 8,
+  oct: 9,
+  october: 9,
+  nov: 10,
+  november: 10,
+  dec: 11,
+  december: 11,
+};
+
+/**
+ * @param {string} monthName
+ * @returns {number | null}
+ */
+function monthIndexFromName(monthName) {
+  const key = String(monthName || '').trim().toLowerCase().replace(/\./g, '');
+  return Object.prototype.hasOwnProperty.call(MONTH_NAME_TO_INDEX, key)
+    ? MONTH_NAME_TO_INDEX[key]
+    : null;
+}
+
+/**
+ * @param {number} year
+ * @param {number} monthIndex
+ * @param {number} day
+ * @returns {string | null}
+ */
+function ymdFromParts(year, monthIndex, day) {
+  if (!Number.isFinite(year) || monthIndex == null || !Number.isFinite(day)) return null;
+  const y = String(Math.trunc(year));
+  const m = String(monthIndex + 1).padStart(2, '0');
+  const d = String(Math.trunc(day)).padStart(2, '0');
+  const iso = `${y}-${m}-${d}`;
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) && Number.isFinite(Date.parse(`${iso}T12:00:00Z`))
+    ? iso
+    : null;
+}
+
+/**
+ * Parse a month/day range like "November 13-16, 2026".
+ * @param {string} blob
+ * @returns {{ eventStart: string, eventEnd: string } | null}
+ */
+export function parseEventDateRange(blob) {
+  const text = String(blob || '');
+  const range = text.match(
+    /\b((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?))\.?\s+(\d{1,2})\s*[-–]\s*(\d{1,2}),?\s+(20\d{2})\b/i,
+  );
+  if (range) {
+    const monthIndex = monthIndexFromName(range[1]);
+    const startDay = Number(range[2]);
+    const endDay = Number(range[3]);
+    const year = Number(range[4]);
+    const eventStart = ymdFromParts(year, monthIndex, startDay);
+    const eventEnd = ymdFromParts(year, monthIndex, endDay);
+    if (eventStart && eventEnd) return { eventStart, eventEnd };
+  }
+  return null;
+}
+
 /**
  * Best-effort start ISO from subject/body when no .ics.
  * @param {string} blob
  * @returns {string | null}
  */
-function guessStartIso(blob) {
+export function guessEventStartIso(blob) {
+  const range = parseEventDateRange(blob);
+  if (range?.eventStart) {
+    const ms = Date.parse(`${range.eventStart}T12:00:00Z`);
+    if (Number.isFinite(ms)) return new Date(ms).toISOString();
+  }
   const text = String(blob || '');
   // ISO-ish
   const iso = text.match(/\b(20\d{2}-\d{2}-\d{2})(?:[ T](\d{1,2}:\d{2}))?/);
@@ -974,12 +1067,20 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
   }
 
   if (!events.length) {
-    const start = guessStartIso(`${subject}\n${textBlob}`) || null;
+    const blob = `${subject}\n${textBlob}`;
+    const range = parseEventDateRange(blob);
+    const start = guessEventStartIso(blob) || null;
     const startOk = start && Number.isFinite(Date.parse(start)) ? start : null;
+    const endOk = range?.eventEnd
+      ? (() => {
+          const ms = Date.parse(`${range.eventEnd}T12:00:00Z`);
+          return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+        })()
+      : null;
     // Only emit when we have a platform link or a plausible invite subject.
     const inviteish =
       urls.length > 0
-      || /\b(invite|invitation|rsvp|you're invited|you are invited|join us|meetup|event)\b/i.test(
+      || /\b(invite|invitation|rsvp|you're invited|you are invited|join us|meetup|event|request for proposals|on sale|announcement|early bird|save the date|tickets)\b/i.test(
         subject,
       );
     if (inviteish) {
@@ -992,7 +1093,7 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
         id: idPrefix,
         title: slugTitle && /^secret party$/i.test(cleanedSubject) ? slugTitle : cleanedSubject,
         start: startOk,
-        end: null,
+        end: endOk,
         venue: null,
         location: null,
         city: null,

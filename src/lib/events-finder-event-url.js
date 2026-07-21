@@ -2,8 +2,10 @@
  * Resolve a real public event page URL for Telegram/manual invites.
  * Never keep Telegram placeholders (t.me / telegram.org).
  */
+// Desktop Chrome UA (Windows). Datacenter IPs + "X11; Linux" get empty/blocked
+// SERP pages from DDG/Yahoo; Bing HTML still returns real results with this UA.
 const BROWSER_UA =
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 const TELEGRAM_HOST_RE = /^(?:www\.)?(?:t\.me|telegram\.(?:me|org)|telegram\.dog)$/i;
 
@@ -270,14 +272,103 @@ async function searchYahoo(query) {
 }
 
 /**
+ * Bing wraps results in /ck/a redirects; destination is base64url in `u`
+ * (often prefixed with "a1").
+ * @param {string} href
+ * @returns {string}
+ */
+function decodeBingRedirect(href) {
+  const s = String(href || '').trim();
+  if (!s) return s;
+  try {
+    const u = new URL(s, 'https://www.bing.com');
+    if (!/(^|\.)bing\.com$/i.test(u.hostname)) return s;
+    const p = u.searchParams.get('u');
+    if (!p) return s;
+    let b64 = p.startsWith('a1') ? p.slice(2) : p;
+    b64 = b64.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const decoded = Buffer.from(b64, 'base64').toString('utf8');
+    return /^https?:\/\//i.test(decoded) ? decoded : s;
+  } catch {
+    return s;
+  }
+}
+
+/**
+ * Plain-HTTP Bing HTML search — works from datacenter IPs / the slim cloud
+ * image where Playwright Chromium is unavailable and DDG/Yahoo often return
+ * empty challenge pages.
+ * @param {string} query
+ * @returns {Promise<Array<{ url: string, title: string }>>}
+ */
+async function searchBingHtml(query) {
+  const q = String(query || '').trim();
+  if (!q) return [];
+  const url = `https://www.bing.com/search?q=${encodeURIComponent(q)}&setlang=en-us&cc=US`;
+  try {
+    const r = await fetch(url, {
+      headers: {
+        Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'User-Agent': BROWSER_UA,
+      },
+      signal: AbortSignal.timeout(12_000),
+      redirect: 'follow',
+    });
+    if (!r.ok) return [];
+    const html = await r.text();
+    if (/captcha|unusual traffic|not a bot/i.test(html) && !/b_algo/i.test(html)) {
+      return [];
+    }
+    /** @type {Array<{ url: string, title: string }>} */
+    const results = [];
+    const seen = new Set();
+    const re = /<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    let m;
+    while ((m = re.exec(html))) {
+      const href = decodeBingRedirect(m[1].replace(/&amp;/g, '&'));
+      const title = String(m[2] || '')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/\s+/g, ' ')
+        .trim();
+      const normalized = normalizeEventPageUrl(href);
+      if (!normalized || seen.has(normalized)) continue;
+      let host = '';
+      try {
+        host = new URL(normalized).hostname;
+      } catch {
+        continue;
+      }
+      if (/bing\.|microsoft\.com|duckduckgo\.|yahoo\./i.test(host)) continue;
+      seen.add(normalized);
+      results.push({ url: normalized, title });
+      if (results.length >= 12) break;
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+/**
  * @param {string} query
  * @returns {Promise<Array<{ url: string, title: string }>>}
  */
 export async function searchWeb(query) {
-  const [ddg, yahoo] = await Promise.all([searchDuckDuckGo(query), searchYahoo(query)]);
+  // Bing HTML first on purpose: from cloud/VPS, DDG often serves an empty 202
+  // challenge page and Yahoo 500s, while Bing still returns real result links.
+  const [bing, ddg, yahoo] = await Promise.all([
+    searchBingHtml(query),
+    searchDuckDuckGo(query),
+    searchYahoo(query),
+  ]);
   /** @type {Array<{ url: string, title: string }>} */
   const out = [];
-  for (const hit of [...ddg, ...yahoo]) {
+  for (const hit of [...bing, ...ddg, ...yahoo]) {
     if (!out.some((x) => x.url === hit.url)) out.push(hit);
   }
   return out;

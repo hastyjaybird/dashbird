@@ -1,6 +1,9 @@
 /**
- * Events finder — The Multiverse School public Google Calendar (ICS).
- * Source: https://themultiverse.school/calendar embed → public basic.ics
+ * Events finder — The Multiverse School.
+ *
+ * Primary: public Google Calendar ICS (embed on /calendar).
+ * Enrichment: scrape https://themultiverse.school/calendar (and homepage)
+ * for /classes/{id} links so each listing gets a unique event URL.
  */
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -8,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { buildRRule, effectiveEndMs } from './ical-recurrence.js';
 import { parseIcsEvents } from './ical-parse.js';
 import { loadEventsFinderCriteria } from './events-finder-criteria-store.js';
+import { eventsIngestWindowDays } from './events-finder-window.js';
+import { normalizeEventTitleKey } from './events-finder-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..', '..');
@@ -18,6 +23,7 @@ export const MULTIVERSE_CALENDAR_ID =
 
 export const MULTIVERSE_SITE_URL = 'https://themultiverse.school/';
 export const MULTIVERSE_CALENDAR_PAGE_URL = 'https://themultiverse.school/calendar';
+export const MULTIVERSE_CLASSES_PAGE_URL = 'https://themultiverse.school/classes';
 
 const DEFAULT_CACHE_MS = 6 * 60 * 60 * 1000;
 const UA = 'Mozilla/5.0 (compatible; DashbirdEvents/1.0; +https://github.com/local/dashbird)';
@@ -132,29 +138,185 @@ function expandInWindow(events, nowMs, horizonMs) {
 }
 
 /**
+ * @param {string} title
+ * @returns {string}
+ */
+function titleMatchKey(title) {
+  return normalizeEventTitleKey(title) || '';
+}
+
+/**
+ * Parse MM.DD.YY → YYYY-MM-DD (assume 20xx).
+ * @param {string} raw
+ * @returns {string | null}
+ */
+function parseMultiverseDateToken(raw) {
+  const m = String(raw || '')
+    .trim()
+    .match(/^(\d{2})\.(\d{2})\.(\d{2})$/);
+  if (!m) return null;
+  return `20${m[3]}-${m[1]}-${m[2]}`;
+}
+
+/**
+ * Scrape Multiverse HTML for class listing cards.
+ * @param {string} html
+ * @returns {Array<{ title: string, url: string, date: string | null, titleKey: string }>}
+ */
+export function parseMultiverseClassListings(html) {
+  const text = String(html || '');
+  /** @type {Array<{ title: string, url: string, date: string | null, titleKey: string }>} */
+  const out = [];
+  const seen = new Set();
+
+  // <a href="/classes/219">Control AI Spending</a> (07.25.26 | 1:00 PM - 2:00 PM PDT)
+  const withDate =
+    /href=["'](\/classes\/\d+)["'][^>]*>([^<]+)<\/a>\s*\((\d{2}\.\d{2}\.\d{2})/gi;
+  for (const m of text.matchAll(withDate)) {
+    const pathPart = m[1];
+    const title = m[2].replace(/\s+/g, ' ').trim();
+    const date = parseMultiverseDateToken(m[3]);
+    const titleKey = titleMatchKey(title);
+    if (!title || !titleKey) continue;
+    const url = `https://themultiverse.school${pathPart}`;
+    const dedupe = `${titleKey}|${date || ''}|${url}`;
+    if (seen.has(dedupe)) continue;
+    seen.add(dedupe);
+    out.push({ title, url, date, titleKey });
+  }
+
+  // Bare class links without an inline date (still useful as title→url).
+  const bare = /href=["'](\/classes\/\d+)["'][^>]*>([^<]+)<\/a>/gi;
+  for (const m of text.matchAll(bare)) {
+    const pathPart = m[1];
+    const title = m[2].replace(/\s+/g, ' ').trim();
+    const titleKey = titleMatchKey(title);
+    if (!title || !titleKey) continue;
+    const url = `https://themultiverse.school${pathPart}`;
+    const dedupe = `${titleKey}||${url}`;
+    if (seen.has(dedupe) || out.some((x) => x.url === url && x.titleKey === titleKey)) continue;
+    // Prefer dated entries; only add bare if no dated row for this title+url.
+    if (out.some((x) => x.url === url)) continue;
+    seen.add(dedupe);
+    out.push({ title, url, date: null, titleKey });
+  }
+
+  return out;
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<Array<{ title: string, url: string, date: string | null, titleKey: string }>>}
+ */
+async function fetchMultiverseClassIndex(env = process.env) {
+  /** @type {Array<{ title: string, url: string, date: string | null, titleKey: string }>} */
+  const merged = [];
+  const seenUrl = new Set();
+  for (const pageUrl of [
+    MULTIVERSE_CALENDAR_PAGE_URL,
+    MULTIVERSE_SITE_URL,
+    MULTIVERSE_CLASSES_PAGE_URL,
+  ]) {
+    try {
+      const r = await fetch(pageUrl, {
+        headers: { Accept: 'text/html,*/*', 'User-Agent': UA },
+        signal: AbortSignal.timeout(25_000),
+      });
+      if (!r.ok) continue;
+      const html = await r.text();
+      for (const row of parseMultiverseClassListings(html)) {
+        if (seenUrl.has(row.url) && row.date == null) continue;
+        const key = `${row.url}|${row.date || ''}`;
+        if (seenUrl.has(key)) continue;
+        seenUrl.add(key);
+        if (row.date) seenUrl.add(row.url);
+        merged.push(row);
+      }
+    } catch (err) {
+      console.warn('[multiverse] class index fetch failed:', pageUrl, err?.message || err);
+    }
+  }
+  return merged;
+}
+
+/**
+ * Local YYYY-MM-DD in dashboard TZ.
+ * @param {number} startMs
+ * @param {string} timeZone
+ */
+function localDateKey(startMs, timeZone) {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(startMs));
+  } catch {
+    return new Date(startMs).toISOString().slice(0, 10);
+  }
+}
+
+/**
+ * @param {object} ev
+ * @param {Array<{ title: string, url: string, date: string | null, titleKey: string }>} classIndex
+ * @param {string} timeZone
+ * @returns {string}
+ */
+function resolveMultiverseEventUrl(ev, classIndex, timeZone) {
+  const titleKey = titleMatchKey(ev.title);
+  const day = localDateKey(ev.startMs, timeZone);
+  if (titleKey && classIndex.length) {
+    const dated = classIndex.find((c) => c.titleKey === titleKey && c.date === day);
+    if (dated?.url) return dated.url;
+    // Title prefix / containment (ICS titles sometimes add subtitles).
+    const datedLoose = classIndex.find(
+      (c) =>
+        c.date === day
+        && (titleKey.startsWith(c.titleKey) || c.titleKey.startsWith(titleKey) || titleKey.includes(c.titleKey)),
+    );
+    if (datedLoose?.url) return datedLoose.url;
+    const byTitle = classIndex.find((c) => c.titleKey === titleKey && c.date == null);
+    if (byTitle?.url) return byTitle.url;
+    const loose = classIndex.find(
+      (c) =>
+        titleKey.startsWith(c.titleKey)
+        || c.titleKey.startsWith(titleKey)
+        || titleKey.includes(c.titleKey),
+    );
+    if (loose?.url) return loose.url;
+  }
+  // Unique deep-link so skip/dedupe never collapses the whole calendar hub.
+  const uid = Buffer.from(String(ev.id)).toString('base64url').slice(0, 48);
+  return `${MULTIVERSE_CALENDAR_PAGE_URL}?uid=${uid}`;
+}
+
+/**
  * @param {object} ev ical event
+ * @param {Array<{ title: string, url: string, date: string | null, titleKey: string }>} classIndex
+ * @param {string} timeZone
  * @returns {object}
  */
-function toFinderEvent(ev) {
+function toFinderEvent(ev, classIndex, timeZone) {
   const loc = String(ev.location || '').trim();
   const locIsUrl = /^https?:\/\//i.test(loc);
-  const online =
-    locIsUrl
-    || /meet\.google|zoom\.us|gather\.town|whereby\.com|discord\.gg/i.test(loc);
+  const url = locIsUrl ? loc : resolveMultiverseEventUrl(ev, classIndex, timeZone);
+  // Multiverse School classes are online; standups/meetups may list a meet URL in LOCATION.
+  const online = true;
   return {
     id: `multiverse:${Buffer.from(String(ev.id)).toString('base64url').slice(0, 48)}`,
     title: String(ev.title || 'Multiverse School').trim(),
     start: new Date(ev.startMs).toISOString(),
     end: ev.endMs != null ? new Date(ev.endMs).toISOString() : null,
-    venue: locIsUrl ? 'Online — Multiverse School' : loc || 'Multiverse School',
-    city: online ? null : 'Oakland',
+    venue: locIsUrl ? 'Online — Multiverse School' : loc || 'Online — Multiverse School',
+    city: null,
     lat: null,
     lon: null,
-    url: locIsUrl ? loc : MULTIVERSE_CALENDAR_PAGE_URL,
+    url,
     source: 'multiverse',
     online,
     isOnline: online,
-    location: locIsUrl ? 'Online — Multiverse School' : loc || 'Multiverse School',
+    location: locIsUrl ? 'Online — Multiverse School' : loc || 'Online — Multiverse School',
     description: null,
     imageUrl: null,
   };
@@ -245,14 +407,15 @@ export async function fetchMultiverseSchoolEvents(env = process.env, opts = {}) 
 
   const tz =
     String(env.WEATHER_TIME_ZONE || 'America/Los_Angeles').trim() || 'America/Los_Angeles';
-  let weeks = 2;
+  let scrape = /** @type {{ windowWeeks?: number } | null} */ (null);
   try {
     const criteria = await loadEventsFinderCriteria();
-    weeks = Math.min(Math.max(Number(criteria.scrape?.windowWeeks) || 2, 1), 5);
+    scrape = criteria.scrape || null;
   } catch {
     /* defaults */
   }
-  const horizonMs = weeks * 7 * 24 * 60 * 60 * 1000;
+  const { futureDays, windowWeeks } = eventsIngestWindowDays(env, { scrape });
+  const horizonMs = futureDays * 24 * 60 * 60 * 1000;
   const nowMs = Date.now();
   const parsed = parseIcsEvents(text, tz);
   const expanded = expandInWindow(parsed, nowMs, horizonMs);
@@ -261,11 +424,16 @@ export async function fetchMultiverseSchoolEvents(env = process.env, opts = {}) 
     .filter((ev) => ev.startMs <= nowMs + horizonMs)
     .sort((a, b) => a.startMs - b.startMs);
 
-  const events = upcoming.map(toFinderEvent);
+  const classIndex = await fetchMultiverseClassIndex(env);
+  const events = upcoming.map((ev) => toFinderEvent(ev, classIndex, tz));
+  const withClassUrl = events.filter((e) => /\/classes\/\d+/.test(String(e.url || ''))).length;
   const payload = {
     cachedAt: new Date().toISOString(),
     icalUrl,
-    weeks,
+    weeks: windowWeeks,
+    futureDays,
+    classIndexCount: classIndex.length,
+    withClassUrl,
     count: events.length,
     events,
   };
@@ -279,5 +447,7 @@ export async function fetchMultiverseSchoolEvents(env = process.env, opts = {}) 
     count: events.length,
     icalUrl,
     calendarPage: MULTIVERSE_CALENDAR_PAGE_URL,
+    classIndexCount: classIndex.length,
+    withClassUrl,
   };
 }

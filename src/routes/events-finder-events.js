@@ -17,6 +17,7 @@ import {
   uniqueEventCities,
 } from '../lib/events-finder-geo.js';
 import { fetchGmailEventAnnouncements } from '../lib/events-finder-gmail.js';
+import { processProducerMailForBigEvents } from '../lib/events-finder-producer-watchlist.js';
 import { fetchGcalIcsPinnedEvents } from '../lib/events-finder-gcal-ics.js';
 import { fetchLumaPinnedEvents } from '../lib/events-finder-luma.js';
 import { fetchMeetupPinnedEvents } from '../lib/events-finder-meetup.js';
@@ -208,7 +209,7 @@ function scheduleEventsFinderIngest(opts) {
       ),
       take(
         'multiverse',
-        fetchMultiverseSchoolEvents(process.env).catch((e) => ({
+        fetchMultiverseSchoolEvents(process.env, { forceRefresh: force }).catch((e) => ({
           ok: false,
           events: [],
           fromCache: false,
@@ -254,6 +255,15 @@ function scheduleEventsFinderIngest(opts) {
       console.warn('[events-finder] sqlite prune failed:', storeErr?.message || storeErr);
     }
 
+    /** @type {{ ok: boolean, promoted?: number, actions?: object[] }} */
+    let producerWatchlist = { ok: true, promoted: 0, actions: [] };
+    try {
+      producerWatchlist = await processProducerMailForBigEvents(process.env);
+    } catch (e) {
+      producerWatchlist = { ok: false, promoted: 0, actions: [] };
+      console.warn('[events-finder] producer watchlist bridge failed:', e?.message || e);
+    }
+
     return {
       gmail: sources.gmail || { ok: false, events: [] },
       facebook: sources.facebook || { ok: false, events: [] },
@@ -268,6 +278,7 @@ function scheduleEventsFinderIngest(opts) {
       deletedSkipped,
       ingestSkipped,
       batch,
+      producerWatchlist,
     };
   })()
     .then((result) => {
@@ -742,6 +753,8 @@ router.get('/', async (req, res) => {
           cachedAt: multiverse.cachedAt || null,
           icalUrl: multiverse.icalUrl || null,
           calendarPage: multiverse.calendarPage || null,
+          classIndexCount: multiverse.classIndexCount ?? null,
+          withClassUrl: multiverse.withClassUrl ?? null,
           count: Array.isArray(multiverse.events) ? multiverse.events.length : 0,
         },
         luma: {

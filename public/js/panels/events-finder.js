@@ -1442,13 +1442,15 @@ export function mountEventsFinder(root) {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        const candidates = Array.isArray(data.preview?.candidates) ? data.preview.candidates : [];
+        const pickUrl = data.preview?.homepageUrl || data.preview?.url || candidates[0]?.url || null;
         pendingPreview = {
           query,
-          url: data.preview?.url || null,
-          homepageUrl: data.preview?.homepageUrl || data.preview?.url || null,
+          url: pickUrl,
+          homepageUrl: pickUrl,
           ticketUrl: data.preview?.ticketUrl || null,
         };
-        renderPreview({ ...(data.preview || {}), deep });
+        renderPreview({ ...(data.preview || {}), deep, candidates });
         setMsg('');
       } catch (e) {
         setMsg(`Search failed: ${String(e?.message || e)}`, 'error');
@@ -1467,14 +1469,63 @@ export function mountEventsFinder(root) {
       nameEl.textContent = String(p.name || p.query || '');
       preview.append(nameEl);
 
-      const urlFound = Boolean(p.url);
-      if (urlFound) {
+      const candidates = Array.isArray(p.candidates)
+        ? p.candidates.filter((c) => c && c.url)
+        : [];
+      const unsure = p.confident !== true && candidates.length >= 2;
+      const urlFound = Boolean(p.url) || candidates.length > 0;
+
+      if (unsure) {
+        const hint = document.createElement('p');
+        hint.className = 'events-finder__big-events-preview-hint muted';
+        hint.textContent = 'Not sure which site is official — pick one:';
+        preview.append(hint);
+        const list = document.createElement('div');
+        list.className = 'events-finder__big-events-candidates';
+        list.setAttribute('role', 'radiogroup');
+        list.setAttribute('aria-label', 'Official site candidates');
+        const selected = String(pendingPreview?.homepageUrl || pendingPreview?.url || candidates[0].url);
+        candidates.forEach((c, i) => {
+          const label = document.createElement('label');
+          label.className = 'events-finder__big-events-candidate';
+          const radio = document.createElement('input');
+          radio.type = 'radio';
+          radio.name = 'big-event-site-candidate';
+          radio.value = String(c.url);
+          radio.checked = String(c.url) === selected || (!selected && i === 0);
+          radio.addEventListener('change', () => {
+            if (!pendingPreview || !radio.checked) return;
+            pendingPreview.url = String(c.url);
+            pendingPreview.homepageUrl = String(c.url);
+          });
+          const body = document.createElement('span');
+          body.className = 'events-finder__big-events-candidate-body';
+          const title = document.createElement('span');
+          title.className = 'events-finder__big-events-candidate-title';
+          title.textContent = String(c.title || c.url);
+          const link = document.createElement('a');
+          link.className = 'events-finder__big-events-candidate-url';
+          link.href = String(c.url);
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = String(c.url);
+          link.addEventListener('click', (e) => e.stopPropagation());
+          body.append(title, link);
+          label.append(radio, body);
+          list.append(label);
+        });
+        preview.append(list);
+        if (pendingPreview && !pendingPreview.homepageUrl) {
+          pendingPreview.url = String(candidates[0].url);
+          pendingPreview.homepageUrl = String(candidates[0].url);
+        }
+      } else if (urlFound) {
         const link = document.createElement('a');
         link.className = 'events-finder__big-events-preview-url';
-        link.href = String(p.url);
+        link.href = String(p.url || candidates[0]?.url || '');
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
-        link.textContent = String(p.url);
+        link.textContent = String(p.url || candidates[0]?.url || '');
         preview.append(link);
       } else {
         const noUrl = document.createElement('p');
@@ -1485,7 +1536,7 @@ export function mountEventsFinder(root) {
         preview.append(noUrl);
       }
 
-      if (p.ticketUrl && p.ticketUrl !== p.url) {
+      if (p.ticketUrl && p.ticketUrl !== (pendingPreview?.url || p.url)) {
         const tlink = document.createElement('a');
         tlink.className = 'events-finder__big-events-preview-url events-finder__big-events-preview-tickets';
         tlink.href = String(p.ticketUrl);
@@ -1500,12 +1551,12 @@ export function mountEventsFinder(root) {
       const confirmBtn = document.createElement('button');
       confirmBtn.type = 'button';
       confirmBtn.className = 'events-finder__big-events-confirm';
-      confirmBtn.textContent = 'Add event';
+      confirmBtn.textContent = unsure ? 'Add selected' : 'Add event';
       confirmBtn.addEventListener('click', () => void confirmAdd(confirmBtn));
       actions.append(confirmBtn);
 
-      // If no URL was found, offer a deeper search (more query variants + hits).
-      if (!urlFound && !p.deep) {
+      // Offer a deeper search when unsure or when nothing was found.
+      if ((!urlFound || unsure) && !p.deep) {
         const deeperBtn = document.createElement('button');
         deeperBtn.type = 'button';
         deeperBtn.className = 'events-finder__big-events-again';

@@ -149,6 +149,49 @@ export function normalizeEventUrlKey(url) {
 }
 
 /**
+ * Listing / hub pages shared by many events. Never use these for URL-based skip
+ * matching — one skip would hide the whole source (e.g. all Multiverse ICS rows
+ * pointed at /calendar).
+ * @param {unknown} url
+ * @returns {boolean}
+ */
+export function isSharedEventHubUrl(url) {
+  const key = normalizeEventUrlKey(url);
+  if (!key) return false;
+  try {
+    const u = new URL(key);
+    const host = u.hostname.replace(/^www\./i, '').toLowerCase();
+    const path = (u.pathname || '').replace(/\/+$/, '') || '/';
+
+    if (host === 'themultiverse.school') {
+      // Deep links with uid/event query are per-occurrence, not hubs.
+      if (path === '/calendar' && (u.searchParams.has('uid') || u.searchParams.has('event'))) {
+        return false;
+      }
+      return path === '/' || path === '/calendar' || path === '/classes';
+    }
+
+    if (host === 'meetup.com') {
+      // /group or /group/events — hub; /group/events/<id> — concrete.
+      if (/^\/[^/]+$/.test(path)) return true;
+      if (/^\/[^/]+\/events$/.test(path)) return true;
+      return false;
+    }
+
+    if (host === 'lu.ma' || host === 'luma.com') {
+      // Calendar hubs are /@handle or bare calendar slugs without /event/.
+      if (path.startsWith('/event/') || path.startsWith('/e/')) return false;
+      if (path.startsWith('/@')) return true;
+      return path === '/';
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * @param {unknown} raw
  * @param {string} [timeZone]
  * @returns {SkippedEventRecord[]}
@@ -698,7 +741,7 @@ export function buildSkippedEventsIndex(skipped, timeZone) {
     if (!s || typeof s !== 'object') continue;
     if (s.id) index.byId.set(String(s.id).trim(), s);
     const urlKey = normalizeEventUrlKey(s.url);
-    if (urlKey) index.urls.set(urlKey, s);
+    if (urlKey && !isSharedEventHubUrl(urlKey)) index.urls.set(urlKey, s);
     if (s.key) index.keys.set(String(s.key), s);
     const seriesKey = resolveSkipSeriesKey(s);
     if (seriesKey) index.seriesKeys.set(seriesKey, s);
@@ -731,7 +774,9 @@ export function findSkippedEventMatch(event, index) {
   }
 
   const url = normalizeEventUrlKey(event.url);
-  if (url && index.urls.has(url)) return index.urls.get(url) || null;
+  if (url && !isSharedEventHubUrl(url) && index.urls.has(url)) {
+    return index.urls.get(url) || null;
+  }
 
   const key = eventNameDateDedupeKey(event, index.tz);
   if (key && index.keys.has(key)) return index.keys.get(key) || null;
@@ -787,7 +832,14 @@ export function isEventSkipped(event, skipped, timeZone) {
     if (id && s.id === id) return true;
     const skipSeries = resolveSkipSeriesKey(s);
     if (seriesKey && skipSeries && seriesKey === skipSeries) return true;
-    if (url && s.url && url === s.url) return true;
+    if (
+      url
+      && s.url
+      && url === s.url
+      && !isSharedEventHubUrl(url)
+    ) {
+      return true;
+    }
     if (key && s.key && key === s.key) return true;
     // Same title on same local calendar day even if key formatting drifted
     if (titleKey && s.title && normalizeEventTitleKey(s.title) === titleKey) {

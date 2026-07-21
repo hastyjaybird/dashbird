@@ -185,7 +185,9 @@ function parseNextEruptionForecast(text) {
 
   // Split into sentences and look for one describing the next episode/eruption timing.
   const sentences = blob.split(/(?<=[.!?])\s+(?=[A-Z0-9])/);
-  const keyword = /\bnext\s+(?:episode|eruption|eruptive\s+episode)\b|\bnext\s+episode\b/i;
+  // "next episode", "next fountain episode", "next eruption", etc.
+  const keyword =
+    /\bnext\s+(?:(?:lava\s+|high\s+)?(?:fountain(?:ing)?\s+)?)?(?:episode|eruption|eruptive\s+episode)\b/i;
   const timing =
     /\b(?:likely|expected|anticipated|forecast(?:ed)?|could|may|projected|estimated)\b[^.]*\b(?:begin|start|resume|occur|erupt)/i;
   const windowRe =
@@ -370,10 +372,31 @@ function buildQuakeStripItem(quake) {
 function isEruptingAlert(alertLevel, colorCode, textBlob) {
   const alert = String(alertLevel || '').toUpperCase();
   const color = String(colorCode || '').toUpperCase();
+  const t = String(textBlob || '').toLowerCase();
+
+  // HVO episodic updates keep saying "eruption" / "fountaining" while paused between
+  // episodes ("The Halemaʻumaʻu eruption is paused"). That must not count as erupting.
+  if (
+    /\b(?:not\s+erupting|eruption\s+is\s+paused|summit\s+eruption\s+.*?is\s+paused|currently\s+paused|eruption\s+has\s+(?:paused|ended)|fountaining\s+has\s+(?:paused|ended|stopped))\b/.test(
+      t,
+    ) ||
+    (/\bpaused\b/.test(t) && /\b(?:eruption|halema|fountain)\b/.test(t))
+  ) {
+    return false;
+  }
+
+  // Elevated aviation/alert codes usually mean unrest or eruption in progress.
   if (color === 'ORANGE' || color === 'RED') return true;
   if (alert === 'WATCH' || alert === 'WARNING') return true;
-  const t = String(textBlob || '').toLowerCase();
-  if (/\b(erupt(?:ion|ing)|fountaining|lava fountain|overflow)\b/.test(t)) return true;
+
+  // Present-tense active eruption only — not historical "has been erupting episodically".
+  if (
+    /\b(?:is\s+erupting|currently\s+erupting|lava\s+is\s+(?:erupting|fountaining)|fountaining\s+(?:is\s+)?(?:underway|ongoing|continuing|in\s+progress)|eruption\s+is\s+(?:underway|ongoing|continuing|in\s+progress)|active\s+lava\s+fountains?\b)/.test(
+      t,
+    )
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -522,22 +545,32 @@ export async function buildKilaueaDashboardPayload() {
   if (erupting || alertLevel || colorCode || forecast.hasForecast) {
     const parts = [];
     if (erupting) parts.push('Erupting');
+    else if (forecast.hasForecast) parts.push('Paused');
     else if (alertLevel || colorCode) {
       parts.push([alertLevel, colorCode].filter(Boolean).join(' · ') || 'Elevated');
     }
-    if (stats.episode != null) parts.push(`Ep ${stats.episode}`);
-    if (stats.startedShort) parts.push(`since ${stats.startedShort}`);
-    if (stats.fountainFt != null) {
-      parts.push(
-        stats.fountainM != null
-          ? `fountain ${stats.fountainFt} ft (${stats.fountainM} m)`
-          : `fountain ${stats.fountainFt} ft`,
-      );
-    } else if (erupting || alertLevel || colorCode) {
-      parts.push(`summit ${elevationFt} ft`);
-    }
-    if (erupting && (alertLevel || colorCode)) {
-      parts.push([alertLevel, colorCode].filter(Boolean).join('/'));
+    // Episode / fountain height are only current while lava is actively erupting.
+    if (erupting) {
+      if (stats.episode != null) parts.push(`Ep ${stats.episode}`);
+      if (stats.startedShort) parts.push(`since ${stats.startedShort}`);
+      if (stats.fountainFt != null) {
+        parts.push(
+          stats.fountainM != null
+            ? `fountain ${stats.fountainFt} ft (${stats.fountainM} m)`
+            : `fountain ${stats.fountainFt} ft`,
+        );
+      } else {
+        parts.push(`summit ${elevationFt} ft`);
+      }
+      if (alertLevel || colorCode) {
+        parts.push([alertLevel, colorCode].filter(Boolean).join('/'));
+      }
+    } else {
+      if (forecast.hasForecast && (alertLevel || colorCode)) {
+        parts.push([alertLevel, colorCode].filter(Boolean).join(' · '));
+      }
+      if (stats.episode != null) parts.push(`last Ep ${stats.episode}`);
+      else parts.push(`summit ${elevationFt} ft`);
     }
     // 📅 next-eruption forecast segment (shown between episodes and during episodic eruptions).
     if (forecast.hasForecast) {

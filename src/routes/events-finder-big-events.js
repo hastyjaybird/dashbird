@@ -76,6 +76,14 @@ router.post('/search', async (req, res) => {
         ticketUrl: preview.ticketUrl || null,
         urlFound: preview.urlFound === true,
         deep: preview.deep === true,
+        confident: preview.confident === true,
+        candidates: Array.isArray(preview.candidates)
+          ? preview.candidates.map((c) => ({
+              url: String(c?.url || '').trim(),
+              title: String(c?.title || '').trim().slice(0, 140),
+              score: Number(c?.score) || 0,
+            })).filter((c) => c.url)
+          : [],
       },
     });
   } catch (e) {

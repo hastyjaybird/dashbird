@@ -16,8 +16,15 @@ import { assertPublicHttpUrl } from './public-http-url.js';
 import { braveApiEnabled, braveApiWebSearch, braveApiImageSearch } from './brave-search-api.js';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
+
+// Desktop Chrome UA (Windows). Many WAFs (Wordfence et al.) 403 headless/
+// datacenter traffic that advertises "X11; Linux" — same fetch with a Windows
+// Chrome UA succeeds. Keep this aligned with chrome-web-search.js.
 const BROWSER_UA =
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+/** Second-chance UA when the primary is blocked (403/429). */
+const BROWSER_UA_FALLBACK =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 /** ~2 months before the event. */
 export const CONFERENCE_HEADS_UP_MS = 60 * 24 * 60 * 60 * 1000;
@@ -151,32 +158,187 @@ function extractOgImage(html, baseUrl) {
 }
 
 /**
+ * WordPress (and similar) often serve `-310x165` / `-scaled` crops in the HTML.
+ * Prefer the full upload URL when the sized variant is what we scraped.
+ * @param {string} url
+ * @returns {string[]}
+ */
+function expandImageUrlVariants(url) {
+  const s = String(url || '').trim();
+  if (!s) return [];
+  /** @type {string[]} */
+  const out = [s];
+  // Strip WordPress size suffix: name-1200x630.jpg → name.jpg
+  const unsized = s.replace(/-\d{2,5}x\d{2,5}(?=\.(?:jpe?g|png|webp|gif)(?:[?#]|$))/i, '');
+  if (unsized !== s) out.push(unsized);
+  // Strip -scaled before extension: name-scaled.png → name.png
+  const unscaled = s.replace(/-scaled(?=\.(?:jpe?g|png|webp|gif)(?:[?#]|$))/i, '');
+  if (unscaled !== s && !out.includes(unscaled)) out.push(unscaled);
+  return out;
+}
+
+/**
+ * When a page has no og:image (common on older WordPress event sites), pull the
+ * best on-page promo images so cloud can still get a thumbnail without Brave /
+ * headless image search.
+ * @param {string} html
+ * @param {string} baseUrl
+ * @param {number} [limit]
+ * @returns {string[]}
+ */
+function extractPageImages(html, baseUrl, limit = 8) {
+  const h = String(html || '');
+  if (!h) return [];
+  let baseHost = '';
+  try {
+    baseHost = new URL(baseUrl).hostname.replace(/^www\./i, '').toLowerCase();
+  } catch {
+    /* ignore */
+  }
+  /** @type {Map<string, number>} */
+  const scored = new Map();
+  const consider = (raw, bonus = 0) => {
+    const s = String(raw || '').trim();
+    if (!s || s.startsWith('data:')) return;
+    let abs;
+    try {
+      abs = new URL(s, baseUrl).toString();
+    } catch {
+      return;
+    }
+    if (!/^https?:\/\//i.test(abs)) return;
+    const lower = abs.toLowerCase();
+    if (!FLIER_IMAGE_EXT_RE.test(lower) && !/\/uploads\//i.test(lower)) return;
+    if (/logo|icon|favicon|sprite|emoji|avatar|gravatar|wp-includes|1x1|pixel|tracking/i.test(lower)) {
+      return;
+    }
+    let score = bonus;
+    try {
+      const host = new URL(abs).hostname.replace(/^www\./i, '').toLowerCase();
+      if (baseHost && host === baseHost) score += 25;
+      else if (baseHost && host.endsWith(`.${baseHost}`)) score += 10;
+      else score -= 20; // off-site CDN noise
+    } catch {
+      return;
+    }
+    if (/header|hero|banner|feature|poster|flyer|flier|cover|promo|masthead/i.test(lower)) {
+      score += 40;
+    }
+    if (/wp-content\/uploads/i.test(lower)) score += 8;
+    // Prefer full-size over thumbnail crops.
+    if (/-\d{2,4}x\d{2,4}\.(?:jpe?g|png|webp|gif)/i.test(lower)) score -= 15;
+    for (const variant of expandImageUrlVariants(abs)) {
+      const prev = scored.get(variant) || -Infinity;
+      if (score > prev) scored.set(variant, score);
+    }
+  };
+
+  for (const m of h.matchAll(/<img\b[^>]*>/gi)) {
+    const tag = m[0];
+    const src = tag.match(/\bsrc=["']([^"']+)["']/i)?.[1];
+    const dataSrc = tag.match(/\bdata-src=["']([^"']+)["']/i)?.[1];
+    const srcset = tag.match(/\bsrcset=["']([^"']+)["']/i)?.[1];
+    consider(src, 5);
+    consider(dataSrc, 5);
+    if (srcset) {
+      // Take the last (usually largest) candidate in the srcset.
+      const parts = srcset.split(',').map((p) => p.trim().split(/\s+/)[0]).filter(Boolean);
+      if (parts.length) consider(parts[parts.length - 1], 8);
+    }
+  }
+  for (const m of h.matchAll(/url\(\s*['"]?(https?:\/\/[^)'"\s]+\.(?:jpe?g|png|webp|gif)[^)'"\s]*)['"]?\s*\)/gi)) {
+    consider(m[1], 3);
+  }
+
+  return [...scored.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, Math.max(1, Math.min(16, limit)))
+    .map(([u]) => u);
+}
+
+/**
  * @param {string} url
  * @returns {Promise<{ text: string, ogImage: string | null }>}
  */
+/**
+ * Candidate URLs to try for a page scrape. Wikipedia / SERPs often hand us
+ * `http://` official links; many hosts only serve (or only allow) HTTPS from
+ * datacenter IPs, so always attempt the https upgrade as a second candidate.
+ * @param {string} safeHref
+ * @returns {string[]}
+ */
+function fetchPageCandidates(safeHref) {
+  /** @type {string[]} */
+  const out = [safeHref];
+  try {
+    const u = new URL(safeHref);
+    if (u.protocol === 'http:') {
+      const https = `https://${u.host}${u.pathname}${u.search}`;
+      if (!out.includes(https)) out.push(https);
+    }
+  } catch {
+    /* keep original only */
+  }
+  return out;
+}
+
 async function fetchPage(url) {
   const href = String(url || '').trim();
-  if (!href) return { text: '', ogImage: null };
+  if (!href) return { text: '', ogImage: null, pageImages: [] };
   // URLs here are user-pasted (manual add) or scraped from search results —
   // block private/link-local/metadata targets before requesting (SSRF).
   let safeHref;
   try {
     safeHref = await assertPublicHttpUrl(href);
   } catch {
-    return { text: '', ogImage: null };
+    return { text: '', ogImage: null, pageImages: [] };
   }
-  try {
-    const r = await fetch(safeHref, {
-      headers: { Accept: 'text/html', 'User-Agent': BROWSER_UA },
-      signal: AbortSignal.timeout(12_000),
-      redirect: 'follow',
-    });
-    if (!r.ok) return { text: '', ogImage: null };
-    const html = await r.text();
-    return { text: htmlToText(html), ogImage: extractOgImage(html, r.url || href) };
-  } catch {
-    return { text: '', ogImage: null };
+
+  const candidates = fetchPageCandidates(safeHref);
+  // Validate https upgrade through the same SSRF gate.
+  /** @type {string[]} */
+  const safeCandidates = [];
+  for (const c of candidates) {
+    try {
+      safeCandidates.push(await assertPublicHttpUrl(c));
+    } catch {
+      /* skip */
+    }
   }
+  const uas = [BROWSER_UA, BROWSER_UA_FALLBACK];
+
+  for (const tryHref of safeCandidates) {
+    for (const ua of uas) {
+      try {
+        const r = await fetch(tryHref, {
+          headers: {
+            Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'User-Agent': ua,
+          },
+          signal: AbortSignal.timeout(12_000),
+          redirect: 'follow',
+        });
+        if (!r.ok) {
+          // Soft blocks are worth retrying with another UA / https; hard 404s aren't.
+          if (r.status === 404 || r.status === 410) break;
+          continue;
+        }
+        const html = await r.text();
+        const finalBase = r.url || tryHref;
+        const text = htmlToText(html);
+        const ogImage = extractOgImage(html, finalBase);
+        // Sites without og:image still usually embed a header/feature upload —
+        // collect those so thumbnail acquisition works without image-search APIs.
+        const pageImages = extractPageImages(html, finalBase, 8);
+        return { text, ogImage, pageImages };
+      } catch {
+        /* try next UA / URL candidate */
+      }
+    }
+  }
+
+  return { text: '', ogImage: null, pageImages: [] };
 }
 
 /**
@@ -201,6 +363,32 @@ const OFFICIAL_NOISE_HOSTS = [
 const ACRONYM_SKIP = new Set(['the', 'a', 'an', 'of', 'and', 'for', 'in', 'at', 'by', 'to', 'or']);
 
 /**
+ * Geographic / place tokens. When present we do NOT invent an acronym from
+ * initials — "sesa san juan" must not become "ssj" (ssj.org.uk). The lead
+ * brand token ("sesa") stays the name; place words only help ranking/domain
+ * probes (sesapr.org).
+ */
+const PLACE_WORDS = new Set([
+  'san', 'juan', 'los', 'angeles', 'las', 'vegas', 'new', 'york', 'porto', 'puerto',
+  'rico', 'city', 'beach', 'springs', 'miami', 'orlando', 'chicago', 'austin',
+  'denver', 'seattle', 'boston', 'atlanta', 'dallas', 'houston', 'phoenix',
+  'oakland', 'francisco', 'diego', 'jose', 'nyc', 'la', 'sf', 'dc', 'uk', 'usa',
+]);
+
+/**
+ * Place phrases → search expansions + domain abbreviations.
+ * @type {Array<{ re: RegExp, expand: string[], abbrevs: string[] }>}
+ */
+const PLACE_PHRASES = [
+  { re: /\bsan juan\b/i, expand: ['puerto rico', 'puerto rico summit'], abbrevs: ['pr', 'sju'] },
+  { re: /\bpuerto rico\b/i, expand: ['san juan'], abbrevs: ['pr'] },
+  { re: /\bnew york\b/i, expand: ['nyc'], abbrevs: ['nyc', 'ny'] },
+  { re: /\blos angeles\b/i, expand: ['la'], abbrevs: ['la'] },
+  { re: /\blas vegas\b/i, expand: [], abbrevs: ['vegas', 'lv'] },
+  { re: /\bsan francisco\b/i, expand: ['sf'], abbrevs: ['sf'] },
+];
+
+/**
  * @param {string} query
  * @returns {string[]}
  */
@@ -214,14 +402,39 @@ function queryTokens(query) {
 
 /**
  * Acronym of significant query words ("consumer electronics show" → "ces").
+ * Returns "" when inventing an acronym would be misleading (brand + place).
  * @param {string[]} tokens
  * @returns {string}
  */
 function queryAcronym(tokens) {
-  return tokens
-    .filter((t) => t.length >= 2 && !ACRONYM_SKIP.has(t))
-    .map((t) => t[0])
-    .join('');
+  const sig = tokens.filter((t) => t.length >= 2 && !ACRONYM_SKIP.has(t));
+  if (sig.length < 3) return '';
+  // Brand + place ("sesa san juan", "ces las vegas"): keep the lead brand; do
+  // not mint ssj/clv from place initials.
+  if (sig.some((t) => PLACE_WORDS.has(t))) return '';
+  return sig.map((t) => t[0]).join('');
+}
+
+/**
+ * @param {string} query
+ * @returns {{ expand: string[], abbrevs: string[] }}
+ */
+function placeHintsFromQuery(query) {
+  const q = String(query || '').toLowerCase();
+  /** @type {string[]} */
+  const expand = [];
+  /** @type {string[]} */
+  const abbrevs = [];
+  for (const p of PLACE_PHRASES) {
+    if (!p.re.test(q)) continue;
+    for (const e of p.expand) {
+      if (!expand.includes(e)) expand.push(e);
+    }
+    for (const a of p.abbrevs) {
+      if (!abbrevs.includes(a)) abbrevs.push(a);
+    }
+  }
+  return { expand, abbrevs };
 }
 
 /**
@@ -229,7 +442,7 @@ function queryAcronym(tokens) {
  * @param {string[]} tokens
  * @returns {number}
  */
-function conferenceHostScore(host, tokens) {
+function conferenceHostScore(host, tokens, query = '') {
   const h = String(host || '').replace(/^www\./, '').toLowerCase();
   if (!h) return -Infinity;
   for (const n of OFFICIAL_NOISE_HOSTS) {
@@ -262,6 +475,21 @@ function conferenceHostScore(host, tokens) {
     }
     if (totalLen) score += (hitLen / totalLen) * 40;
   }
+  // Brand + place domains: sesapr.org for "sesa san juan" / "sesa puerto rico".
+  const brand = tokens.find((t) => t.length >= 3 && !PLACE_WORDS.has(t) && !ACRONYM_SKIP.has(t));
+  const { abbrevs } = placeHintsFromQuery(query || tokens.join(' '));
+  if (brand && abbrevs.length) {
+    for (const ab of abbrevs) {
+      if (hostFlat === `${brand}${ab}` || label === `${brand}${ab}` || label === `${brand}-${ab}`) {
+        score += 70;
+        break;
+      }
+      if (hostFlat.includes(brand) && hostFlat.includes(ab)) {
+        score += 45;
+        break;
+      }
+    }
+  }
   if (/\.(?:com|org|net|io|co|tech|events?|fest|us)$/i.test(h)) score += 4;
   return score;
 }
@@ -293,9 +521,10 @@ const TICKET_PATH_RE =
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {Promise<Array<{ url: string, title: string }>>}
  */
-export async function searchConferenceHits(query, env = process.env) {
+export async function searchConferenceHits(query, env = process.env, opts = {}) {
   const q = String(query || '').trim();
   if (!q) return [];
+  const fast = opts.fast === true;
   /** @type {Array<{ url: string, title: string }>} */
   const out = [];
   const push = (rawUrl, title = '') => {
@@ -310,7 +539,9 @@ export async function searchConferenceHits(query, env = process.env) {
     braveApiEnabled(env)
       ? braveApiWebSearch(q, 8, env).catch(() => [])
       : Promise.resolve([]),
-    searchChromeResultUrls(q, 8, env).catch(() => []),
+    fast
+      ? Promise.resolve([])
+      : searchChromeResultUrls(q, 8, env).catch(() => []),
   ]);
 
   // Prefer titled DDG/Yahoo + Brave API rows first so ranking has titles and so
@@ -335,6 +566,8 @@ function conferenceSearchQueries(query, year, opts = {}) {
   const deep = opts.deep === true;
   const tokens = queryTokens(q);
   const acronym = queryAcronym(tokens);
+  const brand = tokens.find((t) => t.length >= 3 && !PLACE_WORDS.has(t) && !ACRONYM_SKIP.has(t));
+  const { expand, abbrevs } = placeHintsFromQuery(q);
   /** @type {string[]} */
   const queries = deep
     ? [
@@ -343,14 +576,30 @@ function conferenceSearchQueries(query, year, opts = {}) {
         `${q} ${year} tickets buy passes`,
         `${q} ${year + 1} tickets`,
         `${q} conference festival homepage`,
+        `${q} summit conference ${year}`,
         `${q} event dates lineup ${year}`,
         `"${q}" official`,
       ]
     : [
         `${q} official site tickets ${year}`,
         `${q} conference festival official website`,
+        `${q} summit conference official`,
         `${q} tickets ${year}`,
       ];
+  // Place expansion: "sesa san juan" also searches "sesa puerto rico summit".
+  if (brand && expand.length) {
+    for (const place of expand) {
+      queries.splice(1, 0, `${brand} ${place} official website`);
+      queries.splice(2, 0, `${brand} ${place} summit conference`);
+    }
+  }
+  // Brand + place abbrev domain-ish queries (sesapr / SESA-PR).
+  if (brand && abbrevs.length) {
+    for (const ab of abbrevs) {
+      queries.push(`${brand}${ab} official`);
+      queries.push(`${brand}-${ab} summit`);
+    }
+  }
   if (acronym.length >= 3 && acronym !== tokens.join('')) {
     // Insert early so a confident acronym hit can stop the preview loop sooner.
     queries.splice(1, 0, `${acronym} official website`);
@@ -359,6 +608,93 @@ function conferenceSearchQueries(query, year, opts = {}) {
     }
   }
   return queries;
+}
+
+/**
+ * Few query variants for the Add-event preview — run in parallel (HTML search
+ * only, no Playwright) so the picker returns in a few seconds like Tool Library.
+ * @param {string} query
+ * @param {number} year
+ * @returns {string[]}
+ */
+function previewSearchQueries(query, year) {
+  const q = String(query || '').trim();
+  const tokens = queryTokens(q);
+  const acronym = queryAcronym(tokens);
+  const brand = tokens.find((t) => t.length >= 3 && !PLACE_WORDS.has(t) && !ACRONYM_SKIP.has(t));
+  const { expand, abbrevs } = placeHintsFromQuery(q);
+  /** @type {string[]} */
+  const out = [`${q} official website`];
+  const seen = new Set(out.map((s) => s.toLowerCase()));
+  const add = (s) => {
+    const key = String(s || '').trim().toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push(String(s).trim());
+  };
+  if (brand && expand.length) add(`${brand} ${expand[0]} official website`);
+  if (brand && abbrevs.length) add(`${brand}${abbrevs[0]} official`);
+  if (acronym.length >= 3 && acronym !== tokens.join('')) add(`${acronym} official website`);
+  add(`${q} official site tickets ${year}`);
+  return out.slice(0, 3);
+}
+
+/**
+ * Merge search hit batches into one deduped list.
+ * @param {Array<{ url: string, title: string }>} hits
+ * @param {Array<Array<{ url: string, title: string }>>} batches
+ */
+function mergeSearchHits(hits, batches) {
+  for (const batch of batches || []) {
+    for (const h of batch || []) {
+      if (!hits.some((x) => x.url === h.url)) hits.push(h);
+    }
+  }
+}
+
+/**
+ * @param {string} query
+ * @param {NodeJS.ProcessEnv} env
+ * @param {number} year
+ * @returns {Promise<{ hits: Array<{ url: string, title: string }>, pair: ReturnType<typeof pickOfficialSitePair>, ms: number }>}
+ */
+async function previewBigEventSearchFast(query, env, year) {
+  const t0 = Date.now();
+  const q = String(query || '').trim();
+  const queries = previewSearchQueries(q, year);
+  const [searchBatches, probed] = await Promise.all([
+    Promise.all(queries.map((sq) => searchConferenceHits(sq, env, { fast: true }))),
+    probeBrandPlaceHomepage(q),
+  ]);
+  /** @type {Array<{ url: string, title: string }>} */
+  const hits = [];
+  mergeSearchHits(hits, searchBatches);
+  let pair = pickOfficialSitePair(q, hits);
+  if (probed) {
+    if (!hits.some((x) => x.url === probed)) {
+      hits.unshift({ url: probed, title: q });
+    }
+    if (!pair.confident) {
+      const scored = pickOfficialSitePair(q, hits);
+      pair = {
+        homepageUrl: probed,
+        ticketUrl: scored.ticketUrl,
+        officialHost: registrableDomain(new URL(probed).hostname),
+        confident: true,
+        bestScore: Math.max(scored.bestScore || 0, 70),
+      };
+    }
+  }
+  if (!pair.confident && pair.bestScore < MIN_OFFICIAL_ACCEPT_SCORE) {
+    const wikiOfficial = await officialSiteFromWikipedia(q, hits);
+    if (wikiOfficial) {
+      if (!hits.some((x) => x.url === wikiOfficial)) {
+        hits.unshift({ url: wikiOfficial, title: q });
+      }
+      pair = pickOfficialSitePair(q, hits);
+    }
+  }
+  return { hits, pair, ms: Date.now() - t0 };
 }
 
 /** Common multi-label public suffixes so apex stripping keeps the real domain. */
@@ -419,7 +755,7 @@ export function pickOfficialSitePair(query, hits) {
     } catch {
       continue;
     }
-    const hostScore = conferenceHostScore(u.hostname, tokens);
+    const hostScore = conferenceHostScore(u.hostname, tokens, query);
     let score = hostScore;
     const title = String(hit?.title || '').toLowerCase();
     let thit = 0;
@@ -693,37 +1029,54 @@ async function fetchImageBuffer(url) {
   if (!/^https?:\/\//i.test(href)) return null;
   // The URL comes from image search or a scraped og:image tag (untrusted), so
   // block private/link-local/metadata targets before making the request (SSRF).
-  let safeHref;
-  try {
-    safeHref = await assertPublicHttpUrl(href);
-  } catch {
-    return null;
-  }
-  try {
-    const r = await fetch(safeHref, {
-      headers: { 'User-Agent': BROWSER_UA, Accept: 'image/*' },
-      signal: AbortSignal.timeout(12_000),
-      redirect: 'follow',
-    });
-    if (!r.ok) return null;
-    const type = String(r.headers.get('content-type') || '').toLowerCase();
-    if (type && !type.startsWith('image/')) return null;
-    const ab = await r.arrayBuffer();
-    const buffer = Buffer.from(ab);
-    if (buffer.length < 3000 || buffer.length > MAX_FLIER_BYTES) return null;
-    let ext = 'jpg';
-    if (type.includes('png')) ext = 'png';
-    else if (type.includes('webp')) ext = 'webp';
-    else if (type.includes('gif')) ext = 'gif';
-    else if (type.includes('jpeg') || type.includes('jpg')) ext = 'jpg';
-    else {
-      const m = href.match(FLIER_IMAGE_EXT_RE);
-      if (m) ext = m[1].toLowerCase().replace('jpeg', 'jpg');
+  /** @type {string[]} */
+  const tryHrefs = [];
+  for (const c of fetchPageCandidates(href)) {
+    try {
+      tryHrefs.push(await assertPublicHttpUrl(c));
+    } catch {
+      /* skip */
     }
-    return { buffer, ext };
-  } catch {
-    return null;
   }
+  if (!tryHrefs.length) return null;
+
+  for (const safeHref of tryHrefs) {
+    for (const ua of [BROWSER_UA, BROWSER_UA_FALLBACK]) {
+      try {
+        const r = await fetch(safeHref, {
+          headers: {
+            'User-Agent': ua,
+            Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+          },
+          signal: AbortSignal.timeout(12_000),
+          redirect: 'follow',
+        });
+        if (!r.ok) {
+          if (r.status === 404 || r.status === 410) break;
+          continue;
+        }
+        const type = String(r.headers.get('content-type') || '').toLowerCase();
+        if (type && !type.startsWith('image/')) continue;
+        const ab = await r.arrayBuffer();
+        const buffer = Buffer.from(ab);
+        if (buffer.length < 3000 || buffer.length > MAX_FLIER_BYTES) continue;
+        let ext = 'jpg';
+        if (type.includes('png')) ext = 'png';
+        else if (type.includes('webp')) ext = 'webp';
+        else if (type.includes('gif')) ext = 'gif';
+        else if (type.includes('jpeg') || type.includes('jpg')) ext = 'jpg';
+        else {
+          const m = safeHref.match(FLIER_IMAGE_EXT_RE);
+          if (m) ext = m[1].toLowerCase().replace('jpeg', 'jpg');
+        }
+        return { buffer, ext };
+      } catch {
+        /* try next UA / URL */
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -782,6 +1135,127 @@ function extractPriceLabel(text) {
 }
 
 /**
+ * Rank distinct official-site candidates for the Add-event picker when we are
+ * not confident enough to auto-pick one URL.
+ * @param {string} query
+ * @param {Array<{ url: string, title?: string }>} hits
+ * @param {number} [limit]
+ * @returns {Array<{ url: string, title: string, score: number }>}
+ */
+export function rankOfficialSiteCandidates(query, hits, limit = 5) {
+  const tokens = queryTokens(query);
+  const acronym = queryAcronym(tokens);
+  /** @type {Map<string, { url: string, title: string, score: number }>} */
+  const byHost = new Map();
+  for (const hit of hits || []) {
+    const url = normalizeEventPageUrl(hit?.url);
+    if (!url) continue;
+    let u;
+    try {
+      u = new URL(url);
+    } catch {
+      continue;
+    }
+    const host = registrableDomain(u.hostname);
+    if (!host) continue;
+    // Skip pure noise aggregators / social for the picker shortlist.
+    if (OFFICIAL_NOISE_HOSTS.some((n) => host === n || host.endsWith(`.${n}`))) continue;
+    let score = conferenceHostScore(u.hostname, tokens, query);
+    const title = String(hit?.title || '').trim();
+    const titleLc = title.toLowerCase();
+    let thit = 0;
+    for (const t of tokens) {
+      if (t.length > 2 && titleLc.includes(t)) thit += 1;
+    }
+    if (tokens.length) score += (thit / tokens.length) * 15;
+    if (
+      acronym.length >= 3
+      && new RegExp(`\\b${acronym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(titleLc)
+    ) {
+      score += 12;
+    }
+    // Soft floor: keep weakly related hits out of the picker.
+    if (score < 8) continue;
+    const home = homepageRootFromUrl(url) || `${u.origin}/`;
+    const prev = byHost.get(host);
+    if (!prev || score > prev.score) {
+      byHost.set(host, {
+        url: home,
+        title: title.slice(0, 140) || host,
+        score,
+      });
+    }
+  }
+  return [...byHost.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(1, Math.min(8, limit)));
+}
+
+/**
+ * When search engines drown a regional brand under unrelated acronym hits,
+ * probe likely official domains: brand + place abbreviation (sesa + pr →
+ * sesapr.org). Accept only if the live page mentions the brand and a place or
+ * event keyword.
+ * @param {string} query
+ * @returns {Promise<string | null>}
+ */
+async function probeBrandPlaceHomepage(query) {
+  const q = String(query || '').trim();
+  const tokens = queryTokens(q);
+  const brand = tokens.find((t) => t.length >= 3 && t.length <= 6 && !PLACE_WORDS.has(t) && !ACRONYM_SKIP.has(t));
+  const { abbrevs, expand } = placeHintsFromQuery(q);
+  if (!brand || !abbrevs.length) return null;
+
+  /** @type {string[]} */
+  const candidates = [];
+  const push = (url) => {
+    if (url && !candidates.includes(url)) candidates.push(url);
+  };
+  for (const ab of abbrevs) {
+    for (const tld of ['org', 'com']) {
+      push(`https://www.${brand}${ab}.${tld}/`);
+      push(`https://${brand}${ab}.${tld}/`);
+      push(`https://www.${brand}-${ab}.${tld}/`);
+      push(`https://${brand}-${ab}.${tld}/`);
+    }
+  }
+
+  const placeNeedles = [
+    ...expand,
+    ...abbrevs.filter((a) => a.length >= 2),
+    ...tokens.filter((t) => PLACE_WORDS.has(t) && t.length > 2),
+  ].map((s) => String(s).toLowerCase());
+
+  const probeOne = async (url) => {
+    let safe;
+    try {
+      safe = await assertPublicHttpUrl(url);
+    } catch {
+      return null;
+    }
+    const page = await fetchPage(safe);
+    if (page.text.length < 160) return null;
+    const text = page.text.toLowerCase();
+    if (!text.includes(brand)) return null;
+    const placeHit = placeNeedles.some((n) => n && text.includes(n));
+    const eventHit = /\b(summit|conference|festival|symposium|expo|forum)\b/i.test(text);
+    if (!placeHit && !eventHit) return null;
+    return homepageRootFromUrl(safe) || safe;
+  };
+
+  const urls = candidates.slice(0, 6);
+  if (!urls.length) return null;
+  try {
+    return await Promise.any(urls.map((url) => probeOne(url).then((r) => {
+      if (!r) throw new Error('miss');
+      return r;
+    })));
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Search the web for a Big Event's official site (URL only — no snapshot). Used
  * by the "Add event → Search" preview step. In `deep` mode it runs more query
  * variants and inspects more hits so a "search again" can dig deeper when the
@@ -796,7 +1270,6 @@ export async function previewBigEvent(query, env = process.env, opts = {}) {
   if (!slug) return { ok: false, error: 'invalid_query' };
   const deep = opts.deep === true;
   const year = new Date().getFullYear();
-  const queries = conferenceSearchQueries(q, year, { deep });
   /** @type {Array<{ url: string, title: string }>} */
   const hits = [];
   let pair = {
@@ -806,35 +1279,74 @@ export async function previewBigEvent(query, env = process.env, opts = {}) {
     confident: false,
     bestScore: -Infinity,
   };
-  for (let i = 0; i < queries.length; i += 1) {
-    if (i > 0) await sleep(SEARCH_QUERY_DELAY_MS);
-    const batch = await searchConferenceHits(queries[i], env);
-    for (const h of batch) {
-      if (!hits.some((x) => x.url === h.url)) hits.push(h);
-    }
-    pair = pickOfficialSitePair(q, hits);
-    // Stop as soon as we have a confident official-domain match (avoids extra
-    // Brave queries that would trip its rate limit and fall back to weaker
-    // engines). A deep pass keeps going even when confident, to surface a
-    // stronger homepage/ticket pair.
-    if (pair.confident && !deep) break;
-  }
+  let searchMs = 0;
 
-  // When engines only return junk, Wikipedia often still ranks and its infobox
-  // points at the real official site (Consumer Electronics Show → ces.tech).
-  if (!pair.confident) {
-    const wikiOfficial = await officialSiteFromWikipedia(q, hits);
-    if (wikiOfficial) {
-      if (!hits.some((x) => x.url === wikiOfficial)) {
-        hits.unshift({ url: wikiOfficial, title: q });
+  if (!deep) {
+    const fast = await previewBigEventSearchFast(q, env, year);
+    hits.push(...fast.hits);
+    pair = fast.pair;
+    searchMs = fast.ms;
+  } else {
+    const queries = conferenceSearchQueries(q, year, { deep });
+    for (let i = 0; i < queries.length; i += 1) {
+      if (i > 0) await sleep(SEARCH_QUERY_DELAY_MS);
+      const batch = await searchConferenceHits(queries[i], env);
+      for (const h of batch) {
+        if (!hits.some((x) => x.url === h.url)) hits.push(h);
       }
       pair = pickOfficialSitePair(q, hits);
+      if (pair.confident && !deep) break;
+    }
+
+    if (!pair.confident) {
+      const wikiOfficial = await officialSiteFromWikipedia(q, hits);
+      if (wikiOfficial) {
+        if (!hits.some((x) => x.url === wikiOfficial)) {
+          hits.unshift({ url: wikiOfficial, title: q });
+        }
+        pair = pickOfficialSitePair(q, hits);
+      }
+    }
+
+    if (!pair.confident) {
+      const probed = await probeBrandPlaceHomepage(q);
+      if (probed) {
+        if (!hits.some((x) => x.url === probed)) {
+          hits.unshift({ url: probed, title: q });
+        }
+        const scored = pickOfficialSitePair(q, hits);
+        pair = {
+          homepageUrl: probed,
+          ticketUrl: scored.ticketUrl,
+          officialHost: registrableDomain(new URL(probed).hostname),
+          confident: true,
+          bestScore: Math.max(scored.bestScore || 0, 70),
+        };
+      }
     }
   }
 
   // Never fall back to hits[0] — that was returning Consumer Cellular etc.
   const homepageUrl = pair.homepageUrl || homepageRootFromUrl(pickOfficialSiteUrl(q, hits));
   const ticketUrl = pair.ticketUrl || null;
+  // Ranked shortlist for the UI when we are not confident — Jay picks the right
+  // one instead of us silently committing a wrong SERP hit.
+  const candidates = rankOfficialSiteCandidates(q, hits, 5);
+  if (homepageUrl && !candidates.some((c) => c.url === homepageUrl)) {
+    candidates.unshift({
+      url: homepageUrl,
+      title: pair.officialHost || homepageUrl,
+      score: pair.bestScore || 0,
+    });
+    if (candidates.length > 5) candidates.length = 5;
+  }
+  // Host-name embedding can look "confident" while several unrelated brands share
+  // the same top score (e.g. query "summit"). Near-ties → show the picker.
+  let confident = pair.confident === true;
+  if (candidates.length >= 2) {
+    const gap = (Number(candidates[0].score) || 0) - (Number(candidates[1].score) || 0);
+    if (gap < 20) confident = false;
+  }
   return {
     ok: true,
     slug,
@@ -845,6 +1357,9 @@ export async function previewBigEvent(query, env = process.env, opts = {}) {
     ticketUrl,
     deep,
     urlFound: Boolean(homepageUrl),
+    confident,
+    bestScore: Number.isFinite(pair.bestScore) ? pair.bestScore : null,
+    candidates,
   };
 }
 
@@ -1121,14 +1636,19 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       const s = String(src || '').trim();
       if (s && !ogImageCandidates.includes(s)) ogImageCandidates.push(s);
     };
+    /** Prefer og:image, then on-page promo images (header/feature uploads). */
+    const pushPageImages = (page) => {
+      pushOgImage(page?.ogImage);
+      for (const src of page?.pageImages || []) pushOgImage(src);
+    };
     if (homepageUrl) {
       const page = await fetchPage(homepageUrl);
-      pushOgImage(page.ogImage);
+      pushPageImages(page);
       if (page.text.length > 120) homePages.push({ url: homepageUrl, title: q, text: page.text });
     }
     if (ticketUrl && ticketUrl !== homepageUrl) {
       const page = await fetchPage(ticketUrl);
-      pushOgImage(page.ogImage);
+      pushPageImages(page);
       if (page.text.length > 120) {
         ticketPages.push({ url: ticketUrl, title: `${q} tickets`, text: page.text });
       }
@@ -1139,7 +1659,7 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       if (homePages.length + ticketPages.length >= 5) break;
       if (h.url === homepageUrl || h.url === ticketUrl) continue;
       const page = await fetchPage(h.url);
-      pushOgImage(page.ogImage);
+      pushPageImages(page);
       if (page.text.length <= 120) continue;
       if (TICKET_PATH_RE.test(h.url) && ticketPages.length < 2) {
         ticketPages.push({ url: h.url, title: h.title || `${q} tickets`, text: page.text });
@@ -1290,16 +1810,22 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       }
     }
 
-    // Resolve the sidebar card image. Retry at most daily so polls stay cheap.
-    // Prefer the event page's own og:image (its real promo graphic, always the
-    // right edition and reliably fetchable), then fall back to a poster
-    // image-search when the page advertises no share image.
+    // Resolve the sidebar card image.
+    // 1) Always try images we already scraped from the event pages (og:image +
+    //    on-page header/feature uploads) whenever the card still has no flier —
+    //    cheap, no search API, and recovers Add/Enrich even inside the 24h
+    //    "already checked" window after a prior failed attempt.
+    // 2) Fall back to poster image-search only when forced / freshly added
+    //    (urlProvidedNow) / daily-stale, so cloud without Brave/Chromium isn't
+    //    hammered on every poll.
     let flierPath = existing.flierPath || null;
     let flierCheckedAt = existing.flierCheckedAt || null;
     const flierCheckedMs = Date.parse(String(flierCheckedAt || ''));
     const flierStale =
       !Number.isFinite(flierCheckedMs) || nowMs - flierCheckedMs > RETRY_MS;
-    if (!flierPath && flierStale) {
+    const retryImageSearch =
+      opts.force === true || flierStale || urlProvidedNow === true;
+    if (!flierPath && ogImageCandidates.length) {
       for (const candidate of ogImageCandidates) {
         const img = await fetchImageBuffer(candidate);
         if (!img) continue;
@@ -1309,11 +1835,12 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
           break;
         }
       }
-      if (!flierPath) {
-        const flierYear = finalStart ? Number(finalStart.slice(0, 4)) : new Date().getFullYear();
-        const found = await findAndSaveFlier(parsedName || existing.name || q, flierYear, slug, env);
-        if (found) flierPath = found;
-      }
+      if (flierPath) flierCheckedAt = new Date().toISOString();
+    }
+    if (!flierPath && retryImageSearch) {
+      const flierYear = finalStart ? Number(finalStart.slice(0, 4)) : new Date().getFullYear();
+      const found = await findAndSaveFlier(parsedName || existing.name || q, flierYear, slug, env);
+      if (found) flierPath = found;
       flierCheckedAt = new Date().toISOString();
     }
 
