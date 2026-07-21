@@ -206,7 +206,7 @@ export function mountNetworkGroupsUi(root, opts) {
     return createGroupKindIconEl(g);
   }
 
-  function avatarEl(contact) {
+  function invalidateMemberCache() {
     cachedMemberIds = null;
   }
 
@@ -259,7 +259,7 @@ export function mountNetworkGroupsUi(root, opts) {
     return `${names.join(', ')}${more}`;
   }
 
-  function invalidateMemberCache() {
+  function avatarEl(contact) {
     const box = document.createElement('div');
     box.className = 'network-crm__avatar network-crm__avatar--sm';
     if (contact?.avatarUrl) {
