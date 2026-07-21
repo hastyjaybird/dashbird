@@ -118,6 +118,14 @@ function htmlToText(html) {
     .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+      const n = Number.parseInt(hex, 16);
+      return Number.isFinite(n) ? String.fromCodePoint(n) : _;
+    })
+    .replace(/&#(\d+);/g, (_, dec) => {
+      const n = Number(dec);
+      return Number.isFinite(n) ? String.fromCodePoint(n) : _;
+    })
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 12000);
@@ -383,6 +391,7 @@ const PLACE_PHRASES = [
   { re: /\bsan juan\b/i, expand: ['puerto rico', 'puerto rico summit'], abbrevs: ['pr', 'sju'] },
   { re: /\bpuerto rico\b/i, expand: ['san juan'], abbrevs: ['pr'] },
   { re: /\bnew york\b/i, expand: ['nyc'], abbrevs: ['nyc', 'ny'] },
+  { re: /\bnew orleans\b/i, expand: ['nola'], abbrevs: ['nola'] },
   { re: /\blos angeles\b/i, expand: ['la'], abbrevs: ['la'] },
   { re: /\blas vegas\b/i, expand: [], abbrevs: ['vegas', 'lv'] },
   { re: /\bsan francisco\b/i, expand: ['sf'], abbrevs: ['sf'] },
@@ -398,6 +407,72 @@ function queryTokens(query) {
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
     .filter(Boolean);
+}
+
+/**
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+function editDistance(a, b) {
+  const s = String(a || '');
+  const t = String(b || '');
+  if (s === t) return 0;
+  if (!s.length) return t.length;
+  if (!t.length) return s.length;
+  if (Math.abs(s.length - t.length) > 1) return 99;
+  const rows = s.length + 1;
+  const cols = t.length + 1;
+  /** @type {number[]} */
+  let prev = Array.from({ length: cols }, (_, i) => i);
+  for (let i = 1; i < rows; i += 1) {
+    /** @type {number[]} */
+    const cur = [i];
+    for (let j = 1; j < cols; j += 1) {
+      const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[t.length];
+}
+
+/**
+ * Exact substring or 1-edit near-miss ("marti" ↔ "mardi" in a host/title).
+ * @param {string} text
+ * @param {string} token
+ * @returns {boolean}
+ */
+function textContainsToken(text, token) {
+  const t = String(token || '').toLowerCase();
+  const raw = String(text || '').toLowerCase();
+  if (!t || t.length <= 2) return false;
+  if (raw.includes(t)) return true;
+  if (t.length < 4) return false;
+  const flat = raw.replace(/[^a-z0-9]/g, '');
+  if (!flat) return false;
+  if (flat.includes(t)) return true;
+  for (let len = t.length - 1; len <= t.length + 1; len += 1) {
+    if (len < 3) continue;
+    for (let i = 0; i <= flat.length - len; i += 1) {
+      if (editDistance(flat.slice(i, i + len), t) <= 1) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Count significant query tokens that appear (exactly or fuzzy) in `text`.
+ * @param {string} text
+ * @param {string[]} tokens
+ * @returns {number}
+ */
+function countTokenHits(text, tokens) {
+  let n = 0;
+  for (const t of tokens || []) {
+    if (t.length > 2 && textContainsToken(text, t)) n += 1;
+  }
+  return n;
 }
 
 /**
@@ -461,17 +536,19 @@ function conferenceHostScore(host, tokens, query = '') {
   } else if (acronym.length >= 3 && hostFlat.startsWith(acronym)) {
     score += 35;
   }
-  if (nameFlat && hostFlat.includes(nameFlat)) {
+  if (nameFlat && (hostFlat.includes(nameFlat) || textContainsToken(hostFlat, nameFlat))) {
     score += 60;
   } else {
     // Length-weight token matches so a distinctive token ("sauce") counts far
     // more than a common one ("open"); avoids picking openai.com for "open sauce".
+    // Fuzzy near-misses count too (marti ↔ mardi) so a typo'd query still
+    // elevates mardigrasneworleans.com over unrelated Marti* brands.
     let hitLen = 0;
     let totalLen = 0;
     for (const t of tokens) {
       if (t.length <= 2) continue;
       totalLen += t.length;
-      if (hostFlat.includes(t)) hitLen += t.length;
+      if (textContainsToken(hostFlat, t)) hitLen += t.length;
     }
     if (totalLen) score += (hitLen / totalLen) * 40;
   }
@@ -564,6 +641,7 @@ export async function searchConferenceHits(query, env = process.env, opts = {}) 
 function conferenceSearchQueries(query, year, opts = {}) {
   const q = String(query || '').trim();
   const deep = opts.deep === true;
+  const suggested = String(opts.suggestedQuery || '').trim();
   const tokens = queryTokens(q);
   const acronym = queryAcronym(tokens);
   const brand = tokens.find((t) => t.length >= 3 && !PLACE_WORDS.has(t) && !ACRONYM_SKIP.has(t));
@@ -586,6 +664,10 @@ function conferenceSearchQueries(query, year, opts = {}) {
         `${q} summit conference official`,
         `${q} tickets ${year}`,
       ];
+  if (suggested && suggested.toLowerCase() !== q.toLowerCase()) {
+    queries.unshift(`${suggested} official website`);
+    queries.splice(2, 0, `${suggested} official site tickets ${year}`);
+  }
   // Place expansion: "sesa san juan" also searches "sesa puerto rico summit".
   if (brand && expand.length) {
     for (const place of expand) {
@@ -615,28 +697,35 @@ function conferenceSearchQueries(query, year, opts = {}) {
  * only, no Playwright) so the picker returns in a few seconds like Tool Library.
  * @param {string} query
  * @param {number} year
+ * @param {{ suggestedQuery?: string }} [opts]
  * @returns {string[]}
  */
-function previewSearchQueries(query, year) {
+function previewSearchQueries(query, year, opts = {}) {
   const q = String(query || '').trim();
+  const suggested = String(opts.suggestedQuery || '').trim();
   const tokens = queryTokens(q);
   const acronym = queryAcronym(tokens);
   const brand = tokens.find((t) => t.length >= 3 && !PLACE_WORDS.has(t) && !ACRONYM_SKIP.has(t));
   const { expand, abbrevs } = placeHintsFromQuery(q);
   /** @type {string[]} */
-  const out = [`${q} official website`];
-  const seen = new Set(out.map((s) => s.toLowerCase()));
+  const out = [];
+  const seen = new Set();
   const add = (s) => {
     const key = String(s || '').trim().toLowerCase();
     if (!key || seen.has(key)) return;
     seen.add(key);
     out.push(String(s).trim());
   };
+  // Spell-corrected / wiki-suggested form first so Bing (no autocorrect) still
+  // finds the real event when the typed query is a near-miss typo.
+  if (suggested) add(`${suggested} official website`);
+  add(`${q} official website`);
   if (brand && expand.length) add(`${brand} ${expand[0]} official website`);
   if (brand && abbrevs.length) add(`${brand}${abbrevs[0]} official`);
   if (acronym.length >= 3 && acronym !== tokens.join('')) add(`${acronym} official website`);
   add(`${q} official site tickets ${year}`);
-  return out.slice(0, 3);
+  if (suggested) add(`${suggested} official site tickets ${year}`);
+  return out.slice(0, suggested ? 4 : 3);
 }
 
 /**
@@ -661,25 +750,44 @@ function mergeSearchHits(hits, batches) {
 async function previewBigEventSearchFast(query, env, year) {
   const t0 = Date.now();
   const q = String(query || '').trim();
-  const queries = previewSearchQueries(q, year);
-  const [searchBatches, probed] = await Promise.all([
+  // Cheap OpenSearch spell/title hint before SERPs — Bing will not rewrite
+  // "marti gras" → "mardi gras" on its own.
+  const suggested = await wikipediaSuggestedQuery(q);
+  const queries = previewSearchQueries(q, year, { suggestedQuery: suggested });
+  const [searchBatches, probedBrand, probedName] = await Promise.all([
     Promise.all(queries.map((sq) => searchConferenceHits(sq, env, { fast: true }))),
     probeBrandPlaceHomepage(q),
+    // When datacenter Bing returns first-token junk and DDG is challenged,
+    // concatenated-name domains (mardigrasneworleans.com) still resolve.
+    probeNameFlatHomepage(q, suggested),
   ]);
   /** @type {Array<{ url: string, title: string }>} */
   const hits = [];
   mergeSearchHits(hits, searchBatches);
   let pair = pickOfficialSitePair(q, hits);
+  const probed = probedName || probedBrand;
   if (probed) {
     if (!hits.some((x) => x.url === probed)) {
-      hits.unshift({ url: probed, title: q });
+      hits.unshift({ url: probed, title: suggested || q });
     }
-    if (!pair.confident) {
-      const scored = pickOfficialSitePair(q, hits);
+    // Re-score with the probed homepage in the pool (fuzzy tokens elevate the
+    // real event domain over Marti* brand noise for typo queries).
+    pair = pickOfficialSitePair(q, hits);
+    if (!pair.confident && probedName) {
+      const scored = pair;
       pair = {
-        homepageUrl: probed,
+        homepageUrl: probedName,
         ticketUrl: scored.ticketUrl,
-        officialHost: registrableDomain(new URL(probed).hostname),
+        officialHost: registrableDomain(new URL(probedName).hostname),
+        confident: true,
+        bestScore: Math.max(scored.bestScore || 0, 70),
+      };
+    } else if (!pair.confident && probedBrand) {
+      const scored = pair;
+      pair = {
+        homepageUrl: probedBrand,
+        ticketUrl: scored.ticketUrl,
+        officialHost: registrableDomain(new URL(probedBrand).hostname),
         confident: true,
         bestScore: Math.max(scored.bestScore || 0, 70),
       };
@@ -689,7 +797,7 @@ async function previewBigEventSearchFast(query, env, year) {
     const wikiOfficial = await officialSiteFromWikipedia(q, hits);
     if (wikiOfficial) {
       if (!hits.some((x) => x.url === wikiOfficial)) {
-        hits.unshift({ url: wikiOfficial, title: q });
+        hits.unshift({ url: wikiOfficial, title: suggested || q });
       }
       pair = pickOfficialSitePair(q, hits);
     }
@@ -758,10 +866,7 @@ export function pickOfficialSitePair(query, hits) {
     const hostScore = conferenceHostScore(u.hostname, tokens, query);
     let score = hostScore;
     const title = String(hit?.title || '').toLowerCase();
-    let thit = 0;
-    for (const t of tokens) {
-      if (t.length > 2 && title.includes(t)) thit += 1;
-    }
+    const thit = countTokenHits(title, tokens);
     if (tokens.length) score += (thit / tokens.length) * 15;
     if (
       acronym.length >= 3
@@ -863,13 +968,76 @@ function matchingWikipediaUrl(query, hits) {
     if (slugFlat.includes(nameFlat) || nameFlat.includes(slugFlat)) {
       return normalizeEventPageUrl(url) || url;
     }
-    const overlap = sig.filter((t) => slugTokens.includes(t)).length;
+    const overlap = significantTokenOverlap(sig, slugTokens);
     if (overlap > bestOverlap && overlap >= Math.ceil(sig.length * 0.75)) {
       bestOverlap = overlap;
       best = normalizeEventPageUrl(url) || url;
     }
   }
   return best;
+}
+
+/**
+ * Significant-token overlap with 1-edit near-miss tolerance (marti ↔ mardi).
+ * @param {string[]} sig
+ * @param {string[]} other
+ * @returns {number}
+ */
+function significantTokenOverlap(sig, other) {
+  const pool = Array.isArray(other) ? other : [];
+  let n = 0;
+  for (const t of sig || []) {
+    if (t.length <= 2) continue;
+    if (pool.some((u) => u === t || (t.length >= 4 && u.length >= 3 && editDistance(t, u) <= 1))) {
+      n += 1;
+    }
+  }
+  return n;
+}
+
+/**
+ * Wikipedia OpenSearch often returns the correctly spelled event title for a
+ * near-miss query ("marti gras new orleans" → "Mardi Gras in New Orleans").
+ * Use that as an extra SERP query when Bing would otherwise return brand junk.
+ * @param {string} query
+ * @returns {Promise<string>}
+ */
+async function wikipediaSuggestedQuery(query) {
+  const q = String(query || '').trim();
+  if (!q) return '';
+  const api =
+    `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(q)}`
+    + '&limit=5&namespace=0&format=json';
+  try {
+    const safe = await assertPublicHttpUrl(api);
+    const r = await fetch(safe, {
+      headers: { Accept: 'application/json', 'User-Agent': BROWSER_UA },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!r.ok) return '';
+    const data = await r.json();
+    const titles = Array.isArray(data?.[1]) ? data[1] : [];
+    const qTokens = queryTokens(q);
+    const sig = qTokens.filter((t) => t.length > 2);
+    if (!sig.length) return '';
+    const qNorm = qTokens.join(' ');
+    for (const rawTitle of titles) {
+      const title = String(rawTitle || '').replace(/\s*\([^)]*\)\s*/g, ' ').trim();
+      if (!title) continue;
+      const titleTokens = queryTokens(title);
+      // Drop filler words Wikipedia adds ("in", "the") for the search variant.
+      const useful = titleTokens.filter((t) => t.length > 2 && !ACRONYM_SKIP.has(t));
+      if (!useful.length) continue;
+      const overlap = significantTokenOverlap(sig, titleTokens);
+      if (overlap < Math.ceil(sig.length * 0.75)) continue;
+      const suggested = useful.join(' ');
+      if (!suggested || suggested === qNorm) continue;
+      return suggested;
+    }
+  } catch {
+    return '';
+  }
+  return '';
 }
 
 /**
@@ -905,7 +1073,7 @@ async function wikipediaOpenSearchUrl(query) {
       if (titleFlat.includes(nameFlat) || nameFlat.includes(titleFlat)) {
         return normalizeEventPageUrl(url) || url;
       }
-      const overlap = sig.filter((t) => titleTokens.includes(t)).length;
+      const overlap = significantTokenOverlap(sig, titleTokens);
       if (sig.length && overlap >= Math.ceil(sig.length * 0.75)) {
         return normalizeEventPageUrl(url) || url;
       }
@@ -924,6 +1092,89 @@ async function wikipediaOpenSearchUrl(query) {
  * @param {Array<{ url: string, title?: string }>} hits
  * @returns {Promise<string | null>}
  */
+/**
+ * Whether a host is never a usable official event site (wiki/social/archives).
+ * @param {string} host
+ * @returns {boolean}
+ */
+function isWikipediaRecoveryNoiseHost(host) {
+  const h = String(host || '').replace(/^www\./, '').toLowerCase();
+  if (!h) return true;
+  if (/wikipedia\.org$|wikimedia\.org$|archive\.org$|web\.archive\.org$/i.test(h)) return true;
+  return OFFICIAL_NOISE_HOSTS.some((nHost) => h === nHost || h.endsWith(`.${nHost}`));
+}
+
+/**
+ * Best external URL embedded in a Wikipedia article that looks like the event's
+ * own site (infobox "Official website", or citation/JSON hosts that fuzzy-match
+ * the query — Mardi Gras articles often lack a classic Official website row).
+ * @param {string} html
+ * @param {string} query
+ * @returns {string | null}
+ */
+function pickOfficialUrlFromWikipediaHtml(html, query) {
+  const patterns = [
+    /<a[^>]+href=["'](https?:\/\/[^"']+)["'][^>]*>\s*Official website/i,
+    /Official website[\s\S]{0,200}?<a[^>]+href=["'](https?:\/\/[^"']+)["']/i,
+  ];
+  for (const re of patterns) {
+    const m = String(html || '').match(re);
+    if (!m?.[1]) continue;
+    const n = normalizeEventPageUrl(m[1]);
+    if (!n) continue;
+    try {
+      const host = new URL(n).hostname;
+      if (isWikipediaRecoveryNoiseHost(host)) continue;
+    } catch {
+      continue;
+    }
+    return homepageRootFromUrl(n) || n;
+  }
+
+  const tokens = queryTokens(query);
+  /** @type {Map<string, number>} */
+  const hostScores = new Map();
+  const consider = (raw) => {
+    let href = String(raw || '').trim();
+    if (!href) return;
+    if (!/^https?:\/\//i.test(href)) href = `https://${href.replace(/^\/\//, '')}`;
+    const n = normalizeEventPageUrl(href);
+    if (!n) return;
+    let host = '';
+    try {
+      host = new URL(n).hostname;
+    } catch {
+      return;
+    }
+    if (isWikipediaRecoveryNoiseHost(host)) return;
+    const score = conferenceHostScore(host, tokens, query);
+    if (score < MIN_OFFICIAL_ACCEPT_SCORE) return;
+    const apex = registrableDomain(host);
+    const prev = hostScores.get(apex) || -Infinity;
+    if (score > prev) hostScores.set(apex, score);
+  };
+
+  for (const m of String(html || '').matchAll(/\bhttps?:\/\/[^\s"'<>\\]+/gi)) {
+    consider(m[0].replace(/[),.;]+$/g, ''));
+  }
+  // Bare hosts in citation JSON / infobox text (www.mardigrasneworleans.com).
+  for (const m of String(html || '').matchAll(
+    /\b(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|org|net|io|tech|events?|fest|us)\b/gi,
+  )) {
+    consider(m[0]);
+  }
+
+  let bestHost = '';
+  let bestScore = -Infinity;
+  for (const [apex, score] of hostScores) {
+    if (score > bestScore) {
+      bestScore = score;
+      bestHost = apex;
+    }
+  }
+  return bestHost ? `https://${bestHost}/` : null;
+}
+
 async function officialSiteFromWikipedia(query, hits) {
   let wikiUrl = matchingWikipediaUrl(query, hits);
   if (!wikiUrl) wikiUrl = await wikipediaOpenSearchUrl(query);
@@ -941,35 +1192,82 @@ async function officialSiteFromWikipedia(query, hits) {
       redirect: 'follow',
     });
     if (!r.ok) return null;
-    const html = await r.text();
-    const patterns = [
-      /<a[^>]+href=["'](https?:\/\/[^"']+)["'][^>]*>\s*Official website/i,
-      /Official website[\s\S]{0,200}?<a[^>]+href=["'](https?:\/\/[^"']+)["']/i,
-    ];
-    for (const re of patterns) {
-      const m = html.match(re);
-      if (!m?.[1]) continue;
-      const n = normalizeEventPageUrl(m[1]);
-      if (!n) continue;
-      let host = '';
-      try {
-        host = new URL(n).hostname.replace(/^www\./, '').toLowerCase();
-      } catch {
-        continue;
-      }
-      // Skip archives / social / wikipedia mirrors.
-      if (
-        /wikipedia\.org$|wikimedia\.org$|archive\.org$|web\.archive\.org$/i.test(host)
-        || OFFICIAL_NOISE_HOSTS.some((nHost) => host === nHost || host.endsWith(`.${nHost}`))
-      ) {
-        continue;
-      }
-      return homepageRootFromUrl(n) || n;
-    }
+    return pickOfficialUrlFromWikipediaHtml(await r.text(), query);
   } catch {
     return null;
   }
-  return null;
+}
+
+/**
+ * Probe likely official domains built from the flattened event name
+ * (mardigrasneworleans.com). Uses a Wikipedia-corrected spelling when the
+ * typed query is a near-miss typo so Bing-only environments still recover.
+ * @param {string} query
+ * @param {string} [suggestedQuery]
+ * @returns {Promise<string | null>}
+ */
+async function probeNameFlatHomepage(query, suggestedQuery = '') {
+  const q = String(query || '').trim();
+  const suggested = String(suggestedQuery || '').trim();
+  /** @type {string[]} */
+  const flats = [];
+  const pushFlat = (raw) => {
+    const tokens = queryTokens(raw).filter((t) => t.length > 2 && !ACRONYM_SKIP.has(t));
+    if (tokens.length < 2) return;
+    const flat = tokens.join('');
+    if (flat.length >= 8 && flat.length <= 48 && !flats.includes(flat)) flats.push(flat);
+  };
+  pushFlat(suggested);
+  pushFlat(q);
+  if (!flats.length) return null;
+
+  /** @type {string[]} */
+  const candidates = [];
+  for (const flat of flats.slice(0, 2)) {
+    for (const tld of ['com', 'org', 'net']) {
+      candidates.push(`https://www.${flat}.${tld}/`);
+      candidates.push(`https://${flat}.${tld}/`);
+    }
+  }
+
+  const scoreTokens = queryTokens(suggested || q);
+  const probeOne = async (url) => {
+    let safe;
+    try {
+      safe = await assertPublicHttpUrl(url);
+    } catch {
+      return null;
+    }
+    const page = await fetchPage(safe);
+    if (page.text.length < 120) return null;
+    const host = (() => {
+      try {
+        return new URL(safe).hostname;
+      } catch {
+        return '';
+      }
+    })();
+    if (!host || conferenceHostScore(host, scoreTokens, suggested || q) < MIN_OFFICIAL_ACCEPT_SCORE) {
+      return null;
+    }
+    const text = page.text.toLowerCase();
+    const hits = countTokenHits(text.slice(0, 4000), scoreTokens);
+    if (hits < Math.min(2, scoreTokens.filter((t) => t.length > 2).length)) return null;
+    return homepageRootFromUrl(safe) || safe;
+  };
+
+  try {
+    return await Promise.any(
+      candidates.slice(0, 8).map((url) =>
+        probeOne(url).then((r) => {
+          if (!r) throw new Error('miss');
+          return r;
+        }),
+      ),
+    );
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1163,10 +1461,7 @@ export function rankOfficialSiteCandidates(query, hits, limit = 5) {
     let score = conferenceHostScore(u.hostname, tokens, query);
     const title = String(hit?.title || '').trim();
     const titleLc = title.toLowerCase();
-    let thit = 0;
-    for (const t of tokens) {
-      if (t.length > 2 && titleLc.includes(t)) thit += 1;
-    }
+    const thit = countTokenHits(titleLc, tokens);
     if (tokens.length) score += (thit / tokens.length) * 15;
     if (
       acronym.length >= 3
@@ -1287,7 +1582,8 @@ export async function previewBigEvent(query, env = process.env, opts = {}) {
     pair = fast.pair;
     searchMs = fast.ms;
   } else {
-    const queries = conferenceSearchQueries(q, year, { deep });
+    const suggested = await wikipediaSuggestedQuery(q);
+    const queries = conferenceSearchQueries(q, year, { deep, suggestedQuery: suggested });
     for (let i = 0; i < queries.length; i += 1) {
       if (i > 0) await sleep(SEARCH_QUERY_DELAY_MS);
       const batch = await searchConferenceHits(queries[i], env);

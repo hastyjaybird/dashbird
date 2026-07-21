@@ -39,6 +39,48 @@ const RESELLER_HOST_RE =
   /(?:^|\.)(?:stubhub|viagogo|seatgeek|vividseats|gametime|tickpick|ticketnetwork)\./i;
 
 /**
+ * Decode common HTML entities in SERP titles (incl. numeric &#237; / &#x27;).
+ * @param {string} s
+ * @returns {string}
+ */
+export function decodeHtmlEntities(s) {
+  return String(s || '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+      const n = Number.parseInt(hex, 16);
+      return Number.isFinite(n) ? String.fromCodePoint(n) : _;
+    })
+    .replace(/&#(\d+);/g, (_, dec) => {
+      const n = Number(dec);
+      return Number.isFinite(n) ? String.fromCodePoint(n) : _;
+    });
+}
+
+/**
+ * DDG lite often spell-corrects ("marti gras" → "mardi gras") and still
+ * returns the corrected results on the same page.
+ * @param {string} html
+ * @returns {string}
+ */
+function parseDdgSpellingCorrection(html) {
+  const s = String(html || '');
+  const m =
+    s.match(
+      /id=["']did_you_mean["'][\s\S]{0,400}?Including results for\s*<a[^>]*>([^<]+)<\/a>/i,
+    )
+    || s.match(
+      /msg--spelling[\s\S]{0,400}?Including results for\s*<a[^>]*>([^<]+)<\/a>/i,
+    );
+  return m ? decodeHtmlEntities(m[1]).replace(/\s+/g, ' ').trim() : '';
+}
+
+/**
  * @param {unknown} url
  * @returns {boolean}
  */
@@ -149,11 +191,7 @@ function parseDdgResults(html) {
   let m;
   while ((m = re.exec(html))) {
     const attrs = `${m[1]} ${m[2]}`;
-    const title = String(m[3] || '')
-      .replace(/<[^>]+>/g, '')
-      .replace(/&amp;/g, '&')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
+    const title = decodeHtmlEntities(String(m[3] || '').replace(/<[^>]+>/g, ''))
       .replace(/\s+/g, ' ')
       .trim();
     const hrefMatch = attrs.match(/href="([^"]+)"/i);
@@ -190,11 +228,11 @@ function parseDdgResults(html) {
 
 /**
  * @param {string} query
- * @returns {Promise<Array<{ url: string, title: string }>>}
+ * @returns {Promise<{ hits: Array<{ url: string, title: string }>, correctedQuery: string }>}
  */
-async function searchDuckDuckGo(query) {
+async function searchDuckDuckGoOnce(query) {
   const q = String(query || '').trim();
-  if (!q) return [];
+  if (!q) return { hits: [], correctedQuery: '' };
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
   try {
     const r = await fetch(url, {
@@ -202,11 +240,40 @@ async function searchDuckDuckGo(query) {
       signal: AbortSignal.timeout(10_000),
       redirect: 'follow',
     });
-    if (!r.ok) return [];
-    return parseDdgResults(await r.text());
+    if (!r.ok) return { hits: [], correctedQuery: '' };
+    const html = await r.text();
+    // Empty / challenge pages have no result anchors.
+    if (!/result__a/i.test(html)) return { hits: [], correctedQuery: '' };
+    return {
+      hits: parseDdgResults(html),
+      correctedQuery: parseDdgSpellingCorrection(html),
+    };
   } catch {
-    return [];
+    return { hits: [], correctedQuery: '' };
   }
+}
+
+/**
+ * @param {string} query
+ * @returns {Promise<Array<{ url: string, title: string }>>}
+ */
+async function searchDuckDuckGo(query) {
+  const primary = await searchDuckDuckGoOnce(query);
+  const corrected = primary.correctedQuery;
+  const qNorm = String(query || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const cNorm = corrected.toLowerCase().replace(/\s+/g, ' ');
+  // When DDG spell-corrects but the lite page still mixed in literal-typo
+  // junk, a second pass on the corrected query prefers the real event sites.
+  if (corrected && cNorm && cNorm !== qNorm) {
+    const second = await searchDuckDuckGoOnce(corrected);
+    /** @type {Array<{ url: string, title: string }>} */
+    const out = [];
+    for (const hit of [...second.hits, ...primary.hits]) {
+      if (!out.some((x) => x.url === hit.url)) out.push(hit);
+    }
+    return out;
+  }
+  return primary.hits;
 }
 
 /**
@@ -230,8 +297,7 @@ function parseYahooResults(html) {
     } catch {
       continue;
     }
-    const title = String(m[2] || '')
-      .replace(/<[^>]+>/g, '')
+    const title = decodeHtmlEntities(String(m[2] || '').replace(/<[^>]+>/g, ''))
       .replace(/\s+/g, ' ')
       .trim();
     const normalized = normalizeEventPageUrl(href);
@@ -327,12 +393,8 @@ async function searchBingHtml(query) {
     const re = /<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
     let m;
     while ((m = re.exec(html))) {
-      const href = decodeBingRedirect(m[1].replace(/&amp;/g, '&'));
-      const title = String(m[2] || '')
-        .replace(/<[^>]+>/g, '')
-        .replace(/&amp;/g, '&')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
+      const href = decodeBingRedirect(decodeHtmlEntities(m[1]));
+      const title = decodeHtmlEntities(String(m[2] || '').replace(/<[^>]+>/g, ''))
         .replace(/\s+/g, ' ')
         .trim();
       const normalized = normalizeEventPageUrl(href);
@@ -359,8 +421,10 @@ async function searchBingHtml(query) {
  * @returns {Promise<Array<{ url: string, title: string }>>}
  */
 export async function searchWeb(query) {
-  // Bing HTML first on purpose: from cloud/VPS, DDG often serves an empty 202
-  // challenge page and Yahoo 500s, while Bing still returns real result links.
+  // Fetch all three in parallel. Prefer DDG/Yahoo when they return real hits —
+  // Bing often literal-matches the first token ("marti*" brands for a "marti
+  // gras" typo) while DDG spell-corrects to the event. Fall back to Bing when
+  // DDG/Yahoo are empty (common challenge pages from some datacenter IPs).
   const [bing, ddg, yahoo] = await Promise.all([
     searchBingHtml(query),
     searchDuckDuckGo(query),
@@ -368,7 +432,11 @@ export async function searchWeb(query) {
   ]);
   /** @type {Array<{ url: string, title: string }>} */
   const out = [];
-  for (const hit of [...bing, ...ddg, ...yahoo]) {
+  const preferDdg = Array.isArray(ddg) && ddg.length > 0;
+  const ordered = preferDdg
+    ? [...ddg, ...yahoo, ...bing]
+    : [...bing, ...ddg, ...yahoo];
+  for (const hit of ordered) {
     if (!out.some((x) => x.url === hit.url)) out.push(hit);
   }
   return out;

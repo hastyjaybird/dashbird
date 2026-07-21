@@ -1,15 +1,135 @@
 {
-  "summaryText": "You have several updates regarding community discussions and upcoming local events in the Bay Area.",
-  "generatedAt": "2026-07-21T01:21:06.428Z",
+  "summaryText": "Recent emails include confirmations for orders and inquiries about events.",
+  "generatedAt": "2026-07-21T03:59:59.229Z",
   "lastScanYmd": "2026-07-20",
-  "lastScanAt": "2026-07-21T01:21:06.428Z",
+  "lastScanAt": "2026-07-21T03:59:59.229Z",
   "windowDays": 10,
   "items": [
     {
-      "id": "9930f978-71cc-4541-aec5-7fecfc563d44",
-      "title": "Review Alameda shoreline statement",
-      "company": "CASA",
-      "detail": "CASA: Carolyn Mason has drafted a statement for the Alameda City Council regarding living shorelines and is inviting others to edit or adopt it.",
+      "id": "7620906d-755d-49d3-9d8f-63c016fba83c",
+      "title": "Respond to inquiry about contributing to Phage",
+      "company": "Phage",
+      "detail": "Phage: Samstorm is interested in contributing to the camp and wants to learn more.",
+      "deadline": "2026-07-23T00:00:00.000Z",
+      "deadlineSource": "response_48h",
+      "needsReply": true,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152583",
+          "threadId": "19f82aa7c70f1ee3",
+          "subject": "Contributing to The Phage?",
+          "date": "2026-07-21T03:13:47.000Z",
+          "gmailId": "19f82aa7c70f1ee3",
+          "rfc822MessageId": "CAJFktQhGC27-cWHtWf6wdw35ZQRx1fWXc4MfHjeKXCxcjhymhw@mail.gmail.com"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-21T03:59:59.229Z",
+      "updatedAt": "2026-07-21T03:59:59.229Z",
+      "fingerprint": "cbc2c929e1100348",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "d7663e83-e201-4833-9962-d48b6aee63dd",
+      "title": "Review order confirmation",
+      "company": "Weee!",
+      "detail": "Weee!: Your order confirmation notification has been received.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "jay.intake.box@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "jay.intake.box@gmail.com",
+          "messageId": "2370",
+          "threadId": "19f82a1a84878c6f",
+          "subject": "Order confirmation notification - 97253896 - Weee!",
+          "date": "2026-07-21T03:04:20.000Z",
+          "gmailId": "19f82a1a84878c6f",
+          "rfc822MessageId": "20260721030420.8e6665ab22e02bbb@sayweee.com"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-21T03:59:59.229Z",
+      "updatedAt": "2026-07-21T03:59:59.229Z",
+      "fingerprint": "695b89cecda23f90",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "4cba22e1-3600-410a-8f56-c4c79dcf4f24",
+      "title": "Review BFC AI Gateway internship post",
+      "company": "Bay Area Founders Club",
+      "detail": "Bay Area Founders Club: BFC AI Gateway is recruiting interns for AI infrastructure and LLM roles.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "jay.intake.box@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "jay.intake.box@gmail.com",
+          "messageId": "2369",
+          "threadId": "19f82820378b1ceb",
+          "subject": "🚀 BFC AI Gateway is Recruiting Interns",
+          "date": "2026-07-21T02:28:41.000Z",
+          "gmailId": "19f82820378b1ceb",
+          "rfc822MessageId": "20260721022841.3.d78ecc52c29cbdba@mg-d0.substack.com"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-21T03:20:25.424Z",
+      "updatedAt": "2026-07-21T03:20:25.424Z",
+      "fingerprint": "93a49d787c55d4af",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "c826e2d2-6033-4607-ab9f-de86c8f56746",
+      "title": "Confirm order shipment details",
+      "company": "Lambda Water",
+      "detail": "Lambda Water: Your order #7323 is confirmed and will be shipped by July 27.",
+      "deadline": "2026-07-27T00:00:00.000Z",
+      "deadlineSource": "extracted",
+      "needsReply": false,
+      "mailboxes": [
+        "jay.intake.box@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "jay.intake.box@gmail.com",
+          "messageId": "2368",
+          "threadId": "19f826c2b9148641",
+          "subject": "Order #7323 confirmed",
+          "date": "2026-07-21T02:05:54.000Z",
+          "gmailId": "19f826c2b9148641",
+          "rfc822MessageId": "E1020004-18C42BD6D7275B4D-070ECB74@shopify.com"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-21T03:59:59.229Z",
+      "updatedAt": "2026-07-21T03:59:59.229Z",
+      "fingerprint": "e449f05d9f59c32e",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "583adfa4-d260-4a94-aec4-94b654fe2fad",
+      "title": "Review security alert",
+      "company": "Google",
+      "detail": "Google: A security alert was sent to your recovery email regarding a new sign-in to your account.",
       "deadline": null,
       "deadlineSource": "none",
       "needsReply": false,
@@ -19,27 +139,27 @@
       "sources": [
         {
           "email": "julia.hasty@gmail.com",
-          "messageId": "152580",
-          "threadId": "19f81d9faf5b26de",
-          "subject": "Oak Trees Protecting Our Shoreline in Alameda are in Peril!",
-          "date": "2026-07-20T23:25:57.000Z",
-          "gmailId": "19f81d9faf5b26de",
-          "rfc822MessageId": "CAEWroWp4zMeF=esjUODh8_0HjcpaRmQdyeRefDZBmCGXXSE8eg@mail.gmail.com"
+          "messageId": "152582",
+          "threadId": "19f8262eb11279c9",
+          "subject": "Security alert for jay.intake.box@gmail.com",
+          "date": "2026-07-21T01:55:47.000Z",
+          "gmailId": "19f8262eb11279c9",
+          "rfc822MessageId": "LrXhK2kTnxDC_GE7xADWXQ@notifications.google.com"
         }
       ],
       "status": "open",
       "pinned": false,
       "unpinDeleteAt": null,
-      "createdAt": "2026-07-21T01:21:06.428Z",
-      "updatedAt": "2026-07-21T01:21:06.428Z",
-      "fingerprint": "4bb5907755c8046a",
+      "createdAt": "2026-07-21T02:02:29.317Z",
+      "updatedAt": "2026-07-21T02:02:29.317Z",
+      "fingerprint": "70acf1c4e2b83f6c",
       "vikunjaTaskId": null
     },
     {
-      "id": "c544768f-9563-429f-bd90-d76c1e3f0937",
-      "title": "Open Sauce offer deadline",
+      "id": "b004f58a-6e95-4c85-8977-f151034e2eab",
+      "title": "Claim Open Sauce promo code before July 21",
       "company": "Snapmaker",
-      "detail": "Snapmaker: Open Sauce offer ends July 21 — decide whether to accept.",
+      "detail": "Snapmaker: Open Sauce offer ends July 21 – claim the promo code before the deadline.",
       "deadline": "2026-07-21T00:00:00.000Z",
       "deadlineSource": "extracted",
       "needsReply": false,
@@ -61,8 +181,8 @@
       "pinned": false,
       "unpinDeleteAt": null,
       "createdAt": "2026-07-20T21:56:20.991Z",
-      "updatedAt": "2026-07-20T21:56:20.991Z",
-      "fingerprint": "433aa4fbdfb779b7",
+      "updatedAt": "2026-07-21T02:42:15.758Z",
+      "fingerprint": "d11e4ed776fe9386",
       "vikunjaTaskId": null
     },
     {
@@ -90,8 +210,8 @@
       "status": "open",
       "pinned": false,
       "unpinDeleteAt": null,
-      "createdAt": "2026-07-21T01:21:06.428Z",
-      "updatedAt": "2026-07-21T01:21:06.428Z",
+      "createdAt": "2026-07-21T03:20:25.424Z",
+      "updatedAt": "2026-07-21T03:20:25.424Z",
       "fingerprint": "3b87cd30bd26111e",
       "vikunjaTaskId": null
     },
@@ -213,6 +333,36 @@
       "createdAt": "2026-07-19T06:00:01.086Z",
       "updatedAt": "2026-07-19T23:12:52.938Z",
       "fingerprint": "be0bf5b8da5fcefb",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "ea1a1602-a9e1-40d2-b26c-1c6a1c7462a7",
+      "title": "Return pressure washer",
+      "company": "Julia Hasty",
+      "detail": "Julia Hasty: Ensure the pressure washer is returned by the 23rd.",
+      "deadline": "2026-07-23T23:59:59.000Z",
+      "deadlineSource": "extracted",
+      "needsReply": true,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152547",
+          "threadId": "19f7245d3d7547f7",
+          "subject": "Notification: Jaybird to babysit Juniper @ Fri Jul 17, 2026 4pm - 10pm (PDT) (Jay Hasty)",
+          "date": "2026-07-17T22:50:06.000Z",
+          "gmailId": "19f7245d3d7547f7",
+          "rfc822MessageId": "calendar-472fc478-1901-4d6c-81b5-9e42db345bac@google.com"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-21T02:02:29.317Z",
+      "updatedAt": "2026-07-21T02:02:29.317Z",
+      "fingerprint": "ad18ceeb36e15062",
       "vikunjaTaskId": null
     },
     {
@@ -573,6 +723,36 @@
       "createdAt": "2026-07-16T07:41:24.611Z",
       "updatedAt": "2026-07-16T09:02:27.751Z",
       "fingerprint": "e8b405ead35fd922",
+      "vikunjaTaskId": null
+    },
+    {
+      "id": "9930f978-71cc-4541-aec5-7fecfc563d44",
+      "title": "Review Alameda shoreline statement",
+      "company": "CASA",
+      "detail": "CASA: Carolyn Mason has drafted a statement for the Alameda City Council regarding living shorelines and is inviting others to edit or adopt it.",
+      "deadline": null,
+      "deadlineSource": "none",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152580",
+          "threadId": "19f81d9faf5b26de",
+          "subject": "Oak Trees Protecting Our Shoreline in Alameda are in Peril!",
+          "date": "2026-07-20T23:25:57.000Z",
+          "gmailId": "19f81d9faf5b26de",
+          "rfc822MessageId": "CAEWroWp4zMeF=esjUODh8_0HjcpaRmQdyeRefDZBmCGXXSE8eg@mail.gmail.com"
+        }
+      ],
+      "status": "dismissed",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-21T01:21:06.428Z",
+      "updatedAt": "2026-07-21T01:54:21.567Z",
+      "fingerprint": "4bb5907755c8046a",
       "vikunjaTaskId": null
     },
     {
