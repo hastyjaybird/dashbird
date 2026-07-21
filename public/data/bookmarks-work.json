@@ -4,12 +4,8 @@
       "title": "Utilities",
       "items": [
         {
-          "word": "Keep",
-          "href": "https://keep.google.com/"
-        },
-        {
-          "word": "Maps",
-          "href": "https://maps.google.com/"
+          "word": "Claude",
+          "href": "https://claude.ai/"
         },
         {
           "word": "Drive",
@@ -17,8 +13,12 @@
           "icon": "/assets/tile-google-drive.svg"
         },
         {
-          "word": "Claude",
-          "href": "https://claude.ai/"
+          "word": "Maps",
+          "href": "https://maps.google.com/"
+        },
+        {
+          "word": "Keep",
+          "href": "https://keep.google.com/"
         }
       ]
     },

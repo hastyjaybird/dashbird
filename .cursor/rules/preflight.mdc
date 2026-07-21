@@ -1,0 +1,46 @@
+---
+description: Security preflight checklist run on the current diff when the user says "preflight" (usually before vet/commit/push/deploy). Also auto-applies when editing routes, fetch code, or env handling.
+globs: src/routes/**,src/lib/**,src/server.js,.env.example,deploy/**
+alwaysApply: false
+---
+
+# preflight
+
+When the user says **"preflight"** (e.g. "preflight, then vet, commit, push, deploy"), run a
+security self-check against the **current diff only** (changed lines, not the whole repo),
+then report `PASS` or a findings list. Only continue to vet/commit/push/deploy on `PASS` or
+after the user accepts the findings. See `docs/security-plan.md` for the full threat model.
+
+Check each changed hunk:
+
+1. **Outbound fetch** — any `fetch()` to a URL that is NOT a hardcoded literal must pass
+   `assertPublicHttpUrl` / `looksLikePublicHttpUrl` from `src/lib/public-http-url.js` before
+   the request. This is the most repeated gap in this app (SSRF via LLM/scraped/user URLs).
+
+   ```js
+   // ❌ BAD — url came from an LLM, scraped page, or request body
+   const r = await fetch(url);
+   // ✅ GOOD
+   const safe = await assertPublicHttpUrl(url);
+   const r = await fetch(safe);
+   ```
+
+2. **Untrusted → dangerous sink** — no LLM output or scraped/Telegram/Gmail/RSS content
+   flowing into `eval`, `new Function`, `child_process`/`spawn`/`exec`, `fs` path building,
+   or string-built SQL. Keep SQL parameterized (prepared statements).
+
+3. **Rendering** — untrusted strings use `.textContent` / DOM nodes, never `innerHTML`.
+
+4. **Secrets** — nothing logs or echoes a key/token; new secrets go in `.env.example` as
+   placeholders and are registered `secret: true` in `dashboard-settings-registry.js`.
+
+5. **New/changed routes** — state the auth tier (LAN is open, cloud is gated). Flag any route
+   that mutates data, spends API credits, sends messages, or drives the host.
+
+6. **Auth-exempt paths** — anything newly exempt from the auth gate must be rate-limited and
+   require a credential challenge (like `/auth/device-bind`). Treat device UUIDs as non-secret.
+
+7. **Destructive ops** — `rsync --delete`, `rm -rf`, DB migrations/merges: confirm a snapshot
+   or dry-run guard exists before overwrite.
+
+Report format: `preflight: PASS` or `preflight: N finding(s)` with file:line + the fix.

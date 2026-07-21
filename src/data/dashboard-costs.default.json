@@ -8,7 +8,7 @@
       "cadence": "usage",
       "weeklyUsd": 1.25,
       "monthlyBudgetUsd": 5,
-      "notes": "Free plan $5/mo credits \u00b7 daily 4am scrape \u00b7 measured from billing log",
+      "notes": "Free plan $5/mo credits · daily 4am scrape · measured from billing log",
       "measuredSource": "facebook-billing",
       "active": true
     },
@@ -18,7 +18,7 @@
       "category": "AI",
       "cadence": "usage",
       "weeklyUsd": 0,
-      "notes": "Account spend measured from OpenRouter key \u00b7 programs listed below (not separately metered) \u00b7 includes Daily Summary digest (scans every 30 min; free-first models)",
+      "notes": "Account spend measured from OpenRouter key · programs listed below (not separately metered) · includes Daily Summary digest (scans every 30 min; free-first models) · Tool Library “Search deeper” (manual; gpt-4o-mini fallback, sub-cent per run)",
       "active": true,
       "monthlyBudgetUsd": 5,
       "measuredSource": "openrouter-key"
@@ -29,7 +29,7 @@
       "category": "Dev tools",
       "cadence": "fixed_monthly",
       "weeklyUsd": 4.62,
-      "notes": "Pro ~$20/mo \u00f7 4.33 \u00b7 edit to match your plan share for Dashbird",
+      "notes": "Pro ~$20/mo ÷ 4.33 · edit to match your plan share for Dashbird",
       "active": true
     },
     {
@@ -38,7 +38,7 @@
       "category": "Events",
       "cadence": "free_tier",
       "weeklyUsd": 0,
-      "notes": "Intake Gmail OAuth \u00b7 personal free quota",
+      "notes": "Intake Gmail OAuth · personal free quota",
       "active": true
     },
     {
@@ -47,7 +47,7 @@
       "category": "Earth",
       "cadence": "optional",
       "weeklyUsd": 0,
-      "notes": "Optional wild-foraging key \u00b7 usually free",
+      "notes": "Optional wild-foraging key · usually free",
       "active": false
     },
     {
@@ -56,7 +56,7 @@
       "category": "Infra",
       "cadence": "optional",
       "weeklyUsd": 0,
-      "notes": "Optional cloud catalog \u00b7 local JSON is default",
+      "notes": "Optional cloud catalog · local JSON is default",
       "active": false
     },
     {
@@ -65,7 +65,7 @@
       "category": "Network",
       "cadence": "usage",
       "weeklyUsd": 0,
-      "notes": "Optional APOLLO_API_KEY \u00b7 org enrich credits for employees/revenue estimates \u00b7 set weeklyUsd after you have a plan",
+      "notes": "Optional APOLLO_API_KEY · org enrich credits for employees/revenue estimates · set weeklyUsd after you have a plan",
       "active": false
     }
   ]

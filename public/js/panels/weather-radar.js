@@ -38,11 +38,13 @@ function loadLeaflet() {
 }
 
 /**
+ * Mount the animated IEM precipitation radar (Leaflet) into a host element.
+ * Shared by the desktop sidebar card and the mobile radar popup.
  * @param {HTMLElement} hostEl
- * @param {object} data
- * @returns {() => void}
+ * @param {object} data Payload from `/api/weather-radar` (needs `data.radar`).
+ * @returns {() => void} Cleanup that tears the map down.
  */
-function mountIemLeaflet(hostEl, data) {
+export function mountIemLeaflet(hostEl, data) {
   const radar = data.radar;
   const frames = Array.isArray(radar?.frames) ? radar.frames : [];
   if (!radar || !frames.length) {

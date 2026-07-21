@@ -601,6 +601,13 @@ export function mountEventsFinderMobile(root) {
   let conferencePopoutKeyHandler = null;
   /** @type {HTMLElement | null} */
   let conferencePopoutStatusList = null;
+  /**
+   * Slugs pending a soft-delete. Value is the timeout id that will commit the
+   * DELETE unless the user hits Undo first.
+   * @type {Map<string, ReturnType<typeof setTimeout>>}
+   */
+  const pendingBigEventDeletes = new Map();
+  const BIG_EVENT_DELETE_DELAY_MS = 3000;
 
   function closeConferencePopout() {
     if (!conferencePopoutBackdrop) return;
@@ -722,13 +729,15 @@ export function mountEventsFinderMobile(root) {
    * @returns {HTMLElement}
    */
   function buildBigEventRow(item) {
+    if (pendingBigEventDeletes.has(String(item?.slug || ''))) {
+      return buildBigEventRemovingRow(item);
+    }
     const row = document.createElement('div');
     row.className = 'events-finder__big-events-row events-finder__big-events-row--mobile';
 
-    const main = document.createElement('button');
-    main.type = 'button';
+    const main = document.createElement('div');
     main.className = 'events-finder__big-events-mobile-main';
-    main.title = 'View details';
+    const rowUrl = String(item.homepageUrl || item.url || '').trim();
     const rowThumb = item.flierImageUrl || item.flierUrl || item.screenshotUrl;
     if (rowThumb) {
       const thumb = document.createElement('img');
@@ -740,9 +749,16 @@ export function mountEventsFinderMobile(root) {
     }
     const textWrap = document.createElement('div');
     textWrap.className = 'events-finder__big-events-mobile-text';
-    const name = document.createElement('span');
+    // Name links straight to the official site — no detail popup.
+    const name = document.createElement(rowUrl ? 'a' : 'span');
     name.className = 'events-finder__big-events-name-text';
     name.textContent = String(item.title || item.query || 'Big event');
+    if (rowUrl) {
+      name.href = rowUrl;
+      name.target = '_blank';
+      name.rel = 'noopener noreferrer';
+      name.title = 'Open official site';
+    }
     const when = document.createElement('span');
     when.className = 'events-finder__big-events-mobile-when muted';
     when.textContent = String(item.whenLabel || (item.researching ? 'Looking up…' : 'Dates TBD'));
@@ -775,6 +791,13 @@ export function mountEventsFinderMobile(root) {
       sl.textContent = String(item.salesStartLine);
       textWrap.append(sl);
     }
+    const descText = String(item.notes || '').trim();
+    if (descText) {
+      const desc = document.createElement('span');
+      desc.className = 'events-finder__big-events-mobile-desc muted';
+      desc.textContent = descText;
+      textWrap.append(desc);
+    }
     if (item.ticketUrl) {
       const tlink = document.createElement('a');
       tlink.className = 'events-finder__big-events-ticketlink';
@@ -785,9 +808,23 @@ export function mountEventsFinderMobile(root) {
       tlink.addEventListener('click', (e) => e.stopPropagation());
       textWrap.append(tlink);
     }
+    if (item.manualEdit) {
+      const editedTag = document.createElement('span');
+      editedTag.className = 'events-finder__big-events-edited-tag';
+      editedTag.textContent = 'edited';
+      editedTag.title = 'Hand-edited — auto research is paused for this event';
+      textWrap.append(editedTag);
+    }
     main.append(textWrap);
-    main.addEventListener('click', () => openConferenceDetailPopout(item));
 
+    const actions = document.createElement('div');
+    actions.className = 'events-finder__big-events-mobile-actions';
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'events-finder__big-events-edit-btn';
+    editBtn.setAttribute('aria-label', `Edit ${item.title || item.query || 'event'}`);
+    editBtn.title = 'Edit details';
+    editBtn.textContent = 'Edit';
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'events-finder__big-events-remove';
@@ -796,11 +833,168 @@ export function mountEventsFinderMobile(root) {
     del.textContent = '×';
     del.addEventListener('click', (e) => {
       e.stopPropagation();
-      void removeBigEvent(item);
+      scheduleBigEventDelete(item);
+    });
+    actions.append(editBtn, del);
+
+    const editor = buildBigEventEditor(item);
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      editor.hidden = !editor.hidden;
+      editBtn.classList.toggle('events-finder__big-events-edit-btn--on', !editor.hidden);
+      if (!editor.hidden) {
+        const first = editor.querySelector('input, textarea');
+        if (first instanceof HTMLElement) first.focus();
+      }
     });
 
-    row.append(main, del);
+    row.append(main, actions, editor);
     return row;
+  }
+
+  /**
+   * Compact inline editor for one big event's metadata (mobile). Saving
+   * hand-edits the record (locks it from auto-research); "Re-research" discards.
+   * @param {object} item
+   * @returns {HTMLElement}
+   */
+  function buildBigEventEditor(item) {
+    const wrap = document.createElement('div');
+    wrap.className = 'events-finder__big-events-edit';
+    wrap.hidden = true;
+
+    /**
+     * @param {string} label
+     * @param {'text'|'url'|'date'|'textarea'} type
+     * @param {string} value
+     */
+    const field = (label, type, value) => {
+      const lab = document.createElement('label');
+      lab.className = 'events-finder__big-events-edit-field';
+      const span = document.createElement('span');
+      span.className = 'events-finder__big-events-edit-label';
+      span.textContent = label;
+      const input =
+        type === 'textarea' ? document.createElement('textarea') : document.createElement('input');
+      if (input instanceof HTMLInputElement) input.type = type;
+      input.className = 'events-finder__big-events-edit-input';
+      input.value = value == null ? '' : String(value);
+      lab.append(span, input);
+      wrap.append(lab);
+      return input;
+    };
+
+    const startVal = item.eventStart || (item.start ? String(item.start).slice(0, 10) : '');
+    const endVal = item.eventEnd || (item.end ? String(item.end).slice(0, 10) : '');
+
+    const nameI = field('Name', 'text', item.title || item.query || '');
+    const urlI = field('Official site URL', 'url', item.homepageUrl || item.url || '');
+    const ticketI = field('Tickets URL', 'url', item.ticketUrl || '');
+    const startI = field('Start date', 'date', startVal);
+    const endI = field('End date', 'date', endVal);
+    const venueI = field('Venue', 'text', item.venue || '');
+    const cityI = field('City', 'text', item.city || '');
+    const priceI = field('Ticket price', 'text', item.ticketPrice || '');
+    const salesI = field('On-sale date', 'date', item.ticketSalesStart || '');
+    const ebPriceI = field('Early bird price', 'text', item.earlyBirdPrice || '');
+    const ebStartI = field('Early bird start', 'date', item.earlyBirdStart || '');
+    const ebEndI = field('Early bird end', 'date', item.earlyBirdEnd || '');
+    const notesI = field('Description', 'textarea', item.notes || '');
+
+    const actions = document.createElement('div');
+    actions.className = 'events-finder__big-events-edit-actions';
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'events-finder__big-events-confirm';
+    saveBtn.textContent = 'Save';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'events-finder__big-events-again';
+    cancelBtn.textContent = 'Cancel';
+    const researchBtn = document.createElement('button');
+    researchBtn.type = 'button';
+    researchBtn.className = 'events-finder__big-events-again';
+    researchBtn.textContent = 'Re-research';
+    researchBtn.title = 'Discard manual edits and re-fetch from the web';
+    const editMsg = document.createElement('span');
+    editMsg.className = 'events-finder__big-events-edit-msg muted';
+    actions.append(saveBtn, cancelBtn, researchBtn, editMsg);
+    wrap.append(actions);
+
+    const setMsg = (text, kind) => {
+      editMsg.textContent = text || '';
+      editMsg.className = `events-finder__big-events-edit-msg${kind === 'error' ? ' events-finder__big-events-edit-msg--error' : ' muted'}`;
+    };
+
+    cancelBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      wrap.hidden = true;
+    });
+
+    saveBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+      setMsg('');
+      try {
+        const body = {
+          name: nameI.value.trim(),
+          homepageUrl: urlI.value.trim(),
+          ticketUrl: ticketI.value.trim(),
+          eventStart: startI.value,
+          eventEnd: endI.value,
+          venue: venueI.value.trim(),
+          city: cityI.value.trim(),
+          ticketPrice: priceI.value.trim(),
+          ticketSalesStart: salesI.value,
+          earlyBirdPrice: ebPriceI.value.trim(),
+          earlyBirdStart: ebStartI.value,
+          earlyBirdEnd: ebEndI.value,
+          notes: notesI.value.trim(),
+        };
+        const res = await fetch(
+          `/api/events-finder/big-events/${encodeURIComponent(item.slug)}`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          },
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        void refreshBigEventsFromStore();
+        reloadBigEventsSoon();
+      } catch (err) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save';
+        setMsg(`Could not save: ${String(err?.message || err)}`, 'error');
+      }
+    });
+
+    researchBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!window.confirm('Discard manual edits and re-fetch this event from the web?')) return;
+      researchBtn.disabled = true;
+      setMsg('Re-researching… this can take a moment.');
+      try {
+        const res = await fetch('/api/events-finder/big-events/research', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: item.query || item.title }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        setTimeout(() => {
+          void refreshBigEventsFromStore();
+          reloadBigEventsSoon();
+        }, 4000);
+      } catch (err) {
+        researchBtn.disabled = false;
+        setMsg(`Could not re-research: ${String(err?.message || err)}`, 'error');
+      }
+    });
+
+    return wrap;
   }
 
   /**
@@ -873,10 +1067,62 @@ export function mountEventsFinderMobile(root) {
     }
   }
 
-  async function removeBigEvent(item) {
+  /** Repaint the tracked list from the cached payload (instant, no network). */
+  function repaintBigEventsTable() {
+    if (conferencePopoutStatusList) {
+      paintBigEventsTable(conferenceWatchItemsFromPayload(), conferencePopoutStatusList);
+    }
+  }
+
+  /**
+   * "Removing" placeholder row shown for the 3s undo window.
+   * @param {object} item
+   * @returns {HTMLElement}
+   */
+  function buildBigEventRemovingRow(item) {
+    const row = document.createElement('div');
+    row.className =
+      'events-finder__big-events-row events-finder__big-events-row--mobile events-finder__big-events-row--removing';
+    const label = document.createElement('span');
+    label.className = 'events-finder__big-events-removing-label';
+    label.textContent = `Removed “${item.title || item.query || 'event'}”`;
+    const undo = document.createElement('button');
+    undo.type = 'button';
+    undo.className = 'events-finder__big-events-undo';
+    undo.textContent = 'Undo';
+    undo.addEventListener('click', (e) => {
+      e.stopPropagation();
+      undoBigEventDelete(item);
+    });
+    row.append(label, undo);
+    return row;
+  }
+
+  /** Start a 3s soft-delete for one event (no confirm dialog; Undo available). */
+  function scheduleBigEventDelete(item) {
+    const slug = String(item?.slug || '').trim();
+    if (!slug || pendingBigEventDeletes.has(slug)) return;
+    const timer = setTimeout(() => {
+      void commitBigEventDelete(item);
+    }, BIG_EVENT_DELETE_DELAY_MS);
+    pendingBigEventDeletes.set(slug, timer);
+    repaintBigEventsTable();
+  }
+
+  /** Cancel a pending soft-delete and restore the row. */
+  function undoBigEventDelete(item) {
+    const slug = String(item?.slug || '').trim();
+    const timer = pendingBigEventDeletes.get(slug);
+    if (timer) clearTimeout(timer);
+    pendingBigEventDeletes.delete(slug);
+    repaintBigEventsTable();
+  }
+
+  /** Actually delete the event once the undo window elapses. */
+  async function commitBigEventDelete(item) {
     const slug = String(item?.slug || '').trim();
     if (!slug) return;
-    if (!window.confirm(`Remove "${item.title || item.query || 'this event'}" from Big events?`)) return;
+    pendingBigEventDeletes.delete(slug);
     try {
       const res = await fetch(`/api/events-finder/big-events/${encodeURIComponent(slug)}`, {
         method: 'DELETE',
@@ -887,6 +1133,7 @@ export function mountEventsFinderMobile(root) {
       void loadEvents();
     } catch (e) {
       window.alert(`Could not remove: ${String(e?.message || e)}`);
+      void refreshBigEventsFromStore();
     }
   }
 
@@ -932,11 +1179,16 @@ export function mountEventsFinderMobile(root) {
     input.className = 'events-finder__big-events-input';
     input.placeholder = 'e.g. open sauce';
     input.autocomplete = 'off';
+    const urlInput = document.createElement('input');
+    urlInput.type = 'url';
+    urlInput.className = 'events-finder__big-events-input events-finder__big-events-input--url';
+    urlInput.placeholder = 'Event URL (optional — leave blank to auto-find)';
+    urlInput.autocomplete = 'off';
     const searchBtn = document.createElement('button');
     searchBtn.type = 'button';
     searchBtn.className = 'events-finder__big-events-search';
     searchBtn.textContent = 'Search';
-    form.append(input, searchBtn);
+    form.append(input, urlInput, searchBtn);
 
     const msg = document.createElement('p');
     msg.className = 'events-finder__big-events-msg muted';
@@ -965,6 +1217,17 @@ export function mountEventsFinderMobile(root) {
       msg.className = `events-finder__big-events-msg${kind ? ` events-finder__big-events-msg--${kind}` : ' muted'}`;
     }
 
+    /** Prefix a bare host with https:// so a pasted URL is usable. */
+    function normalizeManualUrl(raw) {
+      const v = String(raw || '').trim();
+      if (!v) return '';
+      return /^https?:\/\//i.test(v) ? v : `https://${v}`;
+    }
+
+    function updatePrimaryLabel() {
+      searchBtn.textContent = urlInput.value.trim() ? 'Add' : 'Search';
+    }
+
     function resetAddFlow() {
       form.hidden = true;
       addToggle.hidden = false;
@@ -972,7 +1235,37 @@ export function mountEventsFinderMobile(root) {
       preview.replaceChildren();
       pendingPreview = null;
       input.value = '';
+      urlInput.value = '';
+      updatePrimaryLabel();
       setMsg('');
+    }
+
+    /**
+     * Primary action: with a URL typed, skip the web search and confirm that
+     * exact site (it gets scraped for details). Blank URL → auto-find as before.
+     */
+    function submitAdd() {
+      const manualUrl = normalizeManualUrl(urlInput.value);
+      if (manualUrl) {
+        const query = input.value.trim();
+        if (!query) {
+          input.focus();
+          return;
+        }
+        pendingPreview = { query, url: manualUrl, homepageUrl: manualUrl, ticketUrl: null };
+        renderPreview({
+          name: query,
+          query,
+          url: manualUrl,
+          homepageUrl: manualUrl,
+          urlFound: true,
+          manual: true,
+          deep: true,
+        });
+        setMsg('');
+        return;
+      }
+      void runSearch();
     }
 
     async function runSearch(deep = false) {
@@ -1101,13 +1394,16 @@ export function mountEventsFinderMobile(root) {
       addToggle.hidden = true;
       input.focus();
     });
-    searchBtn.addEventListener('click', () => void runSearch());
-    input.addEventListener('keydown', (e) => {
+    searchBtn.addEventListener('click', () => submitAdd());
+    urlInput.addEventListener('input', updatePrimaryLabel);
+    const onAddEnter = (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        void runSearch();
+        submitAdd();
       }
-    });
+    };
+    input.addEventListener('keydown', onAddEnter);
+    urlInput.addEventListener('keydown', onAddEnter);
 
     openConferencePopout({
       title: 'Big events',
@@ -1679,7 +1975,18 @@ export function mountEventsFinderMobile(root) {
 
     const title = document.createElement('h3');
     title.className = 'events-finder__conference-detail-title';
-    title.textContent = String(item.title || item.query || 'Big event');
+    const detailTitleText = String(item.title || item.query || 'Big event');
+    if (eventUrl) {
+      const titleLink = document.createElement('a');
+      titleLink.className = 'events-finder__card-title-link';
+      titleLink.href = eventUrl;
+      titleLink.target = '_blank';
+      titleLink.rel = 'noopener noreferrer';
+      titleLink.textContent = detailTitleText;
+      title.append(titleLink);
+    } else {
+      title.textContent = detailTitleText;
+    }
     body.append(title);
 
     const detailImage = item.flierImageUrl || item.flierUrl || item.screenshotUrl;
@@ -2468,6 +2775,8 @@ export function mountEventsFinderMobile(root) {
   function buildBigEventCard(item) {
     const card = document.createElement('article');
     card.className = 'mobile-events__card mobile-events__card--big-event';
+    const eventHref = String(item.url || item.homepageUrl || '').trim();
+    const ticketHref = String(item.ticketUrl || item.homepageUrl || item.url || '').trim();
 
     const row = document.createElement('div');
     row.className = 'mobile-events__row';
@@ -2500,7 +2809,20 @@ export function mountEventsFinderMobile(root) {
     head.className = 'mobile-events__head';
     const title = document.createElement('h3');
     title.className = 'mobile-events__title';
-    title.textContent = String(item.title || item.query || 'Big event');
+    const titleText = String(item.title || item.query || 'Big event');
+    const titleUrl = String(item.url || item.homepageUrl || '').trim();
+    if (titleUrl) {
+      const titleLink = document.createElement('a');
+      titleLink.className = 'events-finder__card-title-link';
+      titleLink.href = titleUrl;
+      titleLink.target = '_blank';
+      titleLink.rel = 'noopener noreferrer';
+      titleLink.textContent = titleText;
+      titleLink.addEventListener('click', (e) => e.stopPropagation());
+      title.append(titleLink);
+    } else {
+      title.textContent = titleText;
+    }
     const badge = document.createElement('span');
     badge.className = 'events-finder__card-bigbadge';
     badge.textContent = 'Big event';
@@ -2510,16 +2832,32 @@ export function mountEventsFinderMobile(root) {
     meta.className = 'mobile-events__meta';
     const bits = [item.whenLabel || 'Dates TBD'];
     if (item.placeLabel) bits.push(String(item.placeLabel));
-    if (item.ticketLabel) bits.push(String(item.ticketLabel));
     meta.textContent = bits.filter(Boolean).join(' · ');
+
+    // Price on its own line, green + bold (consistent across all event cards).
+    const priceEl = document.createElement('p');
+    priceEl.className = 'events-finder__card-price';
+    if (item.ticketLabel) priceEl.textContent = String(item.ticketLabel);
+    else priceEl.hidden = true;
 
     const statusLine = document.createElement('p');
     statusLine.className = 'mobile-events__meta';
-    const statusPill = document.createElement('span');
+    const statusPill = document.createElement(ticketHref ? 'a' : 'span');
     statusPill.className = `events-finder__big-events-status events-finder__big-events-status--${item.salesStatusKind || 'unknown'}`;
     statusPill.textContent = String(item.salesStatus || '—');
+    if (ticketHref) {
+      statusPill.href = ticketHref;
+      statusPill.target = '_blank';
+      statusPill.rel = 'noopener noreferrer';
+      statusPill.title = 'Open ticket page';
+      statusPill.addEventListener('click', (e) => e.stopPropagation());
+    }
     statusLine.append(statusPill);
-    const extra = item.earlyBirdNote || item.salesStartLine || item.earlyBirdLine;
+    // Keep genuinely-different early-bird notes, but never repeat the plain
+    // price (shown on the price line) nor the on-sale date (shown in the pill).
+    const extra =
+      item.earlyBirdNote
+      || (item.earlyBirdKind !== 'price' ? item.earlyBirdLine : null);
     if (extra) {
       const ex = document.createElement('span');
       ex.className = 'events-finder__big-events-earlybird';
@@ -2566,10 +2904,15 @@ export function mountEventsFinderMobile(root) {
 
     actions.append(snoozeBtn, skipBtn, calBtn);
 
-    body.append(head, meta, statusLine, actions);
+    body.append(head, meta, priceEl, statusLine, actions);
     row.append(icon, body);
     card.append(row);
-    card.addEventListener('click', () => openConferenceDetailPopout(item));
+    if (eventHref) {
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('a, button')) return;
+        window.open(eventHref, '_blank', 'noopener,noreferrer');
+      });
+    }
     return card;
   }
 
@@ -2646,9 +2989,14 @@ export function mountEventsFinderMobile(root) {
     if (ev.online || ev.isOnline) bits.push('Online');
     else if (ev.city) bits.push(String(ev.city));
     if (Number.isFinite(ev.distanceMiles)) bits.push(`${Math.round(ev.distanceMiles)} mi`);
-    const priceLabel = String(ev.priceLabel || '').trim();
-    if (priceLabel) bits.push(priceLabel);
     meta.textContent = bits.filter(Boolean).join(' · ');
+
+    // Price on its own line, green + bold (consistent across all event cards).
+    const priceLabel = String(ev.priceLabel || '').trim();
+    const priceEl = document.createElement('p');
+    priceEl.className = 'events-finder__card-price';
+    if (priceLabel) priceEl.textContent = priceLabel;
+    else priceEl.hidden = true;
 
     const actions = document.createElement('div');
     actions.className = 'mobile-events__actions';
@@ -2715,7 +3063,7 @@ export function mountEventsFinderMobile(root) {
 
     if (showSkipped) actions.append(hideBtn, calBtn);
     else actions.append(upBtn, downBtn, hideBtn, calBtn);
-    body.append(head, meta, actions);
+    body.append(head, meta, priceEl, actions);
     row.append(icon, body);
     card.append(row);
 

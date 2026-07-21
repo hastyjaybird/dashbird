@@ -1,9 +1,54 @@
 /**
  * Gmail web + native app deep links for Daily Summary "Open".
  *
- * Hex API ids in `#all/{id}` are unreliable on a cold browser load (often inbox only).
- * Prefer rfc822msgid search, then `#inbox/{threadId}`, then `#all/` as last resort.
+ * A bare `mail.google.com/mail/u/?authuser=…#…` link loses its #fragment when
+ * Google bounces through account selection (script redirect), stranding the
+ * click on the inbox. Routing through accounts.google.com/AccountChooser with
+ * the full target (fragment percent-encoded) inside `continue` survives that
+ * bounce, so the deep link reaches the Gmail UI intact.
+ *
+ * Prefer the thread view (`#all/{threadId}`) so the email itself opens, then
+ * rfc822msgid search, then hex `#all/` ids — IMAP decimal UIDs never work.
  */
+
+/** @param {unknown} value */
+function hexId(value) {
+  const v = String(value || '').trim();
+  return /^[0-9a-f]+$/i.test(v) && !/^\d+$/.test(v) ? v.toLowerCase() : '';
+}
+
+/**
+ * @param {{
+ *   threadId?: string,
+ *   gmailId?: string,
+ *   messageId?: string,
+ *   rfc822MessageId?: string,
+ *   subject?: string,
+ * } | null | undefined} source
+ * @returns {string} Gmail UI hash (without leading '#'), or ''.
+ */
+function gmailTargetHash(source) {
+  const threadId = hexId(source?.threadId);
+  if (threadId) return `all/${threadId}`;
+
+  const rfc = String(source?.rfc822MessageId || '')
+    .trim()
+    .replace(/^<|>$/g, '');
+  if (rfc) return `search/${encodeURIComponent(`rfc822msgid:${rfc}`)}`;
+
+  const gmailId = hexId(source?.gmailId);
+  if (gmailId) return `all/${gmailId}`;
+
+  const apiId = hexId(source?.messageId);
+  if (apiId) return `all/${apiId}`;
+
+  const subject = String(source?.subject || '').trim();
+  if (subject) return `search/${encodeURIComponent(`subject:${subject}`)}`;
+
+  const rawId = String(source?.messageId || '').trim();
+  if (rawId) return `search/${encodeURIComponent(rawId)}`;
+  return '';
+}
 
 /**
  * @param {{
@@ -17,42 +62,19 @@
  */
 export function gmailWebMessageUrl(source) {
   if (!source?.email) return '';
-  const email = encodeURIComponent(String(source.email).trim().toLowerCase());
-  const base = `https://mail.google.com/mail/u/?authuser=${email}`;
-
-  const rfc = String(source.rfc822MessageId || '')
-    .trim()
-    .replace(/^<|>$/g, '');
-  if (rfc) {
-    return `${base}#search/${encodeURIComponent(`rfc822msgid:${rfc}`)}`;
-  }
-
-  const threadId = String(source.threadId || '').trim();
-  if (threadId && /^[0-9a-f]+$/i.test(threadId) && !/^\d+$/.test(threadId)) {
-    return `${base}#inbox/${threadId.toLowerCase()}`;
-  }
-
-  const gmailId = String(source.gmailId || '').trim().toLowerCase();
-  if (gmailId && /^[0-9a-f]+$/.test(gmailId) && !/^\d+$/.test(gmailId)) {
-    return `${base}#all/${gmailId}`;
-  }
-
-  const apiId = String(source.messageId || '').trim();
-  if (apiId && /^[0-9a-f]+$/i.test(apiId) && !/^\d+$/.test(apiId)) {
-    return `${base}#all/${apiId.toLowerCase()}`;
-  }
-
-  const subject = String(source.subject || '').trim();
-  if (subject) {
-    return `${base}#search/${encodeURIComponent(`subject:${subject}`)}`;
-  }
-  if (apiId) {
-    return `${base}#search/${encodeURIComponent(apiId)}`;
-  }
-  return '';
+  const email = String(source.email).trim().toLowerCase();
+  const hash = gmailTargetHash(source);
+  if (!hash) return '';
+  const target = `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(email)}#${hash}`;
+  return (
+    'https://accounts.google.com/AccountChooser'
+    + `?Email=${encodeURIComponent(email)}`
+    + `&continue=${encodeURIComponent(target)}`
+  );
 }
 
 /**
+ * iOS Gmail app deep link (the googlegmail:// scheme is iOS-only).
  * @param {{
  *   threadId?: string,
  *   gmailId?: string,
@@ -63,7 +85,8 @@ export function gmailWebMessageUrl(source) {
  * @returns {string}
  */
 function gmailNativeAppUrl(source) {
-  const threadId = String(source?.threadId || '').trim();
+  // IMAP decimal UIDs are not routable thread ids — hex only.
+  const threadId = hexId(source?.threadId);
   if (threadId) {
     return `googlegmail:///cv?th=${encodeURIComponent(threadId)}`;
   }
@@ -73,9 +96,9 @@ function gmailNativeAppUrl(source) {
   if (rfc) {
     return `googlegmail:///search?q=${encodeURIComponent(`rfc822msgid:${rfc}`)}`;
   }
-  const msgId = String(source?.gmailId || source?.messageId || '').trim();
-  if (msgId && /^[0-9a-f]+$/i.test(msgId) && !/^\d+$/.test(msgId)) {
-    return `googlegmail:///cv?id=${encodeURIComponent(msgId.toLowerCase())}`;
+  const msgId = hexId(source?.gmailId) || hexId(source?.messageId);
+  if (msgId) {
+    return `googlegmail:///cv?id=${encodeURIComponent(msgId)}`;
   }
   const subject = String(source?.subject || '').trim();
   if (subject) {
@@ -85,28 +108,11 @@ function gmailNativeAppUrl(source) {
 }
 
 /**
- * @param {string} webUrl
- * @returns {string}
- */
-function gmailNativeAppUrlFromWebSearch(webUrl) {
-  const url = String(webUrl || '').trim();
-  const hashIdx = url.indexOf('#');
-  if (hashIdx < 0) return '';
-  const hash = url.slice(hashIdx + 1);
-  if (!hash.startsWith('search/')) return '';
-  let q = hash.slice('search/'.length);
-  try {
-    q = decodeURIComponent(q);
-  } catch {
-    /* keep encoded */
-  }
-  if (!q) return '';
-  return `googlegmail:///search?q=${encodeURIComponent(q)}`;
-}
-
-/**
- * Resolve a Gmail web deep link for mobile native app handoff when possible.
- * Desktop callers should keep the original https://mail.google.com URL.
+ * Resolve the best "Open" href for mobile.
+ *
+ * iOS: hand off to the Gmail app via its googlegmail:// scheme when possible.
+ * Android: the googlegmail:// scheme is not supported and intent:// wrappers
+ * break the AccountChooser hop, so use the web URL as-is.
  *
  * @param {string} webUrl
  * @param {{
@@ -119,25 +125,11 @@ function gmailNativeAppUrlFromWebSearch(webUrl) {
  */
 export function gmailMobileOpenUrl(webUrl, source = null) {
   const url = String(webUrl || '').trim();
-  const native =
-    gmailNativeAppUrl(source)
-    || gmailNativeAppUrlFromWebSearch(url);
-  if (native) return native;
-
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-  const isAndroid = /Android/i.test(ua);
-
-  if (isAndroid) {
-    // Intent URLs use `#Intent;` — a web hash like `#all/…` is stripped and lands on inbox.
-    if (url.includes('#')) return url;
-    const path = url.replace(/^https:\/\//i, '');
-    return (
-      `intent://${path}#Intent;scheme=https;action=android.intent.action.VIEW;`
-      + 'category=android.intent.category.BROWSABLE;package=com.google.android.gm;'
-      + `S.browser_fallback_url=${encodeURIComponent(url)};end`
-    );
+  if (/iPhone|iPad|iPod/i.test(ua)) {
+    const native = gmailNativeAppUrl(source);
+    if (native) return native;
   }
-
   return url;
 }
 

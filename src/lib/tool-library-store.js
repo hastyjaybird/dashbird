@@ -151,6 +151,52 @@ export async function setToolFavorite(id, favorite) {
   return next;
 }
 
+/** Metadata fields a user may hand-edit on a tool card. */
+export const EDITABLE_TOOL_FIELDS = [
+  'name',
+  'url',
+  'website',
+  'bestUsedFor',
+  'categories',
+  'operatingSystems',
+  'pricing',
+  'rating',
+  'ratingSource',
+  'features',
+  'pros',
+  'cons',
+];
+
+/**
+ * Merge a whitelisted metadata patch onto an existing tool. Preserves id/addedAt.
+ * @param {string} id
+ * @param {Partial<ToolRecord>} patch
+ * @returns {Promise<ToolRecord | null>}
+ */
+export async function updateTool(id, patch = {}) {
+  const editable = new Set(EDITABLE_TOOL_FIELDS);
+  const run = async () => {
+    const data = await loadToolLibrary();
+    const idx = data.tools.findIndex((t) => t.id === id);
+    if (idx < 0) return null;
+    const prev = data.tools[idx];
+    const next = { ...prev };
+    for (const [key, value] of Object.entries(patch)) {
+      if (!editable.has(key)) continue;
+      next[key] = value;
+    }
+    next.id = prev.id;
+    next.addedAt = prev.addedAt;
+    next.updatedAt = new Date().toISOString();
+    data.tools[idx] = next;
+    await writeToolLibraryFile(data);
+    return next;
+  };
+  const next = toolLibraryWriteChain.then(run, run);
+  toolLibraryWriteChain = next.catch(() => {});
+  return next;
+}
+
 /**
  * @param {string} url
  */

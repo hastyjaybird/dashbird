@@ -599,6 +599,17 @@ function buildToolCard(card, tool) {
 
   const foot = el('div');
   foot.className = 'tool-library__card-foot';
+  const editBtn = el('button');
+  editBtn.type = 'button';
+  editBtn.className = 'tool-library__card-alt tool-library__card-edit';
+  editBtn.textContent = 'edit';
+  editBtn.title = 'Edit this tool’s details';
+  editBtn.setAttribute('aria-label', `Edit ${tool.name || 'this tool'}`);
+  editBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openEditModal(tool, card.closest('.tool-library'));
+  });
   const altBtn = el('button');
   altBtn.type = 'button';
   altBtn.className = 'tool-library__card-alt';
@@ -612,7 +623,7 @@ function buildToolCard(card, tool) {
     if (!q) return;
     openOnlineSearchModal(q, card.closest('.tool-library'));
   });
-  foot.append(altBtn);
+  foot.append(editBtn, altBtn);
 
   card.append(pick, favBtn, snap, logoRow, meta, ...(catRow ? [catRow] : []), blurb, foot);
   card.addEventListener('click', (e) => {
@@ -1180,6 +1191,337 @@ function openImportModal(root) {
   backdrop.append(modal);
   document.body.append(backdrop);
   chooseBtn.focus();
+}
+
+function splitCommaList(value) {
+  return String(value || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function splitLineList(value) {
+  return String(value || '')
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Labeled form control row for the edit modal.
+ * @param {string} labelText
+ * @param {HTMLElement} control
+ */
+function editField(labelText, control) {
+  const wrap = el('label');
+  wrap.className = 'tool-library__edit-field';
+  const span = el('span');
+  span.className = 'tool-library__edit-label';
+  span.textContent = labelText;
+  wrap.append(span, control);
+  return wrap;
+}
+
+/**
+ * Edit a tool's metadata. Mirrors the Save flow used elsewhere: fields load from
+ * the current tool, a Save button persists via PUT, and the grid refreshes locally.
+ * @param {object} tool
+ * @param {HTMLElement} root
+ */
+function openEditModal(tool, root) {
+  if (!tool || !root) return;
+  const backdrop = el('div');
+  backdrop.className = 'tool-library__modal-backdrop';
+  const modal = el('div');
+  modal.className = 'tool-library__modal tool-library__modal--wide';
+
+  const h = el('h3');
+  h.className = 'tool-library__modal-title';
+  h.textContent = `Edit ${tool.name || 'tool'}`;
+
+  const form = el('form');
+  form.className = 'tool-library__edit-form';
+
+  const textInput = (value) => {
+    const input = el('input');
+    input.type = 'text';
+    input.className = 'tool-library__modal-input tool-library__edit-input';
+    input.value = value == null ? '' : String(value);
+    return input;
+  };
+  const areaInput = (value, rows = 2) => {
+    const ta = el('textarea');
+    ta.className = 'tool-library__modal-input tool-library__edit-input tool-library__edit-area';
+    ta.rows = rows;
+    ta.value = value == null ? '' : String(value);
+    return ta;
+  };
+
+  const nameInput = textInput(tool.name);
+  const siteInput = textInput(tool.website || tool.url);
+  const blurbInput = areaInput(tool.bestUsedFor, 3);
+  const catsInput = textInput((tool.categories || []).join(', '));
+  const osInput = textInput((tool.operatingSystems || []).join(', '));
+
+  const modelSelect = el('select');
+  modelSelect.className = 'tool-library__modal-input tool-library__edit-input';
+  for (const opt of ['unknown', 'free', 'freemium', 'paid']) {
+    const o = el('option');
+    o.value = opt;
+    o.textContent = opt;
+    modelSelect.append(o);
+  }
+  modelSelect.value = ['unknown', 'free', 'freemium', 'paid'].includes(
+    String(tool.pricing?.model || '').toLowerCase(),
+  )
+    ? String(tool.pricing.model).toLowerCase()
+    : 'unknown';
+  const tierInput = textInput(tool.pricing?.lowestTier);
+  tierInput.placeholder = 'e.g. Free / $12/mo';
+  const pricingSummaryInput = textInput(tool.pricing?.summary);
+
+  const ratingInput = el('input');
+  ratingInput.type = 'number';
+  ratingInput.min = '0';
+  ratingInput.max = '5';
+  ratingInput.step = '0.1';
+  ratingInput.className = 'tool-library__modal-input tool-library__edit-input';
+  ratingInput.value =
+    tool.rating == null || !Number.isFinite(Number(tool.rating)) ? '' : String(tool.rating);
+  const ratingSourceInput = textInput(tool.ratingSource);
+  ratingSourceInput.placeholder = 'e.g. g2';
+
+  const featuresInput = areaInput((tool.features || []).join('\n'), 3);
+  featuresInput.placeholder = 'One feature per line';
+  const prosInput = areaInput((tool.pros || []).join('\n'), 2);
+  prosInput.placeholder = 'One per line';
+  const consInput = areaInput((tool.cons || []).join('\n'), 2);
+  consInput.placeholder = 'One per line';
+
+  form.append(
+    editField('Name', nameInput),
+    editField('Website', siteInput),
+    editField('Best used for', blurbInput),
+    editField('Categories (comma separated)', catsInput),
+    editField('Operating systems (comma separated)', osInput),
+    editField('Pricing model', modelSelect),
+    editField('Lowest tier', tierInput),
+    editField('Pricing summary', pricingSummaryInput),
+    editField('Rating (0–5)', ratingInput),
+    editField('Rating source', ratingSourceInput),
+    editField('Features', featuresInput),
+    editField('Pros', prosInput),
+    editField('Cons', consInput),
+  );
+
+  const msg = el('p');
+  msg.className = 'tool-library__modal-msg';
+  msg.hidden = true;
+
+  const actions = el('div');
+  actions.className = 'tool-library__modal-actions';
+  const enrichBtn = el('button');
+  enrichBtn.type = 'button';
+  enrichBtn.className = 'tool-library__btn tool-library__edit-enrich';
+  enrichBtn.textContent = 'Search deeper';
+  enrichBtn.title =
+    'Use the info above to search the web and fill blank fields (rating, pricing, description first)';
+  const cancel = el('button');
+  cancel.type = 'button';
+  cancel.className = 'tool-library__btn';
+  cancel.textContent = 'Cancel';
+  const save = el('button');
+  save.type = 'submit';
+  save.className = 'tool-library__btn tool-library__btn--primary';
+  save.textContent = 'Save';
+
+  const close = () => backdrop.remove();
+  cancel.addEventListener('click', close);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  const buildPayload = () => {
+    const ratingVal = ratingInput.value.trim();
+    return {
+      name: nameInput.value.trim(),
+      website: siteInput.value.trim(),
+      bestUsedFor: blurbInput.value.trim(),
+      categories: splitCommaList(catsInput.value),
+      operatingSystems: splitCommaList(osInput.value),
+      pricing: {
+        model: modelSelect.value,
+        lowestTier: tierInput.value.trim(),
+        summary: pricingSummaryInput.value.trim(),
+      },
+      rating: ratingVal === '' ? null : Number(ratingVal),
+      ratingSource: ratingSourceInput.value.trim(),
+      features: splitLineList(featuresInput.value),
+      pros: splitLineList(prosInput.value),
+      cons: splitLineList(consInput.value),
+      catalogId: tool.catalogId || '',
+      url: tool.url || tool.website || '',
+    };
+  };
+
+  const flagFilled = (control) => {
+    control.classList.add('tool-library__edit-input--filled');
+    control.addEventListener(
+      'input',
+      () => control.classList.remove('tool-library__edit-input--filled'),
+      { once: true },
+    );
+  };
+
+  /** Populate only still-blank controls with researched values; returns the labels filled. */
+  const applyFilled = (found, filledFields) => {
+    const set = new Set(filledFields || []);
+    const done = [];
+    const fillText = (field, control, value, label) => {
+      if (!set.has(field) || control.value.trim() || !String(value || '').trim()) return;
+      control.value = value;
+      flagFilled(control);
+      done.push(label);
+    };
+    const fillList = (field, control, arr, label, sep) => {
+      if (!set.has(field) || control.value.trim() || !(Array.isArray(arr) && arr.length)) return;
+      control.value = arr.join(sep);
+      flagFilled(control);
+      done.push(label);
+    };
+    // Priority order: description, pricing, rating.
+    fillText('bestUsedFor', blurbInput, found.bestUsedFor, 'description');
+    if (set.has('pricing')) {
+      const p = found.pricing || {};
+      const model = String(p.model || '').toLowerCase();
+      let touched = false;
+      if (modelSelect.value === 'unknown' && ['free', 'freemium', 'paid'].includes(model)) {
+        modelSelect.value = model;
+        flagFilled(modelSelect);
+        touched = true;
+      }
+      if (!tierInput.value.trim() && String(p.lowestTier || '').trim()) {
+        tierInput.value = p.lowestTier;
+        flagFilled(tierInput);
+        touched = true;
+      }
+      if (!pricingSummaryInput.value.trim() && String(p.summary || '').trim()) {
+        pricingSummaryInput.value = p.summary;
+        flagFilled(pricingSummaryInput);
+        touched = true;
+      }
+      if (touched) done.push('pricing');
+    }
+    if (set.has('rating') && !ratingInput.value.trim() && found.rating != null) {
+      ratingInput.value = String(found.rating);
+      flagFilled(ratingInput);
+      done.push('rating');
+    }
+    fillText('ratingSource', ratingSourceInput, found.ratingSource, 'rating source');
+    fillText('name', nameInput, found.name, 'name');
+    fillList('categories', catsInput, found.categories, 'categories', ', ');
+    fillList('operatingSystems', osInput, found.operatingSystems, 'operating systems', ', ');
+    fillList('features', featuresInput, found.features, 'features', '\n');
+    fillList('pros', prosInput, found.pros, 'pros', '\n');
+    fillList('cons', consInput, found.cons, 'cons', '\n');
+    return done;
+  };
+
+  enrichBtn.addEventListener('click', async () => {
+    const site = siteInput.value.trim();
+    if (!site) {
+      msg.hidden = false;
+      msg.textContent = 'Add a website first so I know where to research.';
+      siteInput.focus();
+      return;
+    }
+    enrichBtn.disabled = true;
+    save.disabled = true;
+    cancel.disabled = true;
+    msg.hidden = false;
+    setChasingDotsMsg(msg, 'Searching the web to fill rating, pricing, and description');
+    try {
+      const r = await fetch(
+        `/api/tool-library/tools/${encodeURIComponent(tool.id)}/enrich-missing`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(buildPayload()),
+        },
+      );
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+      const done = applyFilled(data.tool || {}, data.filled || []);
+      msg.textContent = done.length
+        ? `Filled ${done.join(', ')}. Review, then Save.`
+        : 'No new details found — the blanks could not be resolved from the web.';
+    } catch (err) {
+      msg.textContent =
+        err?.message === 'enrich_timeout'
+          ? 'Search timed out — try again.'
+          : err?.message || 'Search failed';
+    } finally {
+      enrichBtn.disabled = false;
+      save.disabled = false;
+      cancel.disabled = false;
+    }
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const site = siteInput.value.trim();
+    if (!nameInput.value.trim()) {
+      msg.hidden = false;
+      msg.textContent = 'Name is required.';
+      nameInput.focus();
+      return;
+    }
+    if (!site) {
+      msg.hidden = false;
+      msg.textContent = 'Website is required.';
+      siteInput.focus();
+      return;
+    }
+    enrichBtn.disabled = true;
+    save.disabled = true;
+    cancel.disabled = true;
+    msg.hidden = false;
+    msg.textContent = 'Saving…';
+    const payload = buildPayload();
+    try {
+      const r = await fetch(`/api/tool-library/tools/${encodeURIComponent(tool.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+      const idx = tools.findIndex((t) => t.id === tool.id);
+      if (idx >= 0 && data.tool) tools[idx] = { ...tools[idx], ...data.tool };
+      close();
+      renderSidebar(root);
+      renderGrid(root);
+      const status = root.querySelector('.tool-library__status');
+      if (status) {
+        status.hidden = false;
+        status.textContent = `Saved changes to ${payload.name}.`;
+      }
+    } catch (err) {
+      msg.textContent = err?.message === 'url_not_public'
+        ? 'That website is not a public URL.'
+        : err?.message || 'Save failed';
+      enrichBtn.disabled = false;
+      save.disabled = false;
+      cancel.disabled = false;
+    }
+  });
+
+  actions.append(enrichBtn, cancel, save);
+  form.append(msg, actions);
+  modal.append(h, form);
+  backdrop.append(modal);
+  document.body.append(backdrop);
+  nameInput.focus();
 }
 
 function openAddModal(root) {

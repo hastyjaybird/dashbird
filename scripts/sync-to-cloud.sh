@@ -47,16 +47,27 @@ if [[ "$SYNC_ENV" == "1" ]]; then
 fi
 
 if [[ "$SYNC_DATA" == "1" ]]; then
-  echo "[dashbird] SYNC_DATA=1 — pushing local data/ to cloud (overwrites remote data/)"
-  echo "[dashbird] Syncing persistent data/ (tools, network, events, assets — never commit these)"
   mkdir -p "$ROOT/data"
-  rsync -avz "$ROOT/data/" "${HOST}:${REMOTE_DIR}/data/"
+  if [[ "${SYNC_DATA_CONFIRM:-0}" != "1" ]]; then
+    # Footgun guard: pushing a stale local data/ can clobber good cloud data. Default to a
+    # dry run so you can see exactly what would change before committing.
+    echo "[dashbird] SYNC_DATA=1 DRY RUN — no changes made. Files that WOULD be pushed:"
+    rsync -avzn "$ROOT/data/" "${HOST}:${REMOTE_DIR}/data/" || true
+    echo "[dashbird] Re-run with SYNC_DATA_CONFIRM=1 to actually push data/ (remote is snapshotted first)."
+  else
+    SNAP="/var/backups/dashbird/pre-sync-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+    echo "[dashbird] Snapshotting remote data/ → ${SNAP} (rollback point) before overwrite"
+    ssh "$HOST" "mkdir -p /var/backups/dashbird && tar -czf '${SNAP}' -C '${REMOTE_DIR}' data" \
+      || echo "  (remote snapshot failed — continuing, but you have no rollback point)"
+    echo "[dashbird] Pushing persistent data/ (tools, network, events, assets — never commit these)"
+    rsync -avz "$ROOT/data/" "${HOST}:${REMOTE_DIR}/data/"
 
-  for f in bookmarks-personal.json notes.md last-backup.txt; do
-    if [[ -f "$ROOT/public/data/$f" ]]; then
-      rsync -avz "$ROOT/public/data/$f" "${HOST}:${REMOTE_DIR}/public/data/$f"
-    fi
-  done
+    for f in bookmarks-personal.json notes.md last-backup.txt; do
+      if [[ -f "$ROOT/public/data/$f" ]]; then
+        rsync -avz "$ROOT/public/data/$f" "${HOST}:${REMOTE_DIR}/public/data/$f"
+      fi
+    done
+  fi
 fi
 
 echo "[dashbird] Remote restart (${COMPOSE_FILE})"

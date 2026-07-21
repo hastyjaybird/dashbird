@@ -165,6 +165,9 @@ function normalizeRecord(raw) {
     // (Snooze), or dismiss entirely (Skip). Management table still lists them.
     snoozedUntil: normalizeIsoDateTime(r.snoozedUntil),
     skipped: r.skipped === true,
+    // Set when the user hand-edits metadata — auto/daily research then leaves
+    // this record alone so it never clobbers their corrections.
+    manualEdit: r.manualEdit === true,
   };
 }
 

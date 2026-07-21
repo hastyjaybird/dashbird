@@ -15,11 +15,21 @@ Backups are **gitignored** — they live only on disk under `data/backups/`.
 
 **Daily tarball** includes everything under `data/` except `data/backups/` itself:
 
-- SQLite: `network.db`, `events-finder.db`, `telegram-intake.db`, Vikunja DB/files
+- SQLite: `network.db`, `events-finder.db`, `telegram-intake.db`, `dev-requests.db`, Vikunja DB/files
 - JSON settings and caches (events, Gmail, costs, dev notes, etc.)
 - Network + tool library assets, Telegram media, OAuth token files
 
-Known SQLite databases are snapshotted with `VACUUM INTO` before tar so the archive gets consistent DB copies even while the app is running.
+All five SQLite databases are snapshotted with `VACUUM INTO` before tar so the archive gets
+consistent DB copies even while the app is running. If one snapshot fails (e.g. Vikunja locked
+mid-write) that DB falls back to its live file and the rest of the backup still completes.
+
+**Startup catch-up:** if the container was down at 03:15 and today's tarball is missing, the
+scheduler runs one immediately on boot (`DATA_BACKUP_CATCHUP=1`, default on), so a restart no
+longer silently skips a day.
+
+**Staleness alert:** if the newest daily tarball is older than `DATA_BACKUP_MAX_AGE_HOURS`
+(default 26h), the app sends a Telegram alert once/day (uses `TELEGRAM_BOT_TOKEN` +
+`DATA_BACKUP_ALERT_CHAT_ID`, falling back to the first `TELEGRAM_ALLOWED_CHAT_IDS`).
 
 **Weekly folder** is a lighter, structured restore path focused on CRM + tools (see restore script below).
 
@@ -79,18 +89,27 @@ tar -xzf data.old.*/backups/daily-2026-07-16.tar.gz   # adjust path to your back
 docker compose up -d --build
 ```
 
-## Cloud VPS (Vultr)
+## Cloud VPS (Vultr) — off-host encrypted copies
 
-On the public host, use the shell script + cron (separate from the in-app daily job):
+`scripts/cloud-backup.sh` runs on the host cron **after** the in-app daily job. It takes the
+newest in-app tarball, **encrypts** it (never ships plaintext — `data/` holds OAuth tokens),
+uploads it **off the VPS** via rclone, prunes, and alerts on failure. With no offsite env set
+it degrades to a local encrypted/plain copy + prune, so it is safe to install as-is.
 
 ```bash
 chmod +x /opt/dashbird/scripts/cloud-backup.sh
-apt-get install -y sqlite3
+apt-get install -y sqlite3 age rclone      # age for encryption, rclone for upload
+rclone config                              # set up a remote, e.g. Backblaze B2 → "b2"
 mkdir -p /var/backups/dashbird
+# In /opt/dashbird/.env (see deploy/env.cloud.example):
+#   DASHBIRD_OFFSITE_REMOTE=b2:my-bucket/dashbird
+#   DASHBIRD_AGE_RECIPIENT=age1...            (public key; keep the private key OFF the VPS)
 crontab -e
-# 15 3 * * * /opt/dashbird/scripts/cloud-backup.sh >> /var/log/dashbird-backup.log 2>&1
+# Run 15 min after the 03:15 in-app backup so it ships the fresh tarball:
+# 30 3 * * * cd /opt/dashbird && set -a && . ./.env && set +a && ./scripts/cloud-backup.sh >> /var/log/dashbird-backup.log 2>&1
 ```
 
+Recovery (fetch + decrypt) is in [`recovery-runbook.md`](recovery-runbook.md) Scenario C.
 See [`deploy-vultr.md`](deploy-vultr.md) for full cloud setup.
 
 ## Manual / on-demand backup
@@ -117,10 +136,15 @@ docker compose exec dashboard node -e "
 
 ## Offsite copies
 
-Local daily tarballs protect against bad edits and disk failure on one machine. For fire/theft/host loss, periodically copy `data/backups/` (or the whole `data/` tree) to another drive or cloud storage — rsync, `sync-to-cloud.sh`, or your backup tool of choice.
+Local daily tarballs protect against bad edits and disk failure on one machine. For
+fire/theft/host loss, use `scripts/cloud-backup.sh` (above) to ship encrypted tarballs to
+object storage automatically. `sync-to-cloud.sh` (LAN↔VPS) is a manual helper, not a backup —
+`SYNC_DATA=1` now defaults to a **dry run** and takes a remote pre-sync snapshot before
+overwriting (re-run with `SYNC_DATA_CONFIRM=1` to commit).
 
 ## Related
 
+- Recovery runbook (get back up and running): [`recovery-runbook.md`](recovery-runbook.md)
 - Network restore safety: [`.cursor/rules/network-data-safety.mdc`](../.cursor/rules/network-data-safety.mdc)
 - Security plan (cloud): [`security-plan.md`](security-plan.md)
 - Cloud sync: [`scripts/sync-to-cloud.sh`](../scripts/sync-to-cloud.sh)

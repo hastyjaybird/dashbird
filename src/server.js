@@ -65,7 +65,7 @@ import eventsFinderEventsRouter, {
 import { startSkippedEventsPurgeScheduler } from './lib/events-finder-skipped.js';
 import { startFacebookEventsWeeklyScheduler } from './lib/events-finder-facebook.js';
 import { startTelegramEventsPoller } from './lib/events-finder-telegram.js';
-import { startToolsContactsBackupScheduler, startDailyDataBackupScheduler } from './lib/data-backup-schedule.js';
+import { startToolsContactsBackupScheduler, startDailyDataBackupScheduler, startBackupStalenessMonitor } from './lib/data-backup-schedule.js';
 import { startLocalNewsScheduler } from './lib/local-news-scheduler.js';
 import { startBigEventsDailyRefreshScheduler } from './lib/events-finder-conference-watchlist-schedule.js';
 
@@ -241,6 +241,7 @@ app.listen(port, '0.0.0.0', () => {
   kick(() => startTelegramEventsPoller(), 1000);
   kick(() => startToolsContactsBackupScheduler(), 1100);
   kick(() => startDailyDataBackupScheduler(), 1125);
+  kick(() => startBackupStalenessMonitor(), 1140);
   kick(() => startLocalNewsScheduler(), 1150);
   kick(() => startBigEventsDailyRefreshScheduler(), 1175);
   kick(() => startGmailWeeklySummaryScheduler(), 1250);

@@ -20,6 +20,7 @@ import {
   applyQrFactsToContactPatch,
   decodeContactQrFromImage,
 } from './network-qr-decode.js';
+import { assertPublicHttpUrl, looksLikePublicHttpUrl } from './public-http-url.js';
 import { appendFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -433,8 +434,17 @@ function clearbitLogoUrl(website) {
  * @param {string} url
  */
 async function fetchPageText(url) {
+  let safeUrl;
   try {
-    const r = await fetch(url, {
+    // SSRF guard: reject private/link-local/metadata targets before any network I/O.
+    // Untrusted page content reaches the enrich prompt, so the model (or a caller-supplied
+    // fetchUrls value) must never be able to make the server hit internal addresses.
+    safeUrl = await assertPublicHttpUrl(url);
+  } catch {
+    return { url, ok: false, text: '', imageUrls: [] };
+  }
+  try {
+    const r = await fetch(safeUrl, {
       headers: {
         'User-Agent':
           'Mozilla/5.0 (compatible; DashbirdNetworkEnrich/1.0; +https://localhost)',
@@ -904,6 +914,9 @@ export function sanitizeEnrichFetchUrls(raw) {
     if (!s || !/^https?:\/\//i.test(s)) continue;
     if (/duckduckgo\.com/i.test(s)) continue;
     if (isTelegramEnrichUrl(s)) continue;
+    // Drop obvious private/link-local/metadata targets at intake (DNS-level check
+    // still happens in fetchPageText); prevents caller-supplied SSRF URLs early.
+    if (!looksLikePublicHttpUrl(s)) continue;
     if (!out.includes(s)) out.push(s);
     if (out.length >= 20) break;
   }
@@ -1155,6 +1168,14 @@ function sniffImageKind(buf) {
 export async function fetchRemoteImageBytes(url) {
   const src = String(url || '').trim();
   if (!src || !/^https?:\/\//i.test(src)) return null;
+
+  // SSRF guard: the avatar/logo URL can come straight from the LLM (parsed.avatarImageUrl)
+  // or a caller-supplied list, so validate it resolves to a public address before fetching.
+  try {
+    await assertPublicHttpUrl(src);
+  } catch {
+    return null;
+  }
 
   let refererOrigin = 'https://duckduckgo.com/';
   try {

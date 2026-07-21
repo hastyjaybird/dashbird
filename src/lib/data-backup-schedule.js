@@ -15,7 +15,15 @@ import { networkAssetsDir } from './network-contacts-store.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
-const DAILY_SQLITE_DBS = ['network.db', 'events-finder.db', 'telegram-intake.db'];
+// Every SQLite store that must be captured as a consistent snapshot (VACUUM INTO works
+// with WAL). Nested paths (Vikunja) are relative to data/ and preserved inside the tar.
+const DAILY_SQLITE_DBS = [
+  'network.db',
+  'events-finder.db',
+  'telegram-intake.db',
+  'dev-requests.db',
+  'vikunja/db/vikunja.db',
+];
 
 const DAILY_PUBLIC_FILES = [
   'public/data/bookmarks-personal.json',
@@ -354,7 +362,16 @@ export async function runDailyDataBackup(env = process.env, opts = {}) {
     const snapNames = [];
     for (const db of DAILY_SQLITE_DBS) {
       const src = path.join(PKG_ROOT, 'data', db);
-      if (backupSqliteDb(src, path.join(snapDir, db))) snapNames.push(db);
+      // Per-DB fault tolerance: a failed VACUUM (e.g. Vikunja locked mid-write) must not
+      // abort the whole backup — fall back to tarring the live file for that one DB.
+      try {
+        if (backupSqliteDb(src, path.join(snapDir, db))) snapNames.push(db);
+      } catch (e) {
+        console.warn(
+          `[data-backup] snapshot failed for ${db}; including live file instead:`,
+          e?.message || e,
+        );
+      }
     }
 
     /** @type {string[]} */
@@ -510,6 +527,67 @@ async function seedLastDailyBackupYmd(env = process.env) {
 }
 
 /**
+ * Run one daily backup now, sharing the in-flight/dedupe guards with the scheduler.
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string} ymd
+ * @param {string} reason
+ */
+async function runDailyBackupGuarded(env, ymd, reason) {
+  if (dailyBackupInFlight) return;
+  if (lastDailyBackupYmd === ymd) return;
+  dailyBackupInFlight = true;
+  lastDailyBackupYmd = ymd;
+  console.log(`[data-backup] daily backup starting (${ymd}) [${reason}]`);
+  try {
+    const result = await runDailyDataBackup(env, { ymd });
+    if (result.ok) {
+      const mb = result.bytes ? (result.bytes / (1024 * 1024)).toFixed(1) : '?';
+      console.log(`[data-backup] daily backup done → ${result.file} (${mb} MB)`);
+    } else {
+      console.warn(`[data-backup] daily backup failed: ${result.error}`);
+      lastDailyBackupYmd = null;
+    }
+  } catch (e) {
+    console.warn('[data-backup] daily backup failed', e?.message || e);
+    lastDailyBackupYmd = null;
+  } finally {
+    dailyBackupInFlight = false;
+  }
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function dataBackupCatchUpEnabled(env = process.env) {
+  return String(env.DATA_BACKUP_CATCHUP ?? '1').trim() !== '0';
+}
+
+/**
+ * If the process was down at the scheduled minute, the daily backup would be skipped
+ * for the whole day (this is how daily-2026-07-18 went missing). On startup, if we are
+ * already past today's slot and no tarball exists yet, run one immediately.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function maybeCatchUpDailyBackup(env = process.env) {
+  if (!dataBackupCatchUpEnabled(env)) return;
+  const tz = dataBackupTz(env);
+  const when = dataBackupDailyWhen(env);
+  const nowLocal = dataBackupLocalParts(new Date(), tz);
+  const pastSlot =
+    nowLocal.hour > when.hour
+    || (nowLocal.hour === when.hour && nowLocal.minute >= when.minute);
+  if (!pastSlot) return;
+  if (lastDailyBackupYmd === nowLocal.ymd) return;
+  const expected = path.join(dataBackupDir(env), `daily-${nowLocal.ymd}.tar.gz`);
+  if (fs.existsSync(expected)) {
+    lastDailyBackupYmd = nowLocal.ymd;
+    return;
+  }
+  console.log(`[data-backup] catch-up: no daily backup for ${nowLocal.ymd} and slot has passed`);
+  await runDailyBackupGuarded(env, nowLocal.ymd, 'startup catch-up');
+}
+
+/**
  * Start daily full-data backup scheduler.
  * @param {NodeJS.ProcessEnv} [env]
  */
@@ -526,31 +604,14 @@ export function startDailyDataBackupScheduler(env = process.env) {
   console.log(`[data-backup] daily full-data: ${whenLabel} ${tz} → ${dataBackupDir(env)}/daily-YYYY-MM-DD.tar.gz`);
 
   const tick = async () => {
-    if (dailyBackupInFlight) return;
     if (!shouldRunDataBackupDaily(env)) return;
     const ymd = dataBackupLocalParts(new Date(), tz).ymd;
-    if (lastDailyBackupYmd === ymd) return;
-    dailyBackupInFlight = true;
-    lastDailyBackupYmd = ymd;
-    console.log(`[data-backup] daily backup starting (${ymd})`);
-    try {
-      const result = await runDailyDataBackup(env, { ymd });
-      if (result.ok) {
-        const mb = result.bytes ? (result.bytes / (1024 * 1024)).toFixed(1) : '?';
-        console.log(`[data-backup] daily backup done → ${result.file} (${mb} MB)`);
-      } else {
-        console.warn(`[data-backup] daily backup failed: ${result.error}`);
-        lastDailyBackupYmd = null;
-      }
-    } catch (e) {
-      console.warn('[data-backup] daily backup failed', e?.message || e);
-      lastDailyBackupYmd = null;
-    } finally {
-      dailyBackupInFlight = false;
-    }
+    await runDailyBackupGuarded(env, ymd, 'scheduled');
   };
 
-  void seedLastDailyBackupYmd(env).catch(() => {});
+  void seedLastDailyBackupYmd(env)
+    .then(() => maybeCatchUpDailyBackup(env))
+    .catch(() => {});
 
   dailyBackupTimer = setInterval(() => {
     void tick();
@@ -559,4 +620,130 @@ export function startDailyDataBackupScheduler(env = process.env) {
   setTimeout(() => {
     void tick();
   }, 25_000);
+}
+
+/** @type {ReturnType<typeof setInterval> | null} */
+let stalenessTimer = null;
+/** @type {string | null} */
+let lastStaleAlertYmd = null;
+
+/**
+ * Newest local daily tarball age in hours, or null if none exist.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<number | null>}
+ */
+export async function newestDailyBackupAgeHours(env = process.env) {
+  const dir = dataBackupDir(env);
+  let entries;
+  try {
+    entries = await fsPromises.readdir(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  let newestMs = 0;
+  for (const e of entries) {
+    if (!e.isFile() || !/^daily-\d{4}-\d{2}-\d{2}\.tar\.gz$/.test(e.name)) continue;
+    try {
+      const st = await fsPromises.stat(path.join(dir, e.name));
+      if (st.mtimeMs > newestMs) newestMs = st.mtimeMs;
+    } catch {
+      /* ignore */
+    }
+  }
+  if (!newestMs) return null;
+  return (Date.now() - newestMs) / (1000 * 60 * 60);
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function backupMaxAgeHours(env = process.env) {
+  const n = Number(env.DATA_BACKUP_MAX_AGE_HOURS);
+  if (Number.isFinite(n) && n >= 1 && n <= 24 * 30) return n;
+  return 26;
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function backupAlertChatId(env = process.env) {
+  const explicit = String(env.DATA_BACKUP_ALERT_CHAT_ID || '').trim();
+  if (explicit) return explicit;
+  // Fall back to the first Telegram allowlisted chat so alerts land in Jay's DM.
+  const allowed = String(env.TELEGRAM_ALLOWED_CHAT_IDS || '')
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return allowed[0] || '';
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} text
+ */
+async function sendBackupAlert(env, text) {
+  const chatId = backupAlertChatId(env);
+  const token = String(env.TELEGRAM_BOT_TOKEN || '').trim();
+  if (!chatId || !token) {
+    console.warn(`[data-backup] ALERT (no Telegram target configured): ${text}`);
+    return;
+  }
+  try {
+    const { telegramSendMessage } = await import('./events-finder-telegram.js');
+    await telegramSendMessage(chatId, `⚠️ Dashbird backup alert\n${text}`, env);
+  } catch (e) {
+    console.warn('[data-backup] failed to send backup alert', e?.message || e);
+  }
+}
+
+/**
+ * Periodically verify a recent backup exists; alert once/day if stale. This is what
+ * turns a silently-missing backup (down process, full disk, tar failure) into a signal.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function startBackupStalenessMonitor(env = process.env) {
+  if (String(env.DATA_BACKUP_ALERT_ENABLED ?? '1').trim() === '0') {
+    console.log('[data-backup] staleness monitor disabled');
+    return;
+  }
+  if (stalenessTimer) return;
+  const maxAge = backupMaxAgeHours(env);
+  console.log(`[data-backup] staleness monitor: alert if newest daily backup older than ${maxAge}h`);
+
+  const check = async () => {
+    try {
+      const ageH = await newestDailyBackupAgeHours(env);
+      const tz = dataBackupTz(env);
+      const ymd = dataBackupLocalParts(new Date(), tz).ymd;
+      if (ageH === null) {
+        if (lastStaleAlertYmd !== ymd) {
+          lastStaleAlertYmd = ymd;
+          await sendBackupAlert(env, `No daily backup found in ${dataBackupDir(env)}.`);
+        }
+        return;
+      }
+      if (ageH > maxAge) {
+        if (lastStaleAlertYmd !== ymd) {
+          lastStaleAlertYmd = ymd;
+          await sendBackupAlert(
+            env,
+            `Newest daily backup is ${ageH.toFixed(1)}h old (limit ${maxAge}h). Check the container and disk.`,
+          );
+        }
+      } else {
+        lastStaleAlertYmd = null;
+      }
+    } catch (e) {
+      console.warn('[data-backup] staleness check failed', e?.message || e);
+    }
+  };
+
+  stalenessTimer = setInterval(() => {
+    void check();
+  }, 60 * 60 * 1000);
+  if (typeof stalenessTimer.unref === 'function') stalenessTimer.unref();
+  // First check ~2 min after boot, after the catch-up has had a chance to run.
+  setTimeout(() => {
+    void check();
+  }, 120_000);
 }

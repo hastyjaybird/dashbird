@@ -4,6 +4,7 @@
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 const DEFAULT_TEXT_MODEL = 'openai/gpt-oss-20b:free';
 const TEXT_FALLBACK_MODELS = [
+  'google/gemma-4-26b-a4b-it:free',
   'google/gemma-4-31b-it:free',
   'meta-llama/llama-3.3-70b-instruct:free',
   'openai/gpt-4o-mini',
@@ -77,7 +78,7 @@ function extractJsonObject(content) {
 /**
  * @param {NodeJS.ProcessEnv} [env]
  * @param {Array<{ role: string, content: string }>} messages
- * @param {{ ignoreRateLimit?: boolean, timeoutMs?: number }} [opts]
+ * @param {{ ignoreRateLimit?: boolean, timeoutMs?: number, models?: string[], backoff429?: boolean }} [opts]
  */
 export async function openRouterChatJson(env, messages, opts = {}) {
   if (!openRouterKey(env)) {
@@ -86,7 +87,10 @@ export async function openRouterChatJson(env, messages, opts = {}) {
   if (!opts.ignoreRateLimit && Date.now() < rateLimitUntilMs) {
     return { ok: false, error: 'openrouter_http_429' };
   }
-  const models = modelChain(textModel(env), TEXT_FALLBACK_MODELS);
+  const models =
+    Array.isArray(opts.models) && opts.models.length
+      ? modelChain(opts.models[0], opts.models.slice(1))
+      : modelChain(textModel(env), TEXT_FALLBACK_MODELS);
   const timeoutMs = Math.min(Math.max(Number(opts.timeoutMs) || 90_000, 10_000), 120_000);
   let lastError = 'openrouter_failed';
   for (let i = 0; i < models.length; i += 1) {
@@ -121,13 +125,18 @@ export async function openRouterChatJson(env, messages, opts = {}) {
         const ra = Number(r.headers.get('retry-after'));
         const waitSec = Number.isFinite(ra) && ra > 0 ? Math.min(Math.max(ra, 2), 45) : 5;
         if (i < models.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, waitSec * 1000));
+          // Interactive callers can opt out of the back-off sleep and fall straight
+          // through to the next (typically more reliable) model.
+          if (opts.backoff429 !== false) {
+            await new Promise((resolve) => setTimeout(resolve, waitSec * 1000));
+          }
           continue;
         }
         rateLimitUntilMs = Date.now() + Math.max(waitSec, 60) * 1000;
         break;
       }
-      if (r.status === 402 || r.status >= 500) continue;
+      // 404 = model/endpoint unavailable right now (common for free tiers); try the next model.
+      if (r.status === 402 || r.status === 404 || r.status >= 500) continue;
       break;
     }
     const j = await r.json().catch(() => ({}));

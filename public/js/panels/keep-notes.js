@@ -140,17 +140,7 @@ export function mountKeepNotes(root) {
   status.hidden = true;
   status.setAttribute('aria-live', 'polite');
 
-  const importBar = document.createElement('div');
-  importBar.className = 'keep-notes__import-bar';
-
-  const importBtn = document.createElement('button');
-  importBtn.type = 'button';
-  importBtn.className = 'keep-notes__btn keep-notes__btn--ghost keep-notes__import-btn';
-  importBtn.textContent = 'Import Google Keep…';
-  importBtn.title = 'Import notes from a Google Takeout Keep export';
-  importBar.append(importBtn);
-
-  shell.append(compose, importBar, selectBar, scroll, status);
+  shell.append(compose, selectBar, scroll, status);
   root.append(shell);
 
   /** @type {Array<object>} */
@@ -393,6 +383,31 @@ export function mountKeepNotes(root) {
   }
 
   /**
+   * Small "x" overlay that removes the note's attachment.
+   * @param {string} noteId
+   * @returns {HTMLButtonElement}
+   */
+  function makeAttachmentRemoveBtn(noteId) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'keep-notes__att-remove';
+    btn.title = 'Remove attachment';
+    btn.setAttribute('aria-label', 'Remove attachment');
+    btn.innerHTML =
+      '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (cardClickTimer) {
+        clearTimeout(cardClickTimer);
+        cardClickTimer = null;
+      }
+      void removeAttachment(noteId);
+    });
+    return btn;
+  }
+
+  /**
    * @param {HTMLElement} card
    * @param {object} note
    */
@@ -428,20 +443,26 @@ export function mountKeepNotes(root) {
     if (mediaEl) {
       mediaEl.replaceChildren();
       mediaEl.hidden = !note.attachment;
-      if (note.attachment?.type === 'image') {
-        const img = document.createElement('img');
-        img.className = 'keep-notes__card-img';
-        img.alt = title || 'Note image';
-        img.loading = 'lazy';
-        img.src = attachmentUrl(note);
-        mediaEl.append(img);
-      } else if (note.attachment?.type === 'voice') {
-        const audio = document.createElement('audio');
-        audio.className = 'keep-notes__card-audio';
-        audio.controls = true;
-        audio.preload = 'none';
-        audio.src = attachmentUrl(note);
-        mediaEl.append(audio);
+      if (note.attachment) {
+        const item = document.createElement('div');
+        item.className = 'keep-notes__card-media-item';
+        if (note.attachment.type === 'image') {
+          const img = document.createElement('img');
+          img.className = 'keep-notes__card-img';
+          img.alt = title || 'Note image';
+          img.loading = 'lazy';
+          img.src = attachmentUrl(note);
+          item.append(img);
+        } else if (note.attachment.type === 'voice') {
+          const audio = document.createElement('audio');
+          audio.className = 'keep-notes__card-audio';
+          audio.controls = true;
+          audio.preload = 'none';
+          audio.src = attachmentUrl(note);
+          item.append(audio);
+        }
+        item.append(makeAttachmentRemoveBtn(note.id));
+        mediaEl.append(item);
       }
     }
   }
@@ -485,6 +506,22 @@ export function mountKeepNotes(root) {
       openTransfer(card.dataset.id);
     });
 
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'keep-notes__card-del';
+    delBtn.title = 'Delete note';
+    delBtn.setAttribute('aria-label', 'Delete note');
+    delBtn.innerHTML =
+      '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71a1 1 0 0 0-1.41 0L12 10.59 7.11 5.7A1 1 0 0 0 5.7 7.11L10.59 12 5.7 16.89a1 1 0 1 0 1.41 1.41L12 13.41l4.89 4.89a1 1 0 0 0 1.41-1.41L13.41 12l4.89-4.89a1 1 0 0 0 0-1.4z"/></svg>';
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (cardClickTimer) {
+        clearTimeout(cardClickTimer);
+        cardClickTimer = null;
+      }
+      beginPendingDelete(card.dataset.id);
+    });
+
     const titleEl = document.createElement('h4');
     titleEl.className = 'keep-notes__card-title';
 
@@ -505,7 +542,7 @@ export function mountKeepNotes(root) {
     grip.setAttribute('aria-hidden', 'true');
     dragHandle.append(grip);
 
-    card.append(checkEl, dragHandle, pinBtn, moreBtn, titleEl, bodyEl, mediaEl);
+    card.append(checkEl, dragHandle, pinBtn, moreBtn, delBtn, titleEl, bodyEl, mediaEl);
 
     dragHandle.addEventListener('dragstart', (e) => {
       if (selectMode) {
@@ -946,15 +983,6 @@ export function mountKeepNotes(root) {
   voiceBtn.innerHTML =
     '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>';
 
-  const removeAttBtn = document.createElement('button');
-  removeAttBtn.type = 'button';
-  removeAttBtn.className = 'keep-notes__btn keep-notes__btn--icon';
-  removeAttBtn.title = 'Remove attachment';
-  removeAttBtn.setAttribute('aria-label', 'Remove attachment');
-  removeAttBtn.hidden = true;
-  removeAttBtn.innerHTML =
-    '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>';
-
   const deleteBtn = document.createElement('button');
   deleteBtn.type = 'button';
   deleteBtn.className = 'keep-notes__btn keep-notes__btn--icon keep-notes__btn--danger';
@@ -975,7 +1003,7 @@ export function mountKeepNotes(root) {
   closeEditorBtn.className = 'keep-notes__btn keep-notes__btn--ghost';
   closeEditorBtn.textContent = 'Close';
 
-  editorToolbar.append(pinEditorBtn, imageBtn, voiceBtn, sendEditorBtn, removeAttBtn, deleteBtn, closeEditorBtn);
+  editorToolbar.append(pinEditorBtn, imageBtn, voiceBtn, sendEditorBtn, deleteBtn, closeEditorBtn);
   editor.append(editorTitle, editorBody, editorMedia, editorToolbar);
   overlay.append(editor);
   document.body.append(overlay);
@@ -999,21 +1027,24 @@ export function mountKeepNotes(root) {
   function renderEditorMedia(note) {
     editorMedia.replaceChildren();
     editorMedia.hidden = !note?.attachment;
-    removeAttBtn.hidden = !note?.attachment;
     if (!note?.attachment) return;
+    const item = document.createElement('div');
+    item.className = 'keep-notes__editor-media-item';
     if (note.attachment.type === 'image') {
       const img = document.createElement('img');
       img.className = 'keep-notes__editor-img';
       img.alt = note.title || 'Attachment';
       img.src = attachmentUrl(note);
-      editorMedia.append(img);
+      item.append(img);
     } else {
       const audio = document.createElement('audio');
       audio.controls = true;
       audio.className = 'keep-notes__editor-audio';
       audio.src = attachmentUrl(note);
-      editorMedia.append(audio);
+      item.append(audio);
     }
+    item.append(makeAttachmentRemoveBtn(note.id));
+    editorMedia.append(item);
   }
 
   /**
@@ -1171,10 +1202,12 @@ export function mountKeepNotes(root) {
     reader.readAsDataURL(file);
   });
 
-  removeAttBtn.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    if (!editingNote?.attachment) return;
-    const noteId = editingNote.id;
+  /**
+   * @param {string} noteId
+   */
+  async function removeAttachment(noteId) {
+    const note = notes.find((n) => n.id === noteId);
+    if (!note?.attachment) return;
     try {
       const r = await fetch(`/api/keep-notes/${encodeURIComponent(noteId)}/attachment`, {
         method: 'DELETE',
@@ -1190,7 +1223,7 @@ export function mountKeepNotes(root) {
     } catch (err) {
       showStatus(String(err?.message || err), true);
     }
-  });
+  }
 
   /**
    * @param {Blob} blob
@@ -1597,130 +1630,6 @@ export function mountKeepNotes(root) {
       e.preventDefault();
       closeTransfer();
     }
-    if (e.key === 'Escape' && !importOverlay.hidden) {
-      e.preventDefault();
-      closeImport();
-    }
-  });
-
-  /* ---- Import: Google Takeout Keep export -------------------------------- */
-
-  const importOverlay = document.createElement('div');
-  importOverlay.className = 'keep-notes__overlay keep-notes__import-overlay';
-  importOverlay.hidden = true;
-
-  const importDialog = document.createElement('div');
-  importDialog.className = 'keep-notes__editor keep-notes__import-dialog';
-  importDialog.setAttribute('role', 'dialog');
-  importDialog.setAttribute('aria-modal', 'true');
-  importDialog.setAttribute('aria-label', 'Import Google Keep');
-
-  const importHeading = document.createElement('h3');
-  importHeading.className = 'keep-notes__transfer-heading';
-  importHeading.textContent = 'Import from Google Keep';
-
-  const importHelp = document.createElement('p');
-  importHelp.className = 'keep-notes__import-help';
-  importHelp.textContent =
-    'Google Keep has no public API. Export your notes from Google Takeout (select only Keep), unzip the download, and drop the note files (.json / .html and any images) into the import folder below. Then run the import.';
-
-  const importPath = document.createElement('p');
-  importPath.className = 'keep-notes__import-path';
-
-  const importCount = document.createElement('p');
-  importCount.className = 'keep-notes__import-count';
-
-  const importResult = document.createElement('p');
-  importResult.className = 'keep-notes__import-result';
-  importResult.hidden = true;
-  importResult.setAttribute('aria-live', 'polite');
-
-  const importFoot = document.createElement('div');
-  importFoot.className = 'keep-notes__transfer-foot';
-
-  const runImportBtn = document.createElement('button');
-  runImportBtn.type = 'button';
-  runImportBtn.className = 'keep-notes__btn keep-notes__btn--primary';
-  runImportBtn.textContent = 'Run import';
-
-  const importClose = document.createElement('button');
-  importClose.type = 'button';
-  importClose.className = 'keep-notes__btn keep-notes__btn--ghost';
-  importClose.textContent = 'Close';
-
-  importFoot.append(runImportBtn, importClose);
-  importDialog.append(importHeading, importHelp, importPath, importCount, importResult, importFoot);
-  importOverlay.append(importDialog);
-  document.body.append(importOverlay);
-
-  importDialog.addEventListener('click', (e) => e.stopPropagation());
-  importOverlay.addEventListener('click', () => closeImport());
-
-  function closeImport() {
-    importOverlay.hidden = true;
-  }
-
-  async function refreshImportStaged() {
-    try {
-      const r = await fetch('/api/keep-notes/import', { cache: 'no-store' });
-      const j = await r.json().catch(() => ({}));
-      if (!j.ok) throw new Error(j.error || 'Could not read import folder.');
-      importPath.textContent = `Drop files in: ${j.root}`;
-      const total = Number(j.total) || 0;
-      importCount.textContent = total
-        ? `${total} file${total === 1 ? '' : 's'} staged (${j.jsonCount} JSON, ${j.htmlCount} HTML).`
-        : 'No files staged yet.';
-      runImportBtn.disabled = total === 0;
-    } catch (e) {
-      importPath.textContent = '';
-      importCount.textContent = String(e?.message || e);
-      runImportBtn.disabled = true;
-    }
-  }
-
-  async function openImport() {
-    importResult.hidden = true;
-    importResult.textContent = '';
-    importPath.textContent = 'Checking import folder…';
-    importCount.textContent = '';
-    runImportBtn.disabled = true;
-    importOverlay.hidden = false;
-    await refreshImportStaged();
-  }
-
-  async function runImport() {
-    runImportBtn.disabled = true;
-    importResult.hidden = false;
-    importResult.textContent = 'Importing…';
-    try {
-      const r = await fetch('/api/keep-notes/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.ok === false) throw new Error(j.error || 'Import failed.');
-      const parts = [`Imported ${j.created} note${j.created === 1 ? '' : 's'}`];
-      if (j.withImage) parts.push(`${j.withImage} with image`);
-      if (j.skippedArchived) parts.push(`${j.skippedArchived} archived skipped`);
-      if (j.skippedTrashed) parts.push(`${j.skippedTrashed} trashed skipped`);
-      if (j.skippedEmpty) parts.push(`${j.skippedEmpty} empty skipped`);
-      if (j.failed) parts.push(`${j.failed} failed`);
-      importResult.textContent = `${parts.join(' · ')}.`;
-      if (j.created > 0) await loadNotes();
-      await refreshImportStaged();
-    } catch (e) {
-      importResult.textContent = String(e?.message || e);
-    } finally {
-      runImportBtn.disabled = false;
-    }
-  }
-
-  importBtn.addEventListener('click', () => void openImport());
-  runImportBtn.addEventListener('click', () => void runImport());
-  importClose.addEventListener('click', (e) => {
-    e.stopPropagation();
-    closeImport();
   });
 
   wireGridDragDrop(pinnedGrid);

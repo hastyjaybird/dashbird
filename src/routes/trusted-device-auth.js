@@ -22,16 +22,59 @@ function sendUnauthorized(res) {
   res.status(401).send('Unauthorized');
 }
 
+// Simple in-memory rate limiter for the (auth-exempt) device-bind endpoint. Device UUIDs
+// live in docs, so binding must not be brute-forceable by anyone who learns/guesses one.
+const BIND_WINDOW_MS = 10 * 60 * 1000;
+const BIND_MAX_ATTEMPTS = 10;
+/** @type {Map<string, { count: number, resetAt: number }>} */
+const bindAttempts = new Map();
+
+function clientIp(req) {
+  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return fwd || req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+/** @returns {boolean} true when the caller is over the limit */
+function bindRateLimited(req) {
+  const ip = clientIp(req);
+  const now = Date.now();
+  const rec = bindAttempts.get(ip);
+  if (!rec || now > rec.resetAt) {
+    bindAttempts.set(ip, { count: 1, resetAt: now + BIND_WINDOW_MS });
+    if (bindAttempts.size > 5000) {
+      for (const [k, v] of bindAttempts) if (now > v.resetAt) bindAttempts.delete(k);
+    }
+    return false;
+  }
+  rec.count += 1;
+  return rec.count > BIND_MAX_ATTEMPTS;
+}
+
 function appendTrustCookies(res, deviceId) {
   res.append('Set-Cookie', buildDeviceIdSetCookie(deviceId));
   res.append('Set-Cookie', buildTrustedDeviceSetCookie(deviceId));
 }
 
 /** One-time bookmark: binds an allowlisted device ID and skips future password prompts. */
-export function deviceBindHandler(req, res) {
+export async function deviceBindHandler(req, res) {
   if (!isTrustedDeviceAuthEnabled()) {
     res.redirect(302, '/');
     return;
+  }
+  if (bindRateLimited(req)) {
+    res.status(429).type('text/plain').send('Too many device-bind attempts. Try again later.');
+    return;
+  }
+  // Already-trusted devices can re-bind without re-entering the password.
+  const alreadyTrusted = verifyTrustedDeviceCookie(req.headers.cookie);
+  // Otherwise require one basic-auth challenge before binding. This closes the hole where
+  // knowing an allowlisted UUID alone (they live in docs) granted passwordless access.
+  if (!alreadyTrusted) {
+    const authHeader = req.headers.authorization || req.headers['x-forwarded-authorization'];
+    if (!(await verifyBasicAuthCredentials(authHeader))) {
+      sendUnauthorized(res);
+      return;
+    }
   }
   const did = String(req.query.did || parseDeviceIdFromCookie(req.headers.cookie) || '').trim().toLowerCase();
   if (!isAllowlistedDeviceId(did)) {

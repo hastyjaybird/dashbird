@@ -4,15 +4,10 @@
  * mirroring the aircraft-alert pattern. Tapping opens a small popup with details.
  * Reuses existing endpoints only — no new backends.
  */
-import { describeWeather, fetchCurrentWeather } from '../panels/weather-data.js';
-import { subscribeDevicePlace } from './device-location.js';
+import { mountIemLeaflet } from '../panels/weather-radar.js';
+import { devicePlaceQueryString, subscribeDevicePlace } from './device-location.js';
 
 const POLL_MS = 5 * 60 * 1000;
-
-/** Rain-ish WMO codes (drizzle, rain, freezing rain, showers, thunderstorm). */
-const RAIN_CODES = new Set([
-  51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99,
-]);
 
 /** @type {ReturnType<typeof setInterval> | null} */
 let pollTimer = null;
@@ -32,10 +27,14 @@ let popupKeyHandler = null;
 /** @type {ReturnType<typeof setInterval> | null} */
 let popupMediaTimer = null;
 
+/** @type {(() => void) | null} */
+let popupRadarCleanup = null;
+
 /**
  * @typedef {{ kind: 'image', src: string, alt?: string }
  *   | { kind: 'iframe', src: string, title?: string }
- *   | { kind: 'frames', urls: string[], frameMs?: number, alt?: string }} AlertMedia
+ *   | { kind: 'frames', urls: string[], frameMs?: number, alt?: string }
+ *   | { kind: 'radar', data: object }} AlertMedia
  * @typedef {{ active: boolean, title: string, lines: string[], media?: AlertMedia | null }} AlertState
  * @typedef {{ key: string, glyph: string, label: string, load: () => Promise<AlertState>,
  *   btn: HTMLButtonElement | null, state: AlertState }} AlertDef
@@ -46,7 +45,7 @@ const ALERTS = [
   { key: 'volcano', glyph: '\uD83C\uDF0B', label: 'Volcano', load: loadVolcano, btn: null, state: idle() },
   { key: 'geomag', glyph: '\uD83C\uDF0C', label: 'Geomagnetic storm', load: loadGeomag, btn: null, state: idle() },
   { key: 'air', glyph: '\uD83D\uDE37', label: 'Air quality', load: loadAir, btn: null, state: idle() },
-  { key: 'rain', glyph: '\uD83C\uDF27\uFE0F', label: 'Rain', load: loadRain, btn: null, state: idle() },
+  { key: 'rain', glyph: '\uD83C\uDF27\uFE0F', label: 'Weather radar', load: loadRain, btn: null, state: idle() },
 ];
 
 /** @returns {AlertState} */
@@ -152,16 +151,38 @@ async function loadAir() {
 }
 
 async function loadRain() {
-  if (!coords) return idle();
   try {
-    const w = await fetchCurrentWeather(coords.lat, coords.lon);
-    const code = Number(w.code) || 0;
-    if (!RAIN_CODES.has(code)) return idle();
-    const lines = [
-      `${describeWeather(code)} right now.`,
-      `${Math.round(w.tempF)}\u00B0F${w.apparentF != null ? ` \u00B7 feels ${Math.round(w.apparentF)}\u00B0F` : ''}`,
-    ];
-    return { active: true, title: 'Rain', lines };
+    // Same source the desktop Weather Radar card uses: precip active/imminent
+    // within ~20 mi of the device location. More reliable than the raw WMO
+    // "current" code, which often reports light rain as plain "overcast".
+    const qs = devicePlaceQueryString({ includeLabel: true });
+    const r = await fetch(`/api/weather-radar${qs}`, { cache: 'no-store' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false || j.show !== true) return idle();
+
+    const place = typeof j.geo?.displayName === 'string' ? j.geo.displayName.trim() : '';
+    /** @type {string[]} */
+    const lines = [];
+    if (j.imminent === true && Number.isFinite(Number(j.minutesUntil))) {
+      const mins = Math.max(0, Math.round(Number(j.minutesUntil)));
+      lines.push(mins <= 1 ? 'Rain expected now.' : `Rain expected in ~${mins} min.`);
+    } else if (Number.isFinite(Number(j.hoursUntilPrecip)) && Number(j.hoursUntilPrecip) > 0) {
+      lines.push(`Rain nearby within ~${Math.round(Number(j.hoursUntilPrecip))} h.`);
+    } else {
+      lines.push('Rain active or nearby.');
+    }
+    if (place) lines.push(place);
+
+    const frames = Array.isArray(j.radar?.frames) ? j.radar.frames : [];
+    /** @type {AlertMedia | null} */
+    let media = null;
+    if (j.provider === 'iem' && j.radar && frames.length) {
+      media = { kind: 'radar', data: j };
+    } else if (typeof j.embed?.mapPageUrl === 'string' && /^https?:\/\//i.test(j.embed.mapPageUrl)) {
+      media = { kind: 'iframe', src: j.embed.mapPageUrl, title: 'Live weather radar' };
+    }
+
+    return { active: true, title: 'Weather radar', lines, media };
   } catch {
     return idle();
   }
@@ -175,6 +196,14 @@ function closePopup() {
   if (popupMediaTimer) {
     clearInterval(popupMediaTimer);
     popupMediaTimer = null;
+  }
+  if (popupRadarCleanup) {
+    try {
+      popupRadarCleanup();
+    } catch {
+      /* ignore teardown errors */
+    }
+    popupRadarCleanup = null;
   }
   popupBackdrop?.remove();
   popupBackdrop = null;
@@ -191,6 +220,19 @@ function buildMedia(media) {
   if (!media) return null;
   const wrap = document.createElement('div');
   wrap.className = 'mobile-alert-header__media';
+
+  if (media.kind === 'radar') {
+    wrap.classList.add('mobile-alert-header__media--radar');
+    const host = document.createElement('div');
+    host.className = 'mobile-alert-header__media-radar';
+    wrap.append(host);
+    try {
+      popupRadarCleanup = mountIemLeaflet(host, media.data);
+    } catch {
+      popupRadarCleanup = null;
+    }
+    return wrap;
+  }
 
   if (media.kind === 'iframe') {
     const iframe = document.createElement('iframe');
@@ -345,7 +387,11 @@ async function refreshAlerts() {
  */
 function onPlaceChange(place) {
   if (!place || !Number.isFinite(place.lat) || !Number.isFinite(place.lon)) return;
+  const changed = !coords || coords.lat !== place.lat || coords.lon !== place.lon;
   coords = { lat: place.lat, lon: place.lon };
+  // Re-check conditions right away on a meaningful move (e.g. arriving somewhere
+  // that is actively raining) instead of waiting for the next poll.
+  if (changed) void refreshAlerts();
 }
 
 /**

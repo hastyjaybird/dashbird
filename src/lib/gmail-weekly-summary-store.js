@@ -888,42 +888,46 @@ export function resolveItemDueDate(item) {
 
 /**
  * Gmail web UI deep link for a source message.
- * Prefers rfc822msgid search (reliable cold load), then thread inbox, then hex
- * `#all/` — IMAP UIDs alone do not open the right message in the web UI.
+ *
+ * Routed through accounts.google.com/AccountChooser: a bare
+ * `mail.google.com/mail/u/?authuser=…#…` link loses its #fragment when Google
+ * bounces through account selection, landing on the inbox instead of the
+ * email. Encoding the full target (fragment included) into `continue`
+ * survives that bounce. Prefers the thread view (`#all/{threadId}`, opens the
+ * email directly), then rfc822msgid search, then hex `#all/` — IMAP decimal
+ * UIDs never resolve in the web UI.
  * @param {GmailWeeklySource | null | undefined} source
  */
 export function gmailReplyUrl(source) {
   if (!source?.email) return null;
-  const email = encodeURIComponent(String(source.email).trim().toLowerCase());
-  const base = `https://mail.google.com/mail/u/?authuser=${email}`;
+  const email = String(source.email).trim().toLowerCase();
+  const hexId = (v) => {
+    const s = String(v || '').trim();
+    return /^[0-9a-f]+$/i.test(s) && !/^\d+$/.test(s) ? s.toLowerCase() : '';
+  };
 
+  let hash = '';
+  const threadId = hexId(source.threadId);
   const rfc = String(source.rfc822MessageId || '')
     .trim()
     .replace(/^<|>$/g, '');
-  if (rfc) {
-    return `${base}#search/${encodeURIComponent(`rfc822msgid:${rfc}`)}`;
-  }
-
-  const threadId = String(source.threadId || '').trim();
-  if (threadId && /^[0-9a-f]+$/i.test(threadId) && !/^\d+$/.test(threadId)) {
-    return `${base}#inbox/${threadId.toLowerCase()}`;
-  }
-
-  const gmailId = String(source.gmailId || '').trim().toLowerCase();
-  if (gmailId && /^[0-9a-f]+$/.test(gmailId) && !/^\d+$/.test(gmailId)) {
-    return `${base}#all/${gmailId}`;
-  }
-  const apiId = String(source.messageId || '').trim();
-  // Gmail API ids are hex; bare IMAP UIDs are decimal and must not use #all/.
-  if (apiId && /^[0-9a-f]+$/i.test(apiId) && !/^\d+$/.test(apiId)) {
-    return `${base}#all/${apiId.toLowerCase()}`;
-  }
+  const gmailId = hexId(source.gmailId);
+  const apiId = hexId(source.messageId);
   const subject = String(source.subject || '').trim();
-  if (subject) {
-    return `${base}#search/${encodeURIComponent(`subject:${subject}`)}`;
+  if (threadId) hash = `all/${threadId}`;
+  else if (rfc) hash = `search/${encodeURIComponent(`rfc822msgid:${rfc}`)}`;
+  else if (gmailId) hash = `all/${gmailId}`;
+  else if (apiId) hash = `all/${apiId}`;
+  else if (subject) hash = `search/${encodeURIComponent(`subject:${subject}`)}`;
+  else if (String(source.messageId || '').trim()) {
+    hash = `search/${encodeURIComponent(String(source.messageId).trim())}`;
   }
-  if (apiId) {
-    return `${base}#search/${encodeURIComponent(apiId)}`;
-  }
-  return null;
+  if (!hash) return null;
+
+  const target = `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(email)}#${hash}`;
+  return (
+    'https://accounts.google.com/AccountChooser'
+    + `?Email=${encodeURIComponent(email)}`
+    + `&continue=${encodeURIComponent(target)}`
+  );
 }

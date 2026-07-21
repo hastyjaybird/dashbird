@@ -589,8 +589,8 @@ export function mountGmailSummaryMobile(root) {
     const webUrl = gmailWebMessageUrl(primary) || String(item.replyUrl || '').trim();
     // Intake mailboxes come in over IMAP, so threadId/messageId are decimal UIDs.
     // A googlegmail:///cv?th=<decimal> link is unroutable and lands on nothing, so
-    // strip non-hex ids and let the native handoff fall back to the reliable
-    // rfc822msgid search deep link built from the web URL.
+    // strip non-hex ids and let the iOS native handoff fall back to its
+    // rfc822msgid search deep link.
     const nativeSource = primary ? { ...primary } : null;
     if (nativeSource) {
       const hexId = (v) => /^[0-9a-f]+$/i.test(String(v || '')) && !/^\d+$/.test(String(v || ''));

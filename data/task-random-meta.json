@@ -193,6 +193,18 @@
       "location": "makerfarm",
       "timeAny": true
     },
+    "155": {
+      "difficulty": "high",
+      "priority": "high",
+      "duration": "1hr+",
+      "timeAny": true
+    },
+    "164": {
+      "difficulty": "med",
+      "priority": "low",
+      "duration": "30m",
+      "timeAny": true
+    },
     "168": {
       "difficulty": "high",
       "priority": "low",

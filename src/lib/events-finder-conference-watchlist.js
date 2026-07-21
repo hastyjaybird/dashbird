@@ -12,6 +12,7 @@ import {
   upsertConferenceWatchlistRecords,
   saveBigEventFlier,
 } from './events-finder-conference-watchlist-store.js';
+import { assertPublicHttpUrl } from './public-http-url.js';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 const BROWSER_UA =
@@ -115,23 +116,74 @@ function htmlToText(html) {
 }
 
 /**
- * @param {string} url
- * @returns {Promise<string>}
+ * Pull the social-share / preview image a page advertises for itself
+ * (og:image, twitter:image, or <link rel="image_src">). This is the event's
+ * own promo graphic and makes a far more reliable sidebar card image than a
+ * separate poster image-search. Returns an absolute URL resolved against the
+ * page, or null.
+ * @param {string} html
+ * @param {string} baseUrl
+ * @returns {string | null}
  */
-async function fetchPageText(url) {
+function extractOgImage(html, baseUrl) {
+  const h = String(html || '');
+  const patterns = [
+    /<meta[^>]+(?:property|name)=["']og:image(?::url)?["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']og:image(?::url)?["']/i,
+    /<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image(?::src)?["']/i,
+    /<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i,
+  ];
+  for (const re of patterns) {
+    const m = h.match(re);
+    if (m && m[1]) {
+      const raw = m[1].trim();
+      if (!raw) continue;
+      try {
+        return new URL(raw, baseUrl).toString();
+      } catch {
+        /* try next pattern */
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {string} url
+ * @returns {Promise<{ text: string, ogImage: string | null }>}
+ */
+async function fetchPage(url) {
   const href = String(url || '').trim();
-  if (!href) return '';
+  if (!href) return { text: '', ogImage: null };
+  // URLs here are user-pasted (manual add) or scraped from search results —
+  // block private/link-local/metadata targets before requesting (SSRF).
+  let safeHref;
   try {
-    const r = await fetch(href, {
+    safeHref = await assertPublicHttpUrl(href);
+  } catch {
+    return { text: '', ogImage: null };
+  }
+  try {
+    const r = await fetch(safeHref, {
       headers: { Accept: 'text/html', 'User-Agent': BROWSER_UA },
       signal: AbortSignal.timeout(12_000),
       redirect: 'follow',
     });
-    if (!r.ok) return '';
-    return htmlToText(await r.text());
+    if (!r.ok) return { text: '', ogImage: null };
+    const html = await r.text();
+    return { text: htmlToText(html), ogImage: extractOgImage(html, r.url || href) };
   } catch {
-    return '';
+    return { text: '', ogImage: null };
   }
+}
+
+/**
+ * @param {string} url
+ * @returns {Promise<string>}
+ */
+async function fetchPageText(url) {
+  return (await fetchPage(url)).text;
 }
 
 /** Hosts that are never the official conference site. */
@@ -424,8 +476,16 @@ const MAX_FLIER_BYTES = 6 * 1024 * 1024;
 async function fetchImageBuffer(url) {
   const href = String(url || '').trim();
   if (!/^https?:\/\//i.test(href)) return null;
+  // The URL comes from image search or a scraped og:image tag (untrusted), so
+  // block private/link-local/metadata targets before making the request (SSRF).
+  let safeHref;
   try {
-    const r = await fetch(href, {
+    safeHref = await assertPublicHttpUrl(href);
+  } catch {
+    return null;
+  }
+  try {
+    const r = await fetch(safeHref, {
       headers: { 'User-Agent': BROWSER_UA, Accept: 'image/*' },
       signal: AbortSignal.timeout(12_000),
       redirect: 'follow',
@@ -721,8 +781,9 @@ function firstNonEmpty(...vals) {
 /**
  * @param {string} query
  * @param {NodeJS.ProcessEnv} [env]
- * @param {{ url?: string, homepageUrl?: string, ticketUrl?: string, screenshotPath?: string }} [opts]
- *   Seed from the Add-event preview.
+ * @param {{ url?: string, homepageUrl?: string, ticketUrl?: string, screenshotPath?: string, force?: boolean }} [opts]
+ *   Seed from the Add-event preview. `force` re-researches even a hand-edited
+ *   (manualEdit) record, clearing the lock.
  */
 export async function researchConferenceQuery(query, env = process.env, opts = {}) {
   const q = String(query || '').trim().slice(0, 120);
@@ -736,6 +797,13 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
   // Preserve any snapshot / user-picked URLs already on the record.
   const existingStore = await loadConferenceWatchlistStore(env);
   const existing = existingStore.bySlug[slug] || {};
+
+  // Hand-edited records are locked: auto/daily research must not overwrite the
+  // user's corrections. A forced re-research (opts.force) clears the lock.
+  if (existing.manualEdit === true && opts.force !== true) {
+    researchInFlight.delete(slug);
+    return { ok: true, slug, skipped: true, manualEdit: true };
+  }
   const seedHomepage =
     homepageRootFromUrl(opts.homepageUrl)
     || homepageRootFromUrl(existing.homepageUrl)
@@ -743,7 +811,16 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
     || homepageRootFromUrl(existing.url)
     || null;
   const seedTicket = normalizeEventPageUrl(opts.ticketUrl) || existing.ticketUrl || null;
-  const seedUrl = seedHomepage || normalizeEventPageUrl(opts.url) || existing.url || null;
+  // The exact URL the user pasted (preserving its path) — a manually-added link
+  // may point at a specific event page (Partiful/Luma/etc.) whose facts and
+  // og:image live on that page, not the bare domain root.
+  const seedExact = normalizeEventPageUrl(opts.url) || null;
+  const seedUrl = seedHomepage || seedExact || existing.url || null;
+  // A URL was handed to us for THIS call (manual entry or a confirmed preview) —
+  // scrape it directly instead of spending web searches to rediscover it.
+  const urlProvidedNow = Boolean(
+    normalizeEventPageUrl(opts.url) || homepageRootFromUrl(opts.homepageUrl),
+  );
   let screenshotPath =
     String(opts.screenshotPath || '').trim() || existing.screenshotPath || null;
 
@@ -772,12 +849,13 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
     /** @type {Array<{ url: string, title: string }>} */
     const hits = [];
     if (seedHomepage) hits.push({ url: seedHomepage, title: q });
+    if (seedExact && seedExact !== seedHomepage) hits.push({ url: seedExact, title: q });
     if (seedTicket) hits.push({ url: seedTicket, title: `${q} tickets` });
     // Re-fetch known pages without searching once BOTH URLs are known — dates /
     // price changes show up on the same pages, and this keeps the recurring
     // daily poll well under any bot-rate limit. Still search when the ticket URL
     // hasn't been discovered yet so it can be filled in.
-    if (!seedHomepage || !seedTicket) {
+    if ((!seedHomepage || !seedTicket) && !urlProvidedNow) {
       for (let i = 0; i < queries.length; i += 1) {
         if (i > 0) await sleep(SEARCH_QUERY_DELAY_MS);
         const batch = await searchConferenceHits(queries[i], env);
@@ -798,25 +876,40 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
     const homePages = [];
     /** @type {Array<{ url: string, title: string, text: string }>} */
     const ticketPages = [];
+    // Each fetched page advertises its own share graphic (og:image); collect them
+    // in fetch order so a reliable event image can back the sidebar card when the
+    // separate poster image-search comes up empty. The exact page the user linked
+    // (seedExact) is fetched via the backfill loop, so its image is captured too.
+    /** @type {string[]} */
+    const ogImageCandidates = [];
+    const pushOgImage = (src) => {
+      const s = String(src || '').trim();
+      if (s && !ogImageCandidates.includes(s)) ogImageCandidates.push(s);
+    };
     if (homepageUrl) {
-      const text = await fetchPageText(homepageUrl);
-      if (text.length > 120) homePages.push({ url: homepageUrl, title: q, text });
+      const page = await fetchPage(homepageUrl);
+      pushOgImage(page.ogImage);
+      if (page.text.length > 120) homePages.push({ url: homepageUrl, title: q, text: page.text });
     }
     if (ticketUrl && ticketUrl !== homepageUrl) {
-      const text = await fetchPageText(ticketUrl);
-      if (text.length > 120) ticketPages.push({ url: ticketUrl, title: `${q} tickets`, text });
+      const page = await fetchPage(ticketUrl);
+      pushOgImage(page.ogImage);
+      if (page.text.length > 120) {
+        ticketPages.push({ url: ticketUrl, title: `${q} tickets`, text: page.text });
+      }
     }
     // Backfill from other hits so extraction still has material if a primary
     // page is JS-heavy / empty.
     for (const h of hits) {
       if (homePages.length + ticketPages.length >= 5) break;
       if (h.url === homepageUrl || h.url === ticketUrl) continue;
-      const text = await fetchPageText(h.url);
-      if (text.length <= 120) continue;
+      const page = await fetchPage(h.url);
+      pushOgImage(page.ogImage);
+      if (page.text.length <= 120) continue;
       if (TICKET_PATH_RE.test(h.url) && ticketPages.length < 2) {
-        ticketPages.push({ url: h.url, title: h.title || `${q} tickets`, text });
+        ticketPages.push({ url: h.url, title: h.title || `${q} tickets`, text: page.text });
       } else if (homePages.length < 3) {
-        homePages.push({ url: h.url, title: h.title || q, text });
+        homePages.push({ url: h.url, title: h.title || q, text: page.text });
       }
     }
 
@@ -840,7 +933,7 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       String(firstNonEmpty(ticketParsed?.earlyBirdPrice, homeParsed?.earlyBirdPrice) || '').trim().slice(0, 120) || null;
     const earlyBirdStart = normalizeYmd(firstNonEmpty(ticketParsed?.earlyBirdStart, homeParsed?.earlyBirdStart));
     const earlyBirdEnd = normalizeYmd(firstNonEmpty(ticketParsed?.earlyBirdEnd, homeParsed?.earlyBirdEnd));
-    const ticketSalesStart = normalizeYmd(
+    let ticketSalesStart = normalizeYmd(
       firstNonEmpty(ticketParsed?.ticketSalesStart, homeParsed?.ticketSalesStart),
     );
 
@@ -929,17 +1022,63 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       }
     }
 
-    // Find + download a flier / promo graphic for the upcoming edition (used as
-    // the sidebar card image). Retry at most daily so polls stay cheap.
+    // Nail down WHEN tickets go on sale for the upcoming edition — this is what
+    // the sidebar status pill shows. Only worth a targeted pass when the primary
+    // pages didn't state it AND tickets aren't clearly on sale yet (price only
+    // estimated from last year, or no price found). Keep it only if it lands in
+    // the future so the pill can show a real "Tickets <date>" instead of the
+    // generic "Not on sale yet".
+    if (!ticketSalesStart && (ticketPriceEstimated || !ticketPrice)) {
+      const salesYear = finalStart ? Number(finalStart.slice(0, 4)) : year;
+      try {
+        const salesHits = await searchConferenceHits(
+          `${q} ${salesYear} when do tickets go on sale date`,
+          env,
+        );
+        /** @type {Array<{ url: string, title: string, text: string }>} */
+        const salesPages = [];
+        for (const h of salesHits.slice(0, 4)) {
+          const text = await fetchPageText(h.url);
+          if (text.length > 120) salesPages.push({ url: h.url, title: h.title || q, text });
+          if (salesPages.length >= 3) break;
+        }
+        const salesParsed = salesPages.length
+          ? (await extractWithOpenRouter(`${q} ${salesYear}`, salesPages, env))
+            || extractHeuristic(`${q} ${salesYear}`, salesPages)
+          : null;
+        const ss = normalizeYmd(salesParsed?.ticketSalesStart);
+        // Only trust a genuinely future date — the point is to say when tickets
+        // WILL go on sale. A past/"today" value is almost always a hallucination.
+        if (ss && parseYmd(ss) != null && parseYmd(ss) > nowMs) ticketSalesStart = ss;
+      } catch {
+        /* leave ticketSalesStart null — pill falls back to a generic label */
+      }
+    }
+
+    // Resolve the sidebar card image. Retry at most daily so polls stay cheap.
+    // Prefer the event page's own og:image (its real promo graphic, always the
+    // right edition and reliably fetchable), then fall back to a poster
+    // image-search when the page advertises no share image.
     let flierPath = existing.flierPath || null;
     let flierCheckedAt = existing.flierCheckedAt || null;
     const flierCheckedMs = Date.parse(String(flierCheckedAt || ''));
     const flierStale =
       !Number.isFinite(flierCheckedMs) || nowMs - flierCheckedMs > RETRY_MS;
     if (!flierPath && flierStale) {
-      const flierYear = finalStart ? Number(finalStart.slice(0, 4)) : new Date().getFullYear();
-      const found = await findAndSaveFlier(parsedName || existing.name || q, flierYear, slug, env);
-      if (found) flierPath = found;
+      for (const candidate of ogImageCandidates) {
+        const img = await fetchImageBuffer(candidate);
+        if (!img) continue;
+        const saved = await saveBigEventFlier(slug, img.buffer, img.ext, env).catch(() => null);
+        if (saved) {
+          flierPath = saved;
+          break;
+        }
+      }
+      if (!flierPath) {
+        const flierYear = finalStart ? Number(finalStart.slice(0, 4)) : new Date().getFullYear();
+        const found = await findAndSaveFlier(parsedName || existing.name || q, flierYear, slug, env);
+        if (found) flierPath = found;
+      }
       flierCheckedAt = new Date().toISOString();
     }
 
@@ -1055,9 +1194,9 @@ export function buildTicketSalesStatus(record, now = new Date()) {
   if (ebStart && ebEnd && t >= ebStart && t < ebEnd) {
     return { text: 'Early bird on sale', kind: 'earlybird' };
   }
-  // A known future on-sale date → tickets aren't out yet.
+  // A known future on-sale date → show WHEN tickets go on sale.
   if (salesStart && t < salesStart) {
-    return { text: `Tickets ${formatMd(record.ticketSalesStart)}`, kind: 'soon' };
+    return { text: `On sale ${formatMd(record.ticketSalesStart)}`, kind: 'soon' };
   }
   // Price only found on last year's edition → this year isn't on sale yet.
   if (record.ticketPriceEstimated) return { text: 'Not on sale yet', kind: 'soon' };
@@ -1164,6 +1303,10 @@ export function conferenceRecordToHeadsUp(record, now = new Date()) {
     ticketUrl: record.ticketUrl || null,
     start: record.eventStart ? `${record.eventStart}T12:00:00.000Z` : null,
     end: record.eventEnd ? `${record.eventEnd}T12:00:00.000Z` : null,
+    // Raw YYYY-MM-DD values for the edit form.
+    eventStart: record.eventStart || null,
+    eventEnd: record.eventEnd || null,
+    manualEdit: record.manualEdit === true,
     venue: record.venue || null,
     city: record.city || null,
     whenLabel: whenBits.join(' · '),
@@ -1257,7 +1400,13 @@ export async function loadConferenceHeadsUp(watchlist, now = new Date(), env = p
     const stale = !Number.isFinite(researchedAt) || now.getTime() - researchedAt > RESEARCH_STALE_MS;
     const incomplete = !rec.url || !rec.eventStart;
     const retry = Number.isFinite(researchedAt) && now.getTime() - researchedAt > RETRY_MS;
-    if ((stale || (incomplete && retry)) && !rec.researching && !researchInFlight.has(slug)) {
+    // Hand-edited records are locked — never queue them for auto-research.
+    if (
+      (stale || (incomplete && retry))
+      && !rec.researching
+      && !rec.manualEdit
+      && !researchInFlight.has(slug)
+    ) {
       needResearch.push(name);
     }
   }

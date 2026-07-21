@@ -21,7 +21,8 @@ Dashbird runs in two modes:
 | Anyone on LAN opens dashboard | Accept for trusted home Wi‑Fi; do **not** port-forward 8787 to the internet |
 | Leaked API keys in git | `.env` gitignored; rotate on exposure |
 | Dependency vulnerabilities | Regular SCA + triage |
-| Upstream fetch abuse / SSRF-style bugs | Validate URLs, timeouts, allowlists where applicable |
+| Upstream fetch abuse / SSRF-style bugs | Outbound URLs validated against a private/link-local/metadata blocklist (`src/lib/public-http-url.js`) — used by Tool Library **and** Network enrich page fetch + avatar/logo download |
+| Prompt-injected LLM output driving server fetches | Enrich `avatarImageUrl`/page URLs from the model pass the same public-URL guard before any fetch |
 | Secrets in logs/telemetry | Never log keys; ratings telemetry is non-PII |
 
 ### Public cloud (`dashbird.duckdns.org` / later `jayhasty.com`)
@@ -30,7 +31,9 @@ Dashbird runs in two modes:
 |------|------------|
 | Open internet reachability | Caddy TLS + **HTTP basic auth** (`DASHBOARD_BASIC_AUTH_*` in `.env`) |
 | Brute-force / credential stuffing | Strong unique password; optional Vultr firewall lock SSH to your IP |
-| Personal CRM / events / tools on disk | Bind-mounted `data/` only; never commit; nightly `scripts/cloud-backup.sh` |
+| Passwordless bind via leaked device UUID | `/auth/device-bind` now **requires one basic-auth challenge** before binding (UUID alone is not enough) and is **rate-limited** per IP |
+| Personal CRM / events / tools on disk | Bind-mounted `data/` only; never commit; **off-host encrypted** nightly copy via `scripts/cloud-backup.sh` (rclone + age/gpg) |
+| Host loss / disk failure / ransomware | Off-host encrypted backups + [`recovery-runbook.md`](recovery-runbook.md) (RPO ~24h, RTO ~30–60 min); staleness alert if backups stop |
 | OAuth redirect misuse | Set Gmail (and other) redirect URIs to the public HTTPS origin only |
 | Oversized attack surface | Slim `Dockerfile.cloud` (no Playwright/Chromium on 2 GB VPS) |
 
@@ -161,7 +164,27 @@ For each finding: severity, owner, fix or documented accept-with-reason, target 
 5. Verify — `npm run smoke:core` + targeted checks.
 6. Document — timeline and prevention.
 
-## 10) Backlog
+## 10) Hardening changelog (2026-07-20)
+
+Closed from the [ops-review blast-radius](ops-review-backup-blast-radius.md) findings:
+
+- **SSRF in Network enrich** — page fetch (`fetchPageText`), image download (`fetchRemoteImageBytes`),
+  and caller-supplied `fetchUrls` now go through `assertPublicHttpUrl`/`looksLikePublicHttpUrl`.
+  Prevents LLM- or content-driven fetches to internal/metadata addresses.
+- **Backups off-host + encrypted** — `scripts/cloud-backup.sh` encrypts (age/gpg) and uploads
+  (rclone) the daily tarball off the VPS; refuses to upload plaintext.
+- **Backup gaps closed** — all five SQLite DBs snapshotted (added `dev-requests.db` + Vikunja),
+  startup catch-up for missed days, and a Telegram staleness alert.
+- **Device-bind hardened** — requires a basic-auth challenge before binding + per-IP rate limit.
+- **Safe destructive deploy** — `SYNC_DATA=1` defaults to dry-run and snapshots remote `data/`
+  before overwrite (`SYNC_DATA_CONFIRM=1` to commit).
+- **Recovery runbook** — [`recovery-runbook.md`](recovery-runbook.md) with RPO/RTO and per-scenario steps.
+
+Still open (accepted or deferred): LAN has no auth (trusted Wi-Fi); LAN container runs as root
+with DBus/X11 for desktop tiles; single `.env` holds all secrets; `POST /api/dev-requests` is
+unauthenticated on LAN and feeds coding agents (treat inbox as untrusted before running agents).
+
+## 11) Backlog
 
 - [x] Dependabot config in-repo: [`.github/dependabot.yml`](../.github/dependabot.yml) (npm + Docker, weekly, manual merge). Takes effect after this file is on the default branch.
 - [ ] GitHub UI (needs repo admin; no `gh`/token on this host yet):

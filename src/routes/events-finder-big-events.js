@@ -170,8 +170,10 @@ router.post('/research', async (req, res) => {
       res.status(400).json({ ok: false, error: 'missing_query' });
       return;
     }
+    // An explicit re-research overrides a manual-edit lock (discards hand edits
+    // and re-fetches from the web).
     setImmediate(() => {
-      void researchConferenceQuery(query, process.env).catch(() => {});
+      void researchConferenceQuery(query, process.env, { force: true }).catch(() => {});
     });
     res.json({ ok: true, slug: slugFromQuery(query) });
   } catch (e) {
@@ -179,7 +181,39 @@ router.post('/research', async (req, res) => {
   }
 });
 
-/** PATCH /:slug { reminderLeadDays } — set how far ahead to remind for one event. */
+/**
+ * PATCH /:slug — update one event. Accepts `reminderLeadDays` and/or any of the
+ * editable metadata fields below. Editing metadata sets `manualEdit` so the
+ * daily/auto research leaves the hand-corrected record alone (use POST /research
+ * to discard edits and re-fetch).
+ */
+const EDITABLE_STRING_FIELDS = [
+  'name',
+  'homepageUrl',
+  'ticketUrl',
+  'venue',
+  'city',
+  'ticketPrice',
+  'earlyBirdPrice',
+  'notes',
+];
+const EDITABLE_DATE_FIELDS = [
+  'eventStart',
+  'eventEnd',
+  'ticketSalesStart',
+  'earlyBirdStart',
+  'earlyBirdEnd',
+];
+
+/** @param {unknown} raw */
+function cleanDateInput(raw) {
+  const s = String(raw ?? '').trim().slice(0, 10);
+  if (!s) return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) && Number.isFinite(Date.parse(`${s}T12:00:00Z`))
+    ? s
+    : undefined; // undefined → invalid, reject
+}
+
 router.patch('/:slug', async (req, res) => {
   try {
     const slug = slugFromQuery(String(req.params.slug || ''));
@@ -187,19 +221,60 @@ router.patch('/:slug', async (req, res) => {
       res.status(400).json({ ok: false, error: 'invalid_slug' });
       return;
     }
-    if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'reminderLeadDays')) {
-      res.status(400).json({ ok: false, error: 'missing_reminderLeadDays' });
-      return;
-    }
+    const body = req.body || {};
     const store = await loadConferenceWatchlistStore(process.env);
     const rec = store.bySlug[slug];
     if (!rec) {
       res.status(404).json({ ok: false, error: 'not_found' });
       return;
     }
-    const reminderLeadDays = normalizeLeadDays(req.body.reminderLeadDays);
+
+    /** @type {Record<string, unknown>} */
+    const patch = {};
+    let metaEdited = false;
+
+    for (const key of EDITABLE_STRING_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
+      const val = String(body[key] ?? '').trim() || null;
+      patch[key] = val;
+      if (key === 'homepageUrl') patch.url = val; // keep url mirror in sync
+      // A hand-typed price is authoritative — drop the "estimated" annotation.
+      if (key === 'ticketPrice') {
+        patch.ticketPriceEstimated = false;
+        patch.estimatedFromYear = null;
+      }
+      metaEdited = true;
+    }
+    for (const key of EDITABLE_DATE_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
+      const val = cleanDateInput(body[key]);
+      if (val === undefined) {
+        res.status(400).json({ ok: false, error: `invalid_${key}` });
+        return;
+      }
+      patch[key] = val;
+      // A hand-typed start date is authoritative — drop the "(est.)" annotation.
+      if (key === 'eventStart') patch.nextEditionEstimated = false;
+      metaEdited = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'reminderLeadDays')) {
+      patch.reminderLeadDays = normalizeLeadDays(body.reminderLeadDays);
+    }
+
+    if (!metaEdited && !Object.prototype.hasOwnProperty.call(patch, 'reminderLeadDays')) {
+      res.status(400).json({ ok: false, error: 'no_editable_fields' });
+      return;
+    }
+
+    // Editing metadata locks the record from auto-research; a bare reminder
+    // change does not.
+    if (metaEdited) {
+      patch.manualEdit = true;
+      patch.researching = false;
+    }
+
     const updated = await upsertConferenceWatchlistRecords(
-      { [slug]: { ...rec, reminderLeadDays } },
+      { [slug]: { ...rec, ...patch } },
       process.env,
     );
     res.setHeader('Cache-Control', 'private, no-store');

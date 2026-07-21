@@ -78,3 +78,16 @@ data/dev-requests.db-shm
 public/data/telegram-events/
 # Local Vikunja SQLite + uploads + bootstrap credentials
 data/vikunja/
+# Runtime data (downloaded fliers, learned prefs, device state, debug traces)
+data/big-events-shots/
+data/debug-*.ndjson
+data/*.db.bak
+data/device-place.json
+data/local-news-relevance.json
+data/gmail-daily-summary-guide.md
+data/gmail-daily-summary-guide-feedback.json
+# Agent scratch (screenshots/avatars saved during chats; rules stay tracked)
+.cursor/*.png
+.cursor/*.jpg
+.cursor/*.webp
+.cursor/maptest/

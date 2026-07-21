@@ -8,8 +8,14 @@ import {
   loadToolLibrary,
   setToolFavorite,
   toolLibraryAssetsDir,
+  updateTool,
 } from '../lib/tool-library-store.js';
-import { createToolFromUrl, repairToolLibraryAssets, refreshToolAssets } from '../lib/tool-library-enrich.js';
+import {
+  createToolFromUrl,
+  fillMissingToolFields,
+  repairToolLibraryAssets,
+  refreshToolAssets,
+} from '../lib/tool-library-enrich.js';
 import { findAlternatives, rankToolAmongAlternatives, searchToolOnline } from '../lib/tool-library-ai.js';
 import { fetchToolRating } from '../lib/tool-library-ratings.js';
 import { normalizeToolUrl } from '../lib/tool-library-store.js';
@@ -18,6 +24,7 @@ import {
   getResourceById,
   getResourceByUrl,
   patchResource,
+  resourceToToolRecord,
   upsertResource,
   toolRecordToResource,
 } from '../lib/web-catalog-store.js';
@@ -65,6 +72,60 @@ function recordRatingsTelemetry(event) {
 
 function disabled() {
   return String(process.env.TOOL_LIBRARY || '').trim() === '0';
+}
+
+function cleanStringArray(value) {
+  if (!Array.isArray(value)) return undefined;
+  return value.map((x) => String(x || '').trim()).filter(Boolean);
+}
+
+/**
+ * Whitelist + normalize a user-supplied metadata patch for a tool.
+ * @param {Record<string, unknown>} body
+ */
+function sanitizeToolPatch(body = {}) {
+  /** @type {Record<string, unknown>} */
+  const patch = {};
+  if (typeof body.name === 'string') patch.name = body.name.trim();
+  if (typeof body.bestUsedFor === 'string') patch.bestUsedFor = body.bestUsedFor.trim();
+
+  const website = body.website ?? body.url;
+  if (typeof website === 'string' && website.trim()) {
+    // Reuses public-URL guard; store-only (no fetch here).
+    const normalized = normalizeToolUrl(website);
+    patch.url = normalized;
+    patch.website = normalized;
+  }
+
+  const categories = cleanStringArray(body.categories);
+  if (categories) patch.categories = categories;
+  const operatingSystems = cleanStringArray(body.operatingSystems);
+  if (operatingSystems) patch.operatingSystems = operatingSystems;
+  const features = cleanStringArray(body.features);
+  if (features) patch.features = features;
+  const pros = cleanStringArray(body.pros);
+  if (pros) patch.pros = pros;
+  const cons = cleanStringArray(body.cons);
+  if (cons) patch.cons = cons;
+
+  if (body.pricing && typeof body.pricing === 'object') {
+    const p = /** @type {Record<string, unknown>} */ (body.pricing);
+    const model = String(p.model || '').trim().toLowerCase();
+    patch.pricing = {
+      model: ['free', 'freemium', 'paid', 'unknown'].includes(model) ? model : 'unknown',
+      lowestTier: String(p.lowestTier || '').trim(),
+      summary: String(p.summary || '').trim(),
+    };
+  }
+
+  if (body.rating === null || body.rating === '') {
+    patch.rating = null;
+  } else if (body.rating != null && Number.isFinite(Number(body.rating))) {
+    patch.rating = Math.max(0, Math.min(5, Number(body.rating)));
+  }
+  if (typeof body.ratingSource === 'string') patch.ratingSource = body.ratingSource.trim();
+
+  return patch;
 }
 
 router.get('/', async (_req, res) => {
@@ -266,6 +327,104 @@ router.post('/tools/:id/favorite', async (req, res) => {
     res.json({ ok: true, tool: { ...tool, favorite } });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+/** Edit metadata on a tool (tool-library + catalog sync, or catalog-only fallback). */
+router.put('/tools/:id', async (req, res) => {
+  try {
+    if (disabled()) {
+      res.status(503).json({ ok: false, error: 'disabled' });
+      return;
+    }
+    const id = String(req.params.id || '');
+    let patch;
+    try {
+      patch = sanitizeToolPatch(req.body || {});
+    } catch (e) {
+      res.status(400).json({ ok: false, error: String(e?.message || e) });
+      return;
+    }
+    if (!Object.keys(patch).length) {
+      res.status(400).json({ ok: false, error: 'no_editable_fields' });
+      return;
+    }
+
+    const tool = await updateTool(id, patch);
+    if (tool) {
+      try {
+        await upsertResource(toolRecordToResource(tool), {
+          project: 'dashbird',
+          section: 'Tools',
+        });
+      } catch (e) {
+        console.warn('[tool-library] catalog edit sync failed:', e?.message || e);
+      }
+      res.json({ ok: true, tool });
+      return;
+    }
+
+    // Catalog-only tools (approved review items) have no tool-library.json row.
+    const catalogId = String(req.body?.catalogId || '').trim();
+    const url = String(req.body?.url || req.body?.website || '').trim();
+    let resource = catalogId ? await getResourceById(catalogId) : null;
+    if (!resource && url) resource = await getResourceByUrl(url).catch(() => null);
+    if (resource) {
+      const merged = toolRecordToResource({ ...resourceToToolRecord(resource), ...patch });
+      const patched = await patchResource(resource.id, merged);
+      res.json({ ok: true, tool: resourceToToolRecord(patched) });
+      return;
+    }
+
+    res.status(404).json({ ok: false, error: 'not_found' });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+/** Deep web research from the tool's current info; suggests values for blank fields (no save). */
+router.post('/tools/:id/enrich-missing', async (req, res) => {
+  try {
+    if (disabled()) {
+      res.status(503).json({ ok: false, error: 'disabled' });
+      return;
+    }
+    const id = String(req.params.id || '');
+
+    let current = await getToolById(id);
+    if (!current) {
+      // Catalog-only tools have no tool-library.json row.
+      const catalogId = String(req.body?.catalogId || '').trim();
+      const url = String(req.body?.url || req.body?.website || '').trim();
+      let resource = catalogId ? await getResourceById(catalogId) : null;
+      if (!resource && url) resource = await getResourceByUrl(url).catch(() => null);
+      if (resource) current = resourceToToolRecord(resource);
+    }
+    if (!current) {
+      res.status(404).json({ ok: false, error: 'not_found' });
+      return;
+    }
+
+    // Overlay any in-progress edits so research uses the latest info the user typed.
+    let overlay;
+    try {
+      overlay = sanitizeToolPatch(req.body || {});
+    } catch (e) {
+      res.status(400).json({ ok: false, error: String(e?.message || e) });
+      return;
+    }
+    const context = { ...current, ...overlay };
+
+    const result = await Promise.race([
+      fillMissingToolFields(context),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('enrich_timeout')), 45_000);
+      }),
+    ]);
+    res.json({ ok: true, tool: result.tool, filled: result.filled });
+  } catch (e) {
+    const msg = String(e?.message || e);
+    res.status(msg === 'enrich_timeout' ? 504 : 500).json({ ok: false, error: msg });
   }
 });
 
