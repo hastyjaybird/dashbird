@@ -827,7 +827,7 @@ body.dashy--deferred-ready .boot-deferred {
 .events-finder__conference-popout {
   display: flex;
   flex-direction: column;
-  width: min(52rem, 100%);
+  width: min(72rem, 100%);
   height: min(72vh, 100%);
   min-height: 22rem;
   border-radius: 14px;
@@ -1265,13 +1265,28 @@ body.dashy--deferred-ready .boot-deferred {
 }
 
 .events-finder__big-events-cell--desc {
-  max-width: 24rem;
-  min-width: 12rem;
+  max-width: 22rem;
+  min-width: 10rem;
   color: var(--muted, #9aa3b2);
   font-size: 0.8rem;
   line-height: 1.35;
   white-space: normal;
   word-break: break-word;
+}
+
+/* Keep Edit / × fully visible — table columns were crushing this cell. */
+.events-finder__big-events-cell--action {
+  width: 1%;
+  min-width: 3.75rem;
+  white-space: nowrap;
+  text-align: right;
+  vertical-align: top;
+}
+
+.events-finder__big-events-cell--action .events-finder__big-events-edit-btn,
+.events-finder__big-events-cell--action .events-finder__big-events-remove {
+  display: block;
+  margin-left: auto;
 }
 
 .events-finder__big-events-thumb {

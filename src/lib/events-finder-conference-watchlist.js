@@ -197,6 +197,33 @@ const OFFICIAL_NOISE_HOSTS = [
   'crunchbase.com', 'glassdoor.com', 'indeed.com', 'pinterest.com',
 ];
 
+/** Tiny connectors skipped when building an event-name acronym (CES, SXSW, …). */
+const ACRONYM_SKIP = new Set(['the', 'a', 'an', 'of', 'and', 'for', 'in', 'at', 'by', 'to', 'or']);
+
+/**
+ * @param {string} query
+ * @returns {string[]}
+ */
+function queryTokens(query) {
+  return String(query || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/**
+ * Acronym of significant query words ("consumer electronics show" → "ces").
+ * @param {string[]} tokens
+ * @returns {string}
+ */
+function queryAcronym(tokens) {
+  return tokens
+    .filter((t) => t.length >= 2 && !ACRONYM_SKIP.has(t))
+    .map((t) => t[0])
+    .join('');
+}
+
 /**
  * @param {string} host
  * @param {string[]} tokens
@@ -211,6 +238,16 @@ function conferenceHostScore(host, tokens) {
   let score = 0;
   const hostFlat = h.replace(/[^a-z0-9]/g, '');
   const nameFlat = tokens.join('');
+  const label = h.split('.')[0] || '';
+  const acronym = queryAcronym(tokens);
+  // Official sites are often the acronym of the full name (ces.tech for
+  // "Consumer Electronics Show") — without this, a partial token like
+  // "consumer" wrongly elevates consumercellular.com over ces.tech.
+  if (acronym.length >= 3 && (label === acronym || hostFlat === acronym)) {
+    score += 55;
+  } else if (acronym.length >= 3 && hostFlat.startsWith(acronym)) {
+    score += 35;
+  }
   if (nameFlat && hostFlat.includes(nameFlat)) {
     score += 60;
   } else {
@@ -225,7 +262,7 @@ function conferenceHostScore(host, tokens) {
     }
     if (totalLen) score += (hitLen / totalLen) * 40;
   }
-  if (/\.(?:com|org|net|io|co|events?|fest|us)$/i.test(h)) score += 4;
+  if (/\.(?:com|org|net|io|co|tech|events?|fest|us)$/i.test(h)) score += 4;
   return score;
 }
 
@@ -236,41 +273,8 @@ function conferenceHostScore(host, tokens) {
  * @returns {string | null}
  */
 export function pickOfficialSiteUrl(query, hits) {
-  const tokens = String(query || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean);
-  let best = null;
-  let bestScore = -Infinity;
-  for (const hit of hits || []) {
-    const url = normalizeEventPageUrl(hit?.url);
-    if (!url) continue;
-    let host = '';
-    try {
-      host = new URL(url).hostname;
-    } catch {
-      continue;
-    }
-    let score = conferenceHostScore(host, tokens);
-    const title = String(hit?.title || '').toLowerCase();
-    let thit = 0;
-    for (const t of tokens) {
-      if (t.length > 2 && title.includes(t)) thit += 1;
-    }
-    if (tokens.length) score += (thit / tokens.length) * 15;
-    try {
-      const p = new URL(url).pathname || '/';
-      if (/ticket|register|attend|pass/i.test(p)) score += 6;
-    } catch {
-      /* ignore */
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      best = url;
-    }
-  }
-  return best;
+  // Keep URL + pair pickers on the same acceptance bar.
+  return pickOfficialSitePair(query, hits).homepageUrl;
 }
 
 /** Ticket / pricing / registration subpage path signals. */
@@ -278,10 +282,13 @@ const TICKET_PATH_RE =
   /(?:^|\/)(?:tickets?|ticketing|pricing|prices?|passes|pass|register|registration|admission|attend|rsvp|buy|purchase|checkout|box-?office|order)(?:[/?#]|-|$)/i;
 
 /**
- * Resilient hit fetch for conference research/preview. Headless-Chrome Brave
- * search is the primary source (DuckDuckGo/Yahoo HTML scraping is unreliable and
- * frequently returns zero real results inside the container). Falls back to the
- * HTML scrapers only when Chrome search is disabled or empty.
+ * Resilient hit fetch for conference research/preview.
+ *
+ * Always merges DuckDuckGo/Yahoo (and Brave Search API when keyed) with the
+ * headless-Chrome path. Chrome alone often falls back to Bing, which can return
+ * a full page of irrelevant "first word" hits (e.g. consumercellular.com for
+ * "consumer electronics show") — and the old `< 3 results` gate then skipped
+ * DuckDuckGo, which ranks the real official site first.
  * @param {string} query
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {Promise<Array<{ url: string, title: string }>>}
@@ -297,31 +304,61 @@ export async function searchConferenceHits(query, env = process.env) {
     if (out.some((x) => x.url === n)) return;
     out.push({ url: n, title: String(title || '') });
   };
-  try {
-    const urls = await searchChromeResultUrls(q, 8, env);
-    for (const u of urls) push(u);
-  } catch {
-    /* fall through to API / HTML scrapers */
-  }
-  // Brave Search API: reliable from a datacenter IP / the slim cloud image where
-  // headless Chrome can't run. Only hit it when the browser path came up short.
-  if (out.length < 3 && braveApiEnabled(env)) {
-    try {
-      const api = await braveApiWebSearch(q, 8, env);
-      for (const h of api) push(h.url, h.title);
-    } catch {
-      /* fall through to HTML scrapers */
-    }
-  }
-  if (out.length < 3) {
-    try {
-      const web = await searchWeb(q);
-      for (const h of web) push(h.url, h.title);
-    } catch {
-      /* ignore */
-    }
-  }
+
+  const [webHits, apiHits, chromeUrls] = await Promise.all([
+    searchWeb(q).catch(() => []),
+    braveApiEnabled(env)
+      ? braveApiWebSearch(q, 8, env).catch(() => [])
+      : Promise.resolve([]),
+    searchChromeResultUrls(q, 8, env).catch(() => []),
+  ]);
+
+  // Prefer titled DDG/Yahoo + Brave API rows first so ranking has titles and so
+  // hits[0] fallback is not Bing junk when scoring is inconclusive.
+  for (const h of webHits || []) push(h.url, h.title);
+  for (const h of apiHits || []) push(h.url, h.title);
+  for (const u of chromeUrls || []) push(u);
   return out;
+}
+
+/**
+ * Search query variants for finding an official conference/festival site.
+ * Multi-word names also search their acronym (CES, SXSW) — many official
+ * domains are the short form, and long-form queries confuse weaker engines.
+ * @param {string} query
+ * @param {number} year
+ * @param {{ deep?: boolean }} [opts]
+ * @returns {string[]}
+ */
+function conferenceSearchQueries(query, year, opts = {}) {
+  const q = String(query || '').trim();
+  const deep = opts.deep === true;
+  const tokens = queryTokens(q);
+  const acronym = queryAcronym(tokens);
+  /** @type {string[]} */
+  const queries = deep
+    ? [
+        `${q} official website`,
+        `${q} official site tickets ${year}`,
+        `${q} ${year} tickets buy passes`,
+        `${q} ${year + 1} tickets`,
+        `${q} conference festival homepage`,
+        `${q} event dates lineup ${year}`,
+        `"${q}" official`,
+      ]
+    : [
+        `${q} official site tickets ${year}`,
+        `${q} conference festival official website`,
+        `${q} tickets ${year}`,
+      ];
+  if (acronym.length >= 3 && acronym !== tokens.join('')) {
+    // Insert early so a confident acronym hit can stop the preview loop sooner.
+    queries.splice(1, 0, `${acronym} official website`);
+    if (!queries.some((x) => x.includes(`"${q}"`))) {
+      queries.push(`"${q}" official site`);
+    }
+  }
+  return queries;
 }
 
 /** Common multi-label public suffixes so apex stripping keeps the real domain. */
@@ -345,19 +382,30 @@ function registrableDomain(host) {
 }
 
 /**
+ * Minimum host/title score before we trust a hit as the official site.
+ * Partial first-word matches (consumercellular for "consumer electronics show")
+ * land around ~18; real official domains (name-in-host or acronym) clear 40+.
+ */
+const MIN_OFFICIAL_ACCEPT_SCORE = 28;
+
+/**
  * Select BOTH the official homepage root (dates live here) and the best ticketing
  * subpage (ticket/pricing info lives here) from ranked search hits.
  * @param {string} query
  * @param {Array<{ url: string, title?: string }>} hits
- * @returns {{ homepageUrl: string | null, ticketUrl: string | null, officialHost: string | null, confident: boolean }}
+ * @returns {{ homepageUrl: string | null, ticketUrl: string | null, officialHost: string | null, confident: boolean, bestScore: number }}
  */
 export function pickOfficialSitePair(query, hits) {
-  const tokens = String(query || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean);
+  const empty = {
+    homepageUrl: null,
+    ticketUrl: null,
+    officialHost: null,
+    confident: false,
+    bestScore: -Infinity,
+  };
+  const tokens = queryTokens(query);
   const nameFlat = tokens.join('');
+  const acronym = queryAcronym(tokens);
   /** @type {Array<{ url: string, u: URL, hostScore: number, score: number }>} */
   const scored = [];
   let best = null;
@@ -379,13 +427,25 @@ export function pickOfficialSitePair(query, hits) {
       if (t.length > 2 && title.includes(t)) thit += 1;
     }
     if (tokens.length) score += (thit / tokens.length) * 15;
+    if (
+      acronym.length >= 3
+      && new RegExp(`\\b${acronym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(title)
+    ) {
+      score += 12;
+    }
     scored.push({ url, u, hostScore, score });
     if (score > bestScore) {
       bestScore = score;
       best = { url, u, score };
     }
   }
-  if (!best) return { homepageUrl: null, ticketUrl: null, officialHost: null, confident: false };
+  if (!best) return empty;
+
+  // Reject weak "first word" junk (Consumer Cellular for CES, etc.) instead of
+  // surfacing it as a false-positive official site.
+  if (bestScore < MIN_OFFICIAL_ACCEPT_SCORE) {
+    return { ...empty, bestScore };
+  }
 
   // Official domain = registrable apex of the best hit (e.g. profiles.burningman.org
   // and cart.sxsw.com both resolve to burningman.org / sxsw.com). The homepage is
@@ -424,12 +484,156 @@ export function pickOfficialSitePair(query, hits) {
   if (ticketUrl && ticketUrl.replace(/\/+$/, '') === homepageUrl.replace(/\/+$/, '')) {
     ticketUrl = null;
   }
-  // Confident when the official domain actually embeds the flattened event name
-  // (e.g. "opensauce" ⊂ opensauce.com) — lets callers stop early on a good hit
-  // instead of firing more search queries and tripping engine rate limits.
+  // Confident when the official domain embeds the flattened event name
+  // (opensauce ⊂ opensauce.com) OR matches the name's acronym (ces ⊂ ces.tech).
   const officialFlat = officialHost.replace(/[^a-z0-9]/g, '');
-  const confident = Boolean(nameFlat && nameFlat.length >= 4 && officialFlat.includes(nameFlat));
-  return { homepageUrl, ticketUrl, officialHost, confident };
+  const officialLabel = officialHost.split('.')[0] || '';
+  const confident = Boolean(
+    (nameFlat && nameFlat.length >= 4 && officialFlat.includes(nameFlat))
+    || (acronym.length >= 3 && officialLabel === acronym),
+  );
+  return { homepageUrl, ticketUrl, officialHost, confident, bestScore };
+}
+
+/**
+ * Find a Wikipedia article URL whose slug/title matches the event query.
+ * @param {string} query
+ * @param {Array<{ url: string, title?: string }>} hits
+ * @returns {string | null}
+ */
+function matchingWikipediaUrl(query, hits) {
+  const tokens = queryTokens(query);
+  const nameFlat = tokens.join('');
+  const sig = tokens.filter((t) => t.length > 2);
+  if (!nameFlat || nameFlat.length < 6) return null;
+  let best = null;
+  let bestOverlap = 0;
+  for (const hit of hits || []) {
+    const url = String(hit?.url || '').trim();
+    if (!url) continue;
+    let u;
+    try {
+      u = new URL(url);
+    } catch {
+      continue;
+    }
+    if (!/(^|\.)wikipedia\.org$/i.test(u.hostname)) continue;
+    const rawSlug = decodeURIComponent((u.pathname.split('/') || []).pop() || '');
+    if (!rawSlug || /^(File|Special|Help|Wikipedia|Template|Category):/i.test(rawSlug)) continue;
+    const slug = rawSlug.replace(/_/g, ' ').replace(/\s*\([^)]*\)\s*/g, ' ').trim();
+    const slugTokens = queryTokens(slug);
+    const slugFlat = slugTokens.join('');
+    if (!slugFlat) continue;
+    if (slugFlat.includes(nameFlat) || nameFlat.includes(slugFlat)) {
+      return normalizeEventPageUrl(url) || url;
+    }
+    const overlap = sig.filter((t) => slugTokens.includes(t)).length;
+    if (overlap > bestOverlap && overlap >= Math.ceil(sig.length * 0.75)) {
+      bestOverlap = overlap;
+      best = normalizeEventPageUrl(url) || url;
+    }
+  }
+  return best;
+}
+
+/**
+ * Resolve a Wikipedia article URL via the public opensearch API when SERPs omit it.
+ * @param {string} query
+ * @returns {Promise<string | null>}
+ */
+async function wikipediaOpenSearchUrl(query) {
+  const q = String(query || '').trim();
+  if (!q) return null;
+  const api =
+    `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(q)}`
+    + '&limit=5&namespace=0&format=json';
+  try {
+    const safe = await assertPublicHttpUrl(api);
+    const r = await fetch(safe, {
+      headers: { Accept: 'application/json', 'User-Agent': BROWSER_UA },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!r.ok) return null;
+    const data = await r.json();
+    const titles = Array.isArray(data?.[1]) ? data[1] : [];
+    const urls = Array.isArray(data?.[3]) ? data[3] : [];
+    const tokens = queryTokens(q);
+    const nameFlat = tokens.join('');
+    const sig = tokens.filter((t) => t.length > 2);
+    for (let i = 0; i < urls.length; i += 1) {
+      const title = String(titles[i] || '');
+      const url = String(urls[i] || '');
+      if (!url) continue;
+      const titleTokens = queryTokens(title.replace(/\s*\([^)]*\)\s*/g, ' '));
+      const titleFlat = titleTokens.join('');
+      if (titleFlat.includes(nameFlat) || nameFlat.includes(titleFlat)) {
+        return normalizeEventPageUrl(url) || url;
+      }
+      const overlap = sig.filter((t) => titleTokens.includes(t)).length;
+      if (sig.length && overlap >= Math.ceil(sig.length * 0.75)) {
+        return normalizeEventPageUrl(url) || url;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Pull the official website from a matching Wikipedia article when search engines
+ * only return junk / aggregator hits. Wikipedia itself is never the event site,
+ * but its infobox "Official website" link usually is (e.g. ces.tech).
+ * @param {string} query
+ * @param {Array<{ url: string, title?: string }>} hits
+ * @returns {Promise<string | null>}
+ */
+async function officialSiteFromWikipedia(query, hits) {
+  let wikiUrl = matchingWikipediaUrl(query, hits);
+  if (!wikiUrl) wikiUrl = await wikipediaOpenSearchUrl(query);
+  if (!wikiUrl) return null;
+  let safeHref;
+  try {
+    safeHref = await assertPublicHttpUrl(wikiUrl);
+  } catch {
+    return null;
+  }
+  try {
+    const r = await fetch(safeHref, {
+      headers: { Accept: 'text/html', 'User-Agent': BROWSER_UA },
+      signal: AbortSignal.timeout(12_000),
+      redirect: 'follow',
+    });
+    if (!r.ok) return null;
+    const html = await r.text();
+    const patterns = [
+      /<a[^>]+href=["'](https?:\/\/[^"']+)["'][^>]*>\s*Official website/i,
+      /Official website[\s\S]{0,200}?<a[^>]+href=["'](https?:\/\/[^"']+)["']/i,
+    ];
+    for (const re of patterns) {
+      const m = html.match(re);
+      if (!m?.[1]) continue;
+      const n = normalizeEventPageUrl(m[1]);
+      if (!n) continue;
+      let host = '';
+      try {
+        host = new URL(n).hostname.replace(/^www\./, '').toLowerCase();
+      } catch {
+        continue;
+      }
+      // Skip archives / social / wikipedia mirrors.
+      if (
+        /wikipedia\.org$|wikimedia\.org$|archive\.org$|web\.archive\.org$/i.test(host)
+        || OFFICIAL_NOISE_HOSTS.some((nHost) => host === nHost || host.endsWith(`.${nHost}`))
+      ) {
+        continue;
+      }
+      return homepageRootFromUrl(n) || n;
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 /**
@@ -592,24 +796,16 @@ export async function previewBigEvent(query, env = process.env, opts = {}) {
   if (!slug) return { ok: false, error: 'invalid_query' };
   const deep = opts.deep === true;
   const year = new Date().getFullYear();
-  const queries = deep
-    ? [
-        `${q} official website`,
-        `${q} official site tickets ${year}`,
-        `${q} ${year} tickets buy passes`,
-        `${q} ${year + 1} tickets`,
-        `${q} conference festival homepage`,
-        `${q} event dates lineup ${year}`,
-        `"${q}" official`,
-      ]
-    : [
-        `${q} official site tickets ${year}`,
-        `${q} conference festival official website`,
-        `${q} tickets ${year}`,
-      ];
+  const queries = conferenceSearchQueries(q, year, { deep });
   /** @type {Array<{ url: string, title: string }>} */
   const hits = [];
-  let pair = { homepageUrl: null, ticketUrl: null, officialHost: null, confident: false };
+  let pair = {
+    homepageUrl: null,
+    ticketUrl: null,
+    officialHost: null,
+    confident: false,
+    bestScore: -Infinity,
+  };
   for (let i = 0; i < queries.length; i += 1) {
     if (i > 0) await sleep(SEARCH_QUERY_DELAY_MS);
     const batch = await searchConferenceHits(queries[i], env);
@@ -624,8 +820,20 @@ export async function previewBigEvent(query, env = process.env, opts = {}) {
     if (pair.confident && !deep) break;
   }
 
-  const homepageUrl =
-    pair.homepageUrl || homepageRootFromUrl(pickOfficialSiteUrl(q, hits)) || hits[0]?.url || null;
+  // When engines only return junk, Wikipedia often still ranks and its infobox
+  // points at the real official site (Consumer Electronics Show → ces.tech).
+  if (!pair.confident) {
+    const wikiOfficial = await officialSiteFromWikipedia(q, hits);
+    if (wikiOfficial) {
+      if (!hits.some((x) => x.url === wikiOfficial)) {
+        hits.unshift({ url: wikiOfficial, title: q });
+      }
+      pair = pickOfficialSitePair(q, hits);
+    }
+  }
+
+  // Never fall back to hits[0] — that was returning Consumer Cellular etc.
+  const homepageUrl = pair.homepageUrl || homepageRootFromUrl(pickOfficialSiteUrl(q, hits));
   const ticketUrl = pair.ticketUrl || null;
   return {
     ok: true,
@@ -862,9 +1070,8 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
   try {
     const year = new Date().getFullYear();
     const queries = [
-      `${q} official site dates ${year}`,
+      ...conferenceSearchQueries(q, year),
       `${q} tickets pricing early bird ${year}`,
-      `${q} conference festival official website`,
     ];
     /** @type {Array<{ url: string, title: string }>} */
     const hits = [];
@@ -884,11 +1091,19 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
         }
         if (pickOfficialSitePair(q, hits).confident) break;
       }
+      // Acronym domains (ces.tech) often miss the SERP when Bing/Chrome goes
+      // sideways — Wikipedia's official-website link is a durable fallback.
+      if (!pickOfficialSitePair(q, hits).confident) {
+        const wikiOfficial = await officialSiteFromWikipedia(q, hits);
+        if (wikiOfficial && !hits.some((x) => x.url === wikiOfficial)) {
+          hits.unshift({ url: wikiOfficial, title: q });
+        }
+      }
     }
 
     // Resolve BOTH pages: homepage (dates) + ticketing page (price/sales).
     const pair = pickOfficialSitePair(q, hits);
-    const homepageUrl = seedHomepage || pair.homepageUrl || hits[0]?.url || null;
+    const homepageUrl = seedHomepage || pair.homepageUrl || null;
     const ticketUrl = seedTicket || pair.ticketUrl || null;
 
     // Fetch homepage-first, then ticket page, then a couple more hits for redundancy.
