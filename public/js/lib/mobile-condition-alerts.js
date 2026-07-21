@@ -82,9 +82,11 @@ async function loadVolcano() {
     }
     const cam = Array.isArray(j.cameras) ? j.cameras.find((c) => c?.embedUrl) : null;
     /** @type {AlertMedia} */
-    const media = cam?.embedUrl
-      ? { kind: 'iframe', src: String(cam.embedUrl), title: 'K\u012Blauea summit livestream' }
-      : { kind: 'image', src: '/assets/earth-kilauea-volcano.png', alt: 'K\u012Blauea volcano' };
+    // Summit cam only while lava is actively erupting — not for pause/forecast/elevated alone.
+    const media =
+      s.erupting === true && cam?.embedUrl
+        ? { kind: 'iframe', src: String(cam.embedUrl), title: 'K\u012Blauea summit livestream' }
+        : { kind: 'image', src: '/assets/earth-kilauea-volcano.png', alt: 'K\u012Blauea volcano' };
     // ! for erupting, calendar for a next-eruption forecast.
     const titleMarks = `${s.erupting ? '\u2757' : ''}${hasForecast ? '\uD83D\uDCC5' : ''}`;
     return {

@@ -1,15 +1,45 @@
 {
-  "summaryText": "You have two emails requiring action: a subscription confirmation and a contribution inquiry.",
-  "generatedAt": "2026-07-21T04:39:26.905Z",
+  "summaryText": "Three key actions identified.",
+  "generatedAt": "2026-07-21T05:23:44.749Z",
   "lastScanYmd": "2026-07-20",
-  "lastScanAt": "2026-07-21T04:39:26.905Z",
+  "lastScanAt": "2026-07-21T05:23:44.749Z",
   "windowDays": 10,
   "items": [
+    {
+      "id": "b8342193-d714-4f25-8ce8-94e85dbc6fb6",
+      "title": "Plan Apple Silicon transition for Google Maps SDKs",
+      "company": "Google",
+      "detail": "Google: Deprecation of Intel support for Maps SDKs; plan transition to Apple Silicon by Q3 2026.",
+      "deadline": "2026-09-30T00:00:00.000Z",
+      "deadlineSource": "extracted",
+      "needsReply": false,
+      "mailboxes": [
+        "julia.hasty@gmail.com"
+      ],
+      "sources": [
+        {
+          "email": "julia.hasty@gmail.com",
+          "messageId": "152585",
+          "threadId": "19f82fb56388d42b",
+          "subject": "[Action Advised] Move your Google Maps development environments to Apple Silicon by Q3 2026",
+          "date": "2026-07-21T04:42:17.000Z",
+          "gmailId": "19f82fb56388d42b",
+          "rfc822MessageId": "690f21599d6e8d8a13ad1ffb3f97852511694bbd-20404672-111875400@google.com"
+        }
+      ],
+      "status": "open",
+      "pinned": false,
+      "unpinDeleteAt": null,
+      "createdAt": "2026-07-21T05:23:44.749Z",
+      "updatedAt": "2026-07-21T05:23:44.749Z",
+      "fingerprint": "c1e3db1e3661e2ac",
+      "vikunjaTaskId": null
+    },
     {
       "id": "88d3b523-c919-4596-8333-5fcd4cc6ad4a",
       "title": "Confirm Climatebase subscription",
       "company": "Climatebase",
-      "detail": "Climatebase: confirm subscription to keep receiving updates.",
+      "detail": "Climatebase: Confirm you wish to continue receiving updates.",
       "deadline": "2026-07-23T03:40:15.000Z",
       "deadlineSource": "response_48h",
       "needsReply": true,
@@ -31,15 +61,15 @@
       "pinned": false,
       "unpinDeleteAt": null,
       "createdAt": "2026-07-21T04:39:26.905Z",
-      "updatedAt": "2026-07-21T04:39:26.905Z",
+      "updatedAt": "2026-07-21T05:23:44.749Z",
       "fingerprint": "cbecbcb8809c8d2d",
       "vikunjaTaskId": null
     },
     {
-      "id": "d3098ad3-f6f7-4b29-abaa-c4e5be4be0e2",
-      "title": "Respond to Phage contribution inquiry",
+      "id": "02ff3eb6-fed0-4277-8eda-7ec33f84e450",
+      "title": "Respond about contributing to Phage",
       "company": "Phage",
-      "detail": "Phage: reply to Samstorm about contributing to Phage.",
+      "detail": "Phage: Reply to Samstorm about contributing to the organization.",
       "deadline": "2026-07-23T03:13:47.000Z",
       "deadlineSource": "response_48h",
       "needsReply": true,
@@ -61,8 +91,8 @@
       "pinned": false,
       "unpinDeleteAt": null,
       "createdAt": "2026-07-21T03:59:59.229Z",
-      "updatedAt": "2026-07-21T04:39:26.905Z",
-      "fingerprint": "eac7b18ceb3acb12",
+      "updatedAt": "2026-07-21T05:23:44.749Z",
+      "fingerprint": "59a233b7044a78eb",
       "vikunjaTaskId": null
     },
     {

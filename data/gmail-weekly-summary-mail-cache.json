@@ -1,5 +1,5 @@
 {
-  "cachedAt": "2026-07-21T04:38:32.377Z",
+  "cachedAt": "2026-07-21T05:22:42.610Z",
   "fingerprint": "{\"addresses\":[\"jay.intake.box@gmail.com\",\"julia.hasty@gmail.com\"],\"query\":\"newer_than:10d\",\"days\":10}",
   "days": 10,
   "query": "newer_than:10d",
@@ -8,6 +8,19 @@
     "julia.hasty@gmail.com"
   ],
   "messages": [
+    {
+      "id": "152585",
+      "threadId": "19f82fb56388d42b",
+      "mailbox": "julia.hasty@gmail.com",
+      "subject": "[Action Advised] Move your Google Maps development environments to Apple Silicon by Q3 2026",
+      "from": "",
+      "to": "Julia.Hasty@gmail.com",
+      "date": "2026-07-21T04:42:17.000Z",
+      "snippet": "Hello Google Maps Platform customer, To provide the best possible developer experience and align with Apple’s transition to Apple Silicon[1], we are announcing the deprecation of Intel (x86_64) architecture support in our Maps[2], Places[3]",
+      "text": "Hello Google Maps Platform customer,\nTo provide the best possible developer experience and align with Apple’s transition to Apple Silicon[1], we are announcing the deprecation of Intel (x86_64) architecture support in our Maps[2], Places[3], Navigation[4], Driver[5], and Consumer[6] SDKs for iOS.\nWhat you need to know\nStarting in early Q4 2026, new versions of our iOS SDKs will only support Apple Silicon (arm64) architecture for app development and simulator testing. This update will apply only to the development environment and will not impact deployed applications or end-user experiences.\nWhat you need to do\nAction advised by Q3 2026:\nWe recommend planning for a hardware transition to Apple Silicon-based Macs or using real devices for development prior to Q3 2026 to ensure continued access to the latest SDK features. To avoid immediate impact, you may also lock your application to previously-released versions of the SDK.\nWe’re here to help\nWe understand that making infrastructure changes may take some planning. If you have any questions or require assistance, please contact our support team at Google Maps Platform Support[7].\nThanks for choosing Google Maps Platform.\n– The Google Maps Platform Team\n[1] https://www.apple.com/newsroom/2020/06/apple-announces-mac-transition-to-apple-silicon/\n[2] https://developers.google.com/maps/documentation/ios-sdk/overview\n[3] https://developers.google.com/maps/documentation/places/ios-sdk/overview\n[4] https://developers.google.com/maps/documentation/navigation/ios-sdk\n[5] https://developers.google.com/maps/documentation/mobility/driver-sdk/on-demand/ios/minimum-requirements\n[6] https://developers.google.com/maps/documentation/mobility/journey-sharing/on-demand/ios/setup\n[7] https://developers.google.com/maps/support/?utm_source=em-anncmt&utm_medium=em\n© 2026 Google LLC 1600 Amphitheatre Parkway, Mountain View, CA 94043\nYou have received this mandatory service announcement to update you about important changes to Google Maps Platform or your account.",
+      "gmailId": "19f82fb56388d42b",
+      "rfc822MessageId": "690f21599d6e8d8a13ad1ffb3f97852511694bbd-20404672-111875400@google.com"
+    },
     {
       "id": "152584",
       "threadId": "19f82c29b1f0210d",
@@ -956,19 +969,6 @@
       "text": "———\nYou are reading a plain text version of this post. For the best experience, copy and paste this link in your browser to view the post online:\nhttps://newsletter.foundersbay.com/p/new-post-d287",
       "gmailId": "19f71f2c2e36b3d5",
       "rfc822MessageId": "dJ0dwjJAS7qushCVuOUdcQ@geopod-ismtpd-93"
-    },
-    {
-      "id": "152545",
-      "threadId": "19f71e15262309f7",
-      "mailbox": "julia.hasty@gmail.com",
-      "subject": "You can trust what YOU grow...",
-      "from": "",
-      "to": "gaia.revolts@gmail.com",
-      "date": "2026-07-17T21:00:16.000Z",
-      "snippet": "The lettuce recall has been on our minds all week ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ‌ ͏ ",
-      "text": "The lettuce recall has been on our minds all week\n ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌\n͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏\n‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌\n  ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌   ͏ ‌\n<https://links.gardyn.io/shop-collection?user_uuid=31d4ad83-0774-41bb-8988-3a33ce396ed0&id=cleyn0j0igv2i0bitljmkt877>\n <https://mygardyn.com/ycubes>\nDear Gardyner,\nYou've probably seen the headlines by now: a Cyclospora outbreak\n<https://mygardyn.com/blog/2026-cyclospora-outbreak/> likely tied to lettuce\nhas sickened close to 7,000 people across 34 states.\nIt's not the first time, either. Spinach one year, romaine the next, basil\nafter that. The names change, but the pattern doesn't: food changes hands\ndozens of times and travels thousands of miles before it lands on your plate.\nSomewhere in that chain, things can go wrong.\nWe built Gardyn to get around that chain entirely.\nYour Gardyn produce is harvested minutes before you eat it, in your own\nkitchen. No truck, no warehouse, no unknown hands. Just you, picking what\nyou're about to serve your family. There’s relief in knowing you can stop\nscanning recall lists – you can trust what you grow.\nThat's peace of mind worth passing along. If the people you care about are\nstarting to think harder about where their food comes from, it’s the perfect\ntime to share your referral code. Give $100, get $100 — they’ll be one step\ncloser to cleaner home-grown food, and you’ll get $100 to use on anything at\nGardyn.\nRomaine, cilantro, basil, iceberg — the exact greens making headlines this\nweek — are ready to grow in your Gardyn, so you always know exactly where your\nfood came from.\nWith care,\nThe Gardyn Team 🌱\nDear Gardyner,\nYou've probably seen the headlines by now: a Cyclospora outbreak\n<https://mygardyn.com/blog/2026-cyclospora-outbreak/> likely tied to lettuce\nhas sickened close to 7,000 people across 34 states.\nIt's not the first time, either. Spinach one year, romaine the next, basil\nafter that. The names change, but the pattern doesn't: food changes hands\ndozens of times and travels thousands of miles before it lands on your plate.\nSomewhere in that chain, things can go wrong.\nWe built Gardyn to get around that chain entirely.\nYour Gardyn produce is harvested minutes before you eat it, in your own\nkitchen. No truck, no warehouse, no unknown hands. Just you, picking what\nyou're about to ",
-      "gmailId": "19f71e15262309f7",
-      "rfc822MessageId": "EE.CA.20295.0E79A5A6@i-039671ab1716dd6f4.mta1vrest.sd.prd.sparkpost"
     },
     {
       "id": "2336",

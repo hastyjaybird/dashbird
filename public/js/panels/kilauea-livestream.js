@@ -161,7 +161,7 @@ export function mountKilaueaLivestream(card, mount) {
       return r.json();
     })
     .then((j) => {
-      if (!j?.ok || j.disabled) {
+      if (!j?.ok || j.disabled || j?.status?.erupting !== true) {
         setVisible(false);
         return;
       }

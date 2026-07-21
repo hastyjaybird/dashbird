@@ -487,6 +487,14 @@ function queryAcronym(tokens) {
   // Brand + place ("sesa san juan", "ces las vegas"): keep the lead brand; do
   // not mint ssj/clv from place initials.
   if (sig.some((t) => PLACE_WORDS.has(t))) return '';
+  // Query already ends with its acronym ("consumer electronics show ces") —
+  // use that token. Minting initials of ALL tokens wrongly yields "cesc".
+  const lead = sig.slice(0, -1);
+  if (lead.length >= 2) {
+    const minted = lead.map((t) => t[0]).join('');
+    const last = sig[sig.length - 1];
+    if (last === minted) return last;
+  }
   return sig.map((t) => t[0]).join('');
 }
 
@@ -533,8 +541,15 @@ function conferenceHostScore(host, tokens, query = '') {
   // "consumer" wrongly elevates consumercellular.com over ces.tech.
   if (acronym.length >= 3 && (label === acronym || hostFlat === acronym)) {
     score += 55;
-  } else if (acronym.length >= 3 && hostFlat.startsWith(acronym)) {
-    score += 35;
+    // Exact acronym hosts: prefer real event TLDs (ces.tech) over lookalike
+    // knockoffs (ces.ink "Asia CES") that also match every query token in title.
+    if (/\.tech$/i.test(h)) score += 18;
+    else if (/\.com$/i.test(h)) score += 10;
+    else if (/\.org$/i.test(h)) score += 8;
+    else if (/\.(ink|xyz|online|site|info|biz)$/i.test(h)) score -= 20;
+  } else if (acronym.length >= 3 && hostFlat.startsWith(acronym) && label !== acronym) {
+    // cesc.com starts with "ces" but is not the CES acronym host — smaller bump.
+    score += 20;
   }
   if (nameFlat && (hostFlat.includes(nameFlat) || textContainsToken(hostFlat, nameFlat))) {
     score += 60;
@@ -754,43 +769,64 @@ async function previewBigEventSearchFast(query, env, year) {
   // "marti gras" → "mardi gras" on its own.
   const suggested = await wikipediaSuggestedQuery(q);
   const queries = previewSearchQueries(q, year, { suggestedQuery: suggested });
-  const [searchBatches, probedBrand, probedName] = await Promise.all([
+  const tokens = queryTokens(q);
+  const [searchBatches, probedBrand, probedName, probedAcronym] = await Promise.all([
     Promise.all(queries.map((sq) => searchConferenceHits(sq, env, { fast: true }))),
     probeBrandPlaceHomepage(q),
     // When datacenter Bing returns first-token junk and DDG is challenged,
     // concatenated-name domains (mardigrasneworleans.com) still resolve.
     probeNameFlatHomepage(q, suggested),
+    // CES → ces.tech when Bing only returns consumercellular.com.
+    probeAcronymHomepage(q),
   ]);
   /** @type {Array<{ url: string, title: string }>} */
   const hits = [];
   mergeSearchHits(hits, searchBatches);
   let pair = pickOfficialSitePair(q, hits);
-  const probed = probedName || probedBrand;
-  if (probed) {
-    if (!hits.some((x) => x.url === probed)) {
-      hits.unshift({ url: probed, title: suggested || q });
+  // Acronym probe is content-validated (ces.tech mentions consumer+electronics).
+  // Prefer it over SERP lookalikes (ces.ink) that also match label===acronym.
+  if (probedAcronym) {
+    if (!hits.some((x) => x.url === probedAcronym)) {
+      hits.unshift({ url: probedAcronym, title: suggested || q });
     }
-    // Re-score with the probed homepage in the pool (fuzzy tokens elevate the
-    // real event domain over Marti* brand noise for typo queries).
-    pair = pickOfficialSitePair(q, hits);
-    if (!pair.confident && probedName) {
-      const scored = pair;
-      pair = {
-        homepageUrl: probedName,
-        ticketUrl: scored.ticketUrl,
-        officialHost: registrableDomain(new URL(probedName).hostname),
-        confident: true,
-        bestScore: Math.max(scored.bestScore || 0, 70),
-      };
-    } else if (!pair.confident && probedBrand) {
-      const scored = pair;
-      pair = {
-        homepageUrl: probedBrand,
-        ticketUrl: scored.ticketUrl,
-        officialHost: registrableDomain(new URL(probedBrand).hostname),
-        confident: true,
-        bestScore: Math.max(scored.bestScore || 0, 70),
-      };
+    const scored = pickOfficialSitePair(q, hits);
+    pair = {
+      homepageUrl: probedAcronym,
+      ticketUrl: scored.ticketUrl,
+      officialHost: registrableDomain(new URL(probedAcronym).hostname),
+      confident: true,
+      bestScore: Math.max(scored.bestScore || 0, conferenceHostScore(
+        new URL(probedAcronym).hostname,
+        tokens,
+        q,
+      )),
+    };
+  } else {
+    const probed = probedName || probedBrand;
+    if (probed) {
+      if (!hits.some((x) => x.url === probed)) {
+        hits.unshift({ url: probed, title: suggested || q });
+      }
+      pair = pickOfficialSitePair(q, hits);
+      if (!pair.confident && probedName) {
+        const scored = pair;
+        pair = {
+          homepageUrl: probedName,
+          ticketUrl: scored.ticketUrl,
+          officialHost: registrableDomain(new URL(probedName).hostname),
+          confident: true,
+          bestScore: Math.max(scored.bestScore || 0, 70),
+        };
+      } else if (!pair.confident && probedBrand) {
+        const scored = pair;
+        pair = {
+          homepageUrl: probedBrand,
+          ticketUrl: scored.ticketUrl,
+          officialHost: registrableDomain(new URL(probedBrand).hostname),
+          confident: true,
+          bestScore: Math.max(scored.bestScore || 0, 70),
+        };
+      }
     }
   }
   if (!pair.confident && pair.bestScore < MIN_OFFICIAL_ACCEPT_SCORE) {
@@ -1002,9 +1038,13 @@ function significantTokenOverlap(sig, other) {
  * @param {string} query
  * @returns {Promise<string>}
  */
-async function wikipediaSuggestedQuery(query) {
-  const q = String(query || '').trim();
-  if (!q) return '';
+/**
+ * @param {string} search
+ * @returns {Promise<string[]>}
+ */
+async function wikipediaOpenSearchTitles(search) {
+  const q = String(search || '').trim();
+  if (!q) return [];
   const api =
     `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(q)}`
     + '&limit=5&namespace=0&format=json';
@@ -1014,12 +1054,38 @@ async function wikipediaSuggestedQuery(query) {
       headers: { Accept: 'application/json', 'User-Agent': BROWSER_UA },
       signal: AbortSignal.timeout(8_000),
     });
-    if (!r.ok) return '';
+    if (!r.ok) return [];
     const data = await r.json();
-    const titles = Array.isArray(data?.[1]) ? data[1] : [];
+    return Array.isArray(data?.[1]) ? data[1].map((t) => String(t || '')) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function wikipediaSuggestedQuery(query) {
+  const q = String(query || '').trim();
+  if (!q) return '';
+  try {
     const qTokens = queryTokens(q);
     const sig = qTokens.filter((t) => t.length > 2);
     if (!sig.length) return '';
+    const acronym = queryAcronym(qTokens);
+    // Full query often returns nothing when a trailing acronym is appended
+    // ("consumer electronics show ces"); fall back to long form, then acronym.
+    /** @type {string[]} */
+    const searches = [q];
+    if (acronym && qTokens[qTokens.length - 1] === acronym) {
+      searches.push(qTokens.slice(0, -1).join(' '));
+    }
+    if (acronym) searches.push(acronym);
+    /** @type {string[]} */
+    let titles = [];
+    let usedSearch = q;
+    for (const s of searches) {
+      if (!s || titles.length) continue;
+      titles = await wikipediaOpenSearchTitles(s);
+      if (titles.length) usedSearch = s;
+    }
     const qNorm = qTokens.join(' ');
     for (const rawTitle of titles) {
       const title = String(rawTitle || '').replace(/\s*\([^)]*\)\s*/g, ' ').trim();
@@ -1029,7 +1095,10 @@ async function wikipediaSuggestedQuery(query) {
       const useful = titleTokens.filter((t) => t.length > 2 && !ACRONYM_SKIP.has(t));
       if (!useful.length) continue;
       const overlap = significantTokenOverlap(sig, titleTokens);
-      if (overlap < Math.ceil(sig.length * 0.75)) continue;
+      // Acronym-only wiki hits ("CES") often share few long tokens — accept when
+      // the title is the acronym or contains most of the long-form name.
+      const acronymHit = acronym && (useful.join('') === acronym || titleTokens.includes(acronym));
+      if (!acronymHit && overlap < Math.ceil(sig.length * 0.75)) continue;
       const suggested = useful.join(' ');
       if (!suggested || suggested === qNorm) continue;
       return suggested;
@@ -1206,6 +1275,60 @@ async function officialSiteFromWikipedia(query, hits) {
  * @param {string} [suggestedQuery]
  * @returns {Promise<string | null>}
  */
+/**
+ * When SERPs drown an acronym event (CES → consumercellular.com), probe the
+ * short domain directly: ces.tech / ces.com. Requires a long-form name in the
+ * query so random 3-letter tokens are not probed.
+ * @param {string} query
+ * @returns {Promise<string | null>}
+ */
+async function probeAcronymHomepage(query) {
+  const q = String(query || '').trim();
+  const tokens = queryTokens(q);
+  const acronym = queryAcronym(tokens);
+  if (!acronym || acronym.length < 3 || acronym.length > 6) return null;
+  const longTokens = tokens.filter(
+    (t) => t.length > 2 && t !== acronym && !ACRONYM_SKIP.has(t) && !PLACE_WORDS.has(t),
+  );
+  if (longTokens.length < 2) return null;
+
+  const probeOne = async (url) => {
+    let safe;
+    try {
+      safe = await assertPublicHttpUrl(url);
+    } catch {
+      return null;
+    }
+    const page = await fetchPage(safe);
+    if (page.text.length < 160) return null;
+    const host = (() => {
+      try {
+        return new URL(safe).hostname;
+      } catch {
+        return '';
+      }
+    })();
+    if (!host) return null;
+    const label = host.replace(/^www\./, '').split('.')[0] || '';
+    if (label !== acronym) return null;
+    const text = page.text.toLowerCase();
+    if (!text.includes(acronym)) return null;
+    const longHits = longTokens.filter((t) => textContainsToken(text.slice(0, 6000), t)).length;
+    if (longHits < Math.min(2, longTokens.length)) return null;
+    return homepageRootFromUrl(safe) || safe;
+  };
+
+  // Prefer .tech before .com/.org so CES resolves to ces.tech, not a race to
+  // ces.org / a regional ces.* knockoff that happens to answer first.
+  for (const tld of ['tech', 'com', 'org', 'net', 'io', 'events']) {
+    for (const url of [`https://www.${acronym}.${tld}/`, `https://${acronym}.${tld}/`]) {
+      const hit = await probeOne(url);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 async function probeNameFlatHomepage(query, suggestedQuery = '') {
   const q = String(query || '').trim();
   const suggested = String(suggestedQuery || '').trim();
