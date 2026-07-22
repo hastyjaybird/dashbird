@@ -1,4 +1,8 @@
-import { openRandomTaskPicker, openProjectLocationsTable } from '../lib/task-random-ui.js';
+import {
+  openRandomTaskPicker,
+  openProjectLocationsTable,
+  openTaskTagsEditor,
+} from '../lib/task-random-ui.js';
 import { fetchTaskRandomMeta } from '../lib/task-location-meta.js';
 import { onTaskCreated } from '../lib/task-bridge.js';
 import { TASKS_LABELS } from '../lib/network-labels.js';
@@ -171,6 +175,11 @@ export function mountTasks(root, config = {}) {
   moveRenameInput.autocomplete = 'off';
   moveRenameInput.setAttribute('aria-label', 'Task name');
   moveRenameLabel.append(moveRenameText, moveRenameInput);
+  const moveTagsBtn = document.createElement('button');
+  moveTagsBtn.type = 'button';
+  moveTagsBtn.className = 'tasks-panel__move-edit-tags';
+  moveTagsBtn.textContent = 'Edit tags';
+
   const moveTitle = document.createElement('p');
   moveTitle.className = 'tasks-panel__move-title';
   moveTitle.textContent = 'Move to project';
@@ -180,7 +189,7 @@ export function mountTasks(root, config = {}) {
   moveCancel.type = 'button';
   moveCancel.className = 'tasks-panel__move-cancel';
   moveCancel.textContent = 'Cancel';
-  moveDialog.append(moveRenameLabel, moveTitle, moveList, moveCancel);
+  moveDialog.append(moveRenameLabel, moveTagsBtn, moveTitle, moveList, moveCancel);
   moveOverlay.append(moveDialog);
   wrap.append(moveOverlay);
 
@@ -686,6 +695,25 @@ export function mountTasks(root, config = {}) {
   /**
    * @param {string} taskId
    */
+  function openEditTagsForTask(taskId) {
+    const task = items.find((it) => it.id === taskId);
+    const pid = projectId;
+    openTaskTagsEditor({
+      root: wrap,
+      taskId,
+      taskText: task?.text || '',
+      projectId: pid,
+      taskMeta: taskRandomMeta.byTaskId?.[String(taskId)] || null,
+      projectMeta: pid != null ? taskRandomMeta.byProjectId?.[String(pid)] || null : null,
+      onMetaChange: (meta) => {
+        taskRandomMeta = meta;
+      },
+    });
+  }
+
+  /**
+   * @param {string} taskId
+   */
   function showMoveOverlay(taskId) {
     movingTaskId = taskId;
     const task = items.find((it) => it.id === taskId);
@@ -713,6 +741,7 @@ export function mountTasks(root, config = {}) {
         moveList.append(btn);
       }
     }
+    moveTagsBtn.onclick = () => openEditTagsForTask(taskId);
     moveOverlay.hidden = false;
     wrap.classList.add('tasks-panel--moving');
     queueMicrotask(() => {

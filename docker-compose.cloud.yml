@@ -14,6 +14,8 @@ services:
       - '443:443'
       # No 443/udp: HTTP/3 disabled; publishing QUIC lets Firefox Alt-Svc hang.
     environment:
+      JAYHASTY_ROOT_DOMAIN: ${JAYHASTY_ROOT_DOMAIN:-jayhasty.com}
+      PORTFOLIO_DOMAIN: ${PORTFOLIO_DOMAIN:-portfolio.jayhasty.com}
       DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}
       CADDY_EMAIL: ${CADDY_EMAIL:?Set CADDY_EMAIL in .env}
       # In .env store bcrypt with doubled dollars ($$) so Compose does not interpolate.
@@ -21,6 +23,8 @@ services:
       DASHBOARD_BASIC_AUTH_HASH: ${DASHBOARD_BASIC_AUTH_HASH:?Set DASHBOARD_BASIC_AUTH_HASH in .env}
     volumes:
       - ./deploy/Caddyfile.cloud:/etc/caddy/Caddyfile:ro
+      - ./deploy/jayhasty-coming-soon:/srv/jayhasty:ro
+      - ./deploy/jayhasty-portfolio-coming-soon:/srv/portfolio:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

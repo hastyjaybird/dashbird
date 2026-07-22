@@ -36,7 +36,7 @@ import {
   parseTelegramTypeOverride,
 } from './telegram-message-classify.js';
 import { createPanelTodo } from './vikunja-client.js';
-import { addNetworkNote } from './network-notes-store.js';
+import { createKeepNote } from './keep-notes-store.js';
 import { upsertFromTelegram, getContactById, updateContact } from './network-contacts-store.js';
 import {
   saveOrganizationLogo,
@@ -1699,10 +1699,34 @@ async function routeNonEventType(type, text, chatId, env, meta = {}) {
   }
 
   if (type === 'note') {
-    const noteText = String(classified.noteText || text || '').trim();
+    const noteText = String(classified.noteText || text || '')
+      .replace(/\r\n/g, '\n')
+      .trim()
+      .slice(0, 20000);
     try {
-      const note = await addNetworkNote({ text: noteText, source: 'telegram' }, env);
-      await telegramSendMessage(chatId, `Note saved (${note.id.slice(0, 8)}…):\n${note.text.slice(0, 300)}`, env);
+      if (!noteText) {
+        const err = new Error('text_required');
+        err.code = 'text_required';
+        throw err;
+      }
+      // Keep Notes UI: short first line → title; otherwise body-only.
+      const nl = noteText.indexOf('\n');
+      let title = '';
+      let body = noteText;
+      if (nl > 0 && nl <= 100) {
+        const head = noteText.slice(0, nl).trim();
+        const rest = noteText.slice(nl + 1).trim();
+        if (head && rest) {
+          title = head.slice(0, 200);
+          body = rest;
+        }
+      } else if (!noteText.includes('\n') && noteText.length <= 100) {
+        title = noteText.slice(0, 200);
+        body = '';
+      }
+      const note = await createKeepNote({ title, body }, env);
+      const preview = (note.title || note.body || '').slice(0, 300);
+      await telegramSendMessage(chatId, `Note saved (${note.id}):\n${preview}`, env);
       return { ok: true, type: 'note', note };
     } catch (e) {
       await telegramSendMessage(chatId, `Note failed: ${String(e?.message || e).slice(0, 200)}`, env);

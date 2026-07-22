@@ -161,7 +161,7 @@ const HOST_STRATEGIES = {
     strategy: 'official_api',
     strategyLabel: 'Telegram bot (intake)',
     strategyDetail:
-      'Long-poll Telegram Bot API. Classifies messages as event / todo / note / contact. Events: flyer screenshots (vision; albums merge), voice, or text invites. Todos → Vikunja. Notes → Network notes. Contacts → Network CRM. Overrides: /event /todo /note /contact.',
+      'Long-poll Telegram Bot API. Classifies messages as event / todo / note / contact. Events: flyer screenshots (vision; albums merge), voice, or text invites. Todos → Vikunja. Notes → Keep Notes (mobile/desktop Notes tab). Contacts → Network CRM. Overrides: /event /todo /note /contact.',
     outputHint: 'Events, todos, notes, and contacts from one allowlisted chat.',
     devStatus: 'Wired — bot poll + classifier + OpenRouter',
     devStatusKind: 'wired',

@@ -1,4 +1,8 @@
-import { openRandomTaskPicker, openProjectLocationsTable } from '../lib/task-random-ui.js';
+import {
+  openRandomTaskPicker,
+  openProjectLocationsTable,
+  openTaskTagsEditor,
+} from '../lib/task-random-ui.js';
 import { fetchTaskRandomMeta } from '../lib/task-location-meta.js';
 
 /**
@@ -337,7 +341,7 @@ export function mountTasksMobile(root, config = {}) {
   moveTagsLabel.className = 'mobile-tasks__move-rename-label';
   const moveTagsText = document.createElement('span');
   moveTagsText.className = 'mobile-tasks__move-title';
-  moveTagsText.textContent = 'Tags';
+  moveTagsText.textContent = 'Labels';
   const moveTagsChips = document.createElement('div');
   moveTagsChips.className = 'mobile-tasks__move-tags';
   moveTagsChips.style.cssText = 'display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:0.5rem;';
@@ -347,7 +351,7 @@ export function mountTasksMobile(root, config = {}) {
   const moveTagInput = document.createElement('input');
   moveTagInput.type = 'text';
   moveTagInput.className = 'mobile-tasks__input mobile-tasks__move-tag-input';
-  moveTagInput.placeholder = 'Add tag…';
+  moveTagInput.placeholder = 'Add label…';
   moveTagInput.maxLength = 120;
   moveTagInput.autocomplete = 'off';
   moveTagInput.style.flex = '1';
@@ -360,6 +364,11 @@ export function mountTasksMobile(root, config = {}) {
   moveTagAddBtn.textContent = 'Add';
   moveTagAddRow.append(moveTagInput, moveTagAddBtn, moveTagList);
   moveTagsLabel.append(moveTagsText, moveTagsChips, moveTagAddRow);
+
+  const moveEditTagsBtn = document.createElement('button');
+  moveEditTagsBtn.type = 'button';
+  moveEditTagsBtn.className = 'mobile-tasks__move-edit-tags';
+  moveEditTagsBtn.textContent = 'Edit tags';
 
   const moveActions = document.createElement('div');
   moveActions.className = 'mobile-tasks__move-actions';
@@ -376,7 +385,13 @@ export function mountTasksMobile(root, config = {}) {
   moveCancel.style.cssText = 'flex:1;margin-top:0;';
   moveActions.append(moveSave, moveCancel);
 
-  moveOverlay.append(moveRenameLabel, moveProjectLabel, moveTagsLabel, moveActions);
+  moveOverlay.append(
+    moveRenameLabel,
+    moveProjectLabel,
+    moveTagsLabel,
+    moveEditTagsBtn,
+    moveActions,
+  );
   root.append(moveOverlay);
 
   /** @type {Array<{ id: number, title: string, position?: number }>} */
@@ -643,7 +658,7 @@ export function mountTasksMobile(root, config = {}) {
     if (!editLabels.length) {
       const empty = document.createElement('span');
       empty.className = 'mobile-tasks__move-empty muted';
-      empty.textContent = 'No tags.';
+      empty.textContent = 'No labels.';
       moveTagsChips.append(empty);
       return;
     }
@@ -747,7 +762,7 @@ export function mountTasksMobile(root, config = {}) {
     try {
       await syncTaskLabels(taskId);
     } catch {
-      showStatus('Could not update tags.', true);
+      showStatus('Could not update labels.', true);
     }
 
     if (
@@ -760,6 +775,25 @@ export function mountTasksMobile(root, config = {}) {
       return;
     }
     hideMoveOverlay();
+  }
+
+  /**
+   * @param {string} taskId
+   */
+  function openEditTagsForTask(taskId) {
+    const task = items.find((it) => it.id === taskId);
+    const pid = projectId;
+    openTaskTagsEditor({
+      root,
+      taskId,
+      taskText: task?.text || '',
+      projectId: pid,
+      taskMeta: taskRandomMeta.byTaskId?.[String(taskId)] || null,
+      projectMeta: pid != null ? taskRandomMeta.byProjectId?.[String(pid)] || null : null,
+      onMetaChange: (meta) => {
+        taskRandomMeta = meta;
+      },
+    });
   }
 
   /**
@@ -785,6 +819,8 @@ export function mountTasksMobile(root, config = {}) {
     renderMoveTagChips();
     void loadAllLabels();
     void loadTaskLabels(taskId);
+
+    moveEditTagsBtn.onclick = () => openEditTagsForTask(taskId);
 
     moveOverlay.hidden = false;
     root.classList.add('mobile-tasks--moving');

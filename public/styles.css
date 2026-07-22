@@ -14221,6 +14221,27 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
   width: 100%;
 }
 
+.tasks-panel__move-edit-tags {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 0.9em;
+  font-weight: 650;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(110, 181, 255, 0.45);
+  background: rgba(110, 181, 255, 0.12);
+  color: inherit;
+  cursor: pointer;
+}
+
+.tasks-panel__move-edit-tags:hover,
+.tasks-panel__move-edit-tags:focus-visible {
+  border-color: rgba(110, 181, 255, 0.8);
+  background: rgba(110, 181, 255, 0.22);
+}
+
 .tasks-panel__move-title {
   margin: 0;
   font-size: 0.82em;
@@ -17074,6 +17095,35 @@ body.dev-request-mobile-open {
   color: var(--text, #e8e6e3);
   font: inherit;
   cursor: pointer;
+}
+
+.mobile-tasks__move-edit-tags {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.35rem;
+  font: inherit;
+  font-size: 0.92em;
+  font-weight: 650;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(110, 181, 255, 0.45);
+  background: rgba(110, 181, 255, 0.12);
+  color: inherit;
+  cursor: pointer;
+}
+
+.mobile-tasks__move-edit-tags:hover,
+.mobile-tasks__move-edit-tags:focus-visible {
+  border-color: rgba(110, 181, 255, 0.8);
+  background: rgba(110, 181, 255, 0.22);
+}
+
+.tasks-random__tags-task-name {
+  margin: 0 0 0.75rem;
+  font-size: 1.05em;
+  font-weight: 650;
+  line-height: 1.35;
 }
 
 /* Dev-request view: inline edit on dblclick / long-press (7307fe1d) */

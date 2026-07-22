@@ -146,7 +146,9 @@ function assignSummaryEntries(taskMeta, projectMeta) {
  * @param {Record<string, unknown> | null | undefined} taskMeta
  * @param {Record<string, unknown> | null | undefined} projectMeta
  * @param {Record<string, unknown>} data
- * @param {Parameters<typeof renderTaskCardModal>[0]} opts
+ * @param {{
+ *   onAssignSaved?: (row: Record<string, unknown> | null, fullMeta: object) => void | Promise<void>,
+ * } & Partial<Parameters<typeof renderTaskCardModal>[0]>} opts
  */
 function appendAssignFields(assignRow, fields, taskMeta, projectMeta, data, opts) {
   for (const field of fields) {
@@ -191,11 +193,16 @@ function appendAssignFields(assignRow, fields, taskMeta, projectMeta, data, opts
           });
           if (!r.ok) throw new Error('save_failed');
           const j = await r.json();
+          const row = Object.hasOwn(j, 'row') ? j.row : taskMeta;
+          if (opts.onAssignSaved) {
+            await opts.onAssignSaved(row, j.meta || {});
+            return;
+          }
           await renderTaskCardModal({
             ...opts,
             data: {
               ...data,
-              meta: Object.hasOwn(j, 'row') ? j.row : taskMeta,
+              meta: row,
             },
           });
         } catch {
@@ -206,6 +213,56 @@ function appendAssignFields(assignRow, fields, taskMeta, projectMeta, data, opts
     }
     assignRow.append(group);
   }
+}
+
+/**
+ * Edit random-picker tags (priority / effort / duration / when / location) for one task.
+ * @param {{
+ *   root: HTMLElement,
+ *   taskId: string,
+ *   taskText?: string,
+ *   projectId?: number | null,
+ *   taskMeta?: Record<string, unknown> | null,
+ *   projectMeta?: Record<string, unknown> | null,
+ *   onMetaChange?: (meta: object) => void,
+ * }} opts
+ */
+export function openTaskTagsEditor(opts) {
+  const { root, taskId, taskText = '', projectId = null, onMetaChange } = opts;
+  let taskMeta = opts.taskMeta || null;
+  const projectMeta = opts.projectMeta || null;
+  const { body, close } = makeModalShell(root, 'Edit tags');
+
+  const data = {
+    matched: true,
+    task: { id: taskId, text: taskText, projectId },
+    meta: taskMeta,
+    projectMeta,
+  };
+
+  function paint() {
+    body.replaceChildren();
+    if (taskText) {
+      const name = document.createElement('p');
+      name.className = 'tasks-random__tags-task-name';
+      name.textContent = taskText;
+      body.append(name);
+    }
+    const assignRow = document.createElement('div');
+    assignRow.className = 'tasks-random__assign';
+    appendAssignFields(assignRow, ALL_ASSIGN_FIELDS, taskMeta, projectMeta, data, {
+      onAssignSaved: async (row, fullMeta) => {
+        taskMeta = row;
+        data.meta = row;
+        if (fullMeta && typeof fullMeta === 'object') onMetaChange?.(fullMeta);
+        paint();
+      },
+    });
+    body.append(assignRow);
+  }
+
+  paint();
+  return { close };
 }
 
 /**
