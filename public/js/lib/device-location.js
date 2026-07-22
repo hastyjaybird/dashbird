@@ -16,6 +16,8 @@ const MIN_MOVE_M = 400;
 const REVERSE_DEBOUNCE_MS = 800;
 const LAST_KNOWN_KEY = 'dashbird-last-known-place';
 const SERVER_POST_MIN_MS = 60_000;
+/** Drop cached places older than this so travel is not stuck on home. */
+const LAST_KNOWN_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 
 /** @type {number} */
 let lastServerPostAt = 0;
@@ -49,7 +51,7 @@ function postServerPlace(place) {
 
 /**
  * Read the shared last-known place from the server (phone → laptop transfer).
- * @returns {Promise<DevicePlace | null>}
+ * @returns {Promise<(DevicePlace & { savedAt?: number }) | null>}
  */
 async function fetchServerPlace() {
   try {
@@ -61,12 +63,14 @@ async function fetchServerPlace() {
     const lon = Number(p?.lon);
     const label = typeof p?.shortLabel === 'string' ? p.shortLabel.trim() : '';
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || !label) return null;
+    const savedAt = Number(p?.savedAt) || 0;
     return {
       lat,
       lon,
       shortLabel: label,
       timeZone: typeof p?.timeZone === 'string' ? p.timeZone : '',
       source: 'config',
+      savedAt,
     };
   } catch {
     return null;
@@ -107,7 +111,7 @@ function persistLastKnownPlace(place) {
 
 /**
  * Read the phone's last-known place from local storage (best-effort).
- * @returns {DevicePlace | null}
+ * @returns {(DevicePlace & { savedAt?: number }) | null}
  */
 function readLastKnownPlace() {
   try {
@@ -118,12 +122,18 @@ function readLastKnownPlace() {
     const lon = Number(j?.lon);
     const label = typeof j?.shortLabel === 'string' ? j.shortLabel.trim() : '';
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || !label) return null;
+    const savedAt = Number(j?.savedAt) || 0;
+    if (savedAt && Date.now() - savedAt > LAST_KNOWN_MAX_AGE_MS) {
+      localStorage.removeItem(LAST_KNOWN_KEY);
+      return null;
+    }
     return {
       lat,
       lon,
       shortLabel: label,
       timeZone: typeof j?.timeZone === 'string' ? j.timeZone : '',
       source: 'config',
+      savedAt,
     };
   } catch {
     return null;
@@ -284,17 +294,21 @@ export function startDeviceLocation(config) {
   if (bootPromise) return bootPromise;
 
   bootPromise = new Promise((resolve) => {
-    const fallback = readLastKnownPlace() || placeFromConfig(config);
+    const localKnown = readLastKnownPlace();
+    const fallback = localKnown || placeFromConfig(config);
     current = fallback;
     let settled = false;
 
-    // Cross-device seed: if this browser has no live GPS yet, adopt the phone's
-    // last-known place from the shared server store. Never overrides a real fix.
-    if (!readLastKnownPlace()) {
-      fetchServerPlace().then((serverPlace) => {
-        if (serverPlace && current?.source !== 'device') setCurrent(serverPlace);
-      });
-    }
+    // Cross-device seed: adopt the phone's shared fix when it is newer than this
+    // browser's cache (or when local cache is empty). Never overrides a real GPS fix.
+    fetchServerPlace().then((serverPlace) => {
+      if (!serverPlace || current?.source === 'device') return;
+      const localSaved = Number(localKnown?.savedAt) || 0;
+      const serverSaved = Number(serverPlace.savedAt) || 0;
+      if (!localKnown || serverSaved > localSaved) {
+        setCurrent(serverPlace);
+      }
+    });
     const finish = (place) => {
       if (settled) return;
       settled = true;
@@ -326,7 +340,7 @@ export function startDeviceLocation(config) {
     };
 
     const onError = () => {
-      finish(fallback);
+      finish(current || fallback);
     };
 
     navigator.geolocation.getCurrentPosition(onPosition, onError, {

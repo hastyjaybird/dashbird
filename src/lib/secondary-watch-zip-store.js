@@ -1,5 +1,6 @@
 /**
- * Second ZIP for regional phenology (fireflies, fall foliage).
+ * Second ZIP for the hero’s comparison weather tile and regional phenology
+ * (fireflies, fall foliage).
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';

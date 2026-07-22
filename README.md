@@ -82,7 +82,7 @@ House Hunter is a separate topbar page — also a **placeholder** until v2.
 | `GOOGLE_OAUTH_CLIENT_ID` / `SECRET` | Gmail Events intake OAuth (Settings → Connect Gmail) |
 | `GMAIL_INTAKE_ADDRESS` | Default `jay.intake.box@gmail.com` |
 | `WEATHER_LAT` / `WEATHER_LON` | Fallback coordinates when GPS is denied |
-| `SF_WEATHER_LAT` / `SF_WEATHER_LON` | Second city in hero (default San Francisco) |
+| `SF_WEATHER_LAT` / `SF_WEATHER_LON` | Fallback second hero city when Secondary ZIP is unset/disabled (default San Francisco) |
 | `OPENROUTER_API_KEY` | Optional; tool library AI rating fallback |
 | `VIKUNJA_BASE_URL` / `VIKUNJA_TOKEN` | Vikunja instance + API token (Today’s To Do) |
 | `VIKUNJA_PROJECT_ID` | Project used for list/create in the todo panel |

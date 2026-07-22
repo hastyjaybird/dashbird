@@ -704,7 +704,7 @@ function buildCostsBlock(root) {
 }
 
 /**
- * Secondary ZIP for lightning bugs + fall foliage.
+ * Secondary ZIP: second hero weather tile + lightning bugs / fall foliage.
  * Shows the stored ZIP; “Change secondary ZIP” reveals the editor.
  * @param {HTMLElement} root
  */
@@ -714,6 +714,12 @@ function buildSecondaryWatchBlock(root) {
     headingId: 'settings-secondary-heading',
     className: 'settings-page__secondary-block',
   });
+
+  const blurb = document.createElement('p');
+  blurb.className = 'settings-page__secondary-blurb';
+  blurb.textContent =
+    'Drives the second hero weather city and secondary phenology (fireflies, fall foliage). Reload the dashboard after saving.';
+  body.append(blurb);
 
   const currentRow = document.createElement('p');
   currentRow.className = 'settings-page__secondary-current';
@@ -796,13 +802,22 @@ function buildSecondaryWatchBlock(root) {
   changeBtn.addEventListener('click', () => showEditor(true));
   cancelBtn.addEventListener('click', () => showEditor(false));
 
+  /**
+   * @param {string} zip
+   * @param {string} [place]
+   */
+  function paintStored(zip, place) {
+    storedZip = zip;
+    const p = typeof place === 'string' ? place.trim() : '';
+    currentValue.textContent = zip ? (p ? `${zip} · ${p}` : zip) : '—';
+    if (zip) input.value = zip;
+  }
+
   fetch('/api/secondary-watch/zip', { cache: 'no-store' })
     .then((r) => r.json())
     .then((data) => {
       if (data?.zip) {
-        storedZip = String(data.zip);
-        currentValue.textContent = storedZip;
-        input.value = storedZip;
+        paintStored(String(data.zip), data.place);
       } else {
         currentValue.textContent = '—';
       }
@@ -826,9 +841,11 @@ function buildSecondaryWatchBlock(root) {
       if (!r.ok || data.ok === false) {
         throw new Error(data.error || `HTTP ${r.status}`);
       }
-      storedZip = String(data.zip || input.value).replace(/\D/g, '').slice(0, 5);
-      currentValue.textContent = storedZip || '—';
-      msg.textContent = 'Saved.';
+      const z = String(data.zip || input.value).replace(/\D/g, '').slice(0, 5);
+      paintStored(z, data.place);
+      msg.textContent = data.place
+        ? `Saved · hero secondary city: ${data.place}. Reload dashboard to refresh.`
+        : 'Saved. Reload dashboard to refresh the secondary weather tile.';
       showEditor(false);
     } catch (e) {
       msg.classList.add('settings-page__rain-msg--err');

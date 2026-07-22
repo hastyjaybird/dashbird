@@ -3,7 +3,11 @@ import { createMoonPhaseGlyph } from '../lib/moon-phase.js';
 import { describeWeather, fetchCurrentWeather } from './weather-data.js';
 import { detailLineWithSkyHarvestLicenseHint } from '../lib/resource-license-hint.js';
 import { standaloneWarnExclamationSvgHtml } from '../lib/standalone-warn-exclamation.js';
-import { rainAlertQueryString, subscribeDevicePlace } from '../lib/device-location.js';
+import {
+  getDevicePlace,
+  rainAlertQueryString,
+  subscribeDevicePlace,
+} from '../lib/device-location.js';
 import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
 
 const FALLBACK_TZ = 'America/Los_Angeles';
@@ -11,6 +15,8 @@ const FALLBACK_TZ = 'America/Los_Angeles';
 const SKY_STRIP_POLL_MS = 90_000;
 const HERO_CACHE_MAX_MS = 45 * 60 * 1000;
 const SKY_CACHE_MAX_MS = 20 * 60 * 1000;
+/** Re-fetch hero weather/astro when the device moves at least this far. */
+const HERO_PLACE_MOVE_M = 800;
 
 const HERO_SUNSET_SRC = '/icons/weather/sunset-glyph.png';
 const YOSEMITE_MOONBOW_STRIP_SRC = '/assets/earth-moonbow-strip.png';
@@ -273,7 +279,44 @@ function buildCityBlock(cityLabel) {
   body.append(row, descEl, metaEl);
   col.append(lab, body);
 
-  return { col, tempEl, iconSlot, descEl, metaEl };
+  return { col, lab, tempEl, iconSlot, descEl, metaEl };
+}
+
+/**
+ * City label for the primary hero tile (live GPS place, else server default).
+ * @param {object} config
+ * @param {{ shortLabel?: string, source?: string } | null} [place]
+ */
+function primaryPlaceLabel(config, place) {
+  const fromPlace = typeof place?.shortLabel === 'string' ? place.shortLabel.trim() : '';
+  if (fromPlace && fromPlace !== 'Locating…' && fromPlace !== 'Location unavailable') {
+    return fromPlace;
+  }
+  // Live fix arrived but reverse-geocode is still pending — don't keep the home ZIP name.
+  if (place?.source === 'device') return fromPlace === 'Location unavailable' ? 'Here' : 'Locating…';
+  const fromConfig =
+    (typeof config?.weatherPlace === 'string' && config.weatherPlace.trim()) ||
+    (typeof config?.locationLabel === 'string'
+      ? String(config.locationLabel).split('·')[0].trim()
+      : '');
+  return fromConfig || 'Here';
+}
+
+/**
+ * @param {number} lat1
+ * @param {number} lon1
+ * @param {number} lat2
+ * @param {number} lon2
+ */
+function heroPlaceDistanceM(lat1, lon1, lat2, lon2) {
+  const r = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * r * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
 /**
@@ -707,7 +750,7 @@ function fillSkyEventStrip(container, timeZone) {
 export function mountHero(root, config, options = {}) {
   const renderSkyStrip = options?.renderSkyStrip !== false;
   const skyStripMount = options?.skyStripMount ?? null;
-  const displayTz =
+  let displayTz =
     typeof config.weatherTimeZone === 'string' && config.weatherTimeZone.trim() !== ''
       ? config.weatherTimeZone.trim()
       : FALLBACK_TZ;
@@ -742,13 +785,17 @@ export function mountHero(root, config, options = {}) {
   const citiesWrap = document.createElement('div');
   citiesWrap.className = 'hero-cities';
 
-  const oak = buildCityBlock('Oakland');
+  const initialPlace = getDevicePlace();
+  const here = buildCityBlock(primaryPlaceLabel(config, initialPlace));
   const sep = document.createElement('div');
   sep.className = 'hero-cities-sep';
   sep.setAttribute('role', 'presentation');
-  const sf = buildCityBlock('San Francisco');
+  const secondaryLabel =
+    (typeof config.sfWeatherPlace === 'string' && config.sfWeatherPlace.trim()) ||
+    'San Francisco';
+  const sf = buildCityBlock(secondaryLabel);
 
-  citiesWrap.append(oak.col, sep, sf.col);
+  citiesWrap.append(here.col, sep, sf.col);
 
   let astro = null;
   if (renderSkyStrip) {
@@ -784,27 +831,36 @@ export function mountHero(root, config, options = {}) {
   tick();
   setInterval(tick, 1000);
 
-  const oakLat = config.weatherLat;
-  const oakLon = config.weatherLon;
+  const fallbackLat = Number(config.weatherLat);
+  const fallbackLon = Number(config.weatherLon);
   const sfLat = config.sfWeatherLat;
   const sfLon = config.sfWeatherLon;
-  const heroCacheKey = `hero-weather:${oakLat},${oakLon}:${sfLat},${sfLon}`;
+
+  /** @type {{ lat: number, lon: number } | null} */
+  let loadedAt = null;
+  /** @type {string} */
+  let loadedLabel = here.lab.textContent || '';
+  let rainPollStarted = false;
+  let loadSeq = 0;
 
   /**
-   * @param {{ a?: object | null, wOak?: object | null, wSf?: object | null, memo?: object | null, precipLine?: string }} payload
-   * @param {{ keepLoading?: boolean }} [opts]
+   * @param {{ a?: object | null, wHere?: object | null, wSf?: object | null, memo?: object | null, precipLine?: string }} payload
+   * @param {{ keepLoading?: boolean, placeLive?: boolean }} [opts]
    */
   function paintHero(payload, opts = {}) {
     if (!opts.keepLoading) loading.remove();
     fillHeroPrecipLine(precipEl, typeof payload.precipLine === 'string' ? payload.precipLine : '');
     const a = payload.a;
-    const wOak = payload.wOak;
+    const wHere = payload.wHere || payload.wOak;
     const wSf = payload.wSf;
     const memo = payload.memo;
-    if (wOak) fillCityWeather(oak, wOak, 'oak', { heatAdvisory: memo?.heatAdvisory === true });
+    if (wHere) {
+      fillCityWeather(here, wHere, 'here', { heatAdvisory: memo?.heatAdvisory === true });
+    }
     if (wSf) fillCityWeather(sf, wSf, 'sf');
 
     const zipOk = hasFiveDigitWeatherZip(config);
+    const showUv = zipOk || opts.placeLive === true;
 
     if (!a || a.ok === false) {
       sunBlock.replaceChildren(
@@ -848,12 +904,12 @@ export function mountHero(root, config, options = {}) {
     const timeEl = textCol?.querySelector('.hero-astro-time');
     if (
       timeEl &&
-      zipOk &&
-      wOak &&
-      wOak.uvIndex != null &&
-      Number.isFinite(Number(wOak.uvIndex))
+      showUv &&
+      wHere &&
+      wHere.uvIndex != null &&
+      Number.isFinite(Number(wHere.uvIndex))
     ) {
-      timeEl.after(buildSunUvWrap(wOak.uvIndex));
+      timeEl.after(buildSunUvWrap(wHere.uvIndex));
     }
     if (nwsLink) {
       sunItem.title = 'National Weather Service — point forecast (opens in new tab)';
@@ -869,55 +925,129 @@ export function mountHero(root, config, options = {}) {
     );
   }
 
-  const cachedHero = readPanelCache(heroCacheKey, HERO_CACHE_MAX_MS);
-  if (cachedHero && typeof cachedHero === 'object') {
-    paintHero(cachedHero);
-  }
-
-  const astroQs = new URLSearchParams({
-    lat: String(oakLat),
-    lon: String(oakLon),
-  });
-
   const fetchRainAlert = () =>
     fetch(`/api/rain-alert${rainAlertQueryString()}`, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null);
 
-  Promise.all([
-    fetch(`/api/hero-astronomy?${astroQs}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null),
-    fetchCurrentWeather(oakLat, oakLon).catch(() => null),
-    fetchCurrentWeather(sfLat, sfLon).catch(() => null),
-    fetchWeatherAuthorityMemo(oakLat, oakLon, config.weatherZip).catch(() => ({ heatAdvisory: false })),
-    fetchRainAlert().then((d) => (d?.imminent && d?.message ? String(d.message) : '')),
-  ])
-    .then(([a, wOak, wSf, memo, precipLine]) => {
-      const payload = {
-        a,
-        wOak,
-        wSf,
-        memo,
-        precipLine: typeof precipLine === 'string' ? precipLine : '',
-      };
-      writePanelCache(heroCacheKey, payload);
-      paintHero(payload);
-      const refreshRain = () => {
-        fetchRainAlert().then((d) => {
-          fillHeroPrecipLine(
-            precipEl,
-            d?.imminent && d?.message ? String(d.message) : '',
-          );
-        });
-      };
-      setInterval(refreshRain, 2 * 60 * 1000);
-      subscribeDevicePlace(() => {
-        refreshRain();
-      });
-    })
-    .catch((e) => {
-      if (!document.contains(loading)) return;
-      loading.textContent = `Weather or astronomy unavailable: ${e.message}`;
+  const refreshRain = () => {
+    fetchRainAlert().then((d) => {
+      fillHeroPrecipLine(
+        precipEl,
+        d?.imminent && d?.message ? String(d.message) : '',
+      );
     });
+  };
+
+  /**
+   * @param {{ lat: number, lon: number, label: string, placeLive: boolean, zip?: string | null, timeZone?: string }} point
+   */
+  function loadHeroForPlace(point) {
+    const { lat, lon, label, placeLive } = point;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+
+    const labelText = (label || '').trim() || 'Here';
+    here.lab.textContent = labelText;
+    loadedLabel = labelText;
+    if (typeof point.timeZone === 'string' && point.timeZone.trim() !== '') {
+      displayTz = point.timeZone.trim();
+    }
+
+    const heroCacheKey = `hero-weather:${lat.toFixed(3)},${lon.toFixed(3)}:${sfLat},${sfLon}`;
+    const cachedHero = readPanelCache(heroCacheKey, HERO_CACHE_MAX_MS);
+    if (cachedHero && typeof cachedHero === 'object') {
+      paintHero(cachedHero, { placeLive });
+    }
+
+    const astroQs = new URLSearchParams({
+      lat: String(lat),
+      lon: String(lon),
+    });
+    const memoZip = placeLive ? null : point.zip ?? config.weatherZip;
+    const seq = ++loadSeq;
+
+    Promise.all([
+      fetch(`/api/hero-astronomy?${astroQs}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+      fetchCurrentWeather(lat, lon).catch(() => null),
+      fetchCurrentWeather(sfLat, sfLon).catch(() => null),
+      fetchWeatherAuthorityMemo(lat, lon, memoZip).catch(() => ({ heatAdvisory: false })),
+      fetchRainAlert().then((d) => (d?.imminent && d?.message ? String(d.message) : '')),
+    ])
+      .then(([a, wHere, wSf, memo, precipLine]) => {
+        if (seq !== loadSeq) return;
+        loadedAt = { lat, lon };
+        const payload = {
+          a,
+          wHere,
+          wSf,
+          memo,
+          precipLine: typeof precipLine === 'string' ? precipLine : '',
+        };
+        writePanelCache(heroCacheKey, payload);
+        paintHero(payload, { placeLive });
+        if (!rainPollStarted) {
+          rainPollStarted = true;
+          setInterval(refreshRain, 2 * 60 * 1000);
+        }
+      })
+      .catch((e) => {
+        if (seq !== loadSeq) return;
+        if (!document.contains(loading)) return;
+        loading.textContent = `Weather or astronomy unavailable: ${e.message}`;
+      });
+  }
+
+  function placePointFromDevice(place) {
+    const lat = Number(place?.lat);
+    const lon = Number(place?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      return {
+        lat: Number.isFinite(fallbackLat) ? fallbackLat : 37.848,
+        lon: Number.isFinite(fallbackLon) ? fallbackLon : -122.253,
+        label: primaryPlaceLabel(config, null),
+        placeLive: false,
+        zip: config.weatherZip,
+        timeZone: displayTz,
+      };
+    }
+    return {
+      lat,
+      lon,
+      label: primaryPlaceLabel(config, place),
+      placeLive: place?.source === 'device',
+      zip: place?.source === 'device' ? null : config.weatherZip,
+      timeZone:
+        typeof place?.timeZone === 'string' && place.timeZone.trim() !== ''
+          ? place.timeZone.trim()
+          : displayTz,
+    };
+  }
+
+  loadHeroForPlace(placePointFromDevice(initialPlace));
+
+  subscribeDevicePlace((place) => {
+    const next = placePointFromDevice(place);
+    const labelChanged = next.label !== loadedLabel;
+    if (labelChanged) {
+      here.lab.textContent = next.label;
+      loadedLabel = next.label;
+    }
+    if (
+      typeof next.timeZone === 'string' &&
+      next.timeZone.trim() !== '' &&
+      next.timeZone !== displayTz
+    ) {
+      displayTz = next.timeZone.trim();
+    }
+    const moved =
+      !loadedAt ||
+      heroPlaceDistanceM(loadedAt.lat, loadedAt.lon, next.lat, next.lon) >= HERO_PLACE_MOVE_M;
+    if (moved) {
+      loadHeroForPlace(next);
+    } else {
+      refreshRain();
+    }
+  });
 }

@@ -12,6 +12,8 @@ import { resolveEventsFinderGoogleCalendar } from '../lib/events-finder-google-c
 import { resolveDashboardWeatherLatLon } from '../lib/hero-weather-location.js';
 import { fetchNwsPointsDocument, mapClickUrlForLatLon } from '../lib/nws-points.js';
 import { reverseGeocodeCoords } from '../lib/reverse-geocode.js';
+import { resolveSecondaryWatchLocation } from '../lib/secondary-watch-location.js';
+
 const router = Router();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -47,8 +49,27 @@ async function readLastBackupFromFile() {
 router.get('/', async (req, res) => {
   const { lat, lon, zip: weatherZip, place: weatherPlace, stateAbbrev } =
     await resolveDashboardWeatherLatLon();
-  const sfLat = parseFloat(process.env.SF_WEATHER_LAT ?? '37.7749');
-  const sfLon = parseFloat(process.env.SF_WEATHER_LON ?? '-122.4194');
+
+  // Second hero weather tile: Settings → Secondary ZIP when set; else SF_WEATHER_* env.
+  let sfLat = parseFloat(process.env.SF_WEATHER_LAT ?? '37.7749');
+  let sfLon = parseFloat(process.env.SF_WEATHER_LON ?? '-122.4194');
+  let sfWeatherPlace = 'San Francisco';
+  let sfWeatherZip = null;
+  if (String(process.env.SECONDARY_WATCH || '').trim() !== '0') {
+    try {
+      const secondary = await resolveSecondaryWatchLocation();
+      if (secondary && Number.isFinite(secondary.lat) && Number.isFinite(secondary.lon)) {
+        sfLat = secondary.lat;
+        sfLon = secondary.lon;
+        sfWeatherZip = secondary.zip || null;
+        if (typeof secondary.place === 'string' && secondary.place.trim()) {
+          sfWeatherPlace = secondary.place.trim();
+        }
+      }
+    } catch {
+      /* keep SF_WEATHER_* fallback */
+    }
+  }
 
   let weatherTimeZone = (process.env.WEATHER_TIME_ZONE || '').trim();
   let nwsMapClickUrl = mapClickUrlForLatLon(lat, lon);
@@ -142,6 +163,8 @@ router.get('/', async (req, res) => {
     nwsMapClickUrl,
     sfWeatherLat: Number.isFinite(sfLat) ? sfLat : 37.7749,
     sfWeatherLon: Number.isFinite(sfLon) ? sfLon : -122.4194,
+    sfWeatherPlace,
+    sfWeatherZip,
     locationLabel: envLabel || `${placeLabel}${weatherZip ? ` · ${weatherZip}` : ''}`,
     lastBackupAt,
     vikunjaConfigured,

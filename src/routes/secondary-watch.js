@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import express from 'express';
 import { buildSecondaryWatchEarthBundle } from '../lib/secondary-watch-earth.js';
+import { resolveSecondaryWatchLocation } from '../lib/secondary-watch-location.js';
 import {
   loadSecondaryWatchZip,
   saveSecondaryWatchZip,
@@ -16,12 +17,17 @@ function disabled() {
 router.get('/zip', async (_req, res) => {
   try {
     if (disabled()) {
-      res.json({ ok: true, disabled: true, zip: '' });
+      res.json({ ok: true, disabled: true, zip: '', place: '' });
       return;
     }
-    const zip = await loadSecondaryWatchZip();
+    const loc = await resolveSecondaryWatchLocation();
+    const zip = loc?.zip || (await loadSecondaryWatchZip());
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ ok: true, zip });
+    res.json({
+      ok: true,
+      zip,
+      place: typeof loc?.place === 'string' ? loc.place : '',
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
@@ -38,8 +44,13 @@ router.put('/zip', async (req, res) => {
       res.status(400).json(saved);
       return;
     }
+    const loc = await resolveSecondaryWatchLocation();
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ ok: true, zip: saved.zip });
+    res.json({
+      ok: true,
+      zip: saved.zip,
+      place: typeof loc?.place === 'string' ? loc.place : '',
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }

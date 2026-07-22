@@ -16,7 +16,7 @@ export const DASHBOARD_MONITORING_SOURCES = [
   {
     id: 'hero_weather',
     group: 'Hero & weather',
-    label: 'Hero weather tiles (Oakland + San Francisco)',
+    label: 'Hero weather tiles (live/primary + Secondary ZIP)',
     source:
       '/api/hero-weather — Open-Meteo forecast (cached) with NWS station observations fallback',
   },
