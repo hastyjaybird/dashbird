@@ -1,5 +1,8 @@
-# TLS + multi-site routing for jayhasty.com (public) and dashbird (private).
+# TLS + basic auth + reverse proxy for public dashbird (Vultr / DuckDNS).
 # Env vars injected by docker-compose.cloud.yml (Caddy {$VAR} syntax).
+#
+# For jayhasty.com + portfolio coming-soon + dashbird.jayhasty.com cutover,
+# swap this file for deploy/Caddyfile.cloud.multisite (see docs/jayhasty-setup.md).
 #
 # Generate hash:
 #   docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
@@ -15,34 +18,6 @@
 	}
 }
 
-# Public root — coming soon
-{$JAYHASTY_ROOT_DOMAIN} www.{$JAYHASTY_ROOT_DOMAIN} {
-	encode zstd gzip
-
-	header {
-		Alt-Svc "clear"
-	}
-
-	@www host www.{$JAYHASTY_ROOT_DOMAIN}
-	redir @www https://{$JAYHASTY_ROOT_DOMAIN}{uri} permanent
-
-	root * /srv/jayhasty
-	file_server
-}
-
-# Public portfolio placeholder (replace with app/static site later)
-{$PORTFOLIO_DOMAIN} {
-	encode zstd gzip
-
-	header {
-		Alt-Svc "clear"
-	}
-
-	root * /srv/portfolio
-	file_server
-}
-
-# Private Dashbird — basic auth + trusted-device bypass
 {$DASHBOARD_DOMAIN} {
 	encode zstd gzip
 

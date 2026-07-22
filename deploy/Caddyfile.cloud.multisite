@@ -1,0 +1,74 @@
+# Multi-site cutover: jayhasty.com (public) + portfolio (public) + dashbird (private).
+# Activate at Part 3 of docs/jayhasty-setup.md:
+#   1. Set JAYHASTY_* / PORTFOLIO_* / DASHBOARD_DOMAIN in server .env
+#   2. Point docker-compose.cloud.yml caddy volumes at this file (or:
+#        cp deploy/Caddyfile.cloud.multisite deploy/Caddyfile.cloud)
+#   3. Ensure compose passes JAYHASTY_ROOT_DOMAIN + PORTFOLIO_DOMAIN and mounts
+#      ./deploy/jayhasty-coming-soon:/srv/jayhasty:ro
+#      ./deploy/jayhasty-portfolio-coming-soon:/srv/portfolio:ro
+#   4. docker compose -f docker-compose.cloud.yml up -d --force-recreate caddy
+#
+# Do NOT enable while DNS still points at Squarespace — ACME will fail and can
+# burn Let's Encrypt rate limits. Keep deploy/Caddyfile.cloud (duckdns-only) until then.
+
+{
+	email {$CADDY_EMAIL}
+	servers {
+		protocols h1 h2
+	}
+}
+
+# Public root — coming soon
+{$JAYHASTY_ROOT_DOMAIN} www.{$JAYHASTY_ROOT_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Alt-Svc "clear"
+	}
+
+	@www host www.{$JAYHASTY_ROOT_DOMAIN}
+	redir @www https://{$JAYHASTY_ROOT_DOMAIN}{uri} permanent
+
+	root * /srv/jayhasty
+	file_server
+}
+
+# Public portfolio placeholder (replace with app/static site later)
+{$PORTFOLIO_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Alt-Svc "clear"
+	}
+
+	root * /srv/portfolio
+	file_server
+}
+
+# Private Dashbird — basic auth + trusted-device bypass
+{$DASHBOARD_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Alt-Svc "clear"
+	}
+
+	log {
+		output file /data/access.log
+		format json
+	}
+
+	route {
+		@device_bind path /auth/device-bind
+		handle @device_bind {
+			reverse_proxy dashboard:3000
+		}
+		handle {
+			forward_auth dashboard:3000 {
+				uri /api/trusted-device/auth
+				copy_headers Set-Cookie
+			}
+			reverse_proxy dashboard:3000
+		}
+	}
+}

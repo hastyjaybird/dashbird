@@ -26,7 +26,7 @@ Collect these:
 3. **Credit card** — Google Workspace (~$7/mo).
 4. **15–30 minutes** — DNS can take up to an hour to propagate; domain *transfer* to Cloudflare can take days (optional — use Cloudflare nameservers first for speed).
 
-Repo changes for multi-site Caddy are in `deploy/Caddyfile.cloud` and `deploy/jayhasty-*-coming-soon/`.
+Coming-soon static pages live in `deploy/jayhasty-*-coming-soon/`. Multi-site Caddy is ready in `deploy/Caddyfile.cloud.multisite` — **do not activate it until DNS A records point at Vultr** (Part 1), or ACME will fail and can burn Let's Encrypt rate limits. Until then, production stays on duckdns-only `deploy/Caddyfile.cloud`.
 
 ---
 
@@ -185,7 +185,7 @@ GMAIL_OAUTH_REDIRECT_URI=https://dashbird.jayhasty.com/api/events-finder-gmail/o
 
 (Path is `/api/events-finder-gmail/oauth/callback` — only change the hostname from duckdns.)
 
-### 3.2 Sync code from your laptop
+### 3.2 Sync code + activate multi-site Caddy
 
 From the dashbird repo root:
 
@@ -195,17 +195,29 @@ CLOUD_HOST=root@YOUR_VULTR_IP ./scripts/sync-to-cloud.sh
 
 Do **not** use `SYNC_ENV=1` unless you intend to overwrite the server `.env` — edit `.env` on the server manually (step 3.1).
 
+On the VPS, switch Caddy to the multi-site file and mount the coming-soon dirs:
+
+```bash
+cd /opt/dashbird
+cp deploy/Caddyfile.cloud.multisite deploy/Caddyfile.cloud
+```
+
+In `docker-compose.cloud.yml` under `caddy`:
+
+1. Uncomment `JAYHASTY_ROOT_DOMAIN` / `PORTFOLIO_DOMAIN` in `environment`.
+2. Uncomment the two `/srv/jayhasty` and `/srv/portfolio` volume lines.
+
 ### 3.3 Restart the cloud stack
 
 On the VPS:
 
 ```bash
 cd /opt/dashbird
-docker compose -f docker-compose.cloud.yml up -d --build
+docker compose -f docker-compose.cloud.yml up -d --build --force-recreate caddy dashboard
 docker compose -f docker-compose.cloud.yml logs -f caddy
 ```
 
-Caddy should obtain Let's Encrypt certs for all four hostnames. First visit may take 1–2 minutes per domain.
+Caddy should obtain Let's Encrypt certs for all four hostnames. First visit may take 1–2 minutes per domain. Only do this **after** Cloudflare A records point at Vultr (grey cloud).
 
 ### 3.4 Re-bind trusted devices (one-time per device)
 
