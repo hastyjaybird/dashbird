@@ -5560,6 +5560,17 @@ html.dashbird-view-mobile .page-view--mobile:not([hidden]) {
   min-width: 0;
 }
 
+.mobile-network__toolbar-actions .mobile-network__action--share-square {
+  flex: 0 0 auto;
+  width: 4.75rem;
+  height: 4.75rem;
+  min-height: 4.75rem;
+  padding: 0.35rem;
+  font-size: 0.72rem;
+  line-height: 1.15;
+  font-weight: 650;
+}
+
 .mobile-network__search {
   width: 100%;
   min-height: 2.75rem;
@@ -7342,6 +7353,66 @@ body.dashy--page-network .page-view--mobile {
 .network-crm__btn:disabled {
   opacity: 0.55;
   cursor: default;
+}
+
+.network-crm__btn--share-square {
+  flex: 0 0 auto;
+  width: 4.75rem;
+  height: 4.75rem;
+  padding: 0.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1.15;
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.network-crm__btn-share-label {
+  display: block;
+}
+
+.network-crm__share-asset-dialog {
+  width: min(22rem, 100%);
+  max-height: min(92vh, 40rem);
+}
+
+.network-crm__share-asset-frame {
+  margin-top: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem;
+  border-radius: 0.45rem;
+  background: #fff;
+}
+
+.network-crm__share-asset-img {
+  display: block;
+  width: min(100%, 18rem);
+  height: auto;
+  max-height: min(60vh, 22rem);
+  object-fit: contain;
+}
+
+.network-crm__share-asset-caption {
+  margin: 0.65rem 0 0;
+  font-size: 0.82rem;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.network-crm__share-asset-caption a {
+  color: var(--accent, #6b9bd1);
+}
+
+.network-crm__share-asset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.85rem;
+  justify-content: flex-end;
 }
 
 .network-crm__layout {

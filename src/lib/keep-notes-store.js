@@ -165,6 +165,30 @@ export async function getKeepNote(id, env = process.env) {
 }
 
 /**
+ * Split Telegram / plain note text into Keep Notes title + body.
+ * Short first line → title; short one-liner → title only; else body-only.
+ * @param {string} text
+ * @returns {{ title: string, body: string }}
+ */
+export function splitKeepNoteTitleBody(text) {
+  const noteText = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .trim()
+    .slice(0, 20000);
+  if (!noteText) return { title: '', body: '' };
+  const nl = noteText.indexOf('\n');
+  if (nl > 0 && nl <= 100) {
+    const head = noteText.slice(0, nl).trim();
+    const rest = noteText.slice(nl + 1).trim();
+    if (head && rest) return { title: head.slice(0, 200), body: rest };
+  }
+  if (!noteText.includes('\n') && noteText.length <= 100) {
+    return { title: noteText.slice(0, 200), body: '' };
+  }
+  return { title: '', body: noteText };
+}
+
+/**
  * @param {{ title?: string, body?: string, pinned?: boolean }} input
  * @param {NodeJS.ProcessEnv} [env]
  */

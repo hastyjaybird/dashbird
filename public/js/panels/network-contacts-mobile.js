@@ -15,6 +15,7 @@ import {
   isMobileNavApplying,
 } from '../lib/mobile-history.js';
 import { addSceneToken } from '../lib/network-scene-tokens.js';
+import { openShareContactInfoDialog } from '../lib/network-share-contact.js?v=share-contact-1';
 
 const RELATIONSHIP_STATUSES = [
   'Lead',
@@ -378,7 +379,13 @@ export function mountNetworkContactsMobile(root) {
   newContactBtn.type = 'button';
   newContactBtn.className = 'mobile-network__action';
   newContactBtn.textContent = 'New contact';
-  listActions.append(newContactBtn);
+  const shareContactBtn = document.createElement('button');
+  shareContactBtn.type = 'button';
+  shareContactBtn.className = 'mobile-network__action mobile-network__action--share-square';
+  shareContactBtn.setAttribute('aria-label', 'Share Contact Info');
+  shareContactBtn.innerHTML =
+    '<span class="network-crm__btn-share-label">Share<br>Contact<br>Info</span>';
+  listActions.append(newContactBtn, shareContactBtn);
 
   toolbar.append(search, listActions, filterBar);
 
@@ -1570,6 +1577,10 @@ export function mountNetworkContactsMobile(root) {
   clearSelectionBtn.addEventListener('click', () => {
     selectedContactIds.clear();
     renderList();
+  });
+
+  shareContactBtn.addEventListener('click', () => {
+    openShareContactInfoDialog();
   });
 
   newContactBtn.addEventListener('click', async () => {

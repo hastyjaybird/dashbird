@@ -31,7 +31,6 @@ import {
   fetchHowWeMetSuggestion,
   howWeMetStatusBit,
 } from '../lib/network-how-we-met-suggest.js?v=how-we-met-1';
-
 const WORKBENCH_KEY = 'dashbird-network-workbench-v1';
 
 

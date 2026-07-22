@@ -1,8 +1,8 @@
 {
-  "summaryText": "You have several Amazon deliveries and a few industry updates regarding AI and fusion energy.",
-  "generatedAt": "2026-07-22T21:39:00.541Z",
+  "summaryText": "You have a membership renewal decision pending.",
+  "generatedAt": "2026-07-22T22:13:15.551Z",
   "lastScanYmd": "2026-07-22",
-  "lastScanAt": "2026-07-22T21:39:00.541Z",
+  "lastScanAt": "2026-07-22T22:13:15.551Z",
   "windowDays": 10,
   "items": [
     {
@@ -246,10 +246,10 @@
       "vikunjaTaskId": null
     },
     {
-      "id": "4d1b2a1b-69fc-47c2-a6a9-9625a67833c9",
-      "title": "Address account expiration",
+      "id": "88c3ba4b-c1dd-4ba5-993d-ecafedbb15c6",
+      "title": "Decide on America’s Mailbox membership renewal or closure",
       "company": "America's Mailbox",
-      "detail": "America's Mailbox: Your Silver membership account expired on June 1. Decide whether to extend or close the account before June 30.",
+      "detail": "America's Mailbox: America’s Mailbox: Your Silver membership expired June 1, 2026; decide whether to extend the account or close it.",
       "deadline": "2026-06-30T00:00:00.000Z",
       "deadlineSource": "extracted",
       "needsReply": true,
@@ -271,8 +271,8 @@
       "pinned": false,
       "unpinDeleteAt": null,
       "createdAt": "2026-07-22T01:41:49.252Z",
-      "updatedAt": "2026-07-22T10:31:20.227Z",
-      "fingerprint": "943175f32fa1326a",
+      "updatedAt": "2026-07-22T22:13:15.551Z",
+      "fingerprint": "f959c93e16bf8883",
       "vikunjaTaskId": null
     },
     {

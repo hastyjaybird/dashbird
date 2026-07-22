@@ -36,7 +36,7 @@ import {
   parseTelegramTypeOverride,
 } from './telegram-message-classify.js';
 import { createPanelTodo } from './vikunja-client.js';
-import { createKeepNote } from './keep-notes-store.js';
+import { createKeepNote, splitKeepNoteTitleBody } from './keep-notes-store.js';
 import { upsertFromTelegram, getContactById, updateContact } from './network-contacts-store.js';
 import {
   saveOrganizationLogo,
@@ -1709,21 +1709,7 @@ async function routeNonEventType(type, text, chatId, env, meta = {}) {
         err.code = 'text_required';
         throw err;
       }
-      // Keep Notes UI: short first line → title; otherwise body-only.
-      const nl = noteText.indexOf('\n');
-      let title = '';
-      let body = noteText;
-      if (nl > 0 && nl <= 100) {
-        const head = noteText.slice(0, nl).trim();
-        const rest = noteText.slice(nl + 1).trim();
-        if (head && rest) {
-          title = head.slice(0, 200);
-          body = rest;
-        }
-      } else if (!noteText.includes('\n') && noteText.length <= 100) {
-        title = noteText.slice(0, 200);
-        body = '';
-      }
+      const { title, body } = splitKeepNoteTitleBody(noteText);
       const note = await createKeepNote({ title, body }, env);
       const preview = (note.title || note.body || '').slice(0, 300);
       await telegramSendMessage(chatId, `Note saved (${note.id}):\n${preview}`, env);

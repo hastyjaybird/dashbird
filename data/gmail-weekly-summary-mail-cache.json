@@ -1,5 +1,5 @@
 {
-  "cachedAt": "2026-07-22T21:37:07.085Z",
+  "cachedAt": "2026-07-22T22:11:55.512Z",
   "fingerprint": "{\"addresses\":[\"jay.intake.box@gmail.com\",\"julia.hasty@gmail.com\"],\"query\":\"newer_than:10d\",\"days\":10}",
   "days": 10,
   "query": "newer_than:10d",
@@ -8,6 +8,71 @@
     "julia.hasty@gmail.com"
   ],
   "messages": [
+    {
+      "id": "2409",
+      "threadId": "19f8bd7dc53bea8c",
+      "mailbox": "jay.intake.box@gmail.com",
+      "subject": "Don't let this be a missed connection Hello",
+      "from": "",
+      "to": "jay.intake.box@gmail.com",
+      "date": "2026-07-22T22:00:07.000Z",
+      "snippet": "SHEIN table {border-collapse:collapse; mso-table-lspace:0pt; mso-table-rspace:0pt; border:0;} .ol600 {width:600px;} .ol610 {width:610px;} .lh {line-height:normal !important;} * {font-family: Arial, Helvetica, Microsoft JhengHei;} td {font-f",
+      "text": "SHEIN table {border-collapse:collapse; mso-table-lspace:0pt; mso-table-rspace:0pt; border:0;} .ol600 {width:600px;} .ol610 {width:610px;} .lh {line-height:normal !important;} * {font-family: Arial, Helvetica, Microsoft JhengHei;} td {font-family: Arial, Helvetica, Microsoft JhengHei;} 96 body {margin:0; padding:0; -webkit-text-size-adjust:none; -ms-text-size-adjust:none; color: #404040; background: #eeeeee;} a, a:active, a:visited, .yshortcuts, .yshortcuts a span {text-decoration:none; color: #000000;} a[x-apple-data-detectors] {color: inherit !important; text-decoration: none !important; font-size: inherit !important; font-family: inherit !important; font-weight: inherit !important; line-height: inherit !important;} [office365] td div, [office365] button {display:block !important;} table th {padding:0; margin:0; border:0; font-weight:normal;} .thm {vertical-align:middle;} sup{ display: inline-block; margin-top:-5px; } .ff{font-family: Arial, Helvetica, sans-serif;} .ff1{font-family: Arial, Helvetica, sans-serif, Arial;} .btn{ display:inline-block; font-size: 11px; line-height: 30px; border:1px solid #fff; color: #fff; padding: 0 10px; text-decoration: none; text-align: center;} h1, h2, h3, h4, h5, h6, p {margin:0 !important; padding:0 !important;} @media (prefers-color-scheme: light) { .bgColor{ color:#333333; background: #eeeeee; } .title{color:#333333; display:block;} } @media (prefers-color-scheme: dark) { .bgColor{ color:#ffffff; background: #eeeeee; } .title{color:#dddddd; display:block;} } .fsH1{font-size: 28px; line-height:32px;} .fsH2{font-size: 24px; line-height:28px;} .fsH3{font-size: 18px; line-height:24px;} .fsH4{font-size: 16px; line-height:22px;} .font36, .font36 font {font-size: 36px; line-height:42px;} .font30, .font30 font {font-size: 30px; line-height:35px;} .font28, .font28 font {font-size: 28px; line-height:32px;} .font24, .font24 font {font-size: 24px; line-height:28px;} .font22, .font22 font {font-size: 22px; line-height:26px;} .font20, .font20 font {font-size: 20px; line-height:26px;} .font18, .font18 font {font-size: 18px; line-height:24px;} .font16, .font16 font {font-size: 16px; line-height:20px;} .font14, .font14 font {font-size: 14px; line-height:18px;} .font13, .font13 font {font-size: 13px; line-height:17px;} .font12, .font12 font {font-size: 12px; line-height:16px;} .font11, .font11 font {font-size: 11px; line-height:15px;} .font10, .font10 font {font-size: 10px; line-height:14px;} .font9, .font9 font {font-size: 9px; line-h",
+      "gmailId": "19f8bd7dc53bea8c",
+      "rfc822MessageId": "871f2ebbd812ffe43db0d3ca3333ffd13ff4829f0062057aa93a800682bc7027@news.emailmarket.shein.com"
+    },
+    {
+      "id": "152621",
+      "threadId": "19f8bc8c5f86d6fd",
+      "mailbox": "julia.hasty@gmail.com",
+      "subject": "Your Google Account was recovered successfully",
+      "from": "",
+      "to": "Julia.Hasty@gmail.com",
+      "date": "2026-07-22T21:43:37.000Z",
+      "snippet": "This is a copy of a security alert sent to jay@jayhasty.com. Julia.Hasty@gmail.com is the recovery email for this account. If you don't recognize this account, remove it. [image: Google] Account recovered successfully jay@jayhasty.com Welco",
+      "text": "This is a copy of a security alert sent to jay@jayhasty.com.\nJulia.Hasty@gmail.com is the recovery email for this account. If you don't\nrecognize this account, remove\n<https://accounts.google.com/AccountDisavow?adt=AOX8kiq0mCn_hyeY3gr87CenreD3q06_w3-JYhT0zUkYqV7eI9VJ9Kk4zEInDe21CR8&rfn=264>\nit.\n[image: Google]\nAccount recovered successfully\njay@jayhasty.com\nWelcome back to your accountIf you suspect you were locked out of your\naccount because of changes made by someone else, you should review &\nprotect your account.\n<https://accounts.google.com/AccountChooser?Email=jay@jayhasty.com&continue=https://myaccount.google.com/secure-account?utm_source%3Demail%26utm_medium%3Demail%26utm_campaign%3Dph%26src%3D14%26aneid%3D1148377810651215844>\nYou received this email to let you know about important changes to your\nGoogle Account and services.\n© 2026 Google LLC, 1600 Amphitheatre Parkway, Mountain View, CA 94043, USA",
+      "gmailId": "19f8bc8c5f86d6fd",
+      "rfc822MessageId": "kcgq2xtwq860wLThx_2fUw@notifications.google.com"
+    },
+    {
+      "id": "152622",
+      "threadId": "19f8bc8c86325427",
+      "mailbox": "julia.hasty@gmail.com",
+      "subject": "Security alert for jay@jayhasty.com",
+      "from": "",
+      "to": "Julia.Hasty@gmail.com",
+      "date": "2026-07-22T21:43:37.000Z",
+      "snippet": "This is a copy of a security alert sent to jay@jayhasty.com. Julia.Hasty@gmail.com is the recovery email for this account. If you don't recognize this account, remove it. [image: Google] New sign-in to your account jay@jayhasty.com We notic",
+      "text": "This is a copy of a security alert sent to jay@jayhasty.com.\nJulia.Hasty@gmail.com is the recovery email for this account. If you don't\nrecognize this account, remove\n<https://accounts.google.com/AccountDisavow?adt=AOX8kiqleF8OiVmaH4K5bn6JZ822OP36cujv2gt4bX7ix6wj1C5AHfy4i3U_mXoBjbQ&rfn=325>\nit.\n[image: Google]\nNew sign-in to your account\njay@jayhasty.com\nWe noticed a new sign-in to your Google Account. If this was you, you don’t\nneed to do anything. If not, we’ll help you secure your account.\nCheck activity\n<https://accounts.google.com/AccountChooser?Email=jay@jayhasty.com&continue=https://myaccount.google.com/alert/nt/1784756617000?rfn%3D325%26rfnc%3D1%26eid%3D1698383435835240997%26et%3D1>\nYou can also see security activity at\nhttps://myaccount.google.com/notifications\nYou received this email to let you know about important changes to your\nGoogle Account and services.\n© 2026 Google LLC, 1600 Amphitheatre Parkway, Mountain View, CA 94043, USA",
+      "gmailId": "19f8bc8c86325427",
+      "rfc822MessageId": "EC1CRJRwbIse4d759Q4Efg@notifications.google.com"
+    },
+    {
+      "id": "152620",
+      "threadId": "19f8bc76f30ee52c",
+      "mailbox": "julia.hasty@gmail.com",
+      "subject": "Google Verification Code",
+      "from": "",
+      "to": "juliahasty@gmail.com",
+      "date": "2026-07-22T21:42:08.000Z",
+      "snippet": "Google Verification Code Dear Google User, We received a request to access your Google Account jay@jayhasty.com through your email address. Your Google verification code is: 267249 If you did not request this code, it is possible that someo",
+      "text": "Google Verification Code\nDear Google User,\nWe received a request to access your Google Account jay@jayhasty.com through your email address. Your Google verification code is:\n267249\nIf you did not request this code, it is possible that someone else is trying to access the Google Account jay@jayhasty.com. Do not forward or give this code to anyone.\nYou received this message because this email address is listed as the recovery email for the Google Account jay@jayhasty.com. If that is incorrect, please click here to remove your email address from that Google Account.\nSincerely yours,\nThe Google Accounts team\nThis email can't receive replies. For more information, visit the Google Accounts Help Center.\n© Google Inc., 1600 Amphitheatre Parkway, Mountain View, CA 94043, USA",
+      "gmailId": "19f8bc76f30ee52c",
+      "rfc822MessageId": "autogen-java-835d5c6a-dc00-45bb-9c13-e3dda8bef330@google.com"
+    },
+    {
+      "id": "2408",
+      "threadId": "19f8bc732dff3406",
+      "mailbox": "jay.intake.box@gmail.com",
+      "subject": "Making a break into Venture Capital: Live Networking was canceled",
+      "from": "",
+      "to": "jay.intake.box@gmail.com",
+      "date": "2026-07-22T21:41:55.000Z",
+      "snippet": "Making a break into Venture Capital: Live Networking was Canceled Hello there, We want to let you know that the host of Making a break into Venture Capital: Live Networking has canceled the event. See you next time! Sent using luma.com",
+      "text": "Making a break into Venture Capital: Live Networking was Canceled\nHello there,\nWe want to let you know that the host of Making a break into Venture Capital: Live Networking has canceled the event.\nSee you next time!\nSent using luma.com",
+      "gmailId": "19f8bc732dff3406",
+      "rfc822MessageId": "0101019f8bc73102-b07ef8e3-9354-49a9-9df9-8ef25221a051-000000@us-west-2.amazonses.com"
+    },
     {
       "id": "2407",
       "threadId": "19f8bb7d18d79c68",
@@ -982,71 +1047,6 @@
       "text": "Document * { padding: 0; margin: 0; font-family: 'Poppins', 'Avenir Next', 'Google Sans', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'Helvetica', 'Roboto', 'Arial', 'Seogoe UI', 'Ubuntu', sans-serif; } .container { width: 100%; height: 100%; background: #F4F7FA; } #app { max-width: 450px; box-sizing: border-box; margin: 0 auto; } .content-box { border: 1px solid #EAEAEA; background-color: #ffffff; } .weee-logo { padding: 20px 0; text-align: center; display: block; } .weee-logo img { height: 29px; width: 98px; } .item-box { padding: 20px 20px 15px; background-color: #ffffff; } .item-title { font-weight: 500; font-size: 24px; line-height: 120%; color: #111111; padding-bottom: 20px; border-bottom: 1px solid #eaeaea; } .item-list { padding-top: 20px; font-weight: 500; font-size: 14px; line-height: 120%; color: #777777; } .item-child { margin-bottom: 5px; color: #777777; font-size: 14px; font-weight: 500; height: 40px; display: table; width: 100%; table-layout: fixed; } .item-left { display: table-cell; padding-right: 8px; width: 60%; white-space: nowrap; overflow: hidden; } .item-right { line-height: 22px; display: table-cell; white-space: nowrap; width: 40%; vertical-align: middle; } .clear { clear: both; } .item-cover { width: 40px; height: 40px; margin-right: 5px; object-fit: cover; } .item-name { line-height: 40px; display: inline-block; vertical-align: top; width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #777777; font-size: 14px; font-weight: 500; } .item-q { display: inline-block; text-align: center; white-space: nowrap; width: 48%; text-align: center; } .item-price { width: 48%; text-align: right; white-space: nowrap; display: inline-block; } .item-line1 { font-weight: 600; font-size: 18px; line-height: 120%; color: #777777; margin-top: 20px; display: table; table-layout: fixed; width: 100%; } .tip-box { padding: 60px 60px 20px; text-align: center; background-color: #ffffff; } @media screen and (max-width: 450px) { .tip-box { padding: 40px 40px 20px; } } @media screen and (min-width: 450px) { .tip-box { padding: 60px 60px 20px; } } .tip-box a { display: block; text-decoration: unset; } .tip-icon { background-color: #DFF5FF; border-radius: 50%; width: 80px; height: 80px; text-align: center; margin-bottom: 20px; } .tip-title { font-weight: 500; font-size: 32px; line-height: 120%; color: #00376A; margin-bottom: 10px; } .tip-title strong { font-weight: 500; color: #009ED0; } .tip-code { font-size: 48px; line-heig",
       "gmailId": "19f82a1a84878c6f",
       "rfc822MessageId": "20260721030420.8e6665ab22e02bbb@sayweee.com"
-    },
-    {
-      "id": "2369",
-      "threadId": "19f82820378b1ceb",
-      "mailbox": "jay.intake.box@gmail.com",
-      "subject": "🚀 BFC AI Gateway is Recruiting Interns",
-      "from": "",
-      "to": "jay.intake.box@gmail.com",
-      "date": "2026-07-21T02:28:41.000Z",
-      "snippet": "View this post on the web at https://bayareafoundersclub.substack.com/p/bfc-ai-gateway-is-recruiting-interns Are you passionate about AI infrastructure, LLMs, AI agents, and model optimization? Want to work on a real AI product that’s solvi",
-      "text": "View this post on the web at https://bayareafoundersclub.substack.com/p/bfc-ai-gateway-is-recruiting-interns\nAre you passionate about AI infrastructure, LLMs, AI agents, and model optimization? Want to work on a real AI product that’s solving meaningful problems instead of building another demo?\nJoin BFC AI Gateway.\nWe’re building a simpler, smarter way for developers and AI teams to use foundation models.\nInstead of manually choosing models, users simply provide:\n✅ Use Case\n✅ Agent Workflow\n✅ Monthly Budget\n✅ Quality Requirement (Minimum Pass Rate)\nOur system automatically recommends:\n🎯 The optimal weighted combination of AI models\n💰 Monthly API cost projections\n📉 Estimated cost savings\n📚 Evidence-backed explanations for every routing decision\nOur mission is simple:\nTransform AI model selection from experience-driven to data-driven.\nWe’re actively collaborating with AI researchers, startup founders, and foundation model teams to advance Smart Routing—helping every AI request find the best balance between quality, cost, and latency.\nWhat You’ll Work On\nDepending on your interests and background, you may contribute to:\nAI Agent architecture and workflow design\nLLM benchmarking and model evaluation\nSmart Routing algorithms and optimization\nPrompt engineering and evaluation pipelines\nFull-stack AI product development\nDeveloper Relations and technical content\nProduct operations and user growth\nWe’re Looking For People Who Want To\nWork alongside AI researchers, founders, and engineers in Silicon Valley\nStay at the forefront of the latest advances in large language models and AI agents\nHelp build an AI infrastructure product from 0 to 1\nGain hands-on experience shipping real products used by customers—not just prototypes\nWhether you’re a student, researcher, engineer, or aspiring founder, if you’re excited about building the future of AI infrastructure, we’d love to hear from you.\nLocation\n📍 Silicon Valley (Hybrid; some roles can be fully remote)\nApply\n📩 Email your resume and a brief introduction to:\npaul@bayareafoundersclub.com [ mailto:paul@bayareafoundersclub.com ]\nCome build the next generation of AI infrastructure with us—and help create one of the world’s leading AI Gateways.\nAbout the Bay Area Founders Club’s President\nAbout Bay Area Founders Club\nBay Area Founders Club (BFC), founded by Dr. Paul Fang [ https://substack.com/redirect/2056b120-6d5f-4d79-990d-a12d1a8ea0bb?j=eyJ1IjoiN2EzYzFhIn0.gmSjAtdlofMqOFUjgfQgnPyMBlCD_j00mTQEinip6mM ] in Silicon Va",
-      "gmailId": "19f82820378b1ceb",
-      "rfc822MessageId": "20260721022841.3.d78ecc52c29cbdba@mg-d0.substack.com"
-    },
-    {
-      "id": "2368",
-      "threadId": "19f826c2b9148641",
-      "mailbox": "jay.intake.box@gmail.com",
-      "subject": "Order #7323 confirmed",
-      "from": "",
-      "to": "jay.intake.box@gmail.com",
-      "date": "2026-07-21T02:05:54.000Z",
-      "snippet": "Thank you for your order! ***************************************************************** Lambda Water ( https://www.lambdawater.com?syclid=14098a1d-beef-487c-b482-b1b620ad28a7 ) ***********************************************************",
-      "text": "Thank you for your order!\n*****************************************************************\nLambda Water\n( https://www.lambdawater.com?syclid=14098a1d-beef-487c-b482-b1b620ad28a7 )\n*****************************************************************\nOrder #7323\n-------------------------\nThank you for your order!\n-------------------------\nWe're getting your order ready to be shipped. We will\nnotify you when it has been sent.\nEstimated delivery Monday, Jul 27\nView your order\n( https://www.lambdawater.com/96960708920/orders/6dca2d66624a388f03f0051f299fac79/authenticate?key=shcct_QzZXV3ltTUt6SURteTFLNTk5RWFWS0pmbGpHL0pid2w3YUd2OE1Nb3VaVU9FcVJpM2JKTFBKcG9LNDR4SnhnYWVHMHhiZlhRdXBLZ3JjM0Y4ajBocTZ4Wnc4OEZCbzdKRjkrcHoxamJ5ZC9XYnlRYVRyTWtGbjNuY2Nvb1RuTzIvRmpIaTFFVEhRb2gyRGlsVFBjTHQ2U00wck1NdXQxWUsvbjJjUkxQbFJ0bjhSMUgvMWdEVHZNSmxZdHY1MkppTGdwWmI1V2lLOUZkWXhmV2hNOFBONEpiMnBHTFczZ0lwL0F3UTJDM3RPalh5VVM2blluWWhrOUV3V2xRYndGcVc5YkZmNDRobkNBNm9KdjNpcG1hOUZVRllSendmYThQLzRWT3VaRktwNnJ4amhZOEhLZE1FUW95ZkptcHN0VWIzc2FZZmQ0WFJLM1AyekFBb3IreFZzbHlFTjQ4TDBvaDlhc092VEswd3p5QTBhUFUxWXRKaGNveTlMbjNlVXVqQWUyWWd4T3oxNU9MNlIvL0djS2pBSm9jZVpRS1JJQUR6UUhJblJrT2psV2llT3FwaHp0eHJuR2QzSGk0WkhVVk5SbEp3S0Yvb1lPZjVBc1pkK00wakJ6emtLVG5FNjhXKzU1cXB6R3p6OXlKQTAyQkpDOVJ6dmhkSWYycHdBR0ZEcTRaK2p4TmwvUUc2Zy9vL0NvQkJyZFBwQm5CcmMzZ0NnUmN0N1UybU9wdzhhR0gvTU5QSUUyRHVraTdiWDVwV3hOdHVnPT0tLWN4T3BjL1VvNTVnQ0NrUG8tLXFGV2lHcGVBTUcwbGk4ajVKYUNQZkE9PQ&syclid=30c6de46-c25f-4620-8180-c822699af3ac )\nDownload to track with Shop\n( https://open.shop.app/E2jp6/838lf/mdaw?sbt=A-SHOP-APP-T1hKS1lKbjB4K2l3RTdwbThKWW1idEhSOFZMZ2tlSDJ0dlRvcHpCVzk3RmRpSjRBbGhzUmQ5cVZJK3BFdXQyeG5BUjIzYkw0WEFBZVpKZk45dzcxSUJTcEFzR1oveXZKcG9pc3JEbndFRjJoV0RsMXU3dVV3b2d3anlRSkNwSlNjVERsT2RYaTNCQzRqVDdGSHRoLzhpUlN1RldIUFA0RTcxd2JjZG1PM0JNUGhkdndaTFZOZEhpZEhFRXhpaGNCbWFObGRzNjRURG1rSzU5dlhTam92Z1N5TGhjc01zUnB1aFR2cWM5dXloYTIyTGZ2ckczZUZWaDBvdHRnV2E3MGgxbGNWNlhYejFKREV2bWN5N1NOdlYyRGRKcUxjQ2NORDNhNW01SHMzaXZaQXlFNVh2UWNhbkhpZFlGSFZGRFQtLUxyVkxTaGFFT1lzQ3JUNU85MUt5Ymc9PQ%3D%3D--5dc356ba13101dfeefc89fc075752629feeeb634%2Corder_confirmation_email&utm_campaign=order_confirmation&utm_medium=email&utm_source=shopify )\nor Visit our store\n( https://www.lambdawater.com?syclid=7cb0bab2-34aa-4d72-b0d6-7011c538d10c )\nOrder summary\n-------------\nLambda Bacteriostatic Water (1-Pack, 30mL) × 1\n$13.99\nSubtotal\n$13.99\nShipping\n$6.24\nTaxes\n$0.00\nTotal\n$20.23 USD\nCustomer information\n--------------------\nShipping address\n----------------\nJulia Hasty\n1217 32nd St\nOakla",
-      "gmailId": "19f826c2b9148641",
-      "rfc822MessageId": "E1020004-18C42BD6D7275B4D-070ECB74@shopify.com"
-    },
-    {
-      "id": "152582",
-      "threadId": "19f8262eb11279c9",
-      "mailbox": "julia.hasty@gmail.com",
-      "subject": "Security alert for jay.intake.box@gmail.com",
-      "from": "",
-      "to": "julia.hasty@gmail.com",
-      "date": "2026-07-21T01:55:47.000Z",
-      "snippet": "This is a copy of a security alert sent to jay.intake.box@gmail.com. julia.hasty@gmail.com is the recovery email for this account. If you don't recognize this account, remove it. [image: Google] New sign-in to your account jay.intake.box@gm",
-      "text": "This is a copy of a security alert sent to jay.intake.box@gmail.com.\njulia.hasty@gmail.com is the recovery email for this account. If you don't\nrecognize this account, remove\n<https://accounts.google.com/AccountDisavow?adt=AOX8kioAS-Oh9vg19NJCXZwzscExLazG9kIRaGfT5A9oqlnOvcqZxthFM6itAIeMKrE&rfn=325>\nit.\n[image: Google]\nNew sign-in to your account\njay.intake.box@gmail.com\nWe noticed a new sign-in to your Google Account. If this was you, you don’t\nneed to do anything. If not, we’ll help you secure your account.\nCheck activity\n<https://accounts.google.com/AccountChooser?Email=jay.intake.box@gmail.com&continue=https://myaccount.google.com/alert/nt/1784598947000?rfn%3D325%26rfnc%3D1%26eid%3D5080625526237218120%26et%3D1>\nYou can also see security activity at\nhttps://myaccount.google.com/notifications\nYou received this email to let you know about important changes to your\nGoogle Account and services.\n© 2026 Google LLC, 1600 Amphitheatre Parkway, Mountain View, CA 94043, USA",
-      "gmailId": "19f8262eb11279c9",
-      "rfc822MessageId": "LrXhK2kTnxDC_GE7xADWXQ@notifications.google.com"
-    },
-    {
-      "id": "152581",
-      "threadId": "19f81eddf22c78bb",
-      "mailbox": "julia.hasty@gmail.com",
-      "subject": "Notification: Ephemerisle (HOLD) @ Tue Jul 21 - Sun Jul 26, 2026 (julia.hasty@gmail.com)",
-      "from": "",
-      "to": "Jay Hasty <julia.hasty@gmail.com>",
-      "date": "2026-07-20T23:47:57.000Z",
-      "snippet": "You have an upcoming event Ephemerisle (HOLD) Tuesday Jul 21 – Sunday Jul 26, 2026 Organizer Jay Hasty julia.hasty@gmail.com ~~//~~ Invitation from Google Calendar: https://calendar.google.com/calendar/ You are receiving this email because ",
-      "text": "You have an upcoming event\nEphemerisle (HOLD)\nTuesday Jul 21 – Sunday Jul 26, 2026\nOrganizer\nJay Hasty\njulia.hasty@gmail.com\n~~//~~\nInvitation from Google Calendar: https://calendar.google.com/calendar/\nYou are receiving this email because you are subscribed to calendar notifications. To stop receiving these emails, go to https://calendar.google.com/calendar/r/settings, select this calendar, and change \"Other notifications\".\nForwarding this invitation could allow any recipient to send a response to the organizer, be added to the guest list, invite others regardless of their own invitation status, or modify your RSVP.\nLearn more https://support.google.com/calendar/answer/37135#forwarding",
-      "gmailId": "19f81eddf22c78bb",
-      "rfc822MessageId": "calendar-c3e014cd-c380-4597-89dc-7a50171247e1@google.com"
-    },
-    {
-      "id": "152580",
-      "threadId": "19f81d9faf5b26de",
-      "mailbox": "julia.hasty@gmail.com",
-      "subject": "Oak Trees Protecting Our Shoreline in Alameda are in Peril!",
-      "from": "",
-      "to": "Carolyn Mason <lpemail62@gmail.com>, Marla Koss ABG <marlakoss@yahoo.com>, Alison Limoges <aslimoges@gmail.com>, Cindy Lacroix <cjlacroix@aol.com>, Birgitt Evans <reachbirgitt@gmail.com>, Tokuda, Jasmine <Jasmine@jasminebazaar.com>",
-      "date": "2026-07-20T23:25:57.000Z",
-      "snippet": "Good afternoon folks, I've written up the text of my statement to Alameda City Council (See below) and I plan to send a copy via email to each City Council member, so that they have a public record of it. You are welcome to copy my text, ed",
-      "text": "Good afternoon folks,\nI've written up the text of my statement to Alameda City Council (See\nbelow) and I plan to send a copy via email to each City Council member, so\nthat they have a public record of it. You are welcome to copy my text, edit\nit to your preference, write your own statement or take no action as you\nsee fit.\nBeing that I was the main member of CASA advocating for Living Shorelines\nand nature-based adaptation to sea-level rise, in our Climate Action\nResilience Plan. I feel implementing the plan in a way that is most likely\nto succeed and respects the nature-based adaptation already present and\nhelping to stabilize the shoreline is important. I realize that my passion\non this subject may not be felt by everyone, and I respect that.\nHere's a helpful guide on how to write an email to every City Council\nMember.\nhttps://alamedacitizenstaskforce.org/get-involved/how-to-write-to-city-officials/\nCity Meeting Tues July 21, 2026\nFrom: Damian Mason, member of CASA, OAAC, Alameda Backyard Growers (ABG)\nTo: Members of Alameda City Council\nI’m glad to hear that we may soon have the funds to upgrade our storm drain\ninfrastructure, implement nature-based shoreline protections and more.  CA\nnative oak trees of 10 inches or more in diameter are protected in Alameda,\nOakland and other cities in CA.\nI’m here on behalf of a small number of young Coastal Live Oaks growing\nalong the Harbor Bay Shoreline trail between Sea View Park and Harbor Bay\nClub. Coastal live oaks stabilize shorelines with deep roots, reducing\nerosion. Studies show they outperform hard structures like seawalls,\npromoting natural resilience.  This is a key part of nature’s adaptation to\nsea level rise. The oak trees in question are only a few years old and 1-3\ninch diameter. Unfortunately, the current plan is to remove all of them.\nGiven their size, they are not yet protected trees, but every small acorn\nhas the potential to quickly grow into a mighty majestic oak.  I’m\nconfident we can find a way to incorporate them into the city's\nnature-based sea-level rise adaptation plan.\nI’ve personally witnessed the dedication Alameda’s city staff and officials\nhave shown to building Climate Resilience through applied nature-based\ndesign. I trust a path can be found within the shoreline designs to\npreserve these trees by incorporating them into the final design plan.\nThank you for your time and attention on this matter.\nDamian Mason,\nRegenerate, Restore, and Rewild our Ecosystems  #OurCityOurFuture\nCASA ",
-      "gmailId": "19f81d9faf5b26de",
-      "rfc822MessageId": "CAEWroWp4zMeF=esjUODh8_0HjcpaRmQdyeRefDZBmCGXXSE8eg@mail.gmail.com"
     }
   ],
   "errors": []
