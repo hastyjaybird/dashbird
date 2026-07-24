@@ -1202,7 +1202,7 @@ function openEventsFilterCriteriaModal() {
   const ingestHint = document.createElement('p');
   ingestHint.className = 'settings-page__modal-field-hint';
   ingestHint.textContent =
-    'Scrape ahead limits bulk discovery (Gmail, Facebook, Multiverse) and rolls the Events sidebar date picks. Telegram intake is not gated — far-future invites are saved when you send them.';
+    'Scrape ahead shapes how far paid/bulk scrapers look and the Events sidebar date chips. Dated invites from Gmail (and Telegram) are kept even when months out — the horizon no longer drops far-future records.';
 
   const weeksLabel = document.createElement('label');
   weeksLabel.className = 'settings-page__modal-field-label';
@@ -1240,7 +1240,7 @@ function openEventsFilterCriteriaModal() {
   function updateWeeksLiveHint(weeks, ingestWindow = null) {
     const w = Number(weeks) || Number(weeksSelect.value) || 4;
     const days = ingestWindow?.futureDays || w * 7;
-    weeksLiveHint.textContent = `Keeps events from ~2 days ago through ~${days} days ahead (rolling ${w} week${w === 1 ? '' : 's'} from today).`;
+    weeksLiveHint.textContent = `Scrapers / date chips look ~${days} days ahead (rolling ${w} week${w === 1 ? '' : 's'}). Far-future dated invites are still recorded when found.`;
   }
   updateWeeksLiveHint(4);
   weeksSelect.addEventListener('change', () => {
@@ -2590,7 +2590,7 @@ function buildGmailWeeklySummaryBlock(root) {
   const intro = document.createElement('p');
   intro.className = 'settings-page__intro';
   intro.textContent =
-    'Markdown guide for what intake mail becomes action items (jay.intake.box + julia.hasty). Scans every 30 minutes. Rolling 10-day window — older items delete unless pinned. 👍 appends to Prefer more; 👎 always Prefer less (3× similar → Soft skip, 5× → Never show). Template: docs/gmail-daily-summary-guide.md · live: data/gmail-daily-summary-guide.md';
+    'Markdown guide for what intake mail becomes action items (jay.intake.box + julia.hasty). Scans every 30 minutes. Rolling 10-day window — older items delete unless pinned. 👍 appends to Prefer more; 👎 always Prefer less (3× similar → Soft skip, 5× → Never show). Never show / Soft skip / Prefer less are also enforced in code (not LLM-only). Template: docs/gmail-daily-summary-guide.md · live: data/gmail-daily-summary-guide.md';
   body.append(intro);
 
   const guideLabel = document.createElement('label');

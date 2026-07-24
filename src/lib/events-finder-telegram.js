@@ -36,7 +36,7 @@ import {
   parseTelegramTypeOverride,
 } from './telegram-message-classify.js';
 import { createPanelTodo } from './vikunja-client.js';
-import { createKeepNote, splitKeepNoteTitleBody } from './keep-notes-store.js';
+import { createKeepNote, getKeepNote, splitKeepNoteTitleBody, updateKeepNote } from './keep-notes-store.js';
 import { upsertFromTelegram, getContactById, updateContact } from './network-contacts-store.js';
 import {
   saveOrganizationLogo,
@@ -68,6 +68,12 @@ import {
   eventHappeningAt,
   matchByGps,
 } from './calendar-presence-index.js';
+import {
+  CLARIFY_TYPE_CODES,
+  clarifyKeyboard,
+  consumeTelegramClarifyPrompt,
+  createTelegramClarifyPrompt,
+} from './telegram-clarify.js';
 import { extractImageGps } from './image-exif-gps.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
@@ -202,28 +208,105 @@ function saveOffset(next, env = process.env) {
 }
 
 /**
- * Per-chat pointer to the last event created via Telegram, so a follow-up
- * `/more <details>` can append to it. Persisted so it survives restarts.
+ * Per-chat pointer to the last appendable intake (event or note) so
+ * `/more <details>` appends to whatever was just saved — not a stale prior event.
+ * Persisted so it survives restarts. Legacy `{ eventId }` rows still work.
  * @param {NodeJS.ProcessEnv} [env]
  */
-function lastEventPath(env = process.env) {
-  const override = String(env.TELEGRAM_LAST_EVENT_PATH || '').trim();
+function lastIntakeWritePath(env = process.env) {
+  const override = String(env.TELEGRAM_LAST_INTAKE_PATH || env.TELEGRAM_LAST_EVENT_PATH || '').trim();
   if (override) {
     return path.isAbsolute(override) ? override : path.join(PKG_ROOT, override);
   }
-  return path.join(PKG_ROOT, 'data', 'telegram-last-event.json');
+  return path.join(PKG_ROOT, 'data', 'telegram-last-intake.json');
 }
 
 /**
  * @param {NodeJS.ProcessEnv} [env]
- * @returns {Record<string, { eventId: string, at: string }>}
+ * @returns {string[]}
  */
-function readLastEventMap(env = process.env) {
+function lastIntakeReadPaths(env = process.env) {
+  const override = String(env.TELEGRAM_LAST_INTAKE_PATH || env.TELEGRAM_LAST_EVENT_PATH || '').trim();
+  if (override) {
+    const p = path.isAbsolute(override) ? override : path.join(PKG_ROOT, override);
+    return [p];
+  }
+  return [
+    path.join(PKG_ROOT, 'data', 'telegram-last-intake.json'),
+    path.join(PKG_ROOT, 'data', 'telegram-last-event.json'),
+  ];
+}
+
+/**
+ * @param {unknown} raw
+ * @returns {{ kind: 'event' | 'note', id: string, at: string } | null}
+ */
+function normalizeLastIntakeRec(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const rec = /** @type {Record<string, unknown>} */ (raw);
+  const at = rec.at ? String(rec.at) : new Date().toISOString();
+  if (rec.kind === 'note' && rec.id) return { kind: 'note', id: String(rec.id), at };
+  if (rec.kind === 'event' && rec.id) return { kind: 'event', id: String(rec.id), at };
+  // Legacy shape: { eventId, at }
+  if (rec.eventId) return { kind: 'event', id: String(rec.eventId), at };
+  return null;
+}
+
+/**
+ * @param {string} filePath
+ * @returns {Record<string, { kind: 'event' | 'note', id: string, at: string }>}
+ */
+function readLastIntakeFile(filePath) {
   try {
-    const j = JSON.parse(fs.readFileSync(lastEventPath(env), 'utf8'));
-    return j && typeof j === 'object' ? j : {};
+    const j = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!j || typeof j !== 'object') return {};
+    /** @type {Record<string, { kind: 'event' | 'note', id: string, at: string }>} */
+    const out = {};
+    for (const [chatId, raw] of Object.entries(j)) {
+      const norm = normalizeLastIntakeRec(raw);
+      if (norm) out[String(chatId)] = norm;
+    }
+    return out;
   } catch {
     return {};
+  }
+}
+
+/**
+ * Merge new + legacy maps; newer `at` wins per chat.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Record<string, { kind: 'event' | 'note', id: string, at: string }>}
+ */
+function readLastIntakeMap(env = process.env) {
+  /** @type {Record<string, { kind: 'event' | 'note', id: string, at: string }>} */
+  const out = {};
+  for (const fp of lastIntakeReadPaths(env)) {
+    const part = readLastIntakeFile(fp);
+    for (const [chatId, rec] of Object.entries(part)) {
+      const prev = out[chatId];
+      if (!prev || String(rec.at) >= String(prev.at)) out[chatId] = rec;
+    }
+  }
+  return out;
+}
+
+/**
+ * @param {number|string|null|undefined} chatId
+ * @param {'event' | 'note'} kind
+ * @param {string|null|undefined} id
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function recordLastTelegramIntake(chatId, kind, id, env = process.env) {
+  if (chatId == null || !id) return;
+  if (kind !== 'event' && kind !== 'note') return;
+  try {
+    const map = readLastIntakeMap(env);
+    map[String(chatId)] = { kind, id: String(id), at: new Date().toISOString() };
+    const dest = lastIntakeWritePath(env);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, JSON.stringify(map, null, 2));
+  } catch (e) {
+    console.warn('[telegram-events] last-intake pointer write failed', e?.message || e);
   }
 }
 
@@ -233,16 +316,26 @@ function readLastEventMap(env = process.env) {
  * @param {NodeJS.ProcessEnv} [env]
  */
 function recordLastTelegramEvent(chatId, eventId, env = process.env) {
-  if (chatId == null || !eventId) return;
-  try {
-    const map = readLastEventMap(env);
-    map[String(chatId)] = { eventId: String(eventId), at: new Date().toISOString() };
-    const fp = lastEventPath(env);
-    fs.mkdirSync(path.dirname(fp), { recursive: true });
-    fs.writeFileSync(fp, JSON.stringify(map, null, 2));
-  } catch (e) {
-    console.warn('[telegram-events] last-event pointer write failed', e?.message || e);
-  }
+  recordLastTelegramIntake(chatId, 'event', eventId, env);
+}
+
+/**
+ * @param {number|string|null|undefined} chatId
+ * @param {string|null|undefined} noteId
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+function recordLastTelegramNote(chatId, noteId, env = process.env) {
+  recordLastTelegramIntake(chatId, 'note', noteId, env);
+}
+
+/**
+ * @param {number|string|null|undefined} chatId
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {{ kind: 'event' | 'note', id: string, at: string } | null}
+ */
+function getLastTelegramIntake(chatId, env = process.env) {
+  if (chatId == null) return null;
+  return readLastIntakeMap(env)[String(chatId)] || null;
 }
 
 /**
@@ -251,9 +344,8 @@ function recordLastTelegramEvent(chatId, eventId, env = process.env) {
  * @returns {string | null}
  */
 function getLastTelegramEvent(chatId, env = process.env) {
-  if (chatId == null) return null;
-  const rec = readLastEventMap(env)[String(chatId)];
-  return rec?.eventId ? String(rec.eventId) : null;
+  const rec = getLastTelegramIntake(chatId, env);
+  return rec?.kind === 'event' ? rec.id : null;
 }
 
 /**
@@ -632,37 +724,58 @@ function formatIngestReply(event) {
 }
 
 /**
- * `/more <details>` — append extra info to the last event created in this chat.
+ * `/more <details>` — append to the last event OR note created in this chat.
+ * Root cause of note→wrong-event: we only tracked events, so /more after a note
+ * still mutated the prior event. Now the pointer is last appendable intake.
  * @param {number|string} chatId
  * @param {string} extraText
  * @param {NodeJS.ProcessEnv} env
  * @param {{ notifyUser?: boolean }} [opts]
  */
-async function appendToLastTelegramEvent(chatId, extraText, env = process.env, opts = {}) {
+async function appendToLastTelegramIntake(chatId, extraText, env = process.env, opts = {}) {
   const notifyUser = opts.notifyUser !== false;
   const addition = String(extraText || '').replace(/\s+/g, ' ').trim();
   if (!addition) {
     await notifyIntake(
       chatId,
-      'Send /more followed by the extra details to add to your last event, e.g. /more parking is around back.',
+      'Send /more followed by the extra details to add to your last event or note, e.g. /more parking is around back.',
       env,
       { notifyUser },
     );
     return { ok: false, error: 'more_empty', type: 'more' };
   }
 
-  const lastId = getLastTelegramEvent(chatId, env);
-  if (!lastId) {
+  const last = getLastTelegramIntake(chatId, env);
+  if (!last?.id) {
     await notifyIntake(
       chatId,
-      'No recent event to add to. Send an event (flyer or text) first, then reply /more <details>.',
+      'Nothing recent to add to. Save an event or note first, then reply /more <details>.',
       env,
       { notifyUser },
     );
     return { ok: false, error: 'more_no_target', type: 'more' };
   }
 
-  const event = getEventsFinderEventById(lastId, env);
+  if (last.kind === 'note') {
+    const note = await getKeepNote(last.id, env);
+    if (!note) {
+      await notifyIntake(chatId, 'Could not find your last note to update.', env, { notifyUser });
+      return { ok: false, error: 'more_note_missing', type: 'more' };
+    }
+    const existing = String(note.body || '').trim();
+    const nextBody = existing ? `${existing}\n\n${addition}` : addition;
+    const verified = await updateKeepNote(note.id, { body: nextBody }, env);
+    recordLastTelegramNote(chatId, verified.id, env);
+    const label = clean(verified.title) || 'note';
+    await telegramSendMessage(
+      chatId,
+      `Added to ${label}:\n${addition.slice(0, 400)}`,
+      env,
+    );
+    return { ok: true, type: 'more', target: 'note', note: verified };
+  }
+
+  const event = getEventsFinderEventById(last.id, env);
   if (!event) {
     await notifyIntake(chatId, 'Could not find your last event to update.', env, { notifyUser });
     return { ok: false, error: 'more_event_missing', type: 'more' };
@@ -685,7 +798,7 @@ async function appendToLastTelegramEvent(chatId, extraText, env = process.env, o
     `Added to ${clean(verified.title) || 'event'}:\n${addition.slice(0, 400)}`,
     env,
   );
-  return { ok: true, type: 'more', event: verified };
+  return { ok: true, type: 'more', target: 'event', event: verified };
 }
 
 /**
@@ -846,6 +959,213 @@ async function maybeApplyHowWeMetFromPresence(opts, env = process.env) {
 }
 
 /**
+ * Resume intake after the user taps an Event/Contact/… clarify button.
+ * @param {any} callbackQuery
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+async function handleClarifyCallback(callbackQuery, env = process.env) {
+  const data = String(callbackQuery?.data || '').trim();
+  const m = data.match(/^clf:([etncox]):([A-Za-z0-9_-]+)$/);
+  const cqId = String(callbackQuery?.id || '');
+  if (!m) {
+    if (cqId) await telegramAnswerCallbackQuery(cqId, '', env).catch(() => {});
+    return { ok: true, skipped: true, reason: 'not_clarify' };
+  }
+
+  const code = m[1];
+  const promptId = m[2];
+  const type = CLARIFY_TYPE_CODES[code] || null;
+  const prompt = consumeTelegramClarifyPrompt(promptId, env);
+  const chatId = callbackQuery?.message?.chat?.id ?? callbackQuery?.from?.id;
+  const messageId = callbackQuery?.message?.message_id;
+
+  if (!prompt || chatId == null) {
+    if (cqId) await telegramAnswerCallbackQuery(cqId, 'Expired', env).catch(() => {});
+    if (chatId != null && messageId != null) {
+      await telegramEditMessageText(chatId, messageId, 'Clarify prompt expired. Resend the message.', env).catch(
+        () => {},
+      );
+    }
+    return { ok: true, type: 'clarify', expired: true };
+  }
+
+  if (type === 'skip' || code === 'x') {
+    if (cqId) await telegramAnswerCallbackQuery(cqId, 'Skipped', env).catch(() => {});
+    if (messageId != null) {
+      await telegramEditMessageText(chatId, messageId, 'Skipped — nothing saved.', env).catch(() => {});
+    }
+    return { ok: true, type: 'clarify', skipped: true, error: 'clarify_skipped' };
+  }
+
+  if (cqId) await telegramAnswerCallbackQuery(cqId, `Saving as ${type}…`, env).catch(() => {});
+  if (messageId != null) {
+    await telegramEditMessageText(chatId, messageId, `Saving as ${type}…`, env).catch(() => {});
+  }
+
+  const stubMessage = prompt.message && typeof prompt.message === 'object'
+    ? { ...prompt.message, chat: prompt.message.chat || { id: chatId } }
+    : { chat: { id: chatId }, date: Math.floor(Date.now() / 1000) };
+  const text = String(prompt.text || prompt.caption || '').trim();
+  const classified = prompt.classified && typeof prompt.classified === 'object' ? prompt.classified : {};
+
+  try {
+    if (prompt.mode === 'image') {
+      let buffer = null;
+      const clarifyDir = path.resolve(PKG_ROOT, 'data', 'telegram-clarify-media');
+      const mediaPath = prompt.mediaLocalPath
+        ? path.resolve(String(prompt.mediaLocalPath))
+        : '';
+      // Only read snapshots we wrote under clarify-media (tampered JSON must not path-escape).
+      if (
+        mediaPath
+        && (mediaPath === clarifyDir || mediaPath.startsWith(`${clarifyDir}${path.sep}`))
+        && fs.existsSync(mediaPath)
+      ) {
+        buffer = fs.readFileSync(mediaPath);
+      }
+      if (!buffer) {
+        await telegramSendMessage(
+          chatId,
+          'Image no longer available. Please resend the photo with /contact /event /company /note.',
+          env,
+        );
+        return { ok: false, error: 'clarify_media_missing', type: 'clarify' };
+      }
+      const file = {
+        buffer,
+        filePath: mediaPath || undefined,
+        mimeType: prompt.mediaMime || 'image/jpeg',
+      };
+      const caption = String(prompt.caption || prompt.text || '').trim();
+
+      if (type === 'event') {
+        const result = await ingestTelegramEventFromMessage(stubMessage, env, {
+          photoId: prompt.mediaFileId || '',
+          caption,
+          text: caption,
+          notifyUser: true,
+          // Prefer local file when photoId is gone from Telegram CDN.
+          localFile: file,
+        });
+        if (messageId != null) {
+          await telegramEditMessageText(
+            chatId,
+            messageId,
+            result?.ok ? `Saved as event.` : `Could not save as event: ${result?.error || 'failed'}`,
+            env,
+          ).catch(() => {});
+        }
+        return { ...result, clarifiedAs: 'event' };
+      }
+      if (type === 'contact') {
+        const forceKind =
+          String(classified.kind || '').toLowerCase() === 'linkedin_screenshot'
+            ? 'linkedin_screenshot'
+            : String(classified.kind || '').toLowerCase() === 'social_screenshot'
+              ? 'social_screenshot'
+              : String(classified.kind || '').toLowerCase() === 'headshot'
+                ? 'headshot'
+                : 'business_card';
+        const result = await ingestTelegramContactFromImage(stubMessage, file, env, {
+          caption,
+          classified: { ...classified, kind: forceKind, ok: true },
+          forceKind,
+          notifyUser: true,
+        });
+        if (messageId != null) {
+          await telegramEditMessageText(
+            chatId,
+            messageId,
+            result?.ok ? 'Saved as contact.' : `Could not save as contact: ${result?.error || 'failed'}`,
+            env,
+          ).catch(() => {});
+        }
+        return { ...result, clarifiedAs: 'contact' };
+      }
+      if (type === 'company') {
+        const result = await ingestTelegramCompanyFromImage(stubMessage, file, env, {
+          caption,
+          classified: { ...classified, kind: 'company_logo', ok: true },
+          notifyUser: true,
+        });
+        if (messageId != null) {
+          await telegramEditMessageText(
+            chatId,
+            messageId,
+            result?.ok ? 'Saved as company.' : `Could not save as company: ${result?.error || 'failed'}`,
+            env,
+          ).catch(() => {});
+        }
+        return { ...result, clarifiedAs: 'company' };
+      }
+      if (type === 'note') {
+        const noteBody = caption || 'Photo note from Telegram';
+        const result = await routeNonEventType('note', noteBody, chatId, env, {
+          classified: { noteText: noteBody },
+          force: true,
+          notifyUser: true,
+        });
+        if (messageId != null) {
+          await telegramEditMessageText(
+            chatId,
+            messageId,
+            result?.ok ? 'Saved as note.' : `Could not save as note: ${result?.error || 'failed'}`,
+            env,
+          ).catch(() => {});
+        }
+        return { ...result, clarifiedAs: 'note' };
+      }
+    }
+
+    // Text / voice path
+    if (!text) {
+      await telegramSendMessage(chatId, 'Nothing to save — resend the message.', env);
+      return { ok: false, error: 'clarify_empty', type: 'clarify' };
+    }
+    if (type === 'event') {
+      const result = await ingestTelegramEventFromText(text, stubMessage, env, {
+        parseVia: 'text',
+        notifyUser: true,
+      });
+      if (messageId != null) {
+        await telegramEditMessageText(
+          chatId,
+          messageId,
+          result?.ok ? 'Saved as event.' : `Could not save as event: ${result?.error || 'failed'}`,
+          env,
+        ).catch(() => {});
+      }
+      return { ...result, clarifiedAs: 'event' };
+    }
+    const result = await routeNonEventType(type, text, chatId, env, {
+      classified:
+        type === 'contact'
+          ? { contact: classified.contact || null, todoText: null, noteText: null }
+          : type === 'company'
+            ? { company: classified.company || null }
+            : type === 'todo'
+              ? { todoText: classified.todoText || text }
+              : { noteText: classified.noteText || text },
+      force: true,
+      notifyUser: true,
+    });
+    if (messageId != null) {
+      await telegramEditMessageText(
+        chatId,
+        messageId,
+        result?.ok ? `Saved as ${type}.` : `Could not save as ${type}: ${result?.error || 'failed'}`,
+        env,
+      ).catch(() => {});
+    }
+    return { ...result, clarifiedAs: type };
+  } catch (e) {
+    console.warn('[telegram-events] clarify resume failed', e?.message || e);
+    await telegramSendMessage(chatId, `Save failed: ${String(e?.message || e).slice(0, 200)}`, env);
+    return { ok: false, error: String(e?.message || e), type: 'clarify' };
+  }
+}
+
+/**
  * @param {any} callbackQuery
  * @param {NodeJS.ProcessEnv} [env]
  */
@@ -928,6 +1248,100 @@ function ingestFailHint(why, extra = {}) {
   };
   const transcript = extra.transcript ? `\nHeard: “${extra.transcript.slice(0, 200)}”` : '';
   return `Not ingested: ${hints[why] || why}${transcript}`;
+}
+
+/**
+ * Ask the user what this message is, with inline buttons. Persists enough
+ * context to resume ingest when they tap a choice.
+ * @param {number|string} chatId
+ * @param {NodeJS.ProcessEnv} env
+ * @param {{
+ *   mode: 'text' | 'image',
+ *   text?: string | null,
+ *   caption?: string | null,
+ *   message?: object | null,
+ *   file?: { buffer?: Buffer, filePath?: string, mimeType?: string } | null,
+ *   mediaFileId?: string | null,
+ *   mediaKind?: string | null,
+ *   classified?: object | null,
+ *   suggestedType?: string | null,
+ *   reason?: string | null,
+ *   notifyUser?: boolean,
+ * }} opts
+ */
+async function askTelegramClarify(chatId, env, opts) {
+  const notifyUser = opts.notifyUser !== false;
+  if (!notifyUser) {
+    return { ok: false, error: 'needs_clarify', type: 'clarify', silent: true };
+  }
+
+  const suggested = opts.suggestedType || null;
+  const soft = suggested
+    ? `I think this might be a ${suggested}, but I'm not sure.`
+    : "I'm not sure what this is.";
+  const why = opts.reason ? `\n(${String(opts.reason).slice(0, 160)})` : '';
+
+  // Snapshot image bytes into clarify-media so resume works even if intake media is pruned.
+  let mediaLocalPath = null;
+  if (opts.mode === 'image' && opts.file?.buffer && Buffer.isBuffer(opts.file.buffer)) {
+    try {
+      const clarifyDir = path.join(PKG_ROOT, 'data', 'telegram-clarify-media');
+      fs.mkdirSync(clarifyDir, { recursive: true });
+      const ext =
+        path.extname(opts.file.filePath || '')
+        || (String(opts.file.mimeType || '').includes('png') ? '.png' : '.jpg');
+      const snap = path.join(
+        clarifyDir,
+        `pending_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}${ext}`,
+      );
+      fs.writeFileSync(snap, opts.file.buffer);
+      mediaLocalPath = snap;
+    } catch (e) {
+      console.warn('[telegram-events] clarify media snapshot failed', e?.message || e);
+    }
+  }
+
+  const prompt = createTelegramClarifyPrompt(
+    {
+      chatId,
+      mode: opts.mode,
+      text: opts.text || null,
+      caption: opts.caption || null,
+      message: opts.message || null,
+      mediaLocalPath,
+      mediaMime: opts.file?.mimeType || null,
+      mediaFileId: opts.mediaFileId || null,
+      mediaKind: opts.mediaKind || null,
+      classified: opts.classified || null,
+      suggestedType: suggested,
+      reason: opts.reason || null,
+    },
+    env,
+  );
+
+  await telegramSendMessage(
+    chatId,
+    `${soft} Tap a button (or send /event /todo /note /contact /company).${why}`,
+    env,
+    { reply_markup: clarifyKeyboard(opts.mode, prompt.promptId, suggested) },
+  );
+  return { ok: false, error: 'needs_clarify', type: 'clarify', promptId: prompt.promptId };
+}
+
+/**
+ * Soft guess for image clarify when vision is weak or event parse failed.
+ * @param {object | null | undefined} classified
+ * @returns {string | null}
+ */
+function suggestedTypeFromImageClassified(classified) {
+  const kind = String(classified?.kind || '').toLowerCase();
+  if (TELEGRAM_CONTACT_IMAGE_KINDS.has(kind)) return 'contact';
+  if (TELEGRAM_COMPANY_IMAGE_KINDS.has(kind)) return 'company';
+  if (kind === 'event_flyer') return 'event';
+  const c = classified?.contact;
+  if (c?.displayName && (c.linkedin || c.title || c.org || c.email || c.phone)) return 'contact';
+  if (classified?.company?.name) return 'company';
+  return null;
 }
 
 /**
@@ -1356,7 +1770,7 @@ export async function processTelegramEventMessage(message, env = process.env, op
     await telegramSendMessage(
       chatId,
       allowed
-        ? 'Dashbird intake is ready. Send text, voice, flyer, business card, LinkedIn screenshot, guest list, headshot, or company logo.\nI classify as event / todo / note / contact / company.\nOverrides: /event /todo /note /contact /company …\nAdd details to your last event: /more <details>.\nAlbums of screenshots → one event.\nSend "help" any time for the full list.'
+        ? 'Dashbird intake is ready. Send text, voice, flyer, business card, LinkedIn screenshot, guest list, headshot, or company logo.\nI classify as event / todo / note / contact / company.\nOverrides: /event /todo /note /contact /company …\nAdd details to your last event or note: /more <details>.\nIf I am unsure, I will ask with buttons.\nAlbums of screenshots → one event.\nSend "help" any time for the full list.'
         : `Your Telegram chat id is ${chatId}.\nAdd it to TELEGRAM_ALLOWED_CHAT_IDS in Dashbird .env, then restart.`,
       env,
     );
@@ -1366,7 +1780,7 @@ export async function processTelegramEventMessage(message, env = process.env, op
   if (/^\/help(@\w+)?$/i.test(text) || /^help[!.?]*$/i.test(text)) {
     await telegramSendMessage(
       chatId,
-      'Send:\n• Flyer photo / album → event\n• Business card / LinkedIn / headshot → contact\n• Guest list screenshot → contacts (everyone listed)\n• Company logo → company card\n• Voice or text → auto-classified\n• Name + phone → contact\n• /more extra details → adds to your LAST event (e.g. send a flyer, then /more parking around back)\n• /todo buy milk\n• /note idea for weekend\n• /contact Sam, met at party, 555-…\n• /company Acme Labs, acme.com\n• /event July 18 Rooftop Jazz invited by Maya',
+      'Send:\n• Flyer photo / album → event\n• Business card / LinkedIn / headshot → contact\n• Guest list screenshot → contacts (everyone listed)\n• Company logo → company card\n• Voice or text → auto-classified (I ask with buttons when unsure)\n• Name + phone → contact\n• /more extra details → adds to your LAST event or note (whichever you saved most recently)\n• /todo buy milk\n• /note idea for weekend\n• /contact Sam, met at party, 555-…\n• /company Acme Labs, acme.com\n• /event July 18 Rooftop Jazz invited by Maya',
       env,
     );
     return { ok: true, skipped: true, reason: 'help' };
@@ -1382,11 +1796,11 @@ export async function processTelegramEventMessage(message, env = process.env, op
     return { ok: false, error: 'chat_not_allowed' };
   }
 
-  // `/more <details>` (or a photo caption) appends to the last event in this chat.
+  // `/more <details>` (or a photo caption) appends to the last event OR note in this chat.
   const moreSource = text || caption;
   const moreMatch = moreSource.match(/^\/more(?:@\w+)?\b([\s\S]*)$/i);
   if (moreMatch) {
-    return appendToLastTelegramEvent(chatId, moreMatch[1], env, { notifyUser });
+    return appendToLastTelegramIntake(chatId, moreMatch[1], env, { notifyUser });
   }
 
   // Albums arrive as separate messages sharing media_group_id — merge them as events.
@@ -1471,8 +1885,42 @@ export async function processTelegramEventMessage(message, env = process.env, op
       if (heur) classified = heur;
     }
 
+    // LinkedIn/social mobile layout (cover banner + white card) when vision mislabels
+    // a profile as event_flyer/other — e.g. Shannon Fiume with a project headline.
+    const preKind = String(classified?.kind || '').toLowerCase();
+    if (
+      preKind !== 'guest_list'
+      && preKind !== 'company_logo'
+      && !TELEGRAM_CONTACT_IMAGE_KINDS.has(preKind)
+    ) {
+      try {
+        if (await looksLikeSocialProfileScreenshot(file.buffer)) {
+          classified = {
+            ...(classified && typeof classified === 'object' ? classified : {}),
+            ok: true,
+            kind: 'linkedin_screenshot',
+            confidence: Math.max(Number(classified?.confidence) || 0, 0.6),
+            reason: classified?.reason
+              ? `${String(classified.reason).slice(0, 200)}; profile_layout`
+              : 'profile_layout_heuristic',
+            eventName: null,
+            hasHeadshot: classified?.hasHeadshot ?? true,
+          };
+        }
+      } catch (e) {
+        console.warn('[telegram-events] profile layout heuristic failed', e?.message || e);
+      }
+    }
+
     const imageKind = String(classified?.kind || '').toLowerCase();
     const conf = Number(classified?.confidence) || 0;
+    const heuristicContact =
+      classified?.reason === 'heuristic_caption_contact'
+      || classified?.reason === 'heuristic_caption_crm'
+      || String(classified?.reason || '').includes('profile_layout');
+    const heuristicCompany =
+      classified?.reason === 'heuristic_caption_company'
+      || classified?.reason === 'heuristic_caption_logo';
 
     if (
       imageKind === 'guest_list'
@@ -1516,7 +1964,7 @@ export async function processTelegramEventMessage(message, env = process.env, op
     }
     if (
       TELEGRAM_CONTACT_IMAGE_KINDS.has(imageKind)
-      && (conf >= 0.45 || classified?.reason === 'heuristic_caption_contact' || classified?.reason === 'heuristic_caption_crm')
+      && (conf >= 0.45 || heuristicContact || Boolean(classified?.contact?.displayName))
     ) {
       return ingestTelegramContactFromImage(message, file, env, {
         caption: caption || text,
@@ -1526,7 +1974,7 @@ export async function processTelegramEventMessage(message, env = process.env, op
     }
     if (
       TELEGRAM_COMPANY_IMAGE_KINDS.has(imageKind)
-      && (conf >= 0.45 || classified?.reason === 'heuristic_caption_company' || classified?.reason === 'heuristic_caption_logo')
+      && (conf >= 0.45 || heuristicCompany || Boolean(classified?.company?.name))
     ) {
       return ingestTelegramCompanyFromImage(message, file, env, {
         caption: caption || text,
@@ -1574,10 +2022,79 @@ export async function processTelegramEventMessage(message, env = process.env, op
       });
     }
 
-    return ingestTelegramEventFromMessage(message, env, {
-      photoId: fileId,
-      caption,
-      text,
+    // Confident flyer → event. Weak / other / failed classify → ask (do not assume event).
+    // Never default unknown photos to event ingest (that produced hard "Not ingested:
+    // That did not look like an event invite." for LinkedIn screenshots like Shannon Fiume).
+    const confidentFlyer = imageKind === 'event_flyer' && conf >= 0.45;
+    if (confidentFlyer) {
+      const eventResult = await ingestTelegramEventFromMessage(message, env, {
+        photoId: fileId,
+        caption,
+        text,
+        notifyUser,
+        quietFail: true,
+        localFile: file,
+      });
+      // Event parser said "not an event" — often a mislabeled LinkedIn/profile shot.
+      if (
+        !eventResult?.ok
+        && ['not_an_event', 'missing_title', 'missing_start'].includes(String(eventResult?.error || ''))
+      ) {
+        const person = classified?.contact;
+        const personRecoverable =
+          Boolean(person?.displayName)
+          && Boolean(
+            person.linkedin
+            || person.title
+            || person.org
+            || person.email
+            || person.phone
+            || person.officePhone
+            || suggestedTypeFromImageClassified(classified) === 'contact',
+          );
+        if (personRecoverable) {
+          const forceKind =
+            person.linkedin || /\blinkedin\b/i.test(String(classified?.reason || ''))
+              ? 'linkedin_screenshot'
+              : 'social_screenshot';
+          return ingestTelegramContactFromImage(message, file, env, {
+            caption: caption || text,
+            classified: { ...classified, ok: true, kind: forceKind, eventName: null },
+            forceKind,
+            notifyUser,
+          });
+        }
+        return askTelegramClarify(chatId, env, {
+          mode: 'image',
+          caption: caption || text,
+          message,
+          file,
+          mediaFileId: fileId,
+          mediaKind: kind,
+          classified,
+          suggestedType: suggestedTypeFromImageClassified(classified) || 'contact',
+          reason: `Event parse failed (${eventResult.error}); maybe a contact screenshot?`,
+          notifyUser,
+        });
+      }
+      if (!eventResult?.ok && notifyUser) {
+        await notifyIntake(chatId, ingestFailHint(eventResult.error || 'parse_failed'), env, { notifyUser });
+      }
+      return eventResult;
+    }
+
+    return askTelegramClarify(chatId, env, {
+      mode: 'image',
+      caption: caption || text,
+      message,
+      file,
+      mediaFileId: fileId,
+      mediaKind: kind,
+      classified,
+      suggestedType: suggestedTypeFromImageClassified(classified),
+      reason:
+        classified?.reason
+        || (imageKind ? `classified as ${imageKind} @ ${conf.toFixed(2)}` : 'classify_failed'),
       notifyUser,
     });
   }
@@ -1652,21 +2169,47 @@ export async function processTelegramEventMessage(message, env = process.env, op
 
   const confidence = Number(classified.confidence) || 0;
   if (confidence < 0.55 && classified.reason !== 'command_override') {
-    await notifyIntake(
-      chatId,
-      `Not sure if this is an event, todo, note, contact, or company (confidence ${confidence.toFixed(2)}).\nReply with /event /todo /note /contact or /company plus the text.`,
-      env,
-      { notifyUser },
-    );
-    return { ok: false, error: 'low_confidence', confidence, type: classified.type, transcript };
+    return askTelegramClarify(chatId, env, {
+      mode: 'text',
+      text: classifyText,
+      message,
+      classified,
+      suggestedType: classified.type || null,
+      reason: `confidence ${confidence.toFixed(2)}${classified.reason ? ` — ${classified.reason}` : ''}`,
+      notifyUser,
+    });
   }
 
   if (classified.type === 'event') {
-    return ingestTelegramEventFromText(classifyText, message, env, {
+    const eventResult = await ingestTelegramEventFromText(classifyText, message, env, {
       transcript,
       parseVia: voiceId ? 'voice' : 'text',
       notifyUser,
+      quietFail: true,
     });
+    if (
+      !eventResult?.ok
+      && ['not_an_event', 'missing_title', 'missing_start'].includes(String(eventResult?.error || ''))
+    ) {
+      return askTelegramClarify(chatId, env, {
+        mode: 'text',
+        text: classifyText,
+        message,
+        classified,
+        suggestedType: 'note',
+        reason: `Event parse failed (${eventResult.error})`,
+        notifyUser,
+      });
+    }
+    if (!eventResult?.ok && notifyUser) {
+      await notifyIntake(
+        chatId,
+        ingestFailHint(eventResult.error || 'parse_failed', { transcript }),
+        env,
+        { notifyUser },
+      );
+    }
+    return eventResult;
   }
 
   return routeNonEventType(classified.type, classifyText, chatId, env, { classified, transcript, notifyUser });
@@ -1711,6 +2254,7 @@ async function routeNonEventType(type, text, chatId, env, meta = {}) {
       }
       const { title, body } = splitKeepNoteTitleBody(noteText);
       const note = await createKeepNote({ title, body }, env);
+      recordLastTelegramNote(chatId, note.id, env);
       const preview = (note.title || note.body || '').slice(0, 300);
       await telegramSendMessage(chatId, `Note saved (${note.id}):\n${preview}`, env);
       return { ok: true, type: 'note', note };
@@ -2330,7 +2874,7 @@ async function ingestTelegramCompanyFromImage(message, file, env, meta = {}) {
  * @param {string} text
  * @param {any} message
  * @param {NodeJS.ProcessEnv} env
- * @param {{ transcript?: string | null, parseVia?: string, notifyUser?: boolean }} meta
+ * @param {{ transcript?: string | null, parseVia?: string, notifyUser?: boolean, quietFail?: boolean }} meta
  */
 async function ingestTelegramEventFromText(text, message, env, meta = {}) {
   const chatId = message?.chat?.id;
@@ -2343,7 +2887,9 @@ async function ingestTelegramEventFromText(text, message, env, meta = {}) {
   }
   if (!parsed.ok || !parsed.event) {
     const why = parsed.error || 'parse_failed';
-    await notifyIntake(chatId, ingestFailHint(why, { transcript: meta.transcript }), env, { notifyUser });
+    if (!meta.quietFail) {
+      await notifyIntake(chatId, ingestFailHint(why, { transcript: meta.transcript }), env, { notifyUser });
+    }
     return { ok: false, error: why, transcript: meta.transcript, type: 'event' };
   }
   const event = finalizeEvent(parsed.event, message, {
@@ -2525,7 +3071,14 @@ async function fetchOgImageForEventUrl(url) {
 /**
  * @param {any} message
  * @param {NodeJS.ProcessEnv} env
- * @param {{ photoId: string, caption: string, text: string, notifyUser?: boolean }} media
+ * @param {{
+ *   photoId: string,
+ *   caption: string,
+ *   text: string,
+ *   notifyUser?: boolean,
+ *   quietFail?: boolean,
+ *   localFile?: { buffer: Buffer, filePath?: string, mimeType?: string, publicPath?: string | null } | null,
+ * }} media
  */
 async function ingestTelegramEventFromMessage(message, env, media) {
   const chatId = message?.chat?.id;
@@ -2538,12 +3091,19 @@ async function ingestTelegramEventFromMessage(message, env, media) {
 
   try {
     const kind = largestPhotoFileId(message) ? 'photo' : 'document_image';
-    const file = await resolveTelegramMedia(message, kind, media.photoId, env);
+    const file = media.localFile?.buffer
+      ? {
+          buffer: media.localFile.buffer,
+          filePath: media.localFile.filePath || 'clarify.jpg',
+          mimeType: media.localFile.mimeType || 'image/jpeg',
+          publicPath: media.localFile.publicPath || null,
+        }
+      : await resolveTelegramMedia(message, kind, media.photoId, env);
     const publicPath =
       file.publicPath
       || saveMediaPublic(
         file.buffer,
-        `${message.chat.id}_${message.message_id}${path.extname(file.filePath) || '.jpg'}`,
+        `${message?.chat?.id || chatId || 'chat'}_${message?.message_id || Date.now()}${path.extname(file.filePath) || '.jpg'}`,
         env,
       );
     imageUrl = publicPath;
@@ -2562,13 +3122,17 @@ async function ingestTelegramEventFromMessage(message, env, media) {
     }
     // Low flyer-crop score still keeps the real photo — never /assets/tile-telegram.svg.
   } catch (e) {
-    await notifyIntake(chatId, `Ingest error: ${String(e?.message || e).slice(0, 200)}`, env, { notifyUser });
+    if (!media.quietFail) {
+      await notifyIntake(chatId, `Ingest error: ${String(e?.message || e).slice(0, 200)}`, env, { notifyUser });
+    }
     return { ok: false, error: String(e?.message || e), type: 'event' };
   }
 
   if (!parsed.ok || !parsed.event) {
     const why = parsed.error || 'parse_failed';
-    await notifyIntake(chatId, ingestFailHint(why), env, { notifyUser });
+    if (!media.quietFail) {
+      await notifyIntake(chatId, ingestFailHint(why), env, { notifyUser });
+    }
     return { ok: false, error: why, type: 'event' };
   }
 
@@ -2599,6 +3163,10 @@ async function ingestTelegramEventFromMessage(message, env, media) {
  */
 export async function handleTelegramUpdate(update, env = process.env, media = null, opts = {}) {
   if (update?.callback_query) {
+    const data = String(update.callback_query?.data || '');
+    if (data.startsWith('clf:')) {
+      return handleClarifyCallback(update.callback_query, env);
+    }
     return handleHowWeMetCallback(update.callback_query, env);
   }
   const message = update?.message || update?.edited_message;
@@ -2621,6 +3189,13 @@ function isPermanentIntakeFailure(result) {
     || err === 'contact_name_required'
     // User already got the /event|/todo prompt — retrying the same text just spams chat.
     || err === 'low_confidence'
+    // Waiting on inline-keyboard choice; do not re-ask on queue retry.
+    || err === 'needs_clarify'
+    || err === 'clarify_skipped'
+    || err === 'more_empty'
+    || err === 'more_no_target'
+    || err === 'more_event_missing'
+    || err === 'more_note_missing'
   );
 }
 

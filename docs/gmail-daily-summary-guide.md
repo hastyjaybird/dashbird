@@ -3,6 +3,8 @@
 Edit this file (or **Settings → Daily Summary**) to tune what intake mail becomes action items on the main page.
 Scans **jay.intake.box** + **julia.hasty** every ~30 minutes (rolling 10-day window).
 
+**Runtime enforcement:** Never show is always hard-excluded in code. Soft skip and Prefer less are omitted unless a Show these / Prefer more line also matches. The LLM still reads this guide; code is the backstop.
+
 ---
 
 ## Principles

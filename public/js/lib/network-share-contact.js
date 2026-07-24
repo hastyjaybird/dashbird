@@ -79,21 +79,12 @@ function openShareAssetDialog(opts) {
     parts.push(meta);
   }
 
-  const actions = document.createElement('div');
-  actions.className = 'network-crm__share-asset-actions';
-  const downloadBtn = document.createElement('button');
-  downloadBtn.type = 'button';
-  downloadBtn.className = 'network-crm__btn network-crm__btn--primary';
-  downloadBtn.textContent = 'Download';
-  downloadBtn.addEventListener('click', () => {
-    downloadHref(opts.imageUrl, opts.downloadName);
-  });
-  actions.append(downloadBtn);
-
   if (typeof navigator.share === 'function') {
+    const actions = document.createElement('div');
+    actions.className = 'network-crm__share-asset-actions';
     const shareBtn = document.createElement('button');
     shareBtn.type = 'button';
-    shareBtn.className = 'network-crm__btn';
+    shareBtn.className = 'network-crm__btn network-crm__btn--primary';
     shareBtn.textContent = 'Share…';
     shareBtn.addEventListener('click', async () => {
       try {
@@ -121,9 +112,8 @@ function openShareAssetDialog(opts) {
       }
     });
     actions.append(shareBtn);
+    parts.push(actions);
   }
-
-  parts.push(actions);
   dialog.append(...parts);
   backdrop.append(dialog);
 

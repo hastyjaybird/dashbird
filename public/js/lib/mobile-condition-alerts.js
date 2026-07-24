@@ -58,18 +58,19 @@ async function loadVolcano() {
     const r = await fetch('/api/dashboard-kilauea', { cache: 'no-store' });
     const j = await r.json().catch(() => ({}));
     const s = j?.status || {};
-    const alert = String(s.alertLevel || '').toUpperCase();
-    const hasForecast = s.hasEruptionForecast === true;
-    const active =
-      s.erupting === true || (alert !== '' && alert !== 'NORMAL') || hasForecast;
-    if (!active) return idle();
+    // Mobile header: erupting only. Paused + projected next dates stay desktop Earth strip.
+    if (s.erupting !== true) return idle();
     const detail =
       Array.isArray(j.items) && j.items[0]?.detailLine ? String(j.items[0].detailLine) : '';
-    const lines = [];
-    if (s.erupting) lines.push('\u2757 K\u012Blauea is erupting.');
-    else if (alert !== '' && alert !== 'NORMAL') lines.push('K\u012Blauea activity is elevated.');
-    if (detail) lines.push(detail);
-    else {
+    const lines = ['\u2757 K\u012Blauea is erupting.'];
+    if (detail) {
+      // Strip pause/forecast segments — those are desktop-only.
+      const cleaned = detail
+        .split(/\s*\u00B7\s*/)
+        .filter((part) => !/^\s*Paused\s*$/i.test(part) && !/\uD83D\uDCC5|\bnext:\b/i.test(part))
+        .join(' \u00B7 ');
+      if (cleaned) lines.push(cleaned);
+    } else {
       const parts = [];
       if (s.alertLevel) parts.push(`Alert ${s.alertLevel}`);
       if (s.colorCode) parts.push(s.colorCode);
@@ -77,21 +78,14 @@ async function loadVolcano() {
       if (s.fountainFt != null) parts.push(`fountain ${s.fountainFt} ft`);
       if (parts.length) lines.push(parts.join(' \u00B7 '));
     }
-    if (hasForecast && s.forecast) {
-      lines.push(`\uD83D\uDCC5 Next eruption forecast: ${String(s.forecast)}`);
-    }
     const cam = Array.isArray(j.cameras) ? j.cameras.find((c) => c?.embedUrl) : null;
     /** @type {AlertMedia} */
-    // Summit cam only while lava is actively erupting — not for pause/forecast/elevated alone.
-    const media =
-      s.erupting === true && cam?.embedUrl
-        ? { kind: 'iframe', src: String(cam.embedUrl), title: 'K\u012Blauea summit livestream' }
-        : { kind: 'image', src: '/assets/earth-kilauea-volcano.png', alt: 'K\u012Blauea volcano' };
-    // ! for erupting, calendar for a next-eruption forecast.
-    const titleMarks = `${s.erupting ? '\u2757' : ''}${hasForecast ? '\uD83D\uDCC5' : ''}`;
+    const media = cam?.embedUrl
+      ? { kind: 'iframe', src: String(cam.embedUrl), title: 'K\u012Blauea summit livestream' }
+      : { kind: 'image', src: '/assets/earth-kilauea-volcano.png', alt: 'K\u012Blauea volcano' };
     return {
       active: true,
-      title: `K\u012Blauea volcano${titleMarks ? ` ${titleMarks}` : ''}`,
+      title: 'K\u012Blauea volcano \u2757',
       lines,
       media,
     };
@@ -132,10 +126,11 @@ async function loadAir() {
     const r = await fetch('/api/air-quality', { cache: 'no-store' });
     const j = await r.json().catch(() => ({}));
     if (j?.disabled) return idle();
-    const active = j?.aboveThreshold === true || (j?.show === true && j?.aboveThreshold !== false);
+    // Server threshold is US AQI > 100 (unhealthy for sensitive groups or worse).
+    const active = j?.aboveThreshold === true;
     if (!active) return idle();
     const aqi = j.usAqi != null ? Math.round(Number(j.usAqi)) : null;
-    const lines = ['Air quality is elevated.'];
+    const lines = ['Air quality is in the unhealthy range.'];
     const parts = [];
     if (aqi != null) parts.push(`US AQI ${aqi}`);
     if (j.category) parts.push(String(j.category));

@@ -8,6 +8,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { guideExcludeReason } from './gmail-daily-summary-guide-match.js';
+import { loadGmailDailySummaryGuide } from './gmail-daily-summary-guide-store.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
@@ -78,19 +80,28 @@ export function looksLikeVerificationSummaryItem(blob) {
 }
 
 /**
- * @param {{ title?: string, detail?: string, sources?: Array<{ subject?: string }> }} item
+ * @param {{
+ *   title?: string,
+ *   company?: string,
+ *   detail?: string,
+ *   sources?: Array<{ subject?: string, from?: string }>,
+ * }} item
+ * @param {string} [guideMarkdown] live ingestion guide — Never show / Soft skip enforced in code
  */
-export function shouldExcludeDailySummaryItem(item) {
+export function shouldExcludeDailySummaryItem(item, guideMarkdown = '') {
   const blob = [
+    item?.company,
     item?.title,
     item?.detail,
-    ...(Array.isArray(item?.sources) ? item.sources.map((s) => s?.subject) : []),
+    ...(Array.isArray(item?.sources)
+      ? item.sources.flatMap((s) => [s?.subject, s?.from])
+      : []),
   ]
     .filter(Boolean)
     .join(' ');
   if (looksLikeEventSummaryItem(blob)) return 'event';
   if (looksLikeVerificationSummaryItem(blob)) return 'verification';
-  return null;
+  return guideExcludeReason(item, guideMarkdown);
 }
 
 /**
@@ -602,12 +613,14 @@ function normalizeDigest(raw) {
 /**
  * Hard-delete items outside the rolling 10-day window (unless pinned).
  * Unpinned expired items with unpinDeleteAt wait until that timestamp.
- * Event/verification noise is dismissed (tombstone) so it is not resurrected.
+ * Event/verification/guide-noise is dismissed (tombstone) so it is not resurrected.
  * @param {GmailWeeklyDigest} digest
  * @param {number} [nowMs]
+ * @param {{ guideMarkdown?: string }} [opts]
  * @returns {{ digest: GmailWeeklyDigest, changed: boolean }}
  */
-export function pruneExpiredGmailDailySummary(digest, nowMs = Date.now()) {
+export function pruneExpiredGmailDailySummary(digest, nowMs = Date.now(), opts = {}) {
+  const guideMarkdown = String(opts?.guideMarkdown || '');
   const base = normalizeDigest(digest);
   const nowIso = new Date(nowMs).toISOString();
   let changed = false;
@@ -615,7 +628,7 @@ export function pruneExpiredGmailDailySummary(digest, nowMs = Date.now()) {
   const items = [];
 
   for (const it of base.items) {
-    const excludeReason = shouldExcludeDailySummaryItem(it);
+    const excludeReason = shouldExcludeDailySummaryItem(it, guideMarkdown);
     if (it.status === 'open' && excludeReason) {
       changed = true;
       items.push({
@@ -699,7 +712,15 @@ export async function loadGmailWeeklySummary(env = process.env) {
   try {
     const raw = await fs.readFile(gmailWeeklySummaryStorePath(env), 'utf8');
     const loaded = normalizeDigest(JSON.parse(raw));
-    const { digest, changed } = pruneExpiredGmailDailySummary(loaded);
+    let guideMarkdown = '';
+    try {
+      guideMarkdown = await loadGmailDailySummaryGuide(env);
+    } catch {
+      /* guide optional for prune */
+    }
+    const { digest, changed } = pruneExpiredGmailDailySummary(loaded, Date.now(), {
+      guideMarkdown,
+    });
     const collapsedItems = collapseDuplicateDailySummaryItems(digest.items);
     const healedItems = dropOpenItemsMatchingClosed(collapsedItems);
     const itemsChanged =
@@ -726,7 +747,17 @@ export async function loadGmailWeeklySummary(env = process.env) {
  * @param {NodeJS.ProcessEnv} [env]
  */
 export async function saveGmailWeeklySummary(digest, env = process.env) {
-  const { digest: pruned } = pruneExpiredGmailDailySummary(normalizeDigest(digest));
+  let guideMarkdown = '';
+  try {
+    guideMarkdown = await loadGmailDailySummaryGuide(env);
+  } catch {
+    /* guide optional */
+  }
+  const { digest: pruned } = pruneExpiredGmailDailySummary(
+    normalizeDigest(digest),
+    Date.now(),
+    { guideMarkdown },
+  );
   const items = dropOpenItemsMatchingClosed(
     collapseDuplicateDailySummaryItems(pruned.items),
   );
@@ -748,8 +779,10 @@ export async function saveGmailWeeklySummary(digest, env = process.env) {
  *   items?: Array<Partial<GmailWeeklyItem> & { title: string }>,
  *   lastError?: string | null,
  * }} synth
+ * @param {{ guideMarkdown?: string }} [opts]
  */
-export function mergeSynthesizedDigest(prev, synth) {
+export function mergeSynthesizedDigest(prev, synth, opts = {}) {
+  const guideMarkdown = String(opts?.guideMarkdown || '');
   const now = new Date().toISOString();
   const base = normalizeDigest(prev);
   const closed = base.items.filter(
@@ -806,7 +839,7 @@ export function mergeSynthesizedDigest(prev, synth) {
     });
     if (!normalized) continue;
     const candidate = withNewestSourceOnly(normalized);
-    if (shouldExcludeDailySummaryItem(candidate)) continue;
+    if (shouldExcludeDailySummaryItem(candidate, guideMarkdown)) continue;
     if (
       matchesClosedDailySummaryItem(
         candidate,
@@ -868,7 +901,7 @@ export function mergeSynthesizedDigest(prev, synth) {
     items: [...open, ...closed],
     lastError: synth.lastError === undefined ? null : synth.lastError,
   };
-  return pruneExpiredGmailDailySummary(merged).digest;
+  return pruneExpiredGmailDailySummary(merged, Date.now(), { guideMarkdown }).digest;
 }
 
 /**

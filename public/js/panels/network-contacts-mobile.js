@@ -373,21 +373,23 @@ export function mountNetworkContactsMobile(root) {
     defaultFilters,
   );
 
-  const listActions = document.createElement('div');
-  listActions.className = 'mobile-network__toolbar-actions';
+  const toolbarTop = document.createElement('div');
+  toolbarTop.className = 'mobile-network__toolbar-top';
+
   const newContactBtn = document.createElement('button');
   newContactBtn.type = 'button';
-  newContactBtn.className = 'mobile-network__action';
+  newContactBtn.className = 'mobile-network__action mobile-network__action--new-contact';
   newContactBtn.textContent = 'New contact';
+
   const shareContactBtn = document.createElement('button');
   shareContactBtn.type = 'button';
   shareContactBtn.className = 'mobile-network__action mobile-network__action--share-square';
   shareContactBtn.setAttribute('aria-label', 'Share Contact Info');
   shareContactBtn.innerHTML =
     '<span class="network-crm__btn-share-label">Share<br>Contact<br>Info</span>';
-  listActions.append(newContactBtn, shareContactBtn);
 
-  toolbar.append(search, listActions, filterBar);
+  toolbarTop.append(search, newContactBtn, shareContactBtn);
+  toolbar.append(toolbarTop, filterBar);
 
   const selectionBar = document.createElement('div');
   selectionBar.className = 'mobile-network__selection-bar';

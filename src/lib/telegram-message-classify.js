@@ -63,19 +63,20 @@ Return JSON only:
   } | null
 }
 Rules:
-- event: party/meetup/show/invite with a time or clear event framing.
+- event: party/meetup/show/invite with a time or clear event framing (flyer details, "invited by…", RSVP links with a date).
 - todo: actionable task the user wants on a to-do list ("remind me to…", "todo:…", "buy…", "call…").
-- contact: introducing or saving a person — including bare "Name + phone/email/linkedin", business intros, "met Sam…", "new contact…".
+- contact: introducing or saving a person — including bare "Name + phone/email/linkedin", business intros, "met Sam…", "new contact…", LinkedIn/profile blurbs about one person.
 - company: saving an organization / business / brand (not a person) — "add company Acme", org name + website/phone.
-- note: everything else worth keeping as freeform text that is not event/todo/contact/company.
-- confidence: 0-1. If under 0.55, still pick best type but be honest about confidence.
+- note: freeform text to keep that is NOT an event/todo/contact/company (ideas, reminders without a task verb, random facts). Prefer note over event when there is no date/time/invite framing.
+- confidence: 0-1. Be honest. Use <0.55 when two types are plausible so the bot can ask the user. Still pick your best type.
 - For contact, displayName is required when type=contact. Extract phone/officePhone/email/linkedin/org/title/address when present.
 - phone: mobile/cell when distinguishable; otherwise the primary personal number.
 - officePhone: office / work / desk line when labeled separately from mobile.
 - location: city / metro; address: full mailing/street/P.O. Box when present.
 - For company, name is required when type=company.
 - For todo, todoText should be a short task title.
-- For note, noteText is the cleaned note body.`;
+- For note, noteText is the cleaned note body.
+- Never invent event dates. If unsure between event and note/contact, lower confidence.`;
 
 const IMAGE_CLASSIFY_SYSTEM = `You classify a photo sent to a personal dashboard Telegram bot and extract CRM fields.
 Return JSON only:
@@ -136,13 +137,13 @@ Return JSON only:
 }
 Rules:
 - business_card: photo/scan of a physical or digital business card.
-- linkedin_screenshot: LinkedIn profile (or similar professional directory) screenshot.
-- social_screenshot: Instagram / X / Facebook / About page / other social profile screenshot of a person.
+- linkedin_screenshot: LinkedIn (or similar professional directory) profile screenshot — look for LinkedIn chrome (blue logo/nav, "LinkedIn", Experience / Education / About / Open to work, connection degree, headline under the name, circular avatar + cover banner). A single person's profile page is NEVER an event_flyer, even if they mention events in About.
+- social_screenshot: Instagram / X / Facebook / About page / other social profile screenshot of a person (not LinkedIn).
 - headshot: portrait / selfie / headshot of a person with little other CRM text (still extract name from caption if present).
 - guest_list: RSVP / going / invitee / attendee list screenshot (Partiful, Luma, Eventbrite, Facebook, Secret Party, Meetup, spreadsheet, etc.) showing multiple people who were invited or are attending. Put every readable person into "contacts" (cap 40). Set eventName when the event title is visible. contact may mirror the first person or be null.
 - company_logo: primarily a company logo / brand mark / wordmark (optionally with company name), not a person.
-- event_flyer: party/meetup/show invite flyer or event page screenshot (poster/details — not a roster of names). Use event_flyer when a date/time is visible, even if DJs, bands, or performers are listed. DJ / artist / band lineups on a poster are NOT guest_list — leave contacts empty and set eventName to the event title when visible. Prefer guest_list only when the screenshot is mainly a roster of invitees/attendees (platform UI or spreadsheet), not performers on a flyer.
-- other: anything else (receipts, random photos) — prefer other over guessing event_flyer.
+- event_flyer: party/meetup/show invite flyer or event page screenshot (poster/details — not a roster of names). Use event_flyer when a date/time or clear invite poster is visible, even if DJs, bands, or performers are listed. DJ / artist / band lineups on a poster are NOT guest_list — leave contacts empty and set eventName to the event title when visible. Prefer guest_list only when the screenshot is mainly a roster of invitees/attendees (platform UI or spreadsheet), not performers on a flyer.
+- other: anything else (receipts, random photos) — prefer other over guessing event_flyer. Do NOT classify LinkedIn/social profile screenshots as other or event_flyer.
 - hasHeadshot: true when a clear photo of the person's face is visible (card photo, LinkedIn avatar, portrait). For guest_list, set per-row hasHeadshot/headshotCrop on contacts[]; top-level hasHeadshot only if a single dominant face.
 - headshotCrop / logoCrop: normalized 0-1 fractions of the full image (x,y = top-left; w,h = size). Prefer a tight square-ish crop around the face or logo, but keep each edge at least ~0.06 of the image so small marks still crop. Null when not visible.
 - For social_screenshot / linkedin_screenshot: headshotCrop MUST be only the circular or square profile photo (the avatar bubble), not the cover banner and not the white chrome with name / friends / headline text. Match the platform's avatar framing even if the face is off-center inside that circle.
@@ -840,6 +841,9 @@ export async function classifyTelegramImage(dataUrl, caption = '', env = process
     if (/\b(guest\s*list|rsvp\s*list|attendee|going\s*list|invitee)\b/i.test(cap) && kind === 'other') {
       finalKind = 'guest_list';
     }
+    if (/\blinkedin\b/i.test(cap) && (kind === 'other' || kind === 'event_flyer' || kind === 'social_screenshot')) {
+      finalKind = 'linkedin_screenshot';
+    }
 
     let contacts = normalizeContactsList(parsed.contacts);
     const contact = normalizeContactPayload(parsed.contact);
@@ -860,16 +864,76 @@ export async function classifyTelegramImage(dataUrl, caption = '', env = process
       contacts = [];
     }
 
+    // Person CRM fields extracted but kind guessed wrong → contact screenshot.
+    // Prevents LinkedIn profiles falling through to the event flyer parser.
+    // Note: models sometimes invent eventName from a headline ("Net Zero ASAP Project")
+    // — LinkedIn chrome / URL / pronouns still win over that phantom event.
+    const reasonText = String(parsed.reason || '');
+    const linkedinSignals =
+      Boolean(contact?.linkedin)
+      || /\blinkedin\b/i.test(cap)
+      || /\blinkedin\b/i.test(reasonText)
+      || /\b(?:she\/her|he\/him|they\/them|\d+(?:st|nd|rd|th)\s*degree|open to work|premium(?:\s+sales)?|mutual\s+connection|500\+\s*connection|\+\s*connect|sales\s+insights)\b/i.test(
+        reasonText,
+      );
+    const personCrm =
+      Boolean(contact?.displayName)
+      && Boolean(
+        contact.linkedin
+        || contact.title
+        || contact.org
+        || contact.email
+        || contact.phone
+        || contact.officePhone
+        || linkedinSignals,
+      );
+    let eventName =
+      parsed.eventName != null ? String(parsed.eventName).trim().slice(0, 300) || null : null;
+    // Headlines like "Net Zero ASAP Project" are not invites — only keep eventName
+    // when it (or the caption) has a real date/time/invite cue.
+    // Ignore phone auto-captions like "Screenshot (Jul 22, 2026 6:58:56 PM)".
+    const capForEventCue = cap.replace(/\bscreenshot\s*\([^)]*\)/gi, '').trim();
+    // Do not treat bare years (e.g. "2030s Net Zero Playbook") as event dates.
+    const eventLooksReal =
+      /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,?\s+20\d{2})?|tonight|tomorrow|this\s+(?:fri|sat|sun|weekend)|\d{1,2}:\d{2}\s*(?:am|pm)?|invited\s+by|doors?\s+at|rsvp)\b/i.test(
+        `${eventName || ''} ${capForEventCue}`,
+      );
+    if (
+      personCrm
+      && (finalKind === 'other' || finalKind === 'event_flyer')
+      && contacts.length < 2
+      && (
+        finalKind === 'event_flyer'
+        || !eventName
+        || linkedinSignals
+        || !eventLooksReal
+      )
+    ) {
+      finalKind = linkedinSignals ? 'linkedin_screenshot' : 'social_screenshot';
+      if (linkedinSignals || !eventLooksReal) eventName = null;
+    }
+
+    let confidence = Number(parsed.confidence) || 0;
+    // After CRM promotion from a weak "other"/"event_flyer" guess, keep confidence
+    // usable for routing (≥0.45) without pretending the model was certain.
+    if (
+      personCrm
+      && (finalKind === 'linkedin_screenshot' || finalKind === 'social_screenshot')
+      && confidence < 0.5
+    ) {
+      confidence = Math.max(confidence, 0.55);
+    }
+
     return {
       ok: true,
       kind: finalKind,
-      confidence: Number(parsed.confidence) || 0,
-      reason: String(parsed.reason || '').slice(0, 400) || null,
+      confidence,
+      reason: reasonText.slice(0, 400) || null,
       hasHeadshot: Boolean(parsed.hasHeadshot),
       headshotCrop: keepRawCrop(parsed.headshotCrop) || normalizeImageCrop(parsed.headshotCrop),
       hasLogo: Boolean(parsed.hasLogo),
       logoCrop: keepRawCrop(parsed.logoCrop) || normalizeImageCrop(parsed.logoCrop),
-      eventName: parsed.eventName != null ? String(parsed.eventName).trim().slice(0, 300) || null : null,
+      eventName,
       contact,
       contacts,
       company: normalizeCompanyPayload(parsed.company),

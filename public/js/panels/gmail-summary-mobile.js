@@ -3,9 +3,9 @@
  */
 import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
 import {
-  gmailMobileOpenUrl,
+  gmailMailtoFallbackUrl,
   gmailWebMessageUrl,
-  isMobileGmailClient,
+  wireGmailOpenAnchor,
 } from '../lib/gmail-open-url.js';
 
 const CACHE_KEY = 'gmail-daily-summary';
@@ -21,12 +21,50 @@ const PIN_ICON_SVG =
 /**
  * @param {string} email
  */
-function shortMailbox(email) {
-  const s = String(email || '').trim().toLowerCase();
+function normalizeMailbox(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+/**
+ * Compact label for an intake address (full address stays on title).
+ * @param {string} email
+ */
+function shortMailboxLabel(email) {
+  const s = normalizeMailbox(email);
   if (!s) return '';
   if (s.startsWith('jay.intake')) return 'intake';
   if (s.startsWith('julia')) return 'julia';
   return s.split('@')[0] || s;
+}
+
+/**
+ * Intake addresses for this action item (mailboxes[] or sources[].email).
+ * @param {object} item
+ * @returns {string[]}
+ */
+function itemMailboxes(item) {
+  const fromList = Array.isArray(item?.mailboxes)
+    ? item.mailboxes.map(normalizeMailbox).filter(Boolean)
+    : [];
+  if (fromList.length) return [...new Set(fromList)];
+  const fromSources = Array.isArray(item?.sources)
+    ? item.sources
+        .map((s) => normalizeMailbox(s?.email || s?.mailbox))
+        .filter(Boolean)
+    : [];
+  return [...new Set(fromSources)];
+}
+
+/**
+ * Human label for which Dashbird inbox received the mail.
+ * @param {string[]} boxes
+ */
+function mailboxLine(boxes) {
+  const labels = boxes.map(shortMailboxLabel).filter(Boolean);
+  if (!labels.length) return '';
+  return labels.length === 1
+    ? `Inbox · ${labels[0]}`
+    : `Inboxes · ${labels.join(', ')}`;
 }
 
 /**
@@ -519,14 +557,23 @@ export function mountGmailSummaryMobile(root) {
     if (company) companyEl.textContent = company;
     else companyEl.hidden = true;
 
+    const boxes = itemMailboxes(item);
+    const mailboxEl = document.createElement('p');
+    mailboxEl.className = 'mobile-mail__mailbox';
+    const boxLine = mailboxLine(boxes);
+    if (boxLine) {
+      mailboxEl.textContent = boxLine;
+      mailboxEl.title = boxes.join(', ');
+    } else {
+      mailboxEl.hidden = true;
+    }
+
     const meta = document.createElement('p');
     meta.className = 'mobile-mail__meta';
     const metaBits = [];
     const due = formatDeadline(item.deadline);
     if (due) metaBits.push(`Due ${due}`);
     if (item.needsReply) metaBits.push('Needs reply');
-    const boxes = Array.isArray(item.mailboxes) ? item.mailboxes : [];
-    for (const box of boxes) metaBits.push(shortMailbox(box));
     if (metaBits.length) meta.textContent = metaBits.join(' · ');
     else meta.hidden = true;
 
@@ -587,36 +634,33 @@ export function mountGmailSummaryMobile(root) {
 
     const primary = Array.isArray(item.sources) && item.sources.length ? item.sources[0] : null;
     const webUrl = gmailWebMessageUrl(primary) || String(item.replyUrl || '').trim();
-    // Intake mailboxes come in over IMAP, so threadId/messageId are decimal UIDs.
-    // A googlegmail:///cv?th=<decimal> link is unroutable and lands on nothing, so
-    // strip non-hex ids and let the iOS native handoff fall back to its
-    // rfc822msgid search deep link.
-    const nativeSource = primary ? { ...primary } : null;
-    if (nativeSource) {
-      const hexId = (v) => /^[0-9a-f]+$/i.test(String(v || '')) && !/^\d+$/.test(String(v || ''));
-      if (!hexId(nativeSource.threadId)) nativeSource.threadId = '';
-      if (!hexId(nativeSource.gmailId)) nativeSource.gmailId = '';
-      if (!hexId(nativeSource.messageId)) nativeSource.messageId = '';
-    }
-    const openLink = document.createElement(webUrl ? 'a' : 'button');
-    if (webUrl) {
-      /** @type {HTMLAnchorElement} */ (openLink).href = isMobileGmailClient()
-        ? gmailMobileOpenUrl(webUrl, nativeSource)
-        : webUrl;
-      if (!isMobileGmailClient()) {
-        /** @type {HTMLAnchorElement} */ (openLink).target = '_blank';
-        /** @type {HTMLAnchorElement} */ (openLink).rel = 'noopener noreferrer';
+    const mailtoUrl = !webUrl ? gmailMailtoFallbackUrl(primary) : '';
+    const openHref = webUrl || mailtoUrl;
+
+    const openRow = document.createElement('div');
+    openRow.className = 'mobile-mail__open-row';
+
+    const openLink = document.createElement(openHref ? 'a' : 'button');
+    if (openHref) {
+      if (webUrl) {
+        wireGmailOpenAnchor(/** @type {HTMLAnchorElement} */ (openLink), webUrl, primary);
+      } else {
+        /** @type {HTMLAnchorElement} */ (openLink).href = mailtoUrl;
+        openLink.textContent = 'Email sender';
+        openLink.title = 'Email sender';
+        openLink.setAttribute('aria-label', 'Email sender');
       }
     } else {
       /** @type {HTMLButtonElement} */ (openLink).type = 'button';
       /** @type {HTMLButtonElement} */ (openLink).disabled = true;
+      openLink.textContent = 'Open in Gmail';
+      openLink.title = 'Open in Gmail';
     }
     openLink.className = 'mobile-mail__action mobile-mail__action--open';
-    openLink.title = 'Open in Gmail';
-    openLink.textContent = 'Open';
+    openRow.append(openLink);
 
-    actions.append(upBtn, downBtn, dismissBtn, openLink);
-    card.append(head, companyEl, meta, blurb, actions);
+    actions.append(upBtn, downBtn, dismissBtn);
+    card.append(head, companyEl, mailboxEl, meta, blurb, openRow, actions);
 
     if (item.unpinDeleteAt) scheduleUnpinRemoval(id, item.unpinDeleteAt);
     return card;

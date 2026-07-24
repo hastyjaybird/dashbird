@@ -181,3 +181,62 @@ export async function recordThumbsDownAndEscalate(input, guide, env = process.en
     },
   };
 }
+
+/**
+ * Replay 👎 feedback log into Prefer less / Soft skip / Never show when the guide
+ * is missing those bullets (e.g. guide was overwritten after feedback was recorded).
+ * @param {string} guide
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function syncFeedbackLogIntoGuide(guide, env = process.env) {
+  const log = await loadFeedbackLog(env);
+  if (!log.entries.length) {
+    return { guide, changed: false, appended: 0, escalated: 0 };
+  }
+
+  let next = String(guide || '');
+  let appended = 0;
+  let escalated = 0;
+
+  /** @type {Map<string, { append: string, count: number }>} */
+  const clusters = new Map();
+
+  for (const entry of log.entries) {
+    const append = canonicalGuideBullet(entry?.append || '');
+    const patternKey =
+      String(entry?.patternKey || '').trim() || normalizeGuidePatternKey(append);
+    if (!append || !patternKey) continue;
+
+    const before = next;
+    next = appendToGuideSection(next, GUIDE_SECTION_KEYS.prefer_less, append);
+    if (next !== before) appended += 1;
+
+    let matched = false;
+    for (const [key, value] of clusters) {
+      if (key === patternKey || guidePatternSimilarity(key, patternKey) >= 0.55) {
+        value.count += 1;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      clusters.set(patternKey, { append, count: 1 });
+    }
+  }
+
+  for (const { append, count } of clusters.values()) {
+    const escalation = resolveThumbsDownEscalation(count);
+    if (!escalation.promoteSection) continue;
+    const heading = GUIDE_SECTION_KEYS[escalation.promoteSection];
+    const before = next;
+    next = appendToGuideSection(next, heading, append);
+    if (next !== before) escalated += 1;
+  }
+
+  return {
+    guide: next,
+    changed: next !== String(guide || ''),
+    appended,
+    escalated,
+  };
+}

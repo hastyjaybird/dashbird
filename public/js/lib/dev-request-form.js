@@ -66,10 +66,12 @@ export function detectDevRequestArea(platform) {
  * }} opts
  */
 export function buildDevRequestForm(opts) {
-  const platform = opts.platform;
+  const defaultPlatform = opts.platform === 'mobile' ? 'mobile' : 'desktop';
   /** @type {PendingAttachment[]} */
   let attachments = [];
   let submitting = false;
+  /** Once the user changes platform, do not re-apply the UI default in this session. */
+  let platformTouched = false;
 
   const form = document.createElement('form');
   form.className = 'dev-request-form';
@@ -88,7 +90,39 @@ export function buildDevRequestForm(opts) {
   prioritySelect.className = 'dev-request-form__select';
   prioritySelect.title = 'Priority';
 
-  row1.append(prioritySelect);
+  const platformSelect = document.createElement('select');
+  platformSelect.className = 'dev-request-form__select';
+  platformSelect.title = 'Platform';
+  for (const [value, label] of [
+    ['desktop', 'Desktop'],
+    ['mobile', 'Mobile'],
+  ]) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    if (value === defaultPlatform) opt.selected = true;
+    platformSelect.append(opt);
+  }
+  platformSelect.addEventListener('change', () => {
+    platformTouched = true;
+  });
+
+  row1.append(prioritySelect, platformSelect);
+
+  /**
+   * @returns {'desktop' | 'mobile'}
+   */
+  function selectedPlatform() {
+    return platformSelect.value === 'mobile' ? 'mobile' : 'desktop';
+  }
+
+  /**
+   * Re-apply the host UI default only when the user has not overridden it.
+   */
+  function ensureDefaultPlatform() {
+    if (platformTouched) return;
+    platformSelect.value = defaultPlatform;
+  }
 
   const attachZone = document.createElement('div');
   attachZone.className = 'dev-request-form__attach';
@@ -253,6 +287,7 @@ export function buildDevRequestForm(opts) {
     if (submitting || !changeText) return;
     submitting = true;
     syncSubmitState();
+    const platform = selectedPlatform();
     try {
       const payload = {
         title: deriveTitle(changeText),
@@ -272,6 +307,9 @@ export function buildDevRequestForm(opts) {
       bodyInput.value = '';
       attachments = [];
       renderPreview();
+      // Next request starts from the host UI default again.
+      platformTouched = false;
+      ensureDefaultPlatform();
       opts.onSubmit?.({ ok: true });
     } catch (err) {
       opts.onSubmit?.({ ok: false, error: String(err?.message || err) });
@@ -284,10 +322,12 @@ export function buildDevRequestForm(opts) {
   void loadDevRequestMeta()
     .then(({ priorities }) => {
       populatePriorities(priorities);
+      ensureDefaultPlatform();
       syncSubmitState();
     })
     .catch(() => {
       populatePriorities(defaultPriorities());
+      ensureDefaultPlatform();
       syncSubmitState();
     });
 

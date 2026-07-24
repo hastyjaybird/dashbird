@@ -4,7 +4,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { recordThumbsDownAndEscalate } from './gmail-daily-summary-guide-feedback.js';
+import { recordThumbsDownAndEscalate, syncFeedbackLogIntoGuide } from './gmail-daily-summary-guide-feedback.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
@@ -142,16 +142,27 @@ async function migrateLegacyCriteria(env = process.env) {
  */
 export async function loadGmailDailySummaryGuide(env = process.env) {
   const target = gmailDailySummaryGuidePath(env);
+  let text = '';
   try {
-    const text = await fs.readFile(target, 'utf8');
-    if (String(text || '').trim()) return text;
+    text = await fs.readFile(target, 'utf8');
   } catch (e) {
     if (!e || (e.code !== 'ENOENT' && e.code !== 'ENOTDIR')) throw e;
   }
-  const migrated = await migrateLegacyCriteria(env);
-  const guide = migrated || (await seedDefaultGuide(env));
-  await saveGmailDailySummaryGuide(guide, env);
-  return guide;
+  if (!String(text || '').trim()) {
+    const migrated = await migrateLegacyCriteria(env);
+    text = migrated || (await seedDefaultGuide(env));
+    await saveGmailDailySummaryGuide(text, env);
+  }
+
+  try {
+    const synced = await syncFeedbackLogIntoGuide(text, env);
+    if (synced.changed) {
+      text = await saveGmailDailySummaryGuide(synced.guide, env);
+    }
+  } catch {
+    /* feedback sync is best-effort */
+  }
+  return text;
 }
 
 /**

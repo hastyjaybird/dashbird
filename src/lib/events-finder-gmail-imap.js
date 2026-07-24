@@ -159,7 +159,7 @@ export async function fetchGmailEventsViaImap(email, appPassword, env = process.
       ? events
       : filterEventsToIngestWindow(events, {
           pastDays: windowDays.pastDays,
-          futureDays: windowDays.futureDays,
+          // No future horizon — keep months-out dated invites.
         });
 
     return {

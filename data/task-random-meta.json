@@ -81,6 +81,31 @@
       "location": "laptop",
       "timeAny": true
     },
+    "115": {
+      "difficulty": "med",
+      "priority": "med",
+      "duration": "30m",
+      "location": "phone",
+      "times": [
+        "weekday_9_5"
+      ]
+    },
+    "117": {
+      "difficulty": "high",
+      "priority": "high",
+      "duration": "1hr+",
+      "times": [
+        "weekday_9_5"
+      ]
+    },
+    "119": {
+      "difficulty": "high",
+      "priority": "med",
+      "duration": "1hr+",
+      "times": [
+        "weekday_9_5"
+      ]
+    },
     "121": {
       "difficulty": "high",
       "priority": "high",
@@ -193,18 +218,6 @@
       "location": "makerfarm",
       "timeAny": true
     },
-    "155": {
-      "difficulty": "high",
-      "priority": "high",
-      "duration": "1hr+",
-      "timeAny": true
-    },
-    "164": {
-      "difficulty": "med",
-      "priority": "low",
-      "duration": "30m",
-      "timeAny": true
-    },
     "168": {
       "difficulty": "high",
       "priority": "low",
@@ -299,18 +312,12 @@
       "location": "phone",
       "timeAny": true
     },
-    "220": {
-      "location": "out"
-    },
     "227": {
       "difficulty": "high",
       "priority": "med",
       "duration": "1hr+",
       "location": "out",
       "timeAny": true
-    },
-    "241": {
-      "location": "out"
     }
   },
   "byProjectId": {

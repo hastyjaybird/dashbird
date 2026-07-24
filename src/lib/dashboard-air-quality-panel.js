@@ -7,8 +7,8 @@
 import { fetchOpenMeteoCurrentUsAqi, usAqiCategoryStyle } from './dashboard-air-quality.js';
 import { resolveDashboardWeatherLatLon } from './hero-weather-location.js';
 
-/** Show panel when current US AQI is strictly above this value (>50 = Moderate or worse). */
-export const AQI_SHOW_THRESHOLD = 50;
+/** Show panel / alerts when current US AQI is strictly above this value (>100 = Unhealthy for sensitive groups or worse). */
+export const AQI_SHOW_THRESHOLD = 100;
 
 /**
  * Windy embed showing the PM2.5 (fine particulate) air-quality overlay centered on the location.
@@ -66,7 +66,7 @@ function airQualityDisabled(env = process.env) {
   return String(env.AIR_QUALITY || '').trim() === '0';
 }
 
-/** Off by default — panel stays hidden until AQI is Moderate or worse. Set AIR_QUALITY_FORCE_SHOW=1 to force it on for testing. */
+/** Off by default — panel stays hidden until AQI is above 100 (unhealthy range). Set AIR_QUALITY_FORCE_SHOW=1 to force it on for testing. */
 function airQualityForceShow(env = process.env) {
   const v = String(env.AIR_QUALITY_FORCE_SHOW ?? '0').trim().toLowerCase();
   return v === '1' || v === 'true' || v === 'yes';

@@ -484,7 +484,8 @@ router.get('/', async (req, res) => {
     let calendarHidden = 0;
     // Apply full browse filters including cities (client also mirrors city checks).
     const filtersBase = { ...(criteria.filters || {}) };
-    /** Date-only filters for deliberate Telegram intake (skip geo/taste/attendance/time). */
+    /** Date-only filters for deliberate Telegram intake + date-heuristic Gmail
+     * (skip geo/taste-adjacent attendance/time — months-out mail has no clock/coords). */
     const telegramDateFilters = {
       dates: filtersBase.dates,
       dateFrom: filtersBase.dateFrom,
@@ -494,6 +495,10 @@ router.get('/', async (req, res) => {
     for (const event of deduped) {
       const eventId = String(event?.id || '').trim();
       const telegramIntake = isTelegramIntakeEvent(event);
+      const gmailDateHeuristic =
+        String(event?.source || '').toLowerCase() === 'gmail'
+        && String(event?.raw?.via || '') === 'subject_heuristic';
+      const dateOnlyIntake = telegramIntake || gmailDateHeuristic;
 
       if (!telegramIntake) {
         // Skipped events never enter the main feed — regardless of filter/taste changes.
@@ -526,7 +531,7 @@ router.get('/', async (req, res) => {
         }
       }
 
-      const gate = telegramIntake
+      const gate = dateOnlyIntake
         ? eventPassesFeedFilters(event, telegramDateFilters, home, { timeZone })
         : eventPassesFeedFilters(event, filtersBase, home, { timeZone });
       if (!gate.ok) continue;

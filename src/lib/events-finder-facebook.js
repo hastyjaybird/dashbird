@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 import { loadEventsFinderCriteria, saveEventsFinderCriteria, facebookHostSlugKey } from './events-finder-criteria-store.js';
 import { resolveEventsFinderGeo } from './events-finder-geo.js';
 import { appendFacebookBillingRun } from './events-finder-facebook-billing.js';
-import { eventsIngestWindowDays } from './events-finder-window.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..', '..');
@@ -362,14 +361,13 @@ function pinnedHostsFingerprint(pinnedHosts) {
 }
 
 /**
- * Keep events inside the ingestion rolling window (+ optional earliest local time).
+ * Keep events that are not already in the past (+ optional earliest local time).
+ * Scrape-ahead no longer drops months-out dated events — once discovered, record them.
  * @param {object[]} events
  * @param {{ windowWeeks?: number, earliestLocalTime?: string | null }} scrape
  * @param {string} [timeZone]
  */
 export function filterEventsByIngestWindow(events, scrape = {}, timeZone = 'America/Los_Angeles') {
-  const { futureDays } = eventsIngestWindowDays(process.env, { scrape });
-  const horizonMs = futureDays * 24 * 60 * 60 * 1000;
   const now = Date.now();
   const earliest = String(scrape.earliestLocalTime || '').trim();
   const earliestMatch = earliest.match(/^(\d{1,2}):(\d{2})$/);
@@ -382,7 +380,9 @@ export function filterEventsByIngestWindow(events, scrape = {}, timeZone = 'Amer
     if (!start || !Number.isFinite(Date.parse(start))) return true;
     const t = Date.parse(start);
     if (t < now - 12 * 60 * 60 * 1000) return false;
-    if (t > now + horizonMs) return false;
+    // Date-only mail heuristics have no real clock time — don't apply "earliest".
+    const via = String(ev?.raw?.via || '');
+    if (via === 'subject_heuristic') return true;
     if (earliestMinutes == null) return true;
     try {
       const parts = new Intl.DateTimeFormat('en-US', {

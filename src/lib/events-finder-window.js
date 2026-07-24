@@ -102,7 +102,7 @@ export function rollingLocalDatesForWindowWeeks(
  * @param {{
  *   now?: number,
  *   pastDays?: number,
- *   futureDays?: number,
+ *   futureDays?: number | null,
  *   allowMissingStart?: boolean,
  * }} [opts]
  * @returns {boolean}
@@ -110,14 +110,19 @@ export function rollingLocalDatesForWindowWeeks(
 export function eventStartInIngestWindow(startIso, opts = {}) {
   const now = Number.isFinite(opts.now) ? opts.now : Date.now();
   const pastDays = opts.pastDays ?? EVENTS_INGEST_PAST_DAYS;
-  const futureDays = opts.futureDays ?? EVENTS_INGEST_FUTURE_DAYS;
   const allowMissing = opts.allowMissingStart === true;
   if (!startIso) return allowMissing;
   const ms = Date.parse(String(startIso));
   if (!Number.isFinite(ms)) return allowMissing;
   const pastMs = pastDays * 24 * 60 * 60 * 1000;
-  const futureMs = futureDays * 24 * 60 * 60 * 1000;
-  return ms >= now - pastMs && ms <= now + futureMs;
+  if (ms < now - pastMs) return false;
+  // futureDays null/undefined/<=0 → no future horizon (keep months-out events).
+  const futureDays = opts.futureDays;
+  if (Number.isFinite(futureDays) && futureDays > 0) {
+    const futureMs = futureDays * 24 * 60 * 60 * 1000;
+    if (ms > now + futureMs) return false;
+  }
+  return true;
 }
 
 /**

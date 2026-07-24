@@ -783,7 +783,9 @@ export function eventPassesFeedFilters(event, filters, home, opts = {}) {
     }
 
     const earliest = String(filters?.earliestLocalTime || '').trim();
-    if (/^\d{1,2}:\d{2}$/.test(earliest) && local) {
+    const via = String(event?.raw?.via || '');
+    // Date-only Gmail heuristics have no real clock time (local noon placeholder).
+    if (via !== 'subject_heuristic' && /^\d{1,2}:\d{2}$/.test(earliest) && local) {
       const [eh, em] = earliest.split(':').map(Number);
       const floor = eh * 60 + em;
       if (local.minutes < floor) {

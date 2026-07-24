@@ -108,12 +108,17 @@ function gmailCacheFresh(cache, fingerprint, env = process.env) {
 
 // Wider net so we don't miss events that arrive from marketing senders (no invite
 // keyword, sender not a platform domain) but carry a platform link in the body.
-// Downstream parsing + enrichment + window filter still gate what becomes an event.
+// Downstream parsing + enrichment still gate what becomes an event; far-future
+// dated invites are kept (scrape-ahead no longer drops months-out mail).
 const PRODUCER_GMAIL_QUERY_FRAGMENT =
   ' OR from:(take3presents.com OR take3presents.us12.list-manage.com) OR subject:("room service" OR shindig OR "request for proposals" OR "on sale")';
 
 const DEFAULT_QUERY =
-  `newer_than:60d (filename:ics OR subject:(invite OR invitation OR RSVP OR event OR events OR meetup OR party OR gathering OR celebration OR workshop OR screening OR festival OR "you're invited" OR "join us" OR "join me" OR "you're going" OR going OR attend OR attendance OR hosting OR ticket OR tickets OR "get tickets" OR register OR registration OR "save the date" OR "add to calendar" OR "reserve your spot" OR "happening" OR "request for proposals" OR announcement OR "on sale" OR "early bird") OR from:(partiful.com OR secretparty.io OR lu.ma OR eventbrite.com OR meetup.com OR facebookmail.com OR metamail.com OR facebook.com OR posh.vip OR dice.fm OR ra.co OR withfriends.co OR ticketleap.com OR splashthat.com OR take3presents.com OR take3presents.us12.list-manage.com) OR "luma.com" OR "lu.ma" OR "eventbrite.com" OR "partiful.com" OR "secretparty.io" OR "meetup.com")${PRODUCER_GMAIL_QUERY_FRAGMENT}`;
+  `newer_than:60d (filename:ics OR subject:(invite OR invitation OR RSVP OR event OR events OR meetup OR party OR gathering OR celebration OR workshop OR screening OR festival OR dates OR recap OR calendar OR "fall dates" OR "you're invited" OR "join us" OR "join me" OR "you're going" OR going OR attend OR attendance OR hosting OR ticket OR tickets OR "get tickets" OR register OR registration OR "save the date" OR "add to calendar" OR "mark your calendar" OR "reserve your spot" OR "happening" OR "request for proposals" OR announcement OR "on sale" OR "early bird") OR from:(partiful.com OR secretparty.io OR lu.ma OR eventbrite.com OR meetup.com OR facebookmail.com OR metamail.com OR facebook.com OR posh.vip OR dice.fm OR ra.co OR withfriends.co OR ticketleap.com OR splashthat.com OR take3presents.com OR take3presents.us12.list-manage.com) OR "luma.com" OR "lu.ma" OR "eventbrite.com" OR "partiful.com" OR "secretparty.io" OR "meetup.com")${PRODUCER_GMAIL_QUERY_FRAGMENT}`;
+
+/** Subject/body cues that a mail is announcing a dated gathering (not only RSVP platforms). */
+const INVITEISH_RE =
+  /\b(invite|invitation|rsvp|you're invited|you are invited|join us|meetup|event|events|party|festival|dates|recap|calendar|request for proposals|on sale|announcement|early bird|save the date|mark your calendar|add to calendar|tickets)\b/i;
 
 /**
  * Public event / invite links. Facebook: /events/{id}, page hosted tabs, group events.
@@ -907,20 +912,106 @@ function ymdFromParts(year, monthIndex, day) {
 }
 
 /**
- * Parse a month/day range like "November 13-16, 2026".
+ * YYYY-MM-DD at 12:00 in `timeZone` → UTC ISO (avoids UTC-noon looking like 5am PT).
+ * @param {string} ymd
+ * @param {string} [timeZone]
+ * @returns {string | null}
+ */
+export function ymdAtLocalNoonIso(ymd, timeZone = 'America/Los_Angeles') {
+  const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  let ms = Date.UTC(y, mo - 1, d, 19, 0, 0);
+  for (let i = 0; i < 48; i += 1) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(ms));
+    const got = Object.fromEntries(
+      parts.filter((p) => p.type !== 'literal').map((p) => [p.type, Number(p.value)]),
+    );
+    if (
+      got.year === y
+      && got.month === mo
+      && got.day === d
+      && got.hour === 12
+      && got.minute === 0
+    ) {
+      return new Date(ms).toISOString();
+    }
+    const dayDelta =
+      Date.UTC(y, mo - 1, d) - Date.UTC(got.year, got.month - 1, got.day);
+    const minuteDelta =
+      12 * 60 - (got.hour * 60 + got.minute) + dayDelta / 60000;
+    if (!Number.isFinite(minuteDelta) || minuteDelta === 0) break;
+    ms += minuteDelta * 60 * 1000;
+  }
+  const fallback = Date.parse(`${ymd}T19:00:00.000Z`);
+  return Number.isFinite(fallback) ? new Date(fallback).toISOString() : null;
+}
+
+/**
+ * When mail says "October 22" with no year, pick the next upcoming occurrence
+ * (today or later this calendar year, else next year) in America/Los_Angeles.
+ * @param {number} monthIndex 0–11
+ * @param {number} day
+ * @param {Date | number} [now]
+ * @returns {number | null} full year
+ */
+export function upcomingYearForMonthDay(monthIndex, day, now = Date.now()) {
+  if (monthIndex == null || !Number.isFinite(day) || day < 1 || day > 31) return null;
+  const ms = typeof now === 'number' ? now : now.getTime();
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(ms));
+  const yNow = Number(parts.find((p) => p.type === 'year')?.value);
+  const mNow = Number(parts.find((p) => p.type === 'month')?.value);
+  const dNow = Number(parts.find((p) => p.type === 'day')?.value);
+  if (![yNow, mNow, dNow].every(Number.isFinite)) return null;
+  const thisYear = ymdFromParts(yNow, monthIndex, day);
+  if (!thisYear) return null;
+  const month = monthIndex + 1;
+  const stillUpcoming =
+    month > mNow || (month === mNow && day >= dNow);
+  return stillUpcoming ? yNow : yNow + 1;
+}
+
+const MONTH_NAME_RE =
+  '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
+
+/**
+ * Parse a month/day range like "November 13-16, 2026" or yearless "October 22-26"
+ * (year deduced as the next upcoming occurrence).
  * @param {string} blob
+ * @param {Date | number} [now]
  * @returns {{ eventStart: string, eventEnd: string } | null}
  */
-export function parseEventDateRange(blob) {
+export function parseEventDateRange(blob, now = Date.now()) {
   const text = String(blob || '');
   const range = text.match(
-    /\b((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?))\.?\s+(\d{1,2})\s*[-–]\s*(\d{1,2}),?\s+(20\d{2})\b/i,
+    new RegExp(
+      `\\b(${MONTH_NAME_RE})\\.?\\s+(\\d{1,2})\\s*[-–]\\s*(\\d{1,2})(?:,?\\s+(20\\d{2}))?\\b`,
+      'i',
+    ),
   );
   if (range) {
     const monthIndex = monthIndexFromName(range[1]);
     const startDay = Number(range[2]);
     const endDay = Number(range[3]);
-    const year = Number(range[4]);
+    const year = range[4]
+      ? Number(range[4])
+      : upcomingYearForMonthDay(monthIndex, startDay, now);
+    if (!Number.isFinite(year)) return null;
     const eventStart = ymdFromParts(year, monthIndex, startDay);
     const eventEnd = ymdFromParts(year, monthIndex, endDay);
     if (eventStart && eventEnd) return { eventStart, eventEnd };
@@ -931,18 +1022,19 @@ export function parseEventDateRange(blob) {
 /**
  * Best-effort start ISO from subject/body when no .ics.
  * @param {string} blob
+ * @param {Date | number} [now]
  * @returns {string | null}
  */
-export function guessEventStartIso(blob) {
-  const range = parseEventDateRange(blob);
+export function guessEventStartIso(blob, now = Date.now()) {
+  const range = parseEventDateRange(blob, now);
   if (range?.eventStart) {
-    const ms = Date.parse(`${range.eventStart}T12:00:00Z`);
-    if (Number.isFinite(ms)) return new Date(ms).toISOString();
+    return ymdAtLocalNoonIso(range.eventStart);
   }
   const text = String(blob || '');
   // ISO-ish
   const iso = text.match(/\b(20\d{2}-\d{2}-\d{2})(?:[ T](\d{1,2}:\d{2}))?/);
   if (iso) {
+    if (!iso[2]) return ymdAtLocalNoonIso(iso[1]);
     const t = iso[2] || '12:00';
     const [hhRaw, mmRaw = '00'] = t.split(':');
     const hh = String(Math.min(23, Math.max(0, Number(hhRaw) || 0))).padStart(2, '0');
@@ -955,8 +1047,37 @@ export function guessEventStartIso(blob) {
     /\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+20\d{2})(?:\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?))?/i,
   );
   if (mdy) {
+    if (!mdy[2]) {
+      const parsed = Date.parse(mdy[1]);
+      if (Number.isFinite(parsed)) {
+        const ymd = new Date(parsed).toISOString().slice(0, 10);
+        // Date.parse of "Oct 22, 2026" is UTC midnight — prefer local noon
+        const monthIndex = monthIndexFromName(mdy[1].match(/^[A-Za-z]+/)?.[0] || '');
+        const dayMatch = mdy[1].match(/(\d{1,2})/);
+        const yearMatch = mdy[1].match(/(20\d{2})/);
+        if (monthIndex != null && dayMatch && yearMatch) {
+          const ymdLocal = ymdFromParts(Number(yearMatch[1]), monthIndex, Number(dayMatch[1]));
+          if (ymdLocal) return ymdAtLocalNoonIso(ymdLocal);
+        }
+        return ymdAtLocalNoonIso(ymd);
+      }
+    }
     const ms = Date.parse(mdy[1] + (mdy[2] ? ` ${mdy[2]}` : ''));
     if (Number.isFinite(ms)) return new Date(ms).toISOString();
+  }
+  // Yearless "October 22" / "Oct 22nd" → next upcoming
+  const md = text.match(
+    new RegExp(
+      `\\b(${MONTH_NAME_RE})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?!\\s*[-–]\\s*\\d)(?!,?\\s*20\\d{2})`,
+      'i',
+    ),
+  );
+  if (md) {
+    const monthIndex = monthIndexFromName(md[1]);
+    const day = Number(md[2]);
+    const year = upcomingYearForMonthDay(monthIndex, day, now);
+    const ymd = year != null ? ymdFromParts(year, monthIndex, day) : null;
+    if (ymd) return ymdAtLocalNoonIso(ymd);
   }
   return null;
 }
@@ -1072,31 +1193,57 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
     const start = guessEventStartIso(blob) || null;
     const startOk = start && Number.isFinite(Date.parse(start)) ? start : null;
     const endOk = range?.eventEnd
-      ? (() => {
-          const ms = Date.parse(`${range.eventEnd}T12:00:00Z`);
-          return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
-        })()
+      ? ymdAtLocalNoonIso(range.eventEnd)
       : null;
-    // Only emit when we have a platform link or a plausible invite subject.
+    // Platform link, invite-ish subject/body, or a parseable event date range.
     const inviteish =
       urls.length > 0
-      || /\b(invite|invitation|rsvp|you're invited|you are invited|join us|meetup|event|request for proposals|on sale|announcement|early bird|save the date|tickets)\b/i.test(
-        subject,
-      );
+      || INVITEISH_RE.test(subject)
+      || INVITEISH_RE.test(textBlob)
+      || Boolean(startOk);
     if (inviteish) {
       const url =
         pickBestPlatformUrl(urls, `https://mail.google.com/mail/u/0/#inbox/${id}`);
       const platformSource = sourceFromPlatformUrls(urls.length ? urls : [url]);
       const slugTitle = platformSource === 'secretparty' ? secretPartyTitleFromUrl(url) : null;
       const cleanedSubject = subject.replace(/^(re|fwd):\s*/i, '').trim() || subject;
+      const named =
+        textBlob.match(/\b((?:Cowotey|Room Service|Big Stick Shindig)\s*[IVX0-9]*)\b/i)?.[1]
+        || null;
+      const placeHay = (() => {
+        const idx = textBlob.search(
+          /mark your calendar|next event|Cowotey\b|Room Service\b|Big Stick Shindig\b/i,
+        );
+        return idx >= 0 ? textBlob.slice(idx) : textBlob;
+      })().replace(/\s+/g, ' ');
+      const atPlace = placeHay.match(
+        /\bat\s+(.{5,120}?)(?:\.|This will be|,?\s*where we)/i,
+      );
+      let venue = null;
+      let city = null;
+      if (atPlace) {
+        const parts = String(atPlace[1])
+          .split(',')
+          .map((p) => p.replace(/\s+/g, ' ').trim())
+          .filter(Boolean);
+        if (parts.length >= 2) {
+          city = parts[parts.length - 1];
+          venue = parts.slice(0, -1).join(', ');
+        } else if (parts.length === 1) {
+          venue = parts[0];
+        }
+      }
       events.push({
         id: idPrefix,
-        title: slugTitle && /^secret party$/i.test(cleanedSubject) ? slugTitle : cleanedSubject,
+        title:
+          slugTitle && /^secret party$/i.test(cleanedSubject)
+            ? slugTitle
+            : (named || cleanedSubject),
         start: startOk,
         end: endOk,
-        venue: null,
-        location: null,
-        city: null,
+        venue,
+        location: venue,
+        city,
         url,
         source: platformSource === 'gmail' ? 'gmail' : platformSource,
         raw: {
@@ -1665,7 +1812,6 @@ export async function fetchGmailEventAnnouncementsFor(email, env = process.env, 
       ? events
       : filterEventsToIngestWindow(events, {
           pastDays: windowDays.pastDays,
-          futureDays: windowDays.futureDays,
         });
 
     return {
@@ -1774,18 +1920,15 @@ export async function fetchGmailEventAnnouncements(env = process.env, opts = {})
       enriched = events;
     }
 
-    // Apply the ingest-window filter now (deferred above) so enrichment had a chance
-    // to supply start dates first. Dated events outside the window are dropped; dateless
-    // events are KEPT when a real platform link / .ics anchored them (an invite we could
-    // not parse a start from) so we stop silently missing event emails. Pure
-    // subject-heuristic events with no link/date are still dropped as too noisy.
+    // Keep past-floor only. Far-future dated invites (months out) are recorded —
+    // scrape-ahead no longer truncates the catalog. Dateless events still need a
+    // platform link / .ics anchor so subject-only noise stays out.
     const nowMs = Date.now();
     const pastMs = windowDays.pastDays * 24 * 60 * 60 * 1000;
-    const futureMs = windowDays.futureDays * 24 * 60 * 60 * 1000;
     const windowed = enriched.filter((ev) => {
       const ms = ev?.start ? Date.parse(ev.start) : Number.NaN;
       if (Number.isFinite(ms)) {
-        return ms >= nowMs - pastMs && ms <= nowMs + futureMs;
+        return ms >= nowMs - pastMs;
       }
       const via = String(ev?.raw?.via || '');
       const hasPlatformLink = Array.isArray(ev?.raw?.urls) && ev.raw.urls.length > 0;

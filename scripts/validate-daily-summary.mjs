@@ -4,6 +4,11 @@
  */
 import assert from 'node:assert/strict';
 import {
+  guideExcludeReason,
+  guideBulletMatchesItem,
+  parseGuideSections,
+} from '../src/lib/gmail-daily-summary-guide-match.js';
+import {
   GMAIL_DAILY_SUMMARY_MAX_AGE_DAYS,
   GMAIL_DAILY_SUMMARY_UNPIN_GRACE_MS,
   collapseDuplicateDailySummaryItems,
@@ -17,12 +22,13 @@ import {
   scrubEventMentionsFromSummary,
   sortItemsChronological,
   isPastDailySummaryRetention,
+  shouldExcludeDailySummaryItem,
 } from '../src/lib/gmail-weekly-summary-store.js';
 
 assert.equal(GMAIL_DAILY_SUMMARY_MAX_AGE_DAYS, 10);
 assert.equal(GMAIL_DAILY_SUMMARY_UNPIN_GRACE_MS, 30_000);
 
-const now = Date.parse('2026-07-14T12:00:00.000Z');
+const now = Date.now();
 const old = new Date(now - 11 * 24 * 60 * 60 * 1000).toISOString();
 const fresh = new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString();
 const mid = new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString();
@@ -475,5 +481,127 @@ const merged = mergeSynthesizedDigest(
 assert.equal(merged.items.filter((i) => i.status === 'open').length, 1);
 assert.equal(merged.items.find((i) => i.status === 'open')?.company, 'UPS');
 assert.equal(merged.items.find((i) => i.status === 'dismissed')?.id, 'd1');
+
+const sampleGuide = `# Daily Summary
+
+## Show these (important)
+
+- Deadlines I own or need to meet
+- Money, contracts, or docs to sign
+
+## Soft skip
+
+- FYI newsletters with weak or no action
+
+## Never show
+
+- Shipping/delivery noise with no action needed
+- bank statements
+
+### Prefer more like this
+
+### Prefer less like this
+
+- Slack notifications indicating unread messages or channel updates (no action required)
+- Security alerts or account activity notifications that do not require a reply
+`;
+
+const sections = parseGuideSections(sampleGuide);
+assert.ok(sections.never_show.some((b) => /shipping/i.test(b)));
+assert.ok(guideBulletMatchesItem('bank statements', 'USAA Review your USAA credit card statement bank statements'));
+
+assert.equal(
+  shouldExcludeDailySummaryItem({
+    company: 'Amazon',
+    title: 'Track package deliveries',
+    detail: 'Amazon: Several packages have been shipped and delivered.',
+  }),
+  'shipping',
+);
+
+assert.equal(
+  shouldExcludeDailySummaryItem({
+    company: 'Slack',
+    title: 'Review Slack unread messages',
+    detail: 'Slack: There are 5 new unread messages in the #facilities-committee channel',
+  }),
+  'slack_unread',
+);
+
+assert.equal(
+  shouldExcludeDailySummaryItem({
+    company: 'Google',
+    title: 'Review new sign-in activity',
+    detail: 'Google: A new sign-in was detected on your account',
+  }),
+  'security_fyi',
+);
+
+assert.equal(
+  guideExcludeReason(
+    {
+      company: 'Chase',
+      title: 'Review bank statement',
+      detail: 'Your monthly bank statements are ready',
+    },
+    sampleGuide,
+  ),
+  'never_show',
+);
+
+assert.equal(
+  guideExcludeReason(
+    {
+      company: 'Acme',
+      title: 'Sign the contract',
+      detail: 'Acme: Money and contracts — docs to sign by Friday',
+    },
+    sampleGuide,
+  ),
+  null,
+);
+
+const prunedNoise = pruneExpiredGmailDailySummary(
+  {
+    summaryText: '',
+    generatedAt: fresh,
+    lastScanYmd: '2026-07-14',
+    windowDays: 10,
+    lastError: null,
+    items: [
+      baseItem({
+        id: 'ship1',
+        title: 'Track package deliveries',
+        company: 'Amazon',
+        detail: 'Amazon: packages have been shipped and delivered',
+        status: 'open',
+        createdAt: fresh,
+        updatedAt: fresh,
+        fingerprint: 'shipfp',
+      }),
+      baseItem({
+        id: 'keep1',
+        title: 'Sign insurance paperwork',
+        company: 'USAA',
+        detail: 'USAA: contract docs to sign',
+        status: 'open',
+        createdAt: fresh,
+        updatedAt: fresh,
+        fingerprint: 'keepfp',
+      }),
+    ],
+  },
+  now,
+  { guideMarkdown: sampleGuide },
+);
+assert.equal(prunedNoise.changed, true);
+assert.equal(
+  prunedNoise.digest.items.find((i) => i.id === 'ship1')?.status,
+  'dismissed',
+);
+assert.equal(
+  prunedNoise.digest.items.find((i) => i.id === 'keep1')?.status,
+  'open',
+);
 
 console.log('validate-daily-summary: ok');

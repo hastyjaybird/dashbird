@@ -4,9 +4,8 @@
  */
 import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
 import {
-  gmailMobileOpenUrl,
   gmailWebMessageUrl,
-  isMobileGmailClient,
+  wireGmailOpenAnchor,
 } from '../lib/gmail-open-url.js';
 import {
   focusTasksPanel,
@@ -120,12 +119,50 @@ function maxUrgency(list) {
 /**
  * @param {string} email
  */
-function shortMailbox(email) {
-  const s = String(email || '').trim().toLowerCase();
+function normalizeMailbox(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+/**
+ * Compact label for an intake address (full address stays on title).
+ * @param {string} email
+ */
+function shortMailboxLabel(email) {
+  const s = normalizeMailbox(email);
   if (!s) return '';
   if (s.startsWith('jay.intake')) return 'intake';
   if (s.startsWith('julia')) return 'julia';
   return s.split('@')[0] || s;
+}
+
+/**
+ * Intake addresses for this action item (mailboxes[] or sources[].email).
+ * @param {object} item
+ * @returns {string[]}
+ */
+function itemMailboxes(item) {
+  const fromList = Array.isArray(item?.mailboxes)
+    ? item.mailboxes.map(normalizeMailbox).filter(Boolean)
+    : [];
+  if (fromList.length) return [...new Set(fromList)];
+  const fromSources = Array.isArray(item?.sources)
+    ? item.sources
+        .map((s) => normalizeMailbox(s?.email || s?.mailbox))
+        .filter(Boolean)
+    : [];
+  return [...new Set(fromSources)];
+}
+
+/**
+ * Human label for which Dashbird inbox received the mail.
+ * @param {string[]} boxes
+ */
+function mailboxLine(boxes) {
+  const labels = boxes.map(shortMailboxLabel).filter(Boolean);
+  if (!labels.length) return '';
+  return labels.length === 1
+    ? `Inbox · ${labels[0]}`
+    : `Inboxes · ${labels.join(', ')}`;
 }
 
 /**
@@ -640,14 +677,23 @@ export function mountDailySummary(root) {
       companyEl.hidden = true;
     }
 
+    const boxes = itemMailboxes(item);
+    const mailboxEl = document.createElement('p');
+    mailboxEl.className = 'daily-summary__card-mailbox';
+    const boxLine = mailboxLine(boxes);
+    if (boxLine) {
+      mailboxEl.textContent = boxLine;
+      mailboxEl.title = boxes.join(', ');
+    } else {
+      mailboxEl.hidden = true;
+    }
+
     const meta = document.createElement('p');
     meta.className = 'daily-summary__card-meta';
     const metaBits = [];
     const due = formatDeadline(item.deadline);
     if (due) metaBits.push(`Due ${due}`);
     if (item.needsReply) metaBits.push('Needs reply');
-    const boxes = Array.isArray(item.mailboxes) ? item.mailboxes : [];
-    for (const box of boxes) metaBits.push(shortMailbox(box));
     if (metaBits.length) meta.textContent = metaBits.join(' · ');
     else meta.hidden = true;
 
@@ -714,20 +760,14 @@ export function mountDailySummary(root) {
     const webUrl = gmailWebMessageUrl(primary) || String(item.replyUrl || '').trim();
     const openLink = document.createElement(webUrl ? 'a' : 'button');
     if (webUrl) {
-      /** @type {HTMLAnchorElement} */ (openLink).href = isMobileGmailClient()
-        ? gmailMobileOpenUrl(webUrl, primary)
-        : webUrl;
-      if (!isMobileGmailClient()) {
-        /** @type {HTMLAnchorElement} */ (openLink).target = '_blank';
-        /** @type {HTMLAnchorElement} */ (openLink).rel = 'noopener noreferrer';
-      }
+      wireGmailOpenAnchor(/** @type {HTMLAnchorElement} */ (openLink), webUrl, primary);
     } else {
       /** @type {HTMLButtonElement} */ (openLink).type = 'button';
       /** @type {HTMLButtonElement} */ (openLink).disabled = true;
+      openLink.textContent = 'Open in Gmail';
+      openLink.title = 'Open in Gmail';
     }
     openLink.className = 'daily-summary__card-action daily-summary__card-action--open';
-    openLink.textContent = 'Open';
-    openLink.title = 'Open in Gmail';
 
     const createTask = document.createElement('button');
     createTask.type = 'button';
@@ -789,7 +829,7 @@ export function mountDailySummary(root) {
         .join('\n');
     }
 
-    card.append(head, companyEl, meta, blurb, actions, footer);
+    card.append(head, companyEl, mailboxEl, meta, blurb, actions, footer);
     return card;
   }
 

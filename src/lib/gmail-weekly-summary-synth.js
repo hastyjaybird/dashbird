@@ -295,7 +295,7 @@ export function ensureDetailNamesCompany(detail, company) {
  * @param {object} parsed
  * @param {Array<{ id: string, mailbox: string, threadId?: string, subject?: string, date?: string, from?: string }>} messages
  */
-function mapSynthItems(parsed, messages) {
+function mapSynthItems(parsed, messages, guideMarkdown = '') {
   const byKey = new Map(
     messages.map((m) => [`${String(m.mailbox || '').toLowerCase()}:${m.id}`, m]),
   );
@@ -365,7 +365,7 @@ function mapSynthItems(parsed, messages) {
       sources: newestSources,
     };
     item.fingerprint = itemFingerprint(item);
-    const excludeReason = shouldExcludeDailySummaryItem(item);
+    const excludeReason = shouldExcludeDailySummaryItem(item, guideMarkdown);
     if (excludeReason) continue;
     items.push(item);
   }
@@ -411,15 +411,19 @@ export async function runGmailWeeklySummaryScan(env = process.env, opts = {}) {
     }
 
     if (!mail.messages?.length) {
-      const merged = mergeSynthesizedDigest(prev, {
-        summaryText:
-          prev.summaryText
-          || 'No recent messages from the connected intake inboxes.',
-        windowDays: gmailWeeklySummaryDays(env),
-        lastScanYmd: scanYmd,
-        items: [],
-        lastError: null,
-      });
+      const merged = mergeSynthesizedDigest(
+        prev,
+        {
+          summaryText:
+            prev.summaryText
+            || 'No recent messages from the connected intake inboxes.',
+          windowDays: gmailWeeklySummaryDays(env),
+          lastScanYmd: scanYmd,
+          items: [],
+          lastError: null,
+        },
+        { guideMarkdown: guide },
+      );
       const digest = await saveGmailWeeklySummary(merged, env);
       return { ok: true, fromCache: false, digest, mailMeta: mail, reason };
     }
@@ -442,16 +446,20 @@ export async function runGmailWeeklySummaryScan(env = process.env, opts = {}) {
       return { ok: false, fromCache: false, digest, error: chat.error, reason };
     }
 
-    const items = mapSynthItems(chat.parsed, mail.messages);
-    const merged = mergeSynthesizedDigest(prev, {
-      summaryText: String(chat.parsed.summaryText || '').trim()
-        || prev.summaryText
-        || 'Daily inbox digest updated.',
-      windowDays: mail.days || gmailWeeklySummaryDays(env),
-      lastScanYmd: scanYmd,
-      items,
-      lastError: null,
-    });
+    const items = mapSynthItems(chat.parsed, mail.messages, guide);
+    const merged = mergeSynthesizedDigest(
+      prev,
+      {
+        summaryText: String(chat.parsed.summaryText || '').trim()
+          || prev.summaryText
+          || 'Daily inbox digest updated.',
+        windowDays: mail.days || gmailWeeklySummaryDays(env),
+        lastScanYmd: scanYmd,
+        items,
+        lastError: null,
+      },
+      { guideMarkdown: guide },
+    );
     const digest = await saveGmailWeeklySummary(merged, env);
     return {
       ok: true,
