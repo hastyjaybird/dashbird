@@ -56,7 +56,20 @@ function formatCostUsd(n, currency = 'USD') {
 }
 
 /**
- * Financial tracking for Dashbird spend (weekly budgets + measured Apify).
+ * @param {object} item
+ */
+function costsItemShowsUsageMeter(item) {
+  const cadence = String(item?.cadence || '');
+  if (cadence === 'usage') return true;
+  if (item?.measuredSource) return true;
+  if (item?.monthlyBudgetUsd != null && cadence !== 'fixed_monthly' && cadence !== 'fixed_weekly') {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Financial tracking for Dashbird spend (monthly usage + credit meters).
  * @param {HTMLElement} root
  */
 function buildCostsBlock(root) {
@@ -70,28 +83,18 @@ function buildCostsBlock(root) {
   const intro = document.createElement('p');
   intro.className = 'settings-page__intro';
   intro.textContent =
-    'Everything Dashbird spends money on — weekly budgets you can edit, plus measured Apify (Facebook) and OpenRouter (AI) charges. Inactive rows stay listed but are excluded from totals.';
+    'Monthly spend for Dashbird. Usage and credit-based services show month-to-date usage with a progress bar toward the budget. Inactive rows stay listed but are excluded from totals.';
   body.append(intro);
 
   const kpi = document.createElement('div');
   kpi.className = 'settings-page__costs-kpi';
-  kpi.setAttribute('aria-label', 'Weekly cost summary');
+  kpi.setAttribute('aria-label', 'Monthly cost summary');
   body.append(kpi);
 
   const categories = document.createElement('div');
   categories.className = 'settings-page__costs-categories';
   categories.hidden = true;
   body.append(categories);
-
-  const apifyBar = document.createElement('div');
-  apifyBar.className = 'settings-page__costs-apify';
-  apifyBar.hidden = true;
-  body.append(apifyBar);
-
-  const openrouterBar = document.createElement('div');
-  openrouterBar.className = 'settings-page__costs-openrouter';
-  openrouterBar.hidden = true;
-  body.append(openrouterBar);
 
   const openrouterPrograms = document.createElement('div');
   openrouterPrograms.className = 'settings-page__costs-or-programs';
@@ -114,7 +117,7 @@ function buildCostsBlock(root) {
 
   const thead = document.createElement('thead');
   const hr = document.createElement('tr');
-  for (const label of ['On', 'Service', 'Category', 'Cadence', '$ / week', 'Measured', 'Notes']) {
+  for (const label of ['On', 'Service', 'Category', 'Cadence', '$ / mo', 'This month', 'Notes']) {
     const th = document.createElement('th');
     th.scope = 'col';
     th.textContent = label;
@@ -170,30 +173,35 @@ function buildCostsBlock(root) {
     const currency = data.currency || 'USD';
     kpi.replaceChildren();
 
+    const projected =
+      summary.projectedMonthlyUsd ??
+      summary.effectiveMonthlyUsd ??
+      (Number(summary.effectiveWeeklyUsd) || 0) * 4.33;
+    const budgeted =
+      summary.budgetedMonthlyUsd ?? (Number(summary.budgetedWeeklyUsd) || 0) * 4.33;
+    const measured =
+      summary.measuredMonthlyUsd != null
+        ? Number(summary.measuredMonthlyUsd)
+        : (Number(summary.measuredWeeklyUsd) || 0) * 4.33;
+
     const cards = [
       {
-        label: 'This week',
-        value: formatCostUsd(summary.effectiveWeeklyUsd, currency),
-        hint: 'Budget + measured',
+        label: 'This month',
+        value: formatCostUsd(projected, currency),
+        hint: 'Fixed + measured',
         tone: 'primary',
       },
       {
-        label: 'Budgeted / wk',
-        value: formatCostUsd(summary.budgetedWeeklyUsd, currency),
+        label: 'Budgeted / mo',
+        value: formatCostUsd(budgeted, currency),
         hint: 'Active line items',
         tone: '',
       },
       {
-        label: 'Measured / wk',
-        value: formatCostUsd(summary.measuredWeeklyUsd, currency),
+        label: 'Measured / mo',
+        value: formatCostUsd(measured, currency),
         hint: 'Apify + OpenRouter',
         tone: 'amber',
-      },
-      {
-        label: 'Projected / mo',
-        value: formatCostUsd(summary.projectedMonthlyUsd, currency),
-        hint: 'Week × 4.33',
-        tone: '',
       },
     ];
 
@@ -218,7 +226,10 @@ function buildCostsBlock(root) {
    * @param {object} data
    */
   function renderCategories(data) {
-    const byCategory = data.summary?.byCategory || {};
+    const byCategory =
+      data.summary?.byCategoryMonthly && Object.keys(data.summary.byCategoryMonthly).length
+        ? data.summary.byCategoryMonthly
+        : data.summary?.byCategory || {};
     const entries = Object.entries(byCategory).sort((a, b) => Number(b[1]) - Number(a[1]));
     categories.replaceChildren();
     if (!entries.length) {
@@ -229,7 +240,7 @@ function buildCostsBlock(root) {
     const total = entries.reduce((s, [, v]) => s + Number(v), 0) || 1;
     const title = document.createElement('p');
     title.className = 'settings-page__costs-section-label';
-    title.textContent = 'By category (this week)';
+    title.textContent = 'By category (this month)';
     categories.append(title);
     for (const [name, amount] of entries) {
       const row = document.createElement('div');
@@ -249,125 +260,6 @@ function buildCostsBlock(root) {
       row.append(lab, barWrap, amt);
       categories.append(row);
     }
-  }
-
-  /**
-   * @param {object} data
-   */
-  function renderApifyMeter(data) {
-    const month = data.measured?.facebook?.month;
-    apifyBar.replaceChildren();
-    if (!month) {
-      apifyBar.hidden = true;
-      return;
-    }
-    apifyBar.hidden = false;
-    const used = Number(month.totalUsd) || 0;
-    const credits = Number(month.monthlyCreditsUsd) || 5;
-    const remaining =
-      month.remainingCreditsUsd != null ? Number(month.remainingCreditsUsd) : Math.max(0, credits - used);
-    const pct = credits > 0 ? Math.min(100, Math.round((used / credits) * 100)) : 0;
-
-    const title = document.createElement('p');
-    title.className = 'settings-page__costs-section-label';
-    title.textContent = `Apify credits · ${month.month || 'this month'}`;
-    apifyBar.append(title);
-
-    const meter = document.createElement('div');
-    meter.className = 'settings-page__costs-meter';
-    meter.setAttribute('role', 'progressbar');
-    meter.setAttribute('aria-valuemin', '0');
-    meter.setAttribute('aria-valuemax', String(credits));
-    meter.setAttribute('aria-valuenow', String(used));
-    const fill = document.createElement('div');
-    fill.className = 'settings-page__costs-meter-fill';
-    if (pct >= 90) fill.classList.add('settings-page__costs-meter-fill--hot');
-    else if (pct >= 70) fill.classList.add('settings-page__costs-meter-fill--warn');
-    fill.style.width = `${pct}%`;
-    meter.append(fill);
-    apifyBar.append(meter);
-
-    const caption = document.createElement('p');
-    caption.className = 'settings-page__costs-meter-caption';
-    const week = data.measured?.facebook?.week;
-    const weekBit =
-      week && Number(week.totalUsd) > 0
-        ? ` · last 7 days ${formatCostUsd(week.totalUsd, data.currency)} (${week.runCount || 0} runs)`
-        : '';
-    caption.textContent = `${formatCostUsd(used, data.currency)} of ${formatCostUsd(
-      credits,
-      data.currency,
-    )} used · ${formatCostUsd(remaining, data.currency)} left${weekBit}`;
-    apifyBar.append(caption);
-  }
-
-  /**
-   * @param {object} data
-   */
-  function renderOpenRouterMeter(data) {
-    const or = data.measured?.openrouter;
-    openrouterBar.replaceChildren();
-    if (!or || or.configured === false) {
-      openrouterBar.hidden = true;
-      return;
-    }
-    if (!or.ok) {
-      openrouterBar.hidden = false;
-      const title = document.createElement('p');
-      title.className = 'settings-page__costs-section-label';
-      title.textContent = 'OpenRouter';
-      const caption = document.createElement('p');
-      caption.className = 'settings-page__costs-meter-caption';
-      caption.textContent = or.error
-        ? `Could not load key usage (${or.error})`
-        : 'OpenRouter key not readable';
-      openrouterBar.append(title, caption);
-      return;
-    }
-
-    openrouterBar.hidden = false;
-    const used = Number(or.usageMonthlyUsd) || Number(or.totalUsageUsd) || 0;
-    const limit = or.limitUsd != null ? Number(or.limitUsd) : 5;
-    const remaining =
-      or.remainingUsd != null ? Number(or.remainingUsd) : Math.max(0, limit - used);
-    const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
-
-    const title = document.createElement('p');
-    title.className = 'settings-page__costs-section-label';
-    title.textContent = `OpenRouter · ${or.isFreeTier ? 'free tier' : 'paid'} key`;
-    openrouterBar.append(title);
-
-    const meter = document.createElement('div');
-    meter.className = 'settings-page__costs-meter';
-    meter.setAttribute('role', 'progressbar');
-    meter.setAttribute('aria-valuemin', '0');
-    meter.setAttribute('aria-valuemax', String(limit));
-    meter.setAttribute('aria-valuenow', String(used));
-    const fill = document.createElement('div');
-    fill.className = 'settings-page__costs-meter-fill';
-    if (pct >= 90) fill.classList.add('settings-page__costs-meter-fill--hot');
-    else if (pct >= 70) fill.classList.add('settings-page__costs-meter-fill--warn');
-    fill.style.width = `${pct}%`;
-    meter.append(fill);
-    openrouterBar.append(meter);
-
-    const caption = document.createElement('p');
-    caption.className = 'settings-page__costs-meter-caption';
-    const weekBit =
-      Number(or.usageWeeklyUsd) > 0
-        ? ` · this week ${formatCostUsd(or.usageWeeklyUsd, data.currency)}`
-        : Number(or.measuredWeeklyUsd) > 0
-          ? ` · ~${formatCostUsd(or.measuredWeeklyUsd, data.currency)}/wk (from month)`
-          : '';
-    const dayBit =
-      Number(or.usageDailyUsd) > 0
-        ? ` · today ${formatCostUsd(or.usageDailyUsd, data.currency)}`
-        : '';
-    caption.textContent = `${formatCostUsd(used, data.currency)} of ${formatCostUsd(
-      limit,
-      data.currency,
-    )} used · ${formatCostUsd(remaining, data.currency)} left${weekBit}${dayBit}`;
-    openrouterBar.append(caption);
   }
 
   /**
@@ -454,8 +346,10 @@ function buildCostsBlock(root) {
       const labelEl = tr.querySelector('[data-field="label"]');
       const categoryEl = tr.querySelector('[data-field="category"]');
       const cadenceEl = tr.querySelector('[data-field="cadence"]');
-      const weeklyEl = tr.querySelector('input[data-field="weeklyUsd"]');
+      const monthlyEl = tr.querySelector('input[data-field="monthlyUsd"]');
       const notesEl = tr.querySelector('[data-field="notes"]');
+      const monthlyUsd =
+        monthlyEl instanceof HTMLInputElement ? Number(monthlyEl.value) || 0 : 0;
       items.push({
         id,
         active: activeEl instanceof HTMLInputElement ? activeEl.checked : true,
@@ -471,18 +365,114 @@ function buildCostsBlock(root) {
           cadenceEl instanceof HTMLSelectElement
             ? cadenceEl.value
             : String(tr.dataset.cadence || 'usage'),
-        weeklyUsd: weeklyEl instanceof HTMLInputElement ? weeklyEl.value : 0,
+        weeklyUsd: Math.round((monthlyUsd / 4.33) * 100) / 100,
         notes:
           notesEl instanceof HTMLInputElement
             ? notesEl.value
             : String(notesEl?.textContent || '').trim(),
         measuredSource: tr.dataset.measuredSource || null,
-        monthlyBudgetUsd: tr.dataset.monthlyBudgetUsd
-          ? Number(tr.dataset.monthlyBudgetUsd)
-          : null,
+        monthlyBudgetUsd:
+          tr.dataset.measuredSource || String(tr.dataset.cadence || '') === 'usage'
+            ? Math.round(monthlyUsd * 100) / 100
+            : tr.dataset.monthlyBudgetUsd
+              ? Number(tr.dataset.monthlyBudgetUsd)
+              : null,
       });
     }
     return items;
+  }
+
+  /**
+   * @param {object} item
+   * @param {string} currency
+   * @returns {HTMLElement}
+   */
+  function buildMonthUsageCell(item, currency) {
+    const td = document.createElement('td');
+    td.className = 'settings-page__value settings-page__costs-measured';
+
+    const showMeter = costsItemShowsUsageMeter(item);
+    const used =
+      item.measuredMonthlyUsd != null && Number.isFinite(Number(item.measuredMonthlyUsd))
+        ? Number(item.measuredMonthlyUsd)
+        : null;
+    const limitRaw =
+      item.monthlyCreditsUsd != null
+        ? Number(item.monthlyCreditsUsd)
+        : item.monthlyBudgetUsd != null
+          ? Number(item.monthlyBudgetUsd)
+          : null;
+    const limit = limitRaw != null && Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : null;
+
+    if (!showMeter) {
+      if (used != null) {
+        td.textContent = formatCostUsd(used, currency);
+        if (used > 0) td.classList.add('settings-page__costs-measured--live');
+      } else {
+        const monthly =
+          item.cadence === 'fixed_monthly' || item.cadence === 'fixed_weekly'
+            ? Math.round((Number(item.weeklyUsd) || 0) * 4.33 * 100) / 100
+            : null;
+        if (monthly != null && monthly > 0) {
+          td.textContent = formatCostUsd(monthly, currency);
+        } else {
+          td.textContent = '—';
+          td.classList.add('settings-page__costs-measured--na');
+        }
+      }
+      return td;
+    }
+
+    td.classList.add('settings-page__costs-usage');
+    const usedVal = used != null ? used : 0;
+    const lim = limit != null ? limit : Math.max(usedVal, 1);
+    const pct = lim > 0 ? Math.min(100, Math.round((usedVal / lim) * 100)) : 0;
+    const remaining =
+      item.remainingCreditsUsd != null
+        ? Number(item.remainingCreditsUsd)
+        : Math.max(0, lim - usedVal);
+
+    const amount = document.createElement('div');
+    amount.className = 'settings-page__costs-usage-amt';
+    if (used != null || limit != null) {
+      amount.textContent =
+        limit != null
+          ? `${formatCostUsd(usedVal, currency)} / ${formatCostUsd(limit, currency)}`
+          : formatCostUsd(usedVal, currency);
+      if (usedVal > 0) amount.classList.add('settings-page__costs-measured--live');
+    } else {
+      amount.textContent = 'No usage yet';
+      amount.classList.add('settings-page__costs-measured--na');
+    }
+    td.append(amount);
+
+    const meter = document.createElement('div');
+    meter.className = 'settings-page__costs-meter settings-page__costs-meter--row';
+    meter.setAttribute('role', 'progressbar');
+    meter.setAttribute('aria-valuemin', '0');
+    meter.setAttribute('aria-valuemax', String(lim));
+    meter.setAttribute('aria-valuenow', String(usedVal));
+    meter.setAttribute(
+      'aria-label',
+      `${item.label || item.id} monthly usage ${pct}%`,
+    );
+    const fill = document.createElement('div');
+    fill.className = 'settings-page__costs-meter-fill';
+    if (pct >= 90) fill.classList.add('settings-page__costs-meter-fill--hot');
+    else if (pct >= 70) fill.classList.add('settings-page__costs-meter-fill--warn');
+    fill.style.width = `${pct}%`;
+    meter.append(fill);
+    td.append(meter);
+
+    const caption = document.createElement('div');
+    caption.className = 'settings-page__costs-usage-caption';
+    caption.textContent =
+      limit != null
+        ? `${formatCostUsd(remaining, currency)} left · ${pct}%`
+        : `${pct}% of estimated budget`;
+    td.append(caption);
+
+    return td;
   }
 
   /**
@@ -507,7 +497,7 @@ function buildCostsBlock(root) {
       check.type = 'checkbox';
       check.dataset.field = 'active';
       check.checked = item.active !== false;
-      check.title = 'Include in weekly totals';
+      check.title = 'Include in monthly totals';
       check.addEventListener('change', () => {
         tr.classList.toggle('settings-page__costs-row--off', !check.checked);
       });
@@ -564,32 +554,26 @@ function buildCostsBlock(root) {
         tdCadence.textContent = COST_CADENCE_LABELS[item.cadence] || item.cadence || '—';
       }
 
-      const tdWeek = document.createElement('td');
-      tdWeek.className = 'settings-page__costs-weekly';
-      const weekInput = document.createElement('input');
-      weekInput.type = 'number';
-      weekInput.min = '0';
-      weekInput.step = '0.01';
-      weekInput.className = 'settings-page__costs-input settings-page__costs-input--money';
-      weekInput.dataset.field = 'weeklyUsd';
-      weekInput.value = String(Number(item.weeklyUsd) || 0);
-      weekInput.setAttribute('aria-label', `${item.label || item.id} dollars per week`);
-      tdWeek.append(weekInput);
-
-      const tdMeasured = document.createElement('td');
-      tdMeasured.className = 'settings-page__value settings-page__costs-measured';
-      if (item.measuredWeeklyUsd != null && Number.isFinite(Number(item.measuredWeeklyUsd))) {
-        tdMeasured.textContent = formatCostUsd(item.measuredWeeklyUsd, currency);
-        tdMeasured.title = item.measuredMonthlyUsd != null
-          ? `Month to date: ${formatCostUsd(item.measuredMonthlyUsd, currency)}`
-          : '';
-        if (Number(item.measuredWeeklyUsd) > 0) {
-          tdMeasured.classList.add('settings-page__costs-measured--live');
-        }
-      } else {
-        tdMeasured.textContent = '—';
-        tdMeasured.classList.add('settings-page__costs-measured--na');
+      const tdMonth = document.createElement('td');
+      tdMonth.className = 'settings-page__costs-weekly';
+      const monthInput = document.createElement('input');
+      monthInput.type = 'number';
+      monthInput.min = '0';
+      monthInput.step = '0.01';
+      monthInput.className = 'settings-page__costs-input settings-page__costs-input--money';
+      monthInput.dataset.field = 'monthlyUsd';
+      const monthlyBudget =
+        item.monthlyBudgetUsd != null && Number.isFinite(Number(item.monthlyBudgetUsd))
+          ? Number(item.monthlyBudgetUsd)
+          : Math.round((Number(item.weeklyUsd) || 0) * 4.33 * 100) / 100;
+      monthInput.value = String(monthlyBudget);
+      monthInput.setAttribute('aria-label', `${item.label || item.id} dollars per month`);
+      if (costsItemShowsUsageMeter(item) && item.measuredSource) {
+        monthInput.title = 'Monthly budget / credit limit';
       }
+      tdMonth.append(monthInput);
+
+      const tdUsage = buildMonthUsageCell(item, currency);
 
       const tdNotes = document.createElement('td');
       tdNotes.className = 'settings-page__costs-notes';
@@ -601,7 +585,7 @@ function buildCostsBlock(root) {
       notesInput.placeholder = 'Notes';
       tdNotes.append(notesInput);
 
-      tr.append(tdOn, tdService, tdCat, tdCadence, tdWeek, tdMeasured, tdNotes);
+      tr.append(tdOn, tdService, tdCat, tdCadence, tdMonth, tdUsage, tdNotes);
       tbody.append(tr);
     }
   }
@@ -616,8 +600,6 @@ function buildCostsBlock(root) {
     };
     renderKpi(data);
     renderCategories(data);
-    renderApifyMeter(data);
-    renderOpenRouterMeter(data);
     renderOpenRouterPrograms(data);
     populateRows(state.items, state.currency);
     tableWrap.hidden = false;
@@ -628,7 +610,7 @@ function buildCostsBlock(root) {
     const when = data.updatedAt
       ? new Date(data.updatedAt).toLocaleString()
       : 'defaults (not saved yet)';
-    note.textContent = `Costs ledger · last saved ${when} · edit $/week and Save`;
+    note.textContent = `Costs ledger · last saved ${when} · edit $/mo and Save`;
   }
 
   function reload() {

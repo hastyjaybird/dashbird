@@ -1,13 +1,13 @@
 {
-  "summaryText": "Recent emails include security alerts and promotional messages.",
-  "generatedAt": "2026-07-24T08:10:04.918Z",
+  "summaryText": "Your inbox contains several security alerts regarding new sign-ins and account recovery attempts.",
+  "generatedAt": "2026-07-24T08:45:23.864Z",
   "lastScanYmd": "2026-07-24",
-  "lastScanAt": "2026-07-24T08:10:04.918Z",
+  "lastScanAt": "2026-07-24T08:45:23.864Z",
   "windowDays": 10,
   "items": [
     {
-      "id": "9ac4ed41-8c56-4c70-a15c-6293495aaef6",
-      "title": "Claim usage credit",
+      "id": "f66431ca-5d14-4781-8413-b7ff3d086769",
+      "title": "Claim Fable usage credits",
       "company": "Fable",
       "detail": "Fable: Claim your one-time usage credit before August 2.",
       "deadline": "2026-08-02T00:00:00.000Z",
@@ -31,8 +31,8 @@
       "pinned": false,
       "unpinDeleteAt": null,
       "createdAt": "2026-07-24T03:16:19.069Z",
-      "updatedAt": "2026-07-24T08:10:04.918Z",
-      "fingerprint": "2ce799f368e61541",
+      "updatedAt": "2026-07-24T08:45:23.864Z",
+      "fingerprint": "c92393470861b46c",
       "vikunjaTaskId": null
     },
     {
@@ -60,8 +60,8 @@
       "status": "open",
       "pinned": false,
       "unpinDeleteAt": null,
-      "createdAt": "2026-07-24T05:58:38.785Z",
-      "updatedAt": "2026-07-24T07:03:48.097Z",
+      "createdAt": "2026-07-24T08:45:23.864Z",
+      "updatedAt": "2026-07-24T08:45:23.864Z",
       "fingerprint": "2e5c49e9fc516260",
       "vikunjaTaskId": null
     },
@@ -2670,36 +2670,6 @@
       "createdAt": "2026-07-15T00:16:40.295Z",
       "updatedAt": "2026-07-15T00:27:10.322Z",
       "fingerprint": "c6703fdd159da64c",
-      "vikunjaTaskId": null
-    },
-    {
-      "id": "ee629f8c-1ad2-4315-90a0-af76313c8b7a",
-      "title": "Verify DigitalOcean Account",
-      "company": "",
-      "detail": "Complete the payment verification to activate your DigitalOcean account.",
-      "deadline": "2026-07-16T09:00:27.000Z",
-      "deadlineSource": "response_48h",
-      "needsReply": true,
-      "mailboxes": [
-        "julia.hasty@gmail.com"
-      ],
-      "sources": [
-        {
-          "email": "julia.hasty@gmail.com",
-          "messageId": "152461",
-          "threadId": "152461",
-          "subject": "From Shark Tank to the Brink of Bankruptcy",
-          "date": "2026-07-14T09:00:27.000Z",
-          "gmailId": null,
-          "rfc822MessageId": null
-        }
-      ],
-      "status": "dismissed",
-      "pinned": false,
-      "unpinDeleteAt": null,
-      "createdAt": "2026-07-15T00:16:40.295Z",
-      "updatedAt": "2026-07-15T00:25:08.355Z",
-      "fingerprint": "94968d03b6d502e3",
       "vikunjaTaskId": null
     },
     {

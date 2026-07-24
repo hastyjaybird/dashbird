@@ -65,8 +65,11 @@ function enrichPayload(ledger, measured) {
   let budgetedWeeklyUsd = 0;
   let effectiveWeeklyUsd = 0;
   let measuredWeeklyUsd = 0;
+  let measuredMonthlyUsd = 0;
   /** @type {Record<string, number>} */
   const byCategory = {};
+  /** @type {Record<string, number>} */
+  const byCategoryMonthly = {};
 
   for (const item of items) {
     if (item.active === false) continue;
@@ -77,9 +80,20 @@ function enrichPayload(ledger, measured) {
     if (item.measuredWeeklyUsd != null && Number.isFinite(Number(item.measuredWeeklyUsd))) {
       measuredWeeklyUsd += Number(item.measuredWeeklyUsd);
     }
+    let monthAmt = 0;
+    if (item.measuredMonthlyUsd != null && Number.isFinite(Number(item.measuredMonthlyUsd))) {
+      monthAmt = Number(item.measuredMonthlyUsd);
+      measuredMonthlyUsd += monthAmt;
+    } else {
+      monthAmt = Math.round(effective * 4.33 * 100) / 100;
+    }
     const cat = String(item.category || 'Other');
     byCategory[cat] = Math.round(((byCategory[cat] || 0) + effective) * 100) / 100;
+    byCategoryMonthly[cat] =
+      Math.round(((byCategoryMonthly[cat] || 0) + monthAmt) * 100) / 100;
   }
+
+  const projectedMonthlyUsd = Math.round(effectiveWeeklyUsd * 4.33 * 100) / 100;
 
   return {
     ok: true,
@@ -89,8 +103,12 @@ function enrichPayload(ledger, measured) {
       budgetedWeeklyUsd: Math.round(budgetedWeeklyUsd * 100) / 100,
       effectiveWeeklyUsd: Math.round(effectiveWeeklyUsd * 100) / 100,
       measuredWeeklyUsd: Math.round(measuredWeeklyUsd * 100) / 100,
-      projectedMonthlyUsd: Math.round(effectiveWeeklyUsd * 4.33 * 100) / 100,
+      measuredMonthlyUsd: Math.round(measuredMonthlyUsd * 100) / 100,
+      budgetedMonthlyUsd: Math.round(budgetedWeeklyUsd * 4.33 * 100) / 100,
+      effectiveMonthlyUsd: projectedMonthlyUsd,
+      projectedMonthlyUsd,
       byCategory,
+      byCategoryMonthly,
     },
     items,
     measured: {
