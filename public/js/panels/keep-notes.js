@@ -1635,5 +1635,9 @@ export function mountKeepNotes(root) {
   wireGridDragDrop(pinnedGrid);
   wireGridDragDrop(othersGrid);
 
+  document.addEventListener('dashbird:mobile-nav', (e) => {
+    if (e.detail?.tab === 'notes') void loadNotes();
+  });
+
   void loadNotes();
 }

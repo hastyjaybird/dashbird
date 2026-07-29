@@ -171,6 +171,12 @@ export function isSharedEventHubUrl(url) {
       return path === '/' || path === '/calendar' || path === '/classes';
     }
 
+    if (host === 'dorkbotsf.org') {
+      // Homepage / calendar / mailing list are hubs; /archive/YYYYMM/ is per-meetup.
+      if (path.startsWith('/archive/') && path !== '/archive') return false;
+      return path === '/' || path === '/calendar.html' || path === '/maillist.html';
+    }
+
     if (host === 'meetup.com') {
       // /group or /group/events — hub; /group/events/<id> — concrete.
       if (/^\/[^/]+$/.test(path)) return true;

@@ -28,14 +28,6 @@ function createCollapsibleSection({ title, headingId, className = '', open = fal
   return { details, body, summary };
 }
 
-const COST_CADENCE_LABELS = {
-  usage: 'Usage',
-  fixed_weekly: 'Fixed / wk',
-  fixed_monthly: 'Fixed / mo',
-  free_tier: 'Free tier',
-  optional: 'Optional',
-};
-
 /**
  * @param {number} n
  * @param {string} [currency]
@@ -55,21 +47,89 @@ function formatCostUsd(n, currency = 'USD') {
   }
 }
 
+const COST_PIE_COLORS = [
+  '#7ec8ff',
+  '#ffc46e',
+  '#7dcea0',
+  '#d7a0ff',
+  '#ff8c8c',
+  '#9ad0c2',
+  '#f0b27a',
+  '#85c1e9',
+  '#f5b7b1',
+  '#a9dfbf',
+];
+
 /**
  * @param {object} item
  */
 function costsItemShowsUsageMeter(item) {
   const cadence = String(item?.cadence || '');
-  if (cadence === 'usage') return true;
-  if (item?.measuredSource) return true;
-  if (item?.monthlyBudgetUsd != null && cadence !== 'fixed_monthly' && cadence !== 'fixed_weekly') {
-    return true;
-  }
-  return false;
+  return cadence === 'usage' || Boolean(item?.measuredSource);
 }
 
 /**
- * Financial tracking for Dashbird spend (monthly usage + credit meters).
+ * @param {{ label: string, pct: number }[]} slices
+ * @param {number} [size]
+ * @returns {SVGSVGElement}
+ */
+function buildCostsPieSvg(slices, size = 112) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+  svg.setAttribute('width', String(size));
+  svg.setAttribute('height', String(size));
+  svg.setAttribute('aria-hidden', 'true');
+  svg.classList.add('settings-page__costs-pie');
+
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = size / 2 - 2;
+  const list = Array.isArray(slices) ? slices.filter((s) => Number(s.pct) > 0) : [];
+
+  if (!list.length) {
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', String(cx));
+    circle.setAttribute('cy', String(cy));
+    circle.setAttribute('r', String(r));
+    circle.setAttribute('fill', 'rgba(255,255,255,0.08)');
+    svg.append(circle);
+    return svg;
+  }
+
+  if (list.length === 1 || list[0].pct >= 99.5) {
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', String(cx));
+    circle.setAttribute('cy', String(cy));
+    circle.setAttribute('r', String(r));
+    circle.setAttribute('fill', COST_PIE_COLORS[0]);
+    svg.append(circle);
+    return svg;
+  }
+
+  let angle = -Math.PI / 2;
+  list.forEach((slice, i) => {
+    const sweep = (Math.max(0, Number(slice.pct) || 0) / 100) * Math.PI * 2;
+    const start = angle;
+    const end = angle + sweep;
+    angle = end;
+    const x1 = cx + r * Math.cos(start);
+    const y1 = cy + r * Math.sin(start);
+    const x2 = cx + r * Math.cos(end);
+    const y2 = cy + r * Math.sin(end);
+    const large = sweep > Math.PI ? 1 : 0;
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute(
+      'd',
+      `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`,
+    );
+    path.setAttribute('fill', COST_PIE_COLORS[i % COST_PIE_COLORS.length]);
+    svg.append(path);
+  });
+  return svg;
+}
+
+/**
+ * Paid services that keep Dashbird up (simple list + hover breakdown).
  * @param {HTMLElement} root
  */
 function buildCostsBlock(root) {
@@ -82,24 +142,13 @@ function buildCostsBlock(root) {
 
   const intro = document.createElement('p');
   intro.className = 'settings-page__intro';
-  intro.textContent =
-    'Monthly spend for Dashbird. Usage and credit-based services show month-to-date usage with a progress bar toward the budget. Inactive rows stay listed but are excluded from totals.';
+  intro.textContent = 'Hover a service for what it powers and where the spend goes.';
   body.append(intro);
 
-  const kpi = document.createElement('div');
-  kpi.className = 'settings-page__costs-kpi';
-  kpi.setAttribute('aria-label', 'Monthly cost summary');
-  body.append(kpi);
-
-  const categories = document.createElement('div');
-  categories.className = 'settings-page__costs-categories';
-  categories.hidden = true;
-  body.append(categories);
-
-  const openrouterPrograms = document.createElement('div');
-  openrouterPrograms.className = 'settings-page__costs-or-programs';
-  openrouterPrograms.hidden = true;
-  body.append(openrouterPrograms);
+  const totalEl = document.createElement('p');
+  totalEl.className = 'settings-page__costs-total';
+  totalEl.hidden = true;
+  body.append(totalEl);
 
   const loadStatus = document.createElement('p');
   loadStatus.className = 'settings-page__load-status';
@@ -107,513 +156,280 @@ function buildCostsBlock(root) {
   loadStatus.textContent = 'Loading costs…';
   body.append(loadStatus);
 
-  const tableWrap = document.createElement('div');
-  tableWrap.className = 'settings-page__costs-table-wrap';
-  tableWrap.hidden = true;
+  const list = document.createElement('div');
+  list.className = 'settings-page__costs-list';
+  list.hidden = true;
+  body.append(list);
 
-  const table = document.createElement('table');
-  table.className = 'settings-page__table settings-page__table--costs';
-  table.setAttribute('aria-labelledby', 'settings-costs-heading');
+  const popover = document.createElement('div');
+  popover.className = 'settings-page__costs-popover';
+  popover.hidden = true;
+  popover.setAttribute('role', 'tooltip');
+  document.body.append(popover);
 
-  const thead = document.createElement('thead');
-  const hr = document.createElement('tr');
-  for (const label of ['On', 'Service', 'Category', 'Cadence', '$ / mo', 'This month', 'Notes']) {
-    const th = document.createElement('th');
-    th.scope = 'col';
-    th.textContent = label;
-    hr.append(th);
-  }
-  thead.append(hr);
-  table.append(thead);
-
-  const tbody = document.createElement('tbody');
-  table.append(tbody);
-  tableWrap.append(table);
-  body.append(tableWrap);
-
-  const actions = document.createElement('div');
-  actions.className = 'settings-page__costs-actions';
-  actions.hidden = true;
-
-  const addBtn = document.createElement('button');
-  addBtn.type = 'button';
-  addBtn.className = 'settings-page__secondary-cancel';
-  addBtn.textContent = '+ Line item';
-
-  const saveBtn = document.createElement('button');
-  saveBtn.type = 'button';
-  saveBtn.className = 'settings-page__rain-save';
-  saveBtn.textContent = 'Save costs';
-
-  const msg = document.createElement('p');
-  msg.className = 'settings-page__rain-msg';
-  msg.hidden = true;
-  msg.setAttribute('aria-live', 'polite');
-
-  actions.append(addBtn, saveBtn, msg);
-  body.append(actions);
-
-  const note = document.createElement('p');
-  note.className = 'settings-page__note';
-  note.hidden = true;
-  body.append(note);
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let hideTimer = null;
+  /** @type {HTMLElement | null} */
+  let activeRow = null;
 
   const firstEvents = root.querySelector('.settings-page__events-sources-block, .settings-page__events-block');
   if (firstEvents) root.insertBefore(block, firstEvents);
   else root.append(block);
 
-  /** @type {{ currency: string, items: object[] }} */
-  let state = { currency: 'USD', items: [] };
+  function clearHideTimer() {
+    if (hideTimer != null) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+  }
 
-  /**
-   * @param {object} data
-   */
-  function renderKpi(data) {
-    const summary = data.summary || {};
-    const currency = data.currency || 'USD';
-    kpi.replaceChildren();
-
-    const projected =
-      summary.projectedMonthlyUsd ??
-      summary.effectiveMonthlyUsd ??
-      (Number(summary.effectiveWeeklyUsd) || 0) * 4.33;
-    const budgeted =
-      summary.budgetedMonthlyUsd ?? (Number(summary.budgetedWeeklyUsd) || 0) * 4.33;
-    const measured =
-      summary.measuredMonthlyUsd != null
-        ? Number(summary.measuredMonthlyUsd)
-        : (Number(summary.measuredWeeklyUsd) || 0) * 4.33;
-
-    const cards = [
-      {
-        label: 'This month',
-        value: formatCostUsd(projected, currency),
-        hint: 'Fixed + measured',
-        tone: 'primary',
-      },
-      {
-        label: 'Budgeted / mo',
-        value: formatCostUsd(budgeted, currency),
-        hint: 'Active line items',
-        tone: '',
-      },
-      {
-        label: 'Measured / mo',
-        value: formatCostUsd(measured, currency),
-        hint: 'Apify + OpenRouter',
-        tone: 'amber',
-      },
-    ];
-
-    for (const card of cards) {
-      const el = document.createElement('div');
-      el.className = `settings-page__costs-kpi-card${card.tone ? ` settings-page__costs-kpi-card--${card.tone}` : ''}`;
-      const lab = document.createElement('span');
-      lab.className = 'settings-page__costs-kpi-label';
-      lab.textContent = card.label;
-      const val = document.createElement('span');
-      val.className = 'settings-page__costs-kpi-value';
-      val.textContent = card.value;
-      const hint = document.createElement('span');
-      hint.className = 'settings-page__costs-kpi-hint';
-      hint.textContent = card.hint;
-      el.append(lab, val, hint);
-      kpi.append(el);
+  function hidePopover() {
+    clearHideTimer();
+    popover.hidden = true;
+    popover.replaceChildren();
+    if (activeRow) {
+      activeRow.classList.remove('settings-page__costs-row--hot');
+      activeRow = null;
     }
   }
 
   /**
-   * @param {object} data
+   * @param {HTMLElement} anchor
+   * @param {object} item
+   * @param {string} currency
    */
-  function renderCategories(data) {
-    const byCategory =
-      data.summary?.byCategoryMonthly && Object.keys(data.summary.byCategoryMonthly).length
-        ? data.summary.byCategoryMonthly
-        : data.summary?.byCategory || {};
-    const entries = Object.entries(byCategory).sort((a, b) => Number(b[1]) - Number(a[1]));
-    categories.replaceChildren();
-    if (!entries.length) {
-      categories.hidden = true;
-      return;
+  function showPopover(anchor, item, currency) {
+    clearHideTimer();
+    if (activeRow && activeRow !== anchor) {
+      activeRow.classList.remove('settings-page__costs-row--hot');
     }
-    categories.hidden = false;
-    const total = entries.reduce((s, [, v]) => s + Number(v), 0) || 1;
+    activeRow = anchor;
+    anchor.classList.add('settings-page__costs-row--hot');
+
+    const uses = Array.isArray(item.uses) ? item.uses : [];
+    const slices = Array.isArray(item.breakdown?.slices) ? item.breakdown.slices : [];
+
+    popover.replaceChildren();
     const title = document.createElement('p');
-    title.className = 'settings-page__costs-section-label';
-    title.textContent = 'By category (this month)';
-    categories.append(title);
-    for (const [name, amount] of entries) {
-      const row = document.createElement('div');
-      row.className = 'settings-page__costs-cat-row';
-      const lab = document.createElement('span');
-      lab.className = 'settings-page__costs-cat-name';
-      lab.textContent = name;
-      const barWrap = document.createElement('div');
-      barWrap.className = 'settings-page__costs-cat-bar';
-      const fill = document.createElement('div');
-      fill.className = 'settings-page__costs-cat-fill';
-      fill.style.width = `${Math.max(2, Math.round((Number(amount) / total) * 100))}%`;
-      barWrap.append(fill);
-      const amt = document.createElement('span');
-      amt.className = 'settings-page__costs-cat-amt';
-      amt.textContent = formatCostUsd(amount, data.currency);
-      row.append(lab, barWrap, amt);
-      categories.append(row);
-    }
-  }
+    title.className = 'settings-page__costs-popover-title';
+    title.textContent = item.label || item.id;
+    popover.append(title);
 
-  /**
-   * @param {object} data
-   */
-  function renderOpenRouterPrograms(data) {
-    const or = data.measured?.openrouter;
-    openrouterPrograms.replaceChildren();
-    const programs = Array.isArray(or?.programs) ? or.programs : [];
-    if (!programs.length) {
-      openrouterPrograms.hidden = true;
-      return;
-    }
-    openrouterPrograms.hidden = false;
+    const layout = document.createElement('div');
+    layout.className = 'settings-page__costs-popover-layout';
 
-    const title = document.createElement('p');
-    title.className = 'settings-page__costs-section-label';
-    title.textContent = 'OpenRouter programs (Dashbird)';
-    openrouterPrograms.append(title);
-
-    const hint = document.createElement('p');
-    hint.className = 'settings-page__costs-meter-caption';
-    hint.textContent =
-      or?.perProgramNote ||
-      'Account spend is measured above. OpenRouter does not break cost down by Dashbird feature on this key.';
-    openrouterPrograms.append(hint);
-
-    const table = document.createElement('table');
-    table.className = 'settings-page__table settings-page__table--costs-or';
-    const thead = document.createElement('thead');
-    const hr = document.createElement('tr');
-    for (const label of ['Program', 'Area', 'Cost mode', 'When it runs', 'Notes']) {
-      const th = document.createElement('th');
-      th.scope = 'col';
-      th.textContent = label;
-      hr.append(th);
-    }
-    thead.append(hr);
-    table.append(thead);
-    const tbody = document.createElement('tbody');
-
-    const modeLabel = {
-      'free-first': 'Free-first',
-      'paid-default': 'Paid default',
-      'paid-always': 'Paid always',
-    };
-
-    for (const p of programs) {
-      const tr = document.createElement('tr');
-      const tdName = document.createElement('td');
-      tdName.className = 'settings-page__type-label';
-      tdName.textContent = p.label || p.id;
-      const tdArea = document.createElement('td');
-      tdArea.textContent = p.area || '—';
-      const tdMode = document.createElement('td');
-      tdMode.className = 'settings-page__costs-or-mode';
-      const mode = String(p.costMode || '');
-      tdMode.textContent = modeLabel[mode] || mode || '—';
-      if (mode === 'paid-always' || mode === 'paid-default') {
-        tdMode.classList.add('settings-page__costs-or-mode--paid');
-      } else if (mode === 'free-first') {
-        tdMode.classList.add('settings-page__costs-or-mode--free');
+    const usesCol = document.createElement('div');
+    usesCol.className = 'settings-page__costs-popover-uses';
+    const usesLabel = document.createElement('p');
+    usesLabel.className = 'settings-page__costs-section-label';
+    usesLabel.textContent = 'Used for';
+    usesCol.append(usesLabel);
+    const ul = document.createElement('ul');
+    ul.className = 'settings-page__costs-uses-list';
+    if (!uses.length) {
+      const li = document.createElement('li');
+      li.textContent = item.usedFor || item.notes || '—';
+      ul.append(li);
+    } else {
+      for (const use of uses) {
+        const li = document.createElement('li');
+        const name = document.createElement('strong');
+        name.textContent = use.label || '—';
+        li.append(name);
+        if (use.detail) {
+          const detail = document.createElement('span');
+          detail.textContent = use.detail;
+          li.append(detail);
+        }
+        ul.append(li);
       }
-      const tdWhen = document.createElement('td');
-      tdWhen.textContent = p.triggers || '—';
-      const tdNotes = document.createElement('td');
-      tdNotes.className = 'settings-page__costs-notes';
-      const bits = [p.notes, p.envOverride].filter(Boolean);
-      tdNotes.textContent = bits.join(' · ') || '—';
-      tr.append(tdName, tdArea, tdMode, tdWhen, tdNotes);
-      tbody.append(tr);
     }
-    table.append(tbody);
-    openrouterPrograms.append(table);
-  }
+    usesCol.append(ul);
 
-  function readRowsFromDom() {
-    /** @type {object[]} */
-    const items = [];
-    for (const tr of tbody.querySelectorAll('tr')) {
-      const id = String(tr.dataset.itemId || '').trim();
-      if (!id) continue;
-      const activeEl = tr.querySelector('input[data-field="active"]');
-      const labelEl = tr.querySelector('[data-field="label"]');
-      const categoryEl = tr.querySelector('[data-field="category"]');
-      const cadenceEl = tr.querySelector('[data-field="cadence"]');
-      const monthlyEl = tr.querySelector('input[data-field="monthlyUsd"]');
-      const notesEl = tr.querySelector('[data-field="notes"]');
-      const monthlyUsd =
-        monthlyEl instanceof HTMLInputElement ? Number(monthlyEl.value) || 0 : 0;
-      items.push({
-        id,
-        active: activeEl instanceof HTMLInputElement ? activeEl.checked : true,
-        label:
-          labelEl instanceof HTMLInputElement
-            ? labelEl.value
-            : String(labelEl?.textContent || id).trim(),
-        category:
-          categoryEl instanceof HTMLInputElement
-            ? categoryEl.value
-            : String(categoryEl?.textContent || 'Other').trim(),
-        cadence:
-          cadenceEl instanceof HTMLSelectElement
-            ? cadenceEl.value
-            : String(tr.dataset.cadence || 'usage'),
-        weeklyUsd: Math.round((monthlyUsd / 4.33) * 100) / 100,
-        notes:
-          notesEl instanceof HTMLInputElement
-            ? notesEl.value
-            : String(notesEl?.textContent || '').trim(),
-        measuredSource: tr.dataset.measuredSource || null,
-        monthlyBudgetUsd:
-          tr.dataset.measuredSource || String(tr.dataset.cadence || '') === 'usage'
-            ? Math.round(monthlyUsd * 100) / 100
-            : tr.dataset.monthlyBudgetUsd
-              ? Number(tr.dataset.monthlyBudgetUsd)
-              : null,
-      });
+    const pieCol = document.createElement('div');
+    pieCol.className = 'settings-page__costs-popover-pie';
+    const pieLabel = document.createElement('p');
+    pieLabel.className = 'settings-page__costs-section-label';
+    pieLabel.textContent = item.breakdown?.estimated ? 'Activity mix (est.)' : 'Where it goes';
+    pieCol.append(pieLabel);
+    pieCol.append(buildCostsPieSvg(slices));
+
+    const legend = document.createElement('ul');
+    legend.className = 'settings-page__costs-pie-legend';
+    for (let i = 0; i < slices.length; i += 1) {
+      const s = slices[i];
+      const li = document.createElement('li');
+      const swatch = document.createElement('span');
+      swatch.className = 'settings-page__costs-pie-swatch';
+      swatch.style.background = COST_PIE_COLORS[i % COST_PIE_COLORS.length];
+      const text = document.createElement('span');
+      text.textContent = `${s.label} · ${s.pct}%`;
+      li.append(swatch, text);
+      legend.append(li);
     }
-    return items;
+    pieCol.append(legend);
+
+    if (item.breakdown?.note) {
+      const note = document.createElement('p');
+      note.className = 'settings-page__costs-popover-note';
+      note.textContent = item.breakdown.note;
+      pieCol.append(note);
+    }
+
+    layout.append(usesCol, pieCol);
+    popover.append(layout);
+
+    const used =
+      item.measuredMonthlyUsd != null && Number.isFinite(Number(item.measuredMonthlyUsd))
+        ? Number(item.measuredMonthlyUsd)
+        : null;
+    if (used != null && costsItemShowsUsageMeter(item)) {
+      const spend = document.createElement('p');
+      spend.className = 'settings-page__costs-popover-spend';
+      const lim =
+        item.monthlyCreditsUsd != null
+          ? Number(item.monthlyCreditsUsd)
+          : item.monthlyBudgetUsd != null
+            ? Number(item.monthlyBudgetUsd)
+            : null;
+      spend.textContent =
+        lim != null
+          ? `This month: ${formatCostUsd(used, currency)} of ${formatCostUsd(lim, currency)}`
+          : `This month: ${formatCostUsd(used, currency)}`;
+      popover.append(spend);
+    }
+
+    popover.hidden = false;
+    const rect = anchor.getBoundingClientRect();
+    const popW = Math.min(420, Math.max(280, popover.offsetWidth || 360));
+    let left = rect.left + window.scrollX;
+    let top = rect.bottom + window.scrollY + 8;
+    if (left + popW > window.scrollX + window.innerWidth - 12) {
+      left = window.scrollX + window.innerWidth - popW - 12;
+    }
+    if (left < window.scrollX + 8) left = window.scrollX + 8;
+    const popH = popover.offsetHeight || 220;
+    if (rect.bottom + popH + 16 > window.innerHeight && rect.top > popH + 16) {
+      top = rect.top + window.scrollY - popH - 8;
+    }
+    popover.style.width = `${popW}px`;
+    popover.style.left = `${left}px`;
+    popover.style.top = `${top}px`;
   }
 
   /**
    * @param {object} item
    * @param {string} currency
-   * @returns {HTMLElement}
    */
-  function buildMonthUsageCell(item, currency) {
-    const td = document.createElement('td');
-    td.className = 'settings-page__value settings-page__costs-measured';
-
-    const showMeter = costsItemShowsUsageMeter(item);
-    const used =
-      item.measuredMonthlyUsd != null && Number.isFinite(Number(item.measuredMonthlyUsd))
-        ? Number(item.measuredMonthlyUsd)
-        : null;
-    const limitRaw =
-      item.monthlyCreditsUsd != null
-        ? Number(item.monthlyCreditsUsd)
-        : item.monthlyBudgetUsd != null
-          ? Number(item.monthlyBudgetUsd)
-          : null;
-    const limit = limitRaw != null && Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : null;
-
-    if (!showMeter) {
-      if (used != null) {
-        td.textContent = formatCostUsd(used, currency);
-        if (used > 0) td.classList.add('settings-page__costs-measured--live');
-      } else {
-        const monthly =
-          item.cadence === 'fixed_monthly' || item.cadence === 'fixed_weekly'
-            ? Math.round((Number(item.weeklyUsd) || 0) * 4.33 * 100) / 100
-            : null;
-        if (monthly != null && monthly > 0) {
-          td.textContent = formatCostUsd(monthly, currency);
-        } else {
-          td.textContent = '—';
-          td.classList.add('settings-page__costs-measured--na');
-        }
-      }
-      return td;
-    }
-
-    td.classList.add('settings-page__costs-usage');
-    const usedVal = used != null ? used : 0;
-    const lim = limit != null ? limit : Math.max(usedVal, 1);
-    const pct = lim > 0 ? Math.min(100, Math.round((usedVal / lim) * 100)) : 0;
-    const remaining =
-      item.remainingCreditsUsd != null
-        ? Number(item.remainingCreditsUsd)
-        : Math.max(0, lim - usedVal);
-
-    const amount = document.createElement('div');
-    amount.className = 'settings-page__costs-usage-amt';
-    if (used != null || limit != null) {
-      amount.textContent =
-        limit != null
-          ? `${formatCostUsd(usedVal, currency)} / ${formatCostUsd(limit, currency)}`
-          : formatCostUsd(usedVal, currency);
-      if (usedVal > 0) amount.classList.add('settings-page__costs-measured--live');
-    } else {
-      amount.textContent = 'No usage yet';
-      amount.classList.add('settings-page__costs-measured--na');
-    }
-    td.append(amount);
-
-    const meter = document.createElement('div');
-    meter.className = 'settings-page__costs-meter settings-page__costs-meter--row';
-    meter.setAttribute('role', 'progressbar');
-    meter.setAttribute('aria-valuemin', '0');
-    meter.setAttribute('aria-valuemax', String(lim));
-    meter.setAttribute('aria-valuenow', String(usedVal));
-    meter.setAttribute(
+  function buildRow(item, currency) {
+    const row = document.createElement('div');
+    row.className = 'settings-page__costs-row';
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.setAttribute(
       'aria-label',
-      `${item.label || item.id} monthly usage ${pct}%`,
+      `${item.label || item.id}. Hover or focus for usage breakdown.`,
     );
-    const fill = document.createElement('div');
-    fill.className = 'settings-page__costs-meter-fill';
-    if (pct >= 90) fill.classList.add('settings-page__costs-meter-fill--hot');
-    else if (pct >= 70) fill.classList.add('settings-page__costs-meter-fill--warn');
-    fill.style.width = `${pct}%`;
-    meter.append(fill);
-    td.append(meter);
 
-    const caption = document.createElement('div');
-    caption.className = 'settings-page__costs-usage-caption';
-    caption.textContent =
-      limit != null
-        ? `${formatCostUsd(remaining, currency)} left · ${pct}%`
-        : `${pct}% of estimated budget`;
-    td.append(caption);
+    const name = document.createElement('span');
+    name.className = 'settings-page__costs-row-name';
+    name.textContent = item.label || item.id;
 
-    return td;
-  }
+    const right = document.createElement('div');
+    right.className = 'settings-page__costs-row-right';
 
-  /**
-   * @param {object[]} items
-   * @param {string} currency
-   */
-  function populateRows(items, currency) {
-    tbody.replaceChildren();
-    for (const item of items) {
-      const tr = document.createElement('tr');
-      tr.dataset.itemId = item.id;
-      tr.dataset.cadence = item.cadence || 'usage';
-      if (item.measuredSource) tr.dataset.measuredSource = item.measuredSource;
-      if (item.monthlyBudgetUsd != null) {
-        tr.dataset.monthlyBudgetUsd = String(item.monthlyBudgetUsd);
-      }
-      if (item.active === false) tr.classList.add('settings-page__costs-row--off');
+    const isUsage = costsItemShowsUsageMeter(item);
+    const monthly =
+      item.monthlyFixedUsd != null
+        ? Number(item.monthlyFixedUsd)
+        : item.displayMonthlyUsd != null
+          ? Number(item.displayMonthlyUsd)
+          : item.monthlyBudgetUsd != null
+            ? Number(item.monthlyBudgetUsd)
+            : Math.round((Number(item.weeklyUsd) || 0) * 4.33 * 100) / 100;
 
-      const tdOn = document.createElement('td');
-      tdOn.className = 'settings-page__costs-on';
-      const check = document.createElement('input');
-      check.type = 'checkbox';
-      check.dataset.field = 'active';
-      check.checked = item.active !== false;
-      check.title = 'Include in monthly totals';
-      check.addEventListener('change', () => {
-        tr.classList.toggle('settings-page__costs-row--off', !check.checked);
-      });
-      tdOn.append(check);
+    if (isUsage) {
+      const used =
+        item.measuredMonthlyUsd != null && Number.isFinite(Number(item.measuredMonthlyUsd))
+          ? Number(item.measuredMonthlyUsd)
+          : 0;
+      const lim =
+        item.monthlyCreditsUsd != null
+          ? Number(item.monthlyCreditsUsd)
+          : item.monthlyBudgetUsd != null
+            ? Number(item.monthlyBudgetUsd)
+            : monthly || 1;
+      const pct = lim > 0 ? Math.min(100, Math.round((used / lim) * 100)) : 0;
 
-      const tdService = document.createElement('td');
-      tdService.className = 'settings-page__type-label';
-      const isCustom = String(item.id || '').startsWith('custom-');
-      if (isCustom) {
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.className = 'settings-page__costs-input settings-page__costs-input--label';
-        input.dataset.field = 'label';
-        input.value = item.label || '';
-        input.placeholder = 'Service name';
-        tdService.append(input);
-      } else {
-        const span = document.createElement('span');
-        span.dataset.field = 'label';
-        span.textContent = item.label || item.id;
-        tdService.append(span);
-      }
+      const amt = document.createElement('span');
+      amt.className = 'settings-page__costs-row-amt';
+      amt.textContent = `${formatCostUsd(used, currency)} / ${formatCostUsd(lim, currency)}`;
+      right.append(amt);
 
-      const tdCat = document.createElement('td');
-      if (isCustom) {
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.className = 'settings-page__costs-input';
-        input.dataset.field = 'category';
-        input.value = item.category || 'Other';
-        tdCat.append(input);
-      } else {
-        const span = document.createElement('span');
-        span.dataset.field = 'category';
-        span.textContent = item.category || 'Other';
-        tdCat.append(span);
-      }
-
-      const tdCadence = document.createElement('td');
-      tdCadence.className = 'settings-page__costs-cadence';
-      if (isCustom) {
-        const sel = document.createElement('select');
-        sel.className = 'settings-page__costs-select';
-        sel.dataset.field = 'cadence';
-        for (const [id, lab] of Object.entries(COST_CADENCE_LABELS)) {
-          const opt = document.createElement('option');
-          opt.value = id;
-          opt.textContent = lab;
-          if (id === (item.cadence || 'usage')) opt.selected = true;
-          sel.append(opt);
-        }
-        tdCadence.append(sel);
-      } else {
-        tdCadence.textContent = COST_CADENCE_LABELS[item.cadence] || item.cadence || '—';
-      }
-
-      const tdMonth = document.createElement('td');
-      tdMonth.className = 'settings-page__costs-weekly';
-      const monthInput = document.createElement('input');
-      monthInput.type = 'number';
-      monthInput.min = '0';
-      monthInput.step = '0.01';
-      monthInput.className = 'settings-page__costs-input settings-page__costs-input--money';
-      monthInput.dataset.field = 'monthlyUsd';
-      const monthlyBudget =
-        item.monthlyBudgetUsd != null && Number.isFinite(Number(item.monthlyBudgetUsd))
-          ? Number(item.monthlyBudgetUsd)
-          : Math.round((Number(item.weeklyUsd) || 0) * 4.33 * 100) / 100;
-      monthInput.value = String(monthlyBudget);
-      monthInput.setAttribute('aria-label', `${item.label || item.id} dollars per month`);
-      if (costsItemShowsUsageMeter(item) && item.measuredSource) {
-        monthInput.title = 'Monthly budget / credit limit';
-      }
-      tdMonth.append(monthInput);
-
-      const tdUsage = buildMonthUsageCell(item, currency);
-
-      const tdNotes = document.createElement('td');
-      tdNotes.className = 'settings-page__costs-notes';
-      const notesInput = document.createElement('input');
-      notesInput.type = 'text';
-      notesInput.className = 'settings-page__costs-input settings-page__costs-input--notes';
-      notesInput.dataset.field = 'notes';
-      notesInput.value = item.notes || '';
-      notesInput.placeholder = 'Notes';
-      tdNotes.append(notesInput);
-
-      tr.append(tdOn, tdService, tdCat, tdCadence, tdMonth, tdUsage, tdNotes);
-      tbody.append(tr);
+      const meter = document.createElement('div');
+      meter.className = 'settings-page__costs-meter settings-page__costs-meter--row';
+      meter.setAttribute('role', 'progressbar');
+      meter.setAttribute('aria-valuemin', '0');
+      meter.setAttribute('aria-valuemax', String(lim));
+      meter.setAttribute('aria-valuenow', String(used));
+      const fill = document.createElement('div');
+      fill.className = 'settings-page__costs-meter-fill';
+      if (pct >= 90) fill.classList.add('settings-page__costs-meter-fill--hot');
+      else if (pct >= 70) fill.classList.add('settings-page__costs-meter-fill--warn');
+      fill.style.width = `${pct}%`;
+      meter.append(fill);
+      right.append(meter);
+    } else {
+      const amt = document.createElement('span');
+      amt.className = 'settings-page__costs-row-amt';
+      amt.textContent = formatCostUsd(monthly, currency);
+      right.append(amt);
     }
+
+    row.append(name, right);
+
+    const open = () => showPopover(row, item, currency);
+    const scheduleHide = () => {
+      clearHideTimer();
+      hideTimer = setTimeout(() => {
+        if (!popover.matches(':hover') && document.activeElement !== row) hidePopover();
+      }, 160);
+    };
+
+    row.addEventListener('pointerenter', open);
+    row.addEventListener('pointerleave', scheduleHide);
+    row.addEventListener('focus', open);
+    row.addEventListener('blur', scheduleHide);
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') hidePopover();
+    });
+
+    return row;
   }
 
   /**
    * @param {object} data
    */
   function applyPayload(data) {
-    state = {
-      currency: data.currency || 'USD',
-      items: Array.isArray(data.items) ? data.items : [],
-    };
-    renderKpi(data);
-    renderCategories(data);
-    renderOpenRouterPrograms(data);
-    populateRows(state.items, state.currency);
-    tableWrap.hidden = false;
-    actions.hidden = false;
+    const currency = data.currency || 'USD';
+    const items = (Array.isArray(data.items) ? data.items : []).filter((i) => i.active !== false);
+    const projected =
+      data.summary?.projectedMonthlyUsd ??
+      data.summary?.effectiveMonthlyUsd ??
+      0;
+
+    totalEl.hidden = false;
+    totalEl.textContent = `About ${formatCostUsd(projected, currency)} / month`;
+
+    list.replaceChildren();
+    for (const item of items) list.append(buildRow(item, currency));
+    list.hidden = false;
     loadStatus.hidden = true;
     loadStatus.textContent = '';
-    note.hidden = false;
-    const when = data.updatedAt
-      ? new Date(data.updatedAt).toLocaleString()
-      : 'defaults (not saved yet)';
-    note.textContent = `Costs ledger · last saved ${when} · edit $/mo and Save`;
   }
 
   function reload() {
+    hidePopover();
     loadStatus.hidden = false;
     loadStatus.className = 'settings-page__load-status';
     loadStatus.textContent = 'Loading costs…';
@@ -630,63 +446,18 @@ function buildCostsBlock(root) {
       });
   }
 
-  addBtn.addEventListener('click', () => {
-    const id = `custom-${Date.now().toString(36)}`;
-    state.items = [
-      ...readRowsFromDom(),
-      {
-        id,
-        label: '',
-        category: 'Other',
-        cadence: 'fixed_weekly',
-        weeklyUsd: 0,
-        notes: '',
-        active: true,
-        measuredWeeklyUsd: null,
-      },
-    ];
-    populateRows(state.items, state.currency);
-    const last = tbody.querySelector('tr:last-child input[data-field="label"]');
-    if (last instanceof HTMLInputElement) last.focus();
+  popover.addEventListener('pointerenter', clearHideTimer);
+  popover.addEventListener('pointerleave', () => {
+    hideTimer = setTimeout(hidePopover, 120);
   });
-
-  saveBtn.addEventListener('click', async () => {
-    saveBtn.disabled = true;
-    msg.hidden = false;
-    msg.classList.remove('settings-page__rain-msg--err');
-    msg.textContent = 'Saving…';
-    try {
-      const r = await fetch('/api/dashboard-costs', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          currency: state.currency,
-          items: readRowsFromDom(),
-        }),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok || data.ok === false) {
-        throw new Error(data.error || `HTTP ${r.status}`);
-      }
-      applyPayload(data);
-      msg.textContent = 'Saved.';
-      setTimeout(() => {
-        if (msg.textContent === 'Saved.') msg.hidden = true;
-      }, 1800);
-    } catch (e) {
-      msg.classList.add('settings-page__rain-msg--err');
-      msg.textContent =
-        e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
-    } finally {
-      saveBtn.disabled = false;
-    }
-  });
+  window.addEventListener('scroll', hidePopover, { passive: true });
+  window.addEventListener('resize', hidePopover);
 
   reload();
 }
 
 /**
- * Secondary ZIP: second hero weather tile + lightning bugs / fall foliage.
+ * Secondary ZIP: second hero weather tile + lightning bugs (fall foliage watches ZIP 24066).
  * Shows the stored ZIP; “Change secondary ZIP” reveals the editor.
  * @param {HTMLElement} root
  */
@@ -700,7 +471,7 @@ function buildSecondaryWatchBlock(root) {
   const blurb = document.createElement('p');
   blurb.className = 'settings-page__secondary-blurb';
   blurb.textContent =
-    'Drives the second hero weather city and secondary phenology (fireflies, fall foliage). Reload the dashboard after saving.';
+    'Drives the second hero weather city and firefly season. Fall foliage watches ZIP 24066. Reload the dashboard after saving.';
   body.append(blurb);
 
   const currentRow = document.createElement('p');
@@ -893,12 +664,7 @@ function buildSettingsShell(root, _windowHours) {
     tbodyByGroup.set(group, tbody);
   }
 
-  const meta = document.createElement('p');
-  meta.className = 'settings-page__note';
-  meta.hidden = true;
-  root.append(meta);
-
-  return { tbodyByGroup, status, meta };
+  return { tbodyByGroup, status };
 }
 
 /**
@@ -2214,11 +1980,6 @@ function buildEventsFinderSourcesBlock(root) {
   table.append(tbody);
   body.append(table);
 
-  const note = document.createElement('p');
-  note.className = 'settings-page__note';
-  note.hidden = true;
-  body.append(note);
-
   const firstEventsGroup = root.querySelector('.settings-page__events-block');
   if (firstEventsGroup) root.insertBefore(block, firstEventsGroup);
   else root.append(block);
@@ -2387,13 +2148,6 @@ function buildEventsFinderSourcesBlock(root) {
       }
       loadStatus.textContent = '';
       loadStatus.hidden = true;
-      note.hidden = false;
-      const when = data.checkedAt ? new Date(data.checkedAt).toLocaleString() : new Date().toLocaleString();
-      const cacheBit =
-        data.cached && Number(data.cacheAgeMs) > 0
-          ? ` · cached ${Math.round(Number(data.cacheAgeMs) / 1000)}s ago`
-          : '';
-      note.textContent = `Events sources snapshot: ${when}${cacheBit}`;
     })
     .catch((e) => {
       loadStatus.className = 'settings-page__err';
@@ -2405,7 +2159,6 @@ function buildEventsFinderSourcesBlock(root) {
     loadStatus.hidden = false;
     loadStatus.className = 'settings-page__load-status';
     loadStatus.textContent = 'Reloading Events sources…';
-    note.hidden = true;
     tbody.replaceChildren();
     rowById.clear();
     fetch('/api/events-finder-status?manifest=1', { cache: 'no-store' })
@@ -2430,11 +2183,6 @@ function buildEventsFinderSourcesBlock(root) {
         }
         loadStatus.textContent = '';
         loadStatus.hidden = true;
-        note.hidden = false;
-        const when = data.checkedAt
-          ? new Date(data.checkedAt).toLocaleString()
-          : new Date().toLocaleString();
-        note.textContent = `Events sources snapshot: ${when}`;
       })
       .catch((e) => {
         loadStatus.className = 'settings-page__err';
@@ -2823,7 +2571,7 @@ function buildBigEventsRemindersBlock(root) {
 export async function mountSettingsPage(mount) {
   if (!mount) return;
 
-  const { tbodyByGroup, status, meta } = buildSettingsShell(mount, WINDOW_HOURS);
+  const { tbodyByGroup, status } = buildSettingsShell(mount, WINDOW_HOURS);
   buildSecondaryWatchBlock(mount);
   buildEventsFinderSourcesBlock(mount);
   buildGmailWeeklySummaryBlock(mount);
@@ -2852,8 +2600,6 @@ export async function mountSettingsPage(mount) {
     refreshStatus();
     if (pendingParts <= 0) {
       mount.removeAttribute('aria-busy');
-      meta.hidden = false;
-      meta.textContent = `Snapshot: ${new Date().toLocaleString()}`;
     }
   }
 

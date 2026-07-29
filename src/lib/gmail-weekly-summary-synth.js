@@ -6,6 +6,10 @@
  */
 import { loadGmailDailySummaryGuide } from './gmail-daily-summary-guide-store.js';
 import {
+  classifyGmailDailySummaryMessages,
+  triageMetaFromResult,
+} from './gmail-daily-summary-triage.js';
+import {
   bumpOpenRouterRateLimit,
   openRouterChatJson,
   openRouterRateLimitUntilMs,
@@ -152,12 +156,25 @@ export function shouldRunGmailWeeklySummaryDaily(env = process.env, now = new Da
 /**
  * @param {string} guideMarkdown
  */
-function buildSystemPrompt(guideMarkdown) {
+/**
+ * @param {string} guideMarkdown
+ * @param {Array<{ vibe: 'up' | 'down', text: string, company?: string | null }>} [feedbackExamples]
+ */
+function buildSystemPrompt(guideMarkdown, feedbackExamples = []) {
   const guide = String(guideMarkdown || '').trim() || '(no ingestion guide configured)';
+  const exampleLines = (feedbackExamples || []).slice(0, 8).map((ex, i) => {
+    const vibe = ex.vibe === 'up' ? 'prefer more' : 'prefer less';
+    const co = ex.company ? ` (${ex.company})` : '';
+    return `${i + 1}. [${vibe}]${co} ${ex.text}`;
+  });
+  const feedbackBlock = exampleLines.length
+    ? `Learned preference examples:\n${exampleLines.join('\n')}`
+    : '';
   return `You are Dashbird's daily inbox synthesizer for Jay.
 You do NOT return a filtered list of important emails.
 You return a short prose summary of recent mail PLUS durable action items / tasks derived from the mail.
 An action item may cite zero, one, or several messages. Prefer thematic tasks ("Confirm insurance paperwork") over quoting a subject line.
+Messages were pre-triaged for intent; still apply the rules below (code also hard-filters events/OTP/promo).
 
 Return JSON only:
 {
@@ -189,6 +206,7 @@ Rules:
 - Repeated similar 👎 patterns under Prefer less are treated as stronger exclusion; promoted Soft skip / Never show lines in the guide are hard rules.
 - Email ingestion guide:
 ${guide}
+${feedbackBlock ? `\n${feedbackBlock}\n` : ''}
 - deadline: ISO 8601 when an explicit date/time is clear; else null.
 - deadlineSource: "extracted" if you found a deadline; "response_48h" if the only urgency is that Jay needs to reply; else "none".
 - needsReply: true when the main ask is a response from Jay.
@@ -421,6 +439,7 @@ export async function runGmailWeeklySummaryScan(env = process.env, opts = {}) {
           lastScanYmd: scanYmd,
           items: [],
           lastError: null,
+          triageMeta: null,
         },
         { guideMarkdown: guide },
       );
@@ -428,13 +447,59 @@ export async function runGmailWeeklySummaryScan(env = process.env, opts = {}) {
       return { ok: true, fromCache: false, digest, mailMeta: mail, reason };
     }
 
+    // Intent triage gates noise/events out of the digest prompt (heuristics fill if LLM fails).
+    const triage = await classifyGmailDailySummaryMessages(mail.messages, {
+      guideMarkdown: guide,
+      env,
+      ignoreRateLimit: reason === 'manual',
+    });
+    const triageMeta = triageMetaFromResult(triage);
+    const digestMessages = Array.isArray(triage.kept) ? triage.kept : mail.messages;
+    const feedbackExamples = Array.isArray(triage.examples) ? triage.examples : [];
+
+    if (!digestMessages.length) {
+      const merged = mergeSynthesizedDigest(
+        prev,
+        {
+          summaryText: prev.summaryText || 'No actionable mail in the recent intake window.',
+          windowDays: mail.days || gmailWeeklySummaryDays(env),
+          lastScanYmd: scanYmd,
+          items: [],
+          lastError: null,
+          triageMeta,
+        },
+        { guideMarkdown: guide },
+      );
+      const digest = await saveGmailWeeklySummary(merged, env);
+      return {
+        ok: true,
+        fromCache: false,
+        digest,
+        triageModel: triage.model,
+        triageVia: triage.via,
+        reason,
+        mailMeta: {
+          messageCount: mail.messages.length,
+          triageKept: 0,
+          triageDropped: Array.isArray(triage.dropped) ? triage.dropped.length : mail.messages.length,
+          fromCache: mail.fromCache,
+          stale: mail.stale,
+          errors: mail.errors,
+        },
+        triageMeta,
+      };
+    }
+
     const chat = await openRouterChatJson(
       env,
       [
-        { role: 'system', content: buildSystemPrompt(guide) },
-        { role: 'user', content: buildUserPrompt(mail.messages) },
+        { role: 'system', content: buildSystemPrompt(guide, feedbackExamples) },
+        { role: 'user', content: buildUserPrompt(digestMessages) },
       ],
-      { ignoreRateLimit: reason === 'manual' },
+      {
+        ignoreRateLimit: reason === 'manual',
+        xTitle: 'dashbird-daily-summary',
+      },
     );
 
     if (!chat.ok) {
@@ -442,10 +507,12 @@ export async function runGmailWeeklySummaryScan(env = process.env, opts = {}) {
         ...prev,
         windowDays: gmailWeeklySummaryDays(env),
         lastError: chat.error || 'synth_failed',
+        triageMeta,
       }, env);
-      return { ok: false, fromCache: false, digest, error: chat.error, reason };
+      return { ok: false, fromCache: false, digest, error: chat.error, reason, triageMeta };
     }
 
+    // mapSynthItems still applies guide-match / event / OTP hard excludes (authoritative).
     const items = mapSynthItems(chat.parsed, mail.messages, guide);
     const merged = mergeSynthesizedDigest(
       prev,
@@ -457,6 +524,7 @@ export async function runGmailWeeklySummaryScan(env = process.env, opts = {}) {
         lastScanYmd: scanYmd,
         items,
         lastError: null,
+        triageMeta,
       },
       { guideMarkdown: guide },
     );
@@ -466,13 +534,18 @@ export async function runGmailWeeklySummaryScan(env = process.env, opts = {}) {
       fromCache: false,
       digest,
       model: chat.model,
+      triageModel: triage.model,
+      triageVia: triage.via,
       reason,
       mailMeta: {
         messageCount: mail.messages.length,
+        triageKept: digestMessages.length,
+        triageDropped: Array.isArray(triage.dropped) ? triage.dropped.length : 0,
         fromCache: mail.fromCache,
         stale: mail.stale,
         errors: mail.errors,
       },
+      triageMeta,
     };
   })().finally(() => {
     synthInflight = null;

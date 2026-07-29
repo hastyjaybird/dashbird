@@ -1,6 +1,6 @@
 /**
- * Second ZIP for the hero’s comparison weather tile and regional phenology
- * (fireflies, fall foliage).
+ * Second ZIP for the hero’s comparison weather tile and firefly season
+ * (fall foliage watches its own fixed ZIP — see secondary-watch-earth.js).
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';

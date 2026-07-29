@@ -426,6 +426,8 @@ const SOURCE_LABELS = {
   partiful: 'Partiful',
   secretparty: 'Secret Party',
   telegram: 'Telegram',
+  multiverse: 'Multiverse',
+  dorkbotsf: 'dorkbotSF',
   public: 'Web',
 };
 
@@ -446,6 +448,8 @@ function eventSourceLabel(ev) {
         if (/lu\.ma$/i.test(host) || /^luma\./i.test(host)) return 'Luma';
         if (/partiful\.com$/i.test(host)) return 'Partiful';
         if (/secretparty\.io$/i.test(host)) return 'Secret Party';
+        if (/themultiverse\.school$/i.test(host)) return 'Multiverse';
+        if (/dorkbotsf\.org$/i.test(host)) return 'dorkbotSF';
         return host;
       }
     } catch {
@@ -1350,7 +1354,12 @@ export function mountEventsFinder(root) {
     manualBtn.className = 'events-finder__big-events-again';
     manualBtn.textContent = 'Add manually';
     manualBtn.title = 'Skip search — add by name (and optional URL), then fill details in Edit';
-    form.append(input, searchBtn, manualBtn, urlInput);
+    const addUrlBtn = document.createElement('button');
+    addUrlBtn.type = 'button';
+    addUrlBtn.className = 'events-finder__big-events-again';
+    addUrlBtn.textContent = 'Add URL';
+    addUrlBtn.title = 'Paste the official event page URL — no web search';
+    form.append(input, searchBtn, manualBtn, addUrlBtn, urlInput);
 
     const msg = document.createElement('p');
     msg.className = 'events-finder__big-events-msg muted';
@@ -1403,6 +1412,25 @@ export function mountEventsFinder(root) {
       return /^https?:\/\//i.test(v) ? v : `https://${v}`;
     }
 
+    /** Derive a short label from a pasted event URL (e.g. coolstuff.ju.mp → coolstuff). */
+    function deriveQueryFromUrl(raw) {
+      const url = normalizeManualUrl(raw);
+      if (!url) return '';
+      try {
+        const u = new URL(url);
+        const host = u.hostname.replace(/^www\./, '');
+        const slug = host.split('.')[0] || host;
+        return slug.replace(/[-_]+/g, ' ').trim() || host;
+      } catch {
+        return '';
+      }
+    }
+
+    function looksLikeHttpUrl(raw) {
+      const v = String(raw || '').trim();
+      return /^https?:\/\//i.test(v) || /^[\w.-]+\.(?:com|org|net|io|mp|edu|gov|co|me|school|dance|space)(?:\/|$)/i.test(v);
+    }
+
     function resetAddFlow() {
       form.hidden = true;
       addToggle.hidden = false;
@@ -1419,12 +1447,14 @@ export function mountEventsFinder(root) {
      * unlisted events that search cannot find.
      */
     function startManualAdd() {
-      const query = input.value.trim();
+      let query = input.value.trim();
+      const manualUrl = normalizeManualUrl(urlInput.value) || null;
+      if (!query && manualUrl) query = deriveQueryFromUrl(manualUrl) || manualUrl;
       if (!query) {
         input.focus();
         return;
       }
-      const manualUrl = normalizeManualUrl(urlInput.value) || null;
+      input.value = query;
       pendingPreview = {
         query,
         url: manualUrl,
@@ -1676,6 +1706,22 @@ export function mountEventsFinder(root) {
     addToggle.addEventListener('click', showAddForm);
     searchBtn.addEventListener('click', () => submitAdd());
     manualBtn.addEventListener('click', () => startManualAdd());
+    addUrlBtn.addEventListener('click', () => {
+      const manualUrl = normalizeManualUrl(urlInput.value);
+      if (!manualUrl) {
+        urlInput.focus();
+        return;
+      }
+      if (!input.value.trim()) input.value = deriveQueryFromUrl(manualUrl) || manualUrl;
+      startManualAdd();
+    });
+    input.addEventListener('input', () => {
+      const v = input.value.trim();
+      if (!looksLikeHttpUrl(v)) return;
+      urlInput.value = normalizeManualUrl(v);
+      input.value = '';
+      urlInput.focus();
+    });
     const onAddEnter = (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();

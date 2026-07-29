@@ -28,7 +28,7 @@ import {
   describeMoonbowForStatus,
   wallYmdInTimeZone,
 } from './yosemite-moonbow.js';
-import { buildSecondaryWatchEarthBundle } from './secondary-watch-earth.js';
+import { buildSecondaryWatchEarthBundle, FALL_FOLIAGE_ZIP } from './secondary-watch-earth.js';
 import { getEventTypeLiveUrl } from './event-types-manifest.js';
 
 /**
@@ -423,7 +423,7 @@ export async function buildEarthAndMoonbowEventTypes(options = {}) {
     });
     rows.push({
       id: 'fall_foliage_season',
-      label: 'Fall foliage (2nd ZIP)',
+      label: `Fall foliage (ZIP ${FALL_FOLIAGE_ZIP})`,
       category: 'Earth',
       active: false,
       value: 'Disabled (SECONDARY_WATCH=0)',
@@ -440,10 +440,10 @@ export async function buildEarthAndMoonbowEventTypes(options = {}) {
     });
     rows.push({
       id: 'fall_foliage_season',
-      label: 'Fall foliage (2nd ZIP)',
+      label: `Fall foliage (ZIP ${FALL_FOLIAGE_ZIP})`,
       category: 'Earth',
       active: false,
-      value: 'Could not geocode secondary ZIP',
+      value: `Could not geocode ZIP ${FALL_FOLIAGE_ZIP}`,
       dataSource: 'USA-NPN MODIS LSP Mid Greendown median',
     });
   } else {
@@ -461,10 +461,10 @@ export async function buildEarthAndMoonbowEventTypes(options = {}) {
     });
     rows.push({
       id: 'fall_foliage_season',
-      label: 'Fall foliage (2nd ZIP)',
+      label: `Fall foliage (ZIP ${FALL_FOLIAGE_ZIP})`,
       category: 'Earth',
       active: Boolean(fol?.active),
-      value: fol?.value || (zipTag ? `—${zipTag}` : '—'),
+      value: fol?.value || `— @ ${FALL_FOLIAGE_ZIP}`,
       dataSource:
         'USA-NPN Land Surface Phenology Mid Greendown median (2001–2017); active 21d before start / peak / end',
     });
@@ -484,7 +484,7 @@ export async function buildEarthAndMoonbowEventTypes(options = {}) {
 export async function buildEarthEventTypesSlow() {
   const { lat, lon } = await resolveDashboardWeatherLatLon();
   const [quakeBuilt, kilaueaBuilt, glmBuilt] = await Promise.all([
-    buildUsgsEarthquakeWeekItem({ lat, lon }),
+    buildUsgsEarthquakeWeekItem(),
     buildKilaueaDashboardPayload(),
     buildGoesGlmLightningStripItem({ lat, lon }),
   ]);
@@ -499,7 +499,7 @@ export async function buildEarthEventTypesSlow() {
       category: 'Earth',
       active: true,
       value: `${quakeBuilt.item.label} — ${quakeBuilt.item.detailLine}`,
-      dataSource: 'USGS FDSNWS · strongest M>3 within 30 mi (7 days)',
+      dataSource: 'USGS FDSNWS · strongest CA M>3 within 150 mi of Oakland (7 days)',
     });
   } else {
     rows.push({
@@ -508,9 +508,9 @@ export async function buildEarthEventTypesSlow() {
       category: 'Earth',
       active: false,
       value: quakeBuilt.ok
-        ? 'No M>3 earthquake within 30 mi in the past 7 days'
+        ? 'No California M>3 earthquake within 150 mi of Oakland in the past 7 days'
         : `Unavailable (${quakeBuilt.error || 'fetch failed'})`,
-      dataSource: 'USGS FDSNWS · strongest M>3 within 30 mi (7 days)',
+      dataSource: 'USGS FDSNWS · strongest CA M>3 within 150 mi of Oakland (7 days)',
     });
   }
 

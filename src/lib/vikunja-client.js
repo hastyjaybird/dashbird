@@ -606,6 +606,13 @@ export async function movePanelTodo(id, projectId, env = process.env) {
   };
 }
 
+/** Vikunja page size for open-task listing. */
+const PANEL_TODOS_PER_PAGE = 100;
+/** Safety stop so a runaway project cannot loop forever (100 × 100 = 10k tasks). */
+const PANEL_TODOS_MAX_PAGES = 100;
+/** Default ceiling for cross-project random-picker pool (was 500 and hid later projects). */
+const ALL_PANEL_TODOS_DEFAULT_CAP = 10_000;
+
 /**
  * @param {NodeJS.ProcessEnv} [env]
  * @param {{ projectId?: number | null }} [opts]
@@ -629,23 +636,31 @@ export async function listPanelTodos(env = process.env, opts = {}) {
     throw err;
   }
 
-  const qs = new URLSearchParams({
-    per_page: '100',
-    sort_by: 'id',
-    order_by: 'desc',
-    filter: `done = false && project_id = ${projectId}`,
-  });
+  /** @type {Array<{ id: string, text: string, done: boolean, projectId: number | null }>} */
+  const all = [];
+  for (let page = 1; page <= PANEL_TODOS_MAX_PAGES; page++) {
+    const qs = new URLSearchParams({
+      per_page: String(PANEL_TODOS_PER_PAGE),
+      page: String(page),
+      sort_by: 'id',
+      order_by: 'desc',
+      filter: `done = false && project_id = ${projectId}`,
+    });
 
-  const res = await vikunjaFetch(`tasks?${qs}`, { env });
-  if (!res.ok) {
-    const err = new Error(safeUpstreamMessage(res) || 'vikunja_list_failed');
-    err.code = 'vikunja_upstream';
-    err.status = res.status >= 400 && res.status < 600 ? res.status : 502;
-    throw err;
+    const res = await vikunjaFetch(`tasks?${qs}`, { env });
+    if (!res.ok) {
+      const err = new Error(safeUpstreamMessage(res) || 'vikunja_list_failed');
+      err.code = 'vikunja_upstream';
+      err.status = res.status >= 400 && res.status < 600 ? res.status : 502;
+      throw err;
+    }
+
+    const rows = Array.isArray(res.json) ? res.json : [];
+    const mapped = rows.map(mapVikunjaTask).filter(Boolean);
+    all.push(...mapped);
+    if (mapped.length < PANEL_TODOS_PER_PAGE) break;
   }
-
-  const rows = Array.isArray(res.json) ? res.json : [];
-  return rows.map(mapVikunjaTask).filter(Boolean);
+  return all;
 }
 
 
@@ -656,7 +671,9 @@ export async function listPanelTodos(env = process.env, opts = {}) {
  * @returns {Promise<Array<{ id: string, text: string, done: boolean, projectId: number | null, projectTitle: string }>>}
  */
 export async function listAllPanelTodos(env = process.env, opts = {}) {
-  const cap = Number.isFinite(Number(opts.limit)) ? Math.min(500, Math.max(1, Number(opts.limit))) : 500;
+  const cap = Number.isFinite(Number(opts.limit))
+    ? Math.max(1, Number(opts.limit))
+    : ALL_PANEL_TODOS_DEFAULT_CAP;
   const projects = await listPanelProjects(env);
   /** @type {Array<{ id: string, text: string, done: boolean, projectId: number | null, projectTitle: string }>} */
   const all = [];

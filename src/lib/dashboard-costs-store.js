@@ -59,18 +59,26 @@ function normalizeItem(raw) {
   const cadenceRaw = String(raw.cadence || 'usage').trim().toLowerCase();
   const cadence = CADENCES.has(cadenceRaw) ? cadenceRaw : 'usage';
   const notes = String(raw.notes || '').trim().slice(0, 240);
+  const usedFor =
+    String(raw.usedFor || raw.category || '').trim().slice(0, 120) || category;
   const measuredSource = String(raw.measuredSource || '').trim().slice(0, 64) || null;
   const monthlyBudgetUsd =
     raw.monthlyBudgetUsd == null || raw.monthlyBudgetUsd === ''
       ? null
       : money(raw.monthlyBudgetUsd, null);
+  const monthlyFixedUsd =
+    raw.monthlyFixedUsd == null || raw.monthlyFixedUsd === ''
+      ? null
+      : money(raw.monthlyFixedUsd, null);
   return {
     id,
     label,
     category,
+    usedFor,
     cadence,
     weeklyUsd: money(raw.weeklyUsd, 0),
     monthlyBudgetUsd: monthlyBudgetUsd == null || !Number.isFinite(monthlyBudgetUsd) ? null : monthlyBudgetUsd,
+    monthlyFixedUsd: monthlyFixedUsd == null || !Number.isFinite(monthlyFixedUsd) ? null : monthlyFixedUsd,
     notes,
     measuredSource,
     active: raw.active !== false,
@@ -134,45 +142,51 @@ export async function loadDashboardCosts() {
       const live = await ensureLedgerFile();
       const raw = JSON.parse(await fs.readFile(live, 'utf8'));
       const ledger = normalizeDashboardCosts(raw).ledger;
-      // Merge any new seed items (by id) so Settings picks up catalog additions.
+      // Keep live ledger aligned with seed catalog (add/refresh/prune by id).
       try {
         const seedRaw = JSON.parse(await fs.readFile(SEED_PATH, 'utf8'));
         const seed = normalizeDashboardCosts(seedRaw).ledger;
-        const have = new Set(ledger.items.map((i) => i.id));
+        const seedById = new Map(seed.items.map((i) => [i.id, i]));
         let changed = false;
-        for (const item of seed.items) {
-          if (have.has(item.id)) continue;
-          ledger.items.push(item);
-          have.add(item.id);
-          changed = true;
-        }
-        // Refresh measuredSource / notes on known seed rows without wiping edits.
+        const nextItems = [];
         for (const seedItem of seed.items) {
-          const idx = ledger.items.findIndex((i) => i.id === seedItem.id);
-          if (idx < 0) continue;
-          const cur = ledger.items[idx];
-          if (seedItem.measuredSource && cur.measuredSource !== seedItem.measuredSource) {
-            ledger.items[idx] = {
-              ...cur,
-              measuredSource: seedItem.measuredSource,
-              monthlyBudgetUsd: cur.monthlyBudgetUsd ?? seedItem.monthlyBudgetUsd,
-              notes: cur.notes || seedItem.notes,
-              label: cur.label || seedItem.label,
-            };
+          const cur = ledger.items.find((i) => i.id === seedItem.id);
+          if (!cur) {
+            nextItems.push(seedItem);
             changed = true;
+            continue;
           }
+          const merged = {
+            ...cur,
+            label: seedItem.label || cur.label,
+            category: seedItem.category || cur.category,
+            usedFor: seedItem.usedFor || cur.usedFor || cur.category,
+            cadence: seedItem.cadence || cur.cadence,
+            weeklyUsd: seedItem.weeklyUsd,
+            monthlyBudgetUsd: seedItem.monthlyBudgetUsd ?? cur.monthlyBudgetUsd,
+            monthlyFixedUsd: seedItem.monthlyFixedUsd ?? cur.monthlyFixedUsd,
+            notes: seedItem.notes || cur.notes,
+            measuredSource: seedItem.measuredSource || cur.measuredSource,
+            active: seedItem.active !== false && cur.active !== false,
+          };
+          if (JSON.stringify(merged) !== JSON.stringify(cur)) changed = true;
+          nextItems.push(merged);
         }
-        if (changed) {
+        for (const cur of ledger.items) {
+          if (!seedById.has(cur.id)) changed = true;
+        }
+        if (changed || nextItems.length !== ledger.items.length) {
           const payload = {
-            currency: ledger.currency,
-            items: ledger.items,
-            updatedAt: ledger.updatedAt || new Date().toISOString(),
+            currency: ledger.currency || seed.currency || 'USD',
+            items: nextItems,
+            updatedAt: new Date().toISOString(),
           };
           const tmp = `${live}.${process.pid}.${Date.now()}.tmp`;
           await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
           await fs.rename(tmp, live);
           return payload;
         }
+        ledger.items = nextItems;
       } catch {
         // Seed missing or unreadable — keep live ledger as-is.
       }

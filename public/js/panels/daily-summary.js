@@ -757,7 +757,7 @@ export function mountDailySummary(root) {
     });
 
     const primary = Array.isArray(item.sources) && item.sources.length ? item.sources[0] : null;
-    const webUrl = gmailWebMessageUrl(primary) || String(item.replyUrl || '').trim();
+    const webUrl = String(item.replyUrl || '').trim() || gmailWebMessageUrl(primary);
     const openLink = document.createElement(webUrl ? 'a' : 'button');
     if (webUrl) {
       wireGmailOpenAnchor(/** @type {HTMLAnchorElement} */ (openLink), webUrl, primary);

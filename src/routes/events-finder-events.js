@@ -22,6 +22,8 @@ import { fetchGcalIcsPinnedEvents } from '../lib/events-finder-gcal-ics.js';
 import { fetchLumaPinnedEvents } from '../lib/events-finder-luma.js';
 import { fetchMeetupPinnedEvents } from '../lib/events-finder-meetup.js';
 import { fetchMultiverseSchoolEvents } from '../lib/events-finder-multiverse.js';
+import { fetchDorkbotsfEvents } from '../lib/events-finder-dorkbotsf.js';
+import { fetchCoolstuffEvents } from '../lib/events-finder-coolstuff.js';
 import { withEventPrice } from '../lib/events-finder-price.js';
 import { fetchPublicPageEvents } from '../lib/events-finder-public-pages.js';
 import {
@@ -123,6 +125,8 @@ function scheduleEventsFinderIngest(opts) {
         publicPages: { ok: true, events: [], sources: {} },
         meetup: { ok: true, events: [], fromCache: true },
         multiverse: { ok: true, events: [], fromCache: true },
+        dorkbotsf: { ok: true, events: [], fromCache: true },
+        coolstuff: { ok: true, events: [], fromCache: true },
         luma: { ok: true, events: [], fromCache: true },
         gcalIcs: { ok: true, events: [], fromCache: true },
         upserted: 0,
@@ -233,6 +237,24 @@ function scheduleEventsFinderIngest(opts) {
         })),
       ),
       take(
+        'dorkbotsf',
+        fetchDorkbotsfEvents(process.env, { forceRefresh: force }).catch((e) => ({
+          ok: false,
+          events: [],
+          fromCache: false,
+          error: String(e?.message || e),
+        })),
+      ),
+      take(
+        'coolstuff',
+        fetchCoolstuffEvents(process.env, { forceRefresh: force }).catch((e) => ({
+          ok: false,
+          events: [],
+          fromCache: false,
+          error: String(e?.message || e),
+        })),
+      ),
+      take(
         'luma',
         fetchLumaPinnedEvents(process.env).catch((e) => ({
           ok: false,
@@ -286,6 +308,8 @@ function scheduleEventsFinderIngest(opts) {
       publicPages: sources.publicPages || { ok: false, events: [], sources: {} },
       meetup: sources.meetup || { ok: false, events: [] },
       multiverse: sources.multiverse || { ok: false, events: [] },
+      dorkbotsf: sources.dorkbotsf || { ok: false, events: [] },
+      coolstuff: sources.coolstuff || { ok: false, events: [] },
       luma: sources.luma || { ok: false, events: [] },
       gcalIcs: sources.gcalIcs || { ok: false, events: [] },
       upserted,
@@ -430,6 +454,18 @@ router.get('/', async (req, res) => {
     };
     const meetup = ingest?.meetup || { ok: true, events: [], fromCache: true, stale: ingestPending };
     const multiverse = ingest?.multiverse || {
+      ok: true,
+      events: [],
+      fromCache: true,
+      stale: ingestPending,
+    };
+    const dorkbotsf = ingest?.dorkbotsf || {
+      ok: true,
+      events: [],
+      fromCache: true,
+      stale: ingestPending,
+    };
+    const coolstuff = ingest?.coolstuff || {
       ok: true,
       events: [],
       fromCache: true,
@@ -703,6 +739,26 @@ router.get('/', async (req, res) => {
           droppedFull: multiverse.droppedFull ?? 0,
           classDetailsRefreshed: multiverse.classDetailsRefreshed ?? 0,
           count: Array.isArray(multiverse.events) ? multiverse.events.length : 0,
+        },
+        dorkbotsf: {
+          ok: dorkbotsf.ok === true,
+          error: dorkbotsf.error || null,
+          fromCache: dorkbotsf.fromCache === true,
+          stale: dorkbotsf.stale === true,
+          cachedAt: dorkbotsf.cachedAt || null,
+          pageUrl: dorkbotsf.pageUrl || null,
+          featuredPast: dorkbotsf.featuredPast === true,
+          featuredId: dorkbotsf.featuredId || null,
+          count: Array.isArray(dorkbotsf.events) ? dorkbotsf.events.length : 0,
+        },
+        coolstuff: {
+          ok: coolstuff.ok === true,
+          error: coolstuff.error || null,
+          fromCache: coolstuff.fromCache === true,
+          stale: coolstuff.stale === true,
+          cachedAt: coolstuff.cachedAt || null,
+          pageUrl: coolstuff.pageUrl || null,
+          count: Array.isArray(coolstuff.events) ? coolstuff.events.length : 0,
         },
         luma: {
           ok: luma.ok === true,

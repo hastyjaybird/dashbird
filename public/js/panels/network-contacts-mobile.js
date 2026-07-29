@@ -1424,11 +1424,40 @@ export function mountNetworkContactsMobile(root) {
     saveBtn.type = 'submit';
     saveBtn.className = 'mobile-network__save';
     saveBtn.textContent = 'Save';
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'mobile-network__delete';
+    delBtn.textContent = 'Delete';
     const saveStatus = document.createElement('p');
     saveStatus.className = 'mobile-network__save-status';
     saveStatus.hidden = true;
-    saveRow.append(saveBtn, saveStatus);
+    saveRow.append(saveBtn, delBtn, saveStatus);
     form.append(saveRow);
+
+    delBtn.addEventListener('click', async () => {
+      if (!confirm(`Delete ${current.displayName || 'this person'}?`)) return;
+      delBtn.disabled = true;
+      saveBtn.disabled = true;
+      saveStatus.hidden = false;
+      saveStatus.textContent = 'Deleting…';
+      saveStatus.classList.remove('mobile-network__save-status--err');
+      try {
+        const r = await fetch(`/api/network/contacts/${encodeURIComponent(current.id)}`, {
+          method: 'DELETE',
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || 'delete_failed');
+        contacts = contacts.filter((x) => x.id !== current.id);
+        selectedContactIds.delete(current.id);
+        dirty = false;
+        mobileNavBack();
+      } catch (err) {
+        saveStatus.textContent = `Delete failed: ${err?.message || err}`;
+        saveStatus.classList.add('mobile-network__save-status--err');
+        delBtn.disabled = false;
+        saveBtn.disabled = false;
+      }
+    });
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();

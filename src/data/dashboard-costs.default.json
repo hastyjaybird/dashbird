@@ -2,80 +2,50 @@
   "currency": "USD",
   "items": [
     {
+      "id": "vultr",
+      "label": "Vultr",
+      "usedFor": "Cloud server (dashbird.duckdns.org)",
+      "category": "Cloud server",
+      "cadence": "fixed_monthly",
+      "weeklyUsd": 2.31,
+      "monthlyFixedUsd": 10,
+      "notes": "2 GB Cloud Compute \u00b7 Silicon Valley \u00b7 always-on host",
+      "active": true
+    },
+    {
+      "id": "cursor",
+      "label": "Cursor",
+      "usedFor": "Building and editing Dashbird",
+      "category": "Building Dashbird",
+      "cadence": "fixed_monthly",
+      "weeklyUsd": 4.62,
+      "monthlyFixedUsd": 20,
+      "notes": "Pro plan \u00b7 IDE used to develop this dashboard",
+      "active": true
+    },
+    {
       "id": "apify",
-      "label": "Apify (Facebook Events)",
-      "category": "Events",
+      "label": "Apify",
+      "usedFor": "Facebook Events scrape",
+      "category": "Facebook Events",
       "cadence": "usage",
-      "weeklyUsd": 1.25,
+      "weeklyUsd": 1.15,
       "monthlyBudgetUsd": 5,
-      "notes": "Free plan $5/mo credits \u00b7 daily 4am scrape \u00b7 measured from billing log",
+      "notes": "Free plan $5/mo credits \u00b7 daily 4am scrape on cloud",
       "measuredSource": "facebook-billing",
       "active": true
     },
     {
       "id": "openrouter",
-      "label": "OpenRouter (AI)",
-      "category": "AI",
+      "label": "OpenRouter",
+      "usedFor": "AI (Daily Summary, enrich, Tool Library)",
+      "category": "AI features",
       "cadence": "usage",
       "weeklyUsd": 0,
-      "notes": "Account spend measured from OpenRouter key \u00b7 programs listed below (not separately metered) \u00b7 includes Daily Summary digest (scans every 30 min; free-first models) \u00b7 Tool Library \u201cSearch deeper\u201d (manual; gpt-4o-mini fallback, sub-cent per run)",
-      "active": true,
       "monthlyBudgetUsd": 5,
-      "measuredSource": "openrouter-key"
-    },
-    {
-      "id": "cursor",
-      "label": "Cursor (IDE)",
-      "category": "Dev tools",
-      "cadence": "fixed_monthly",
-      "weeklyUsd": 4.62,
-      "notes": "Pro ~$20/mo \u00f7 4.33 \u00b7 edit to match your plan share for Dashbird",
+      "notes": "Usage billed to your OpenRouter key \u00b7 free-first models when possible",
+      "measuredSource": "openrouter-key",
       "active": true
-    },
-    {
-      "id": "vultr",
-      "label": "Vultr (cloud VPS)",
-      "category": "Infra",
-      "cadence": "fixed_monthly",
-      "weeklyUsd": 2.31,
-      "notes": "Cloud Compute 2 GB \u00b7 Silicon Valley \u00b7 dashbird.duckdns.org \u00b7 ~$10/mo \u00f7 4.33",
-      "active": true
-    },
-    {
-      "id": "google-oauth",
-      "label": "Google Cloud (Gmail API)",
-      "category": "Events",
-      "cadence": "free_tier",
-      "weeklyUsd": 0,
-      "notes": "Intake Gmail OAuth \u00b7 personal free quota",
-      "active": true
-    },
-    {
-      "id": "falling-fruit",
-      "label": "Falling Fruit API",
-      "category": "Earth",
-      "cadence": "optional",
-      "weeklyUsd": 0,
-      "notes": "Optional wild-foraging key \u00b7 usually free",
-      "active": false
-    },
-    {
-      "id": "supabase",
-      "label": "Supabase (Web Catalog)",
-      "category": "Infra",
-      "cadence": "optional",
-      "weeklyUsd": 0,
-      "notes": "Optional cloud catalog \u00b7 local JSON is default",
-      "active": false
-    },
-    {
-      "id": "apollo",
-      "label": "Apollo (company firmographics)",
-      "category": "Network",
-      "cadence": "usage",
-      "weeklyUsd": 0,
-      "notes": "Optional APOLLO_API_KEY \u00b7 org enrich credits for employees/revenue estimates \u00b7 set weeklyUsd after you have a plan",
-      "active": false
     }
   ]
 }

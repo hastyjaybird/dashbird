@@ -35,9 +35,13 @@ data/dashboard-costs.json
 data/manual-calendar-events.json
 data/meetup-events-cache.json
 data/multiverse-events-cache.json
+data/dorkbotsf-events-cache.json
+data/coolstuff-events-cache.json
 data/luma-events-cache.json
 data/gcal-ics-events-cache.json
 data/telegram-events-offset.json
+data/telegram-last-event.json
+data/multiverse-class-details-cache.json
 data/telegram-intake.db
 data/telegram-intake.db-wal
 data/telegram-intake.db-shm

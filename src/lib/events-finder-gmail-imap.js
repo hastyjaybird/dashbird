@@ -106,7 +106,11 @@ function toGmailMessageShape({ uid, parsed, envelope }) {
  */
 export async function fetchGmailEventsViaImap(email, appPassword, env = process.env, opts = {}) {
   const address = normalizeGmailAddress(email);
-  const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 50, 1), 100);
+  const envMax = Number(env.GMAIL_EVENTS_MAX_MESSAGES);
+  const maxMessages = Math.min(
+    Math.max(Number(opts.maxMessages) || (Number.isFinite(envMax) ? envMax : 100), 1),
+    200,
+  );
   const query = gmailEventsQuery(env);
   const client = new ImapFlow({
     host: 'imap.gmail.com',
@@ -299,6 +303,8 @@ export async function fetchGmailMessageListViaImap(email, appPassword, env = pro
           gmailThreadId = String(msg.uid);
         }
       }
+      // OBJECTID emailId sometimes equals threadId — not a real message id.
+      if (gmailId && gmailId === gmailThreadId) gmailId = null;
       messages.push({
         id: String(msg.uid),
         threadId: gmailThreadId,
@@ -456,6 +462,8 @@ export async function fetchGmailWeeklyMessagesViaImap(email, appPassword, env = 
           gmailThreadId = String(uid);
         }
       }
+      // OBJECTID emailId sometimes equals threadId — not a real message id.
+      if (gmailId && gmailId === gmailThreadId) gmailId = null;
       const to = formatAddressList(parsed?.to) || '';
       const text = String(parsed?.text || '')
         .replace(/\s+\n/g, '\n')

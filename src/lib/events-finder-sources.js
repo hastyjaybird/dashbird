@@ -132,6 +132,30 @@ const HOST_STRATEGIES = {
     missingEvents:
       'Private / unlisted calendar items. Events only on other Multiverse calendars not embedded on /calendar.',
   },
+  'dorkbotsf.org': {
+    host: 'dorkbotsf.org',
+    strategy: 'public_pages',
+    strategyLabel: 'Public homepage (HTML)',
+    strategyDetail:
+      'Fetches https://dorkbotsf.org/ for the featured next meetup (time, venue, talks, flyer). Cached on disk. Google Calendar embed on /calendar.html is not publicly ICS-exportable.',
+    outputHint: 'Next dorkbotSF meetup: title, time, venue, archive URL.',
+    devStatus: 'Wired — public HTML',
+    devStatusKind: 'wired',
+    missingEvents:
+      'Past archive meetups (homepage only surfaces the next one). Related tours listed only under archives.',
+  },
+  'coolstuff.ju.mp': {
+    host: 'coolstuff.ju.mp',
+    strategy: 'public_pages',
+    strategyLabel: 'Cool Happenings list (HTML)',
+    strategyDetail:
+      'Fetches https://coolstuff.ju.mp/ — Richie Rhombus’s curated under-$30/free Bay Area arts list. Parses outbound event links + nearby dates. Cached on disk.',
+    outputHint: 'Listed happenings: title, optional date/city, outbound URL.',
+    devStatus: 'Wired — public HTML',
+    devStatusKind: 'wired',
+    missingEvents:
+      'Items without outbound links. Events only on other lists not linked from Cool Happenings.',
+  },
   'fetlife.com': {
     host: 'fetlife.com',
     strategy: 'login_walled',

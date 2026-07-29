@@ -235,6 +235,7 @@ const SOURCE_PREF = {
   eventbrite: 4,
   meetup: 4,
   multiverse: 4,
+  dorkbotsf: 4,
   secretparty: 3,
   gmail: 1,
 };

@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { resolveDashboardWeatherLatLon } from '../lib/hero-weather-location.js';
 import { buildUsgsEarthquakeWeekItem } from '../lib/usgs-earthquake-week.js';
 
 const router = Router();
@@ -13,8 +12,7 @@ router.get('/', async (req, res) => {
       return;
     }
 
-    const { lat, lon } = await resolveDashboardWeatherLatLon();
-    const built = await buildUsgsEarthquakeWeekItem({ lat, lon });
+    const built = await buildUsgsEarthquakeWeekItem();
 
     if (!built.ok) {
       res.setHeader('Cache-Control', 'private, max-age=120');

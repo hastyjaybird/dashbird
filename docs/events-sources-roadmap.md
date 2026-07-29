@@ -14,7 +14,7 @@ Shared pipeline (all sources eventually feed the same shape):
 6. **Taste filter** with Look for / Skip criteria.
 7. **Rank + show** on the main Events card (thumbs ± later).
 
-**Event catalog (implemented):** Node `node:sqlite` file at `EVENTS_FINDER_DB_PATH` (default `data/events-finder.db`). Each feed load upserts Gmail + Facebook + public HTML (Partiful/Secret Party/Eventbrite) + Meetup pins + Multiverse ICS + Luma calendar pins, prunes stale rows (~14d), then serves from the catalog. **Telegram** upserts immediately on bot message (text / voice / flyer photo) and appears on the next feed load. **Dedupe:** same normalized title + same local calendar day (`WEATHER_TIME_ZONE`) → keep the richer listing. **Taste:** Skip lines drop unless a Look for line also matches; Look for lines boost rank (`events-finder-taste.js`). API includes a `store` block (`count`, `bySource`, `upserted`, `dedupedRemoved`, `tasteSkipped`).
+**Event catalog (implemented):** Node `node:sqlite` file at `EVENTS_FINDER_DB_PATH` (default `data/events-finder.db`). Each feed load upserts Gmail + Facebook + public HTML (Partiful/Secret Party/Eventbrite) + Meetup pins + Multiverse ICS + dorkbotSF homepage + Luma calendar pins, prunes stale rows (~14d), then serves from the catalog. **Telegram** upserts immediately on bot message (text / voice / flyer photo) and appears on the next feed load. **Dedupe:** same normalized title + same local calendar day (`WEATHER_TIME_ZONE`) → keep the richer listing. **Taste:** Skip lines drop unless a Look for line also matches; Look for lines boost rank (`events-finder-taste.js`). API includes a `store` block (`count`, `bySource`, `upserted`, `dedupedRemoved`, `tasteSkipped`).
 
 **Geo + filters (implemented):** `src/lib/events-finder-geo.js` + criteria `filters` (`cities`, `maxMiles`, `dates`, `dateFrom`, `dateTo`, `earliestLocalTime`, `attendance`). Date/time gates use **local** timezone (not UTC). Settings → Filter criteria edits all of these. API returns `geo.homeCities` / `geo.bayArea` and `filters`. Online events skip city/distance gates; unknowns are kept when attendance is filtered.
 
@@ -166,6 +166,18 @@ event-page seeds.
 
 ---
 
+## 6a. dorkbotSF (`dorkbotsf.org`) — Public homepage HTML
+
+**Decision:** Single-org public site. Homepage always features the **next** meetup (time, venue, talks, flyer). `/calendar.html` embeds a Google Calendar that is **not** publicly ICS-exportable (404 on `basic.ics`), so HTML is the source of truth.
+
+**Today (wired):** `events-finder-dorkbotsf.js` fetches `https://dorkbotsf.org/`, parses the featured block, deep-links to `/archive/YYYYMM/`, caches ~6h in `data/dorkbotsf-events-cache.json`. Settings bookmark + `HOST_STRATEGIES['dorkbotsf.org']`. Facebook group pin + Look-for `dorkbot` remain complementary.
+
+**Missing:** Past archive meetups (homepage only surfaces the featured one). Related tours listed only under archives.
+
+**Needs from you:** nothing — when Karen updates the homepage for the next meetup, it lands in the feed automatically.
+
+---
+
 ## 6b. Telegram (`t.me`) — Phone screenshots / voice / text
 
 **Decision:** Push intake via a private Telegram bot (long-poll `getUpdates` — works on LAN Docker without a public webhook).
@@ -250,6 +262,6 @@ event-page seeds.
 3. **Noisebridge** (optional) — site/calendar/Meetup URL if it should be a source.
 4. **Filter window** — in Settings → Filter criteria, widen `dateFrom` / `dateTo` (or clear them) when the sidebar looks empty; a tight week window hides later events.
 
-**Already wired (no action):** Gmail IMAP app passwords for both inboxes; `APIFY_TOKEN`; SQLite catalog; name+date dedupe; Look for / Skip taste; public Partiful + Luma calendar pins + Eventbrite SF listing + Meetup pins + Multiverse ICS.
+**Already wired (no action):** Gmail IMAP app passwords for both inboxes; `APIFY_TOKEN`; SQLite catalog; name+date dedupe; Look for / Skip taste; public Partiful + Luma calendar pins + Eventbrite SF listing + Meetup pins + Multiverse ICS + dorkbotSF homepage.
 
 **Settled:** Fet deferred. Partiful sample event URLs received. Eventbrite = public pages first. Intake Gmail = IMAP app passwords (**jay.intake.box + julia.hasty**). **Partiful / Secret Party private + Meetup → email to intake, not public scrape.** **Bay home cities: SF / Oakland / Emeryville / Berkeley.** Feed filters: city, optional distance, date range, earliest time, online vs in person.

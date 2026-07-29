@@ -40,7 +40,7 @@ const FIELD_LABELS = {
   times: 'When',
 };
 
-const ALL_ASSIGN_FIELDS = ['priority', 'difficulty', 'duration', 'times', 'locations'];
+const ALL_ASSIGN_FIELDS = ['priority', 'difficulty', 'duration', 'locations', 'times'];
 
 /**
  * @param {string} field
@@ -153,7 +153,7 @@ function assignSummaryEntries(taskMeta, projectMeta) {
 function appendAssignFields(assignRow, fields, taskMeta, projectMeta, data, opts) {
   for (const field of fields) {
     const group = document.createElement('div');
-    group.className = 'tasks-random__assign-group';
+    group.className = `tasks-random__assign-group tasks-random__assign-group--${field}`;
     const fl = document.createElement('span');
     fl.className = 'tasks-random__assign-field';
     fl.textContent = FIELD_LABELS[field] || field;
@@ -216,7 +216,7 @@ function appendAssignFields(assignRow, fields, taskMeta, projectMeta, data, opts
 }
 
 /**
- * Edit random-picker tags (priority / effort / duration / when / location) for one task.
+ * Edit random-picker tags (priority / effort / duration / location / when) for one task.
  * @param {{
  *   root: HTMLElement,
  *   taskId: string,

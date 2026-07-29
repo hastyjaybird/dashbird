@@ -1224,7 +1224,12 @@ export function mountEventsFinderMobile(root) {
     manualBtn.className = 'events-finder__big-events-again';
     manualBtn.textContent = 'Add manually';
     manualBtn.title = 'Skip search — add by name (and optional URL), then fill details in Edit';
-    form.append(input, searchBtn, manualBtn, urlInput);
+    const addUrlBtn = document.createElement('button');
+    addUrlBtn.type = 'button';
+    addUrlBtn.className = 'events-finder__big-events-again';
+    addUrlBtn.textContent = 'Add URL';
+    addUrlBtn.title = 'Paste the official event page URL — no web search';
+    form.append(input, searchBtn, manualBtn, addUrlBtn, urlInput);
 
     const msg = document.createElement('p');
     msg.className = 'events-finder__big-events-msg muted';
@@ -1260,6 +1265,25 @@ export function mountEventsFinderMobile(root) {
       return /^https?:\/\//i.test(v) ? v : `https://${v}`;
     }
 
+    /** Derive a short label from a pasted event URL (e.g. coolstuff.ju.mp → coolstuff). */
+    function deriveQueryFromUrl(raw) {
+      const url = normalizeManualUrl(raw);
+      if (!url) return '';
+      try {
+        const u = new URL(url);
+        const host = u.hostname.replace(/^www\./, '');
+        const slug = host.split('.')[0] || host;
+        return slug.replace(/[-_]+/g, ' ').trim() || host;
+      } catch {
+        return '';
+      }
+    }
+
+    function looksLikeHttpUrl(raw) {
+      const v = String(raw || '').trim();
+      return /^https?:\/\//i.test(v) || /^[\w.-]+\.(?:com|org|net|io|mp|edu|gov|co|me|school|dance|space)(?:\/|$)/i.test(v);
+    }
+
     function resetAddFlow() {
       form.hidden = true;
       addToggle.hidden = false;
@@ -1276,12 +1300,14 @@ export function mountEventsFinderMobile(root) {
      * unlisted events that search cannot find.
      */
     function startManualAdd() {
-      const query = input.value.trim();
+      let query = input.value.trim();
+      const manualUrl = normalizeManualUrl(urlInput.value) || null;
+      if (!query && manualUrl) query = deriveQueryFromUrl(manualUrl) || manualUrl;
       if (!query) {
         input.focus();
         return;
       }
-      const manualUrl = normalizeManualUrl(urlInput.value) || null;
+      input.value = query;
       pendingPreview = {
         query,
         url: manualUrl,
@@ -1528,6 +1554,22 @@ export function mountEventsFinderMobile(root) {
     });
     searchBtn.addEventListener('click', () => submitAdd());
     manualBtn.addEventListener('click', () => startManualAdd());
+    addUrlBtn.addEventListener('click', () => {
+      const manualUrl = normalizeManualUrl(urlInput.value);
+      if (!manualUrl) {
+        urlInput.focus();
+        return;
+      }
+      if (!input.value.trim()) input.value = deriveQueryFromUrl(manualUrl) || manualUrl;
+      startManualAdd();
+    });
+    input.addEventListener('input', () => {
+      const v = input.value.trim();
+      if (!looksLikeHttpUrl(v)) return;
+      urlInput.value = normalizeManualUrl(v);
+      input.value = '';
+      urlInput.focus();
+    });
     const onAddEnter = (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
@@ -3197,6 +3239,17 @@ export function mountEventsFinderMobile(root) {
 
     if (showSkipped) actions.append(hideBtn, calBtn);
     else actions.append(upBtn, downBtn, hideBtn, calBtn);
+    if (eventUrl) {
+      const siteBtn = document.createElement('a');
+      siteBtn.className = 'mobile-events__action mobile-events__action--site';
+      siteBtn.href = eventUrl;
+      siteBtn.target = '_blank';
+      siteBtn.rel = 'noopener noreferrer';
+      siteBtn.textContent = 'Website';
+      siteBtn.title = 'Open event website';
+      siteBtn.addEventListener('click', (e) => e.stopPropagation());
+      actions.append(siteBtn);
+    }
     body.append(head, meta, priceEl, actions);
     row.append(icon, body);
     card.append(row);

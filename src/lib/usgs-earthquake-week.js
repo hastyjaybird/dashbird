@@ -1,5 +1,5 @@
 /**
- * Largest recent earthquake near the dashboard point (USGS FDSNWS event API).
+ * Largest recent California earthquake within 150 miles of Oakland, CA (USGS FDSNWS event API).
  * Qualifying rows persist on the Earth strip for two calendar days; the event date
  * appears on the second day (dashboard `WEATHER_TIME_ZONE`).
  * @see https://earthquake.usgs.gov/fdsnws/event/1/
@@ -15,7 +15,10 @@ const USGS_QUERY = 'https://earthquake.usgs.gov/fdsnws/event/1/query';
 const EARTH_RADIUS_MI = 3958.7613; // mean Earth radius, statute miles
 const KM_PER_MI = 1.609344;
 const WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-const RADIUS_MI = 30;
+const RADIUS_MI = 150;
+// Search center: downtown Oakland, CA (fixed — not the dashboard weather point).
+const CENTER_LAT = 37.8044;
+const CENTER_LON = -122.2712;
 const MIN_MAG_EXCLUSIVE = 3;
 const FETCH_LIMIT = 300;
 const FETCH_TIMEOUT_MS = 18_000;
@@ -46,6 +49,18 @@ function formatDepthKmShort(depthKm) {
   const rounded = Math.round(depthKm * 10) / 10;
   const s = rounded === Math.round(rounded) ? String(Math.round(rounded)) : String(rounded);
   return `${s} km`;
+}
+
+/**
+ * USGS `place` strings for California quakes end in ", CA" (e.g. "5 km SSE of
+ * Berkeley, CA") or name the state (e.g. "offshore of Northern California").
+ * A 150-mile circle around Oakland reaches Nevada, so this keeps CA-only rows.
+ * @param {unknown} place
+ */
+function isCaliforniaPlace(place) {
+  const s = String(place || '').trim().toLowerCase();
+  if (!s) return false;
+  return /,\s*ca$/.test(s) || s.includes('california');
 }
 
 function dashTimeZone(env = process.env) {
@@ -204,6 +219,7 @@ async function fetchStrongestUsgsQuake(lat, lon) {
 
     const mag = Number(props.mag);
     if (!Number.isFinite(mag) || mag <= MIN_MAG_EXCLUSIVE) continue;
+    if (!isCaliforniaPlace(props.place)) continue;
 
     const evLon = Number(coords[0]);
     const evLat = Number(coords[1]);
@@ -245,14 +261,12 @@ async function fetchStrongestUsgsQuake(lat, lon) {
 }
 
 /**
- * @param {{ lat: number, lon: number }} p
+ * Fixed search: California quakes within 150 mi of downtown Oakland.
  * @returns {Promise<{ ok: true, item: object | null } | { ok: false, error: string }>}
  */
-export async function buildUsgsEarthquakeWeekItem(p) {
-  const { lat, lon } = p;
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-    return { ok: false, error: 'bad_lat_lon' };
-  }
+export async function buildUsgsEarthquakeWeekItem() {
+  const lat = CENTER_LAT;
+  const lon = CENTER_LON;
 
   const timeZone = dashTimeZone();
   const todayYmd = wallYmdAt(new Date(), timeZone);

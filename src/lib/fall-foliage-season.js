@@ -2,7 +2,7 @@
  * Fall leaf-color season at secondary-watch ZIP (USA-NPN MODIS LSP Mid Greendown Median).
  * @see https://www.usanpn.org/data/maps/land_surface_phenology
  */
-import { formatMdShort, isPhenologyPhaseActive, PHENOLOGY_HEADS_UP_DAYS } from './phenology-heads-up.js';
+import { formatMdShort, isPhenologyPhaseActive } from './phenology-heads-up.js';
 import { labelWithSecondaryZip, secondaryZipSuffix } from './secondary-watch-label.js';
 import { addDaysToYmd, isLikelyUsanpnSixExtent, npnWcsGetPointValue, wallYmdInTimeZone, ymdForYearDoy } from './usanpn-wcs-point.js';
 
@@ -110,21 +110,12 @@ export async function buildFallFoliageSeasonStatus(p) {
     return { ok: true, active: false, value, items: [], schedule, greendownDoy: sample.doy };
   }
 
-  const detailParts = activePhases.map((ph) => {
-    const approaching = wallYmd < ph.milestoneYmd;
-    if (approaching) {
-      return `${ph.label} expected ~${formatMdShort(ph.milestoneYmd)} (within ${PHENOLOGY_HEADS_UP_DAYS}d heads-up)`;
-    }
-    if (ph.key === 'peak') {
-      return `Peak color ~${formatMdShort(peakStartYmd)}–${formatMdShort(peakEndYmd)}`;
-    }
-    return `${ph.label} window (expected ~${formatMdShort(ph.milestoneYmd)})`;
-  });
+  const detailLine = `Peak ~${formatMdShort(peakStartYmd)}–${formatMdShort(peakEndYmd)}`;
 
   const item = {
     earthType: 'fall_foliage_season',
     label: labelWithSecondaryZip('Fall foliage', p.zip),
-    detailLine: `${detailParts.join(' · ')} · ${schedule}`,
+    detailLine,
     forecastUrl: REF_URL,
     fallFoliage: { schedule, greendownDoy: sample.doy, activePhases: activePhases.map((x) => x.key) },
   };

@@ -2,10 +2,10 @@ import { geocodeUsZip5 } from './zip-geocode.js';
 import { loadSecondaryWatchZip } from './secondary-watch-zip-store.js';
 
 /**
+ * @param {string} zip
  * @returns {Promise<{ zip: string, lat: number, lon: number, place: string, timeZone: string } | null>}
  */
-export async function resolveSecondaryWatchLocation() {
-  const zip = await loadSecondaryWatchZip();
+export async function resolveWatchLocationForZip(zip) {
   const geo = await geocodeUsZip5(zip);
   if (!geo) return null;
 
@@ -26,4 +26,12 @@ export async function resolveSecondaryWatchLocation() {
     place: geo.place,
     timeZone,
   };
+}
+
+/**
+ * @returns {Promise<{ zip: string, lat: number, lon: number, place: string, timeZone: string } | null>}
+ */
+export async function resolveSecondaryWatchLocation() {
+  const zip = await loadSecondaryWatchZip();
+  return resolveWatchLocationForZip(zip);
 }

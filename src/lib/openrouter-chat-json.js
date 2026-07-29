@@ -78,7 +78,14 @@ function extractJsonObject(content) {
 /**
  * @param {NodeJS.ProcessEnv} [env]
  * @param {Array<{ role: string, content: string }>} messages
- * @param {{ ignoreRateLimit?: boolean, timeoutMs?: number, models?: string[], backoff429?: boolean }} [opts]
+ * @param {{
+ *   ignoreRateLimit?: boolean,
+ *   timeoutMs?: number,
+ *   models?: string[],
+ *   backoff429?: boolean,
+ *   xTitle?: string,
+ *   maxTokens?: number,
+ * }} [opts]
  */
 export async function openRouterChatJson(env, messages, opts = {}) {
   if (!openRouterKey(env)) {
@@ -92,6 +99,10 @@ export async function openRouterChatJson(env, messages, opts = {}) {
       ? modelChain(opts.models[0], opts.models.slice(1))
       : modelChain(textModel(env), TEXT_FALLBACK_MODELS);
   const timeoutMs = Math.min(Math.max(Number(opts.timeoutMs) || 90_000, 10_000), 120_000);
+  const maxTokens = Math.min(Math.max(Number(opts.maxTokens) || 2500, 256), 8000);
+  const xTitle =
+    String(opts.xTitle || env.OPENROUTER_X_TITLE || 'dashbird-daily-summary').trim()
+    || 'dashbird-daily-summary';
   let lastError = 'openrouter_failed';
   for (let i = 0; i < models.length; i += 1) {
     const model = models[i];
@@ -103,12 +114,12 @@ export async function openRouterChatJson(env, messages, opts = {}) {
           Authorization: `Bearer ${openRouterKey(env)}`,
           'Content-Type': 'application/json',
           'HTTP-Referer': env.OPENROUTER_HTTP_REFERER || 'http://localhost',
-          'X-Title': env.OPENROUTER_X_TITLE || 'dashbird-daily-summary',
+          'X-Title': xTitle,
         },
         body: JSON.stringify({
           model,
           temperature: 0.2,
-          max_tokens: 2500,
+          max_tokens: maxTokens,
           response_format: { type: 'json_object' },
           messages,
         }),

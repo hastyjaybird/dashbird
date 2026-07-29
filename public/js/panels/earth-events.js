@@ -42,6 +42,7 @@ const KILAUEA_STRIP_ICON_SRC = '/assets/earth-kilauea-volcano.png';
 const GLM_LIGHTNING_STRIP_SRC = '/assets/earth-glm-lightning-strip.png';
 const NASTURTIUM_STRIP_ICON_SRC = '/assets/earth-nasturtium-strip.png';
 const FIREFLY_STRIP_ICON_SRC = '/assets/earth-firefly-strip.png';
+const FALL_FOLIAGE_STRIP_ICON_SRC = '/assets/earth-fall-foliage-strip.png';
 const HURRICANE_ICON_SRC = '/assets/earth-hurricane-icon.png';
 const FRUIT_APPLE_ICON_SRC = '/assets/fruit-apple.png';
 const FRUIT_PEAR_ICON_SRC = '/assets/fruit-pear.png';
@@ -245,9 +246,14 @@ function buildFireflyGlyph() {
 
 function buildFallFoliageGlyph() {
   const wrap = document.createElement('span');
-  wrap.className = 'hero-astro-glyph earth-foliage-glyph';
+  wrap.className = 'hero-astro-glyph hero-astro-glyph--img earth-foliage-glyph';
   wrap.setAttribute('aria-hidden', 'true');
-  wrap.textContent = '🍂';
+  const img = document.createElement('img');
+  img.src = FALL_FOLIAGE_STRIP_ICON_SRC;
+  img.alt = '';
+  img.decoding = 'async';
+  img.loading = 'lazy';
+  wrap.appendChild(img);
   return wrap;
 }
 
@@ -311,7 +317,7 @@ function earthItemTooltip(earthType, ev) {
       typeof ev?.quakeAsOfMd === 'string' && /^[0-9]{1,2}\/[0-9]{1,2}$/.test(ev.quakeAsOfMd.trim())
         ? ev.quakeAsOfMd.trim()
         : formatLocalQuakeMd();
-    return `Strongest nearby earthquake through ${md} (USGS): M>3 within 30 mi of the dashboard map point; opens USGS event (new tab)`;
+    return `Strongest California earthquake through ${md} (USGS): M>3 within 150 mi of Oakland, CA; opens USGS event (new tab)`;
   }
   if (t === 'kilauea_volcano') {
     return 'Kīlauea (Hawaiʻi): HVO alert level, eruption episode / fountain height when erupting; opens USGS volcano update (new tab)';
@@ -335,7 +341,7 @@ function earthItemTooltip(earthType, ev) {
     return "Lightning-bug season at secondary ZIP: strip from 7 days before start through season end; before start shows start + peak dates, after start shows peak + until end; Farmers' Almanac reference (new tab)";
   }
   if (t === 'fall_foliage_season') {
-    return 'Fall leaf-color season at Settings secondary ZIP: USA-NPN MODIS LSP Mid Greendown median; active 21 days before start, peak, or end; opens Status of Autumn (new tab)';
+    return 'Fall leaf-color season at ZIP 24066: USA-NPN MODIS LSP Mid Greendown median; active 21 days before start, peak, or end; opens Status of Autumn (new tab)';
   }
   if (t === 'atlantic_cyclone_land_impact') {
     return 'Atlantic Category 1+ cyclone row shown when NHC advisory indicates projected land impact; detail names forecasted landfall location when parsed from advisory text.';
@@ -454,7 +460,7 @@ export function mountEarthStrip(container) {
     const md = typeof quakeAsOfMd === 'string' && quakeAsOfMd ? quakeAsOfMd : formatLocalQuakeMd();
     container.setAttribute(
       'aria-label',
-      `Earth events: USA-NPN spring when active, Diablo-area tarantulas, Oakland salamander heuristic, monarch migration, salmon seasons, wild edible / foraging notes, nasturtium bloom, lightning bugs at secondary ZIP (7-day heads-up before start), fall foliage at secondary ZIP (21-day heads-up), Atlantic Category 1+ storms with forecasted landfall location when parsed from NHC advisories, nearby earthquake through ${md} when strongest is M>3 within 30 mi, Kīlauea eruption or nearby quake when active, GOES GLM strongest flash and optional Sprite-class proxy row when a tier match is stored (~200 mi, 7-day retention)`,
+      `Earth events: USA-NPN spring when active, Diablo-area tarantulas, Oakland salamander heuristic, monarch migration, salmon seasons, wild edible / foraging notes, nasturtium bloom, lightning bugs at secondary ZIP (7-day heads-up before start), fall foliage at ZIP 24066, Atlantic Category 1+ storms with forecasted landfall location when parsed from NHC advisories, California earthquake through ${md} when strongest is M>3 within 150 mi of Oakland, Kīlauea eruption or nearby quake when active, GOES GLM strongest flash and optional Sprite-class proxy row when a tier match is stored (~200 mi, 7-day retention)`,
     );
   }
 

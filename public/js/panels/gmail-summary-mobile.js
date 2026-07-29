@@ -633,7 +633,7 @@ export function mountGmailSummaryMobile(root) {
     });
 
     const primary = Array.isArray(item.sources) && item.sources.length ? item.sources[0] : null;
-    const webUrl = gmailWebMessageUrl(primary) || String(item.replyUrl || '').trim();
+    const webUrl = String(item.replyUrl || '').trim() || gmailWebMessageUrl(primary);
     const mailtoUrl = !webUrl ? gmailMailtoFallbackUrl(primary) : '';
     const openHref = webUrl || mailtoUrl;
 

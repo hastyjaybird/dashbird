@@ -110,23 +110,123 @@ function gmailCacheFresh(cache, fingerprint, env = process.env) {
 // keyword, sender not a platform domain) but carry a platform link in the body.
 // Downstream parsing + enrichment still gate what becomes an event; far-future
 // dated invites are kept (scrape-ahead no longer drops months-out mail).
+//
+// Gmail X-GM-RAW does NOT stem party→parties (confirmed). Keep explicit plurals.
 const PRODUCER_GMAIL_QUERY_FRAGMENT =
   ' OR from:(take3presents.com OR take3presents.us12.list-manage.com) OR subject:("room service" OR shindig OR "request for proposals" OR "on sale")';
 
-const DEFAULT_QUERY =
-  `newer_than:60d (filename:ics OR subject:(invite OR invitation OR RSVP OR event OR events OR meetup OR party OR gathering OR celebration OR workshop OR screening OR festival OR dates OR recap OR calendar OR "fall dates" OR "you're invited" OR "join us" OR "join me" OR "you're going" OR going OR attend OR attendance OR hosting OR ticket OR tickets OR "get tickets" OR register OR registration OR "save the date" OR "add to calendar" OR "mark your calendar" OR "reserve your spot" OR "happening" OR "request for proposals" OR announcement OR "on sale" OR "early bird") OR from:(partiful.com OR secretparty.io OR lu.ma OR eventbrite.com OR meetup.com OR facebookmail.com OR metamail.com OR facebook.com OR posh.vip OR dice.fm OR ra.co OR withfriends.co OR ticketleap.com OR splashthat.com OR take3presents.com OR take3presents.us12.list-manage.com) OR "luma.com" OR "lu.ma" OR "eventbrite.com" OR "partiful.com" OR "secretparty.io" OR "meetup.com")${PRODUCER_GMAIL_QUERY_FRAGMENT}`;
+/** Subject tokens for DEFAULT_QUERY — exported so validations can assert coverage. */
+export const GMAIL_EVENTS_SUBJECT_TERMS = [
+  'invite',
+  'invitation',
+  'RSVP',
+  'event',
+  'events',
+  'meetup',
+  'party',
+  'parties',
+  'gathering',
+  'gatherings',
+  'celebration',
+  'celebrations',
+  'workshop',
+  'workshops',
+  'screening',
+  'screenings',
+  'festival',
+  'festivals',
+  'dates',
+  'recap',
+  'calendar',
+  '"fall dates"',
+  '"you\'re invited"',
+  '"join us"',
+  '"join me"',
+  '"you\'re going"',
+  'going',
+  'attend',
+  'attendance',
+  'hosting',
+  'ticket',
+  'tickets',
+  '"get tickets"',
+  'register',
+  'registration',
+  '"save the date"',
+  '"add to calendar"',
+  '"mark your calendar"',
+  '"reserve your spot"',
+  '"happening"',
+  '"request for proposals"',
+  'announcement',
+  '"on sale"',
+  '"early bird"',
+  '"pool party"',
+  '"pool parties"',
+  'potluck',
+  'potlucks',
+];
+
+/** from: hosts for DEFAULT_QUERY. */
+export const GMAIL_EVENTS_FROM_HOSTS = [
+  'partiful.com',
+  'secretparty.io',
+  'lu.ma',
+  'eventbrite.com',
+  'meetup.com',
+  'facebookmail.com',
+  'metamail.com',
+  'facebook.com',
+  'posh.vip',
+  'dice.fm',
+  'ra.co',
+  'withfriends.co',
+  'ticketleap.com',
+  'splashthat.com',
+  'take3presents.com',
+  'take3presents.us12.list-manage.com',
+  'bonobonetwork.com',
+  'bonobonetwork.us11.list-manage.com',
+  'plra.io',
+];
+
+/** Body free-text terms for DEFAULT_QUERY (quoted hostnames). */
+export const GMAIL_EVENTS_BODY_TERMS = [
+  '"luma.com"',
+  '"lu.ma"',
+  '"eventbrite.com"',
+  '"partiful.com"',
+  '"secretparty.io"',
+  '"meetup.com"',
+  '"bonobonetwork.com"',
+  '"plra.io"',
+  '"wannaketchup.com"',
+];
+
+/**
+ * @returns {string}
+ */
+export function buildDefaultGmailEventsQuery() {
+  const subject = GMAIL_EVENTS_SUBJECT_TERMS.join(' OR ');
+  const from = GMAIL_EVENTS_FROM_HOSTS.join(' OR ');
+  const body = GMAIL_EVENTS_BODY_TERMS.join(' OR ');
+  return `newer_than:60d (filename:ics OR subject:(${subject}) OR from:(${from}) OR ${body})${PRODUCER_GMAIL_QUERY_FRAGMENT}`;
+}
+
+const DEFAULT_QUERY = buildDefaultGmailEventsQuery();
 
 /** Subject/body cues that a mail is announcing a dated gathering (not only RSVP platforms). */
 const INVITEISH_RE =
-  /\b(invite|invitation|rsvp|you're invited|you are invited|join us|meetup|event|events|party|festival|dates|recap|calendar|request for proposals|on sale|announcement|early bird|save the date|mark your calendar|add to calendar|tickets)\b/i;
+  /\b(invite|invitation|rsvp|you[''\u2019]re invited|you are invited|join us|meetup|event|events|party|parties|festival|festivals|gathering|gatherings|dates|recap|calendar|request for proposals|on sale|announcement|early bird|save the date|mark your calendar|add to calendar|tickets|pool part(?:y|ies)|potluck|potlucks)\b/i;
 
 /**
  * Public event / invite links. Facebook: /events/{id}, page hosted tabs, group events.
  * Secret Party events are usually https://<slug>.secretparty.io/ (subdomain), not path URLs.
  * Eventbrite: include clicks.* / www.* subdomains (ESP trackers + listing hosts).
+ * Bonobo / Plura / WannaKetchup: community + ticket hosts that land in Intake Gmail.
  */
 const PLATFORM_HOST_RE =
-  /(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?secretparty\.io(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?(?:partiful\.com|lu\.ma|luma\.com|eventbrite\.com|meetup\.com)(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:www\.)?facebook\.com\/(?:events\/[^\s"'<>)\]]+|[^/\s"'<>)\]]+\/(?:upcoming_hosted_events|past_hosted_events|events)|groups\/[^/\s"'<>)\]]+\/events)[^\s"'<>)\]]*|(?:https?:\/\/)?(?:www\.)?take3presents\.com(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?mailchi\.mp\/take3presents(?:\/[^\s"'<>)\]]*)?/gi;
+  /(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?secretparty\.io(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?(?:partiful\.com|lu\.ma|luma\.com|eventbrite\.com|meetup\.com)(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:www\.)?facebook\.com\/(?:events\/[^\s"'<>)\]]+|[^/\s"'<>)\]]+\/(?:upcoming_hosted_events|past_hosted_events|events)|groups\/[^/\s"'<>)\]]+\/events)[^\s"'<>)\]]*|(?:https?:\/\/)?(?:www\.)?take3presents\.com(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?mailchi\.mp\/(?:take3presents|bonobonetwork)(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:(?:www|community)\.)?bonobonetwork\.com(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?plra\.io(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:www\.)?wannaketchup\.com(?:\/[^\s"'<>)\]]*)?/gi;
 
 const GMAIL_FETCH_UA =
   'Mozilla/5.0 (compatible; DashbirdEvents/1.0; +https://github.com/local/dashbird)';
@@ -625,8 +725,19 @@ export function platformUrlScore(href) {
     if (host === 'take3presents.com' || host.endsWith('.take3presents.com')) {
       return path.length > 1 ? 85 : 70;
     }
-    if (host === 'mailchi.mp' && /\/take3presents\//i.test(path)) {
+    if (host === 'mailchi.mp' && /\/(?:take3presents|bonobonetwork)\//i.test(path)) {
       return 75;
+    }
+    if (host === 'plra.io' || host.endsWith('.plra.io')) {
+      return path.length > 1 ? 95 : 40;
+    }
+    if (host === 'wannaketchup.com' || host.endsWith('.wannaketchup.com')) {
+      return path.length > 1 ? 90 : 30;
+    }
+    if (host === 'bonobonetwork.com' || host.endsWith('.bonobonetwork.com')) {
+      if (path === '/' || path === '' || path === '/apply') return 15;
+      if (path.startsWith('/events')) return 55;
+      return 40;
     }
     return 10;
   } catch {
@@ -828,6 +939,10 @@ export function sourceFromPlatformUrls(urls, fallback = 'gmail') {
       if (host === 'facebook.com' || host.endsWith('.facebook.com')) return 'facebook';
       if (host === 'take3presents.com' || host.endsWith('.take3presents.com')) return 'take3presents';
       if (host === 'mailchi.mp' && /\/take3presents\//i.test(href)) return 'take3presents';
+      if (host === 'mailchi.mp' && /\/bonobonetwork\//i.test(href)) return 'bonobo';
+      if (host === 'bonobonetwork.com' || host.endsWith('.bonobonetwork.com')) return 'bonobo';
+      if (host === 'plra.io' || host.endsWith('.plra.io')) return 'plura';
+      if (host === 'wannaketchup.com' || host.endsWith('.wannaketchup.com')) return 'wannaketchup';
     } catch {
       /* ignore */
     }
@@ -958,6 +1073,208 @@ export function ymdAtLocalNoonIso(ymd, timeZone = 'America/Los_Angeles') {
 }
 
 /**
+ * YYYY-MM-DD + local clock → UTC ISO (iterative Intl resolve, same as noon helper).
+ * @param {string} ymd
+ * @param {number} hours
+ * @param {number} minutes
+ * @param {string} [timeZone]
+ * @returns {string | null}
+ */
+export function ymdAtLocalTimeIso(ymd, hours, minutes, timeZone = 'America/Los_Angeles') {
+  const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const hh = Math.min(23, Math.max(0, Math.trunc(Number(hours) || 0)));
+  const mm = Math.min(59, Math.max(0, Math.trunc(Number(minutes) || 0)));
+  let ms = Date.UTC(y, mo - 1, d, hh + 7, mm, 0);
+  for (let i = 0; i < 48; i += 1) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(ms));
+    const got = Object.fromEntries(
+      parts.filter((p) => p.type !== 'literal').map((p) => [p.type, Number(p.value)]),
+    );
+    if (
+      got.year === y
+      && got.month === mo
+      && got.day === d
+      && got.hour === hh
+      && got.minute === mm
+    ) {
+      return new Date(ms).toISOString();
+    }
+    const dayDelta =
+      Date.UTC(y, mo - 1, d) - Date.UTC(got.year, got.month - 1, got.day);
+    const minuteDelta =
+      hh * 60 + mm - (got.hour * 60 + got.minute) + dayDelta / 60000;
+    if (!Number.isFinite(minuteDelta) || minuteDelta === 0) break;
+    ms += minuteDelta * 60 * 1000;
+  }
+  return ymdAtLocalNoonIso(ymd, timeZone);
+}
+
+/**
+ * @param {string} raw
+ * @returns {{ hours: number, minutes: number } | null}
+ */
+export function parseClockToken(raw) {
+  const m = String(raw || '')
+    .trim()
+    .match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
+  if (!m) return null;
+  let hours = Number(m[1]);
+  const minutes = Number(m[2] || 0);
+  const ap = m[3].toLowerCase();
+  if (!Number.isFinite(hours) || hours < 1 || hours > 12 || minutes > 59) return null;
+  if (ap === 'pm' && hours < 12) hours += 12;
+  if (ap === 'am' && hours === 12) hours = 0;
+  return { hours, minutes };
+}
+
+const WEEKDAY_NAME_RE =
+  '(?:Mon(?:day)?|Tue(?:s(?:day)?)?|Wed(?:nesday)?|Thu(?:rs(?:day)?)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)';
+
+/**
+ * Guess event title for a dated block from preceding newsletter lines.
+ * @param {string} before
+ * @returns {string | null}
+ */
+function guessDatedBlockTitle(before) {
+  const lines = String(before || '')
+    .split(/\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    let line = lines[i];
+    if (/^-{3,}$/.test(line)) continue;
+    if (/^\*+$/.test(line)) continue;
+    line = line.replace(/^\*\*\s*/, '').replace(/\s*\*\*$/, '').trim();
+    if (!line) continue;
+    if (/^you[''\u2019]?re invited!?$/i.test(line)) continue;
+    if (/^slide down/i.test(line)) continue;
+    if (/flyer template/i.test(line)) continue;
+    if (/event calendar/i.test(line)) continue;
+    if (/^https?:\/\//i.test(line)) continue;
+    if (
+      new RegExp(`^(?:${WEEKDAY_NAME_RE},\\s+)?${MONTH_NAME_RE}`, 'i').test(line)
+      && /\d/.test(line)
+    ) {
+      continue;
+    }
+    if (line.length < 3 || line.length > 180) continue;
+    return line;
+  }
+  return null;
+}
+
+/**
+ * Newsletter digests often list several titled parties with their own date lines,
+ * e.g. "** Afternoon Delight…\\n** Saturday, August 8, 12pm-8pm | Oakland".
+ * @param {string} text
+ * @param {Date | number} [now]
+ * @param {string} [timeZone]
+ * @returns {Array<{
+ *   title: string | null,
+ *   start: string | null,
+ *   end: string | null,
+ *   city: string | null,
+ *   venue: string | null,
+ *   index: number,
+ *   matchStart: number,
+ *   matchEnd: number,
+ * }>}
+ */
+export function extractDatedInviteBlocks(
+  text,
+  now = Date.now(),
+  timeZone = 'America/Los_Angeles',
+) {
+  const raw = String(text || '');
+  const dateLineRe = new RegExp(
+    `(?:^|\\n)\\s*(?:\\*\\*\\s*)?(?:${WEEKDAY_NAME_RE},\\s+)?(${MONTH_NAME_RE})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,\\s*(20\\d{2}))?,\\s*(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm))(?:\\s*[-–]\\s*(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)))?(?:\\s*[|·]\\s*([^\\n*]{2,80}))?`,
+    'gi',
+  );
+  /** @type {ReturnType<typeof extractDatedInviteBlocks>} */
+  const blocks = [];
+  let m = dateLineRe.exec(raw);
+  while (m) {
+    const monthIndex = monthIndexFromName(m[1]);
+    const day = Number(m[2]);
+    const year = m[3] ? Number(m[3]) : upcomingYearForMonthDay(monthIndex, day, now);
+    const startClock = parseClockToken(m[4]);
+    const endClock = m[5] ? parseClockToken(m[5]) : null;
+    const place = m[6] ? String(m[6]).replace(/\s+/g, ' ').trim() : '';
+    if (monthIndex == null || !Number.isFinite(year) || !startClock) {
+      m = dateLineRe.exec(raw);
+      continue;
+    }
+    const ymd = ymdFromParts(year, monthIndex, day);
+    if (!ymd) {
+      m = dateLineRe.exec(raw);
+      continue;
+    }
+    const start = ymdAtLocalTimeIso(ymd, startClock.hours, startClock.minutes, timeZone);
+    const end = endClock
+      ? ymdAtLocalTimeIso(ymd, endClock.hours, endClock.minutes, timeZone)
+      : null;
+    let city = null;
+    let venue = null;
+    if (place) {
+      const parts = place
+        .split(',')
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (parts.length >= 2) {
+        city = parts[parts.length - 1];
+        venue = parts.slice(0, -1).join(', ');
+      } else {
+        city = parts[0];
+      }
+    }
+    blocks.push({
+      title: guessDatedBlockTitle(raw.slice(0, m.index)),
+      start,
+      end,
+      city,
+      venue,
+      index: blocks.length,
+      matchStart: m.index,
+      matchEnd: m.index + m[0].length,
+    });
+    m = dateLineRe.exec(raw);
+  }
+  return blocks;
+}
+
+/**
+ * Thin marketing homepages that must not collapse distinct multi-event rows on dedupe.
+ * @param {string} href
+ * @returns {boolean}
+ */
+export function isThinMarketingEventUrl(href) {
+  try {
+    const u = new URL(href);
+    const host = u.hostname.replace(/^www\./, '').toLowerCase();
+    const path = u.pathname || '/';
+    if (host === 'bonobonetwork.com' || host.endsWith('.bonobonetwork.com')) {
+      return path === '/' || path === '' || path === '/apply' || path === '/events';
+    }
+    if (host === 'mailchi.mp') return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * When mail says "October 22" with no year, pick the next upcoming occurrence
  * (today or later this calendar year, else next year) in America/Los_Angeles.
  * @param {number} monthIndex 0–11
@@ -1042,33 +1359,28 @@ export function guessEventStartIso(blob, now = Date.now()) {
     const ms = Date.parse(`${iso[1]}T${hh}:${mm}:00`);
     if (Number.isFinite(ms)) return new Date(ms).toISOString();
   }
-  // Month Day, Year
+  // Month Day, Year (+ optional "at 6pm" / "6:30pm")
   const mdy = text.match(
-    /\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+20\d{2})(?:\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?))?/i,
+    /\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+20\d{2})(?:\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)))?/i,
   );
   if (mdy) {
-    if (!mdy[2]) {
-      const parsed = Date.parse(mdy[1]);
-      if (Number.isFinite(parsed)) {
-        const ymd = new Date(parsed).toISOString().slice(0, 10);
-        // Date.parse of "Oct 22, 2026" is UTC midnight — prefer local noon
-        const monthIndex = monthIndexFromName(mdy[1].match(/^[A-Za-z]+/)?.[0] || '');
-        const dayMatch = mdy[1].match(/(\d{1,2})/);
-        const yearMatch = mdy[1].match(/(20\d{2})/);
-        if (monthIndex != null && dayMatch && yearMatch) {
-          const ymdLocal = ymdFromParts(Number(yearMatch[1]), monthIndex, Number(dayMatch[1]));
-          if (ymdLocal) return ymdAtLocalNoonIso(ymdLocal);
-        }
-        return ymdAtLocalNoonIso(ymd);
-      }
+    const monthIndex = monthIndexFromName(mdy[1].match(/^[A-Za-z]+/)?.[0] || '');
+    const dayMatch = mdy[1].match(/(\d{1,2})/);
+    const yearMatch = mdy[1].match(/(20\d{2})/);
+    const ymdLocal =
+      monthIndex != null && dayMatch && yearMatch
+        ? ymdFromParts(Number(yearMatch[1]), monthIndex, Number(dayMatch[1]))
+        : null;
+    if (ymdLocal) {
+      const clock = mdy[2] ? parseClockToken(mdy[2]) : null;
+      if (clock) return ymdAtLocalTimeIso(ymdLocal, clock.hours, clock.minutes);
+      return ymdAtLocalNoonIso(ymdLocal);
     }
-    const ms = Date.parse(mdy[1] + (mdy[2] ? ` ${mdy[2]}` : ''));
-    if (Number.isFinite(ms)) return new Date(ms).toISOString();
   }
-  // Yearless "October 22" / "Oct 22nd" → next upcoming
+  // Yearless "October 22" / "Oct 22nd" / "August 8, 12pm" → next upcoming
   const md = text.match(
     new RegExp(
-      `\\b(${MONTH_NAME_RE})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?!\\s*[-–]\\s*\\d)(?!,?\\s*20\\d{2})`,
+      `\\b(${MONTH_NAME_RE})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?!\\s*[-–]\\s*\\d)(?!,?\\s*20\\d{2})(?:,\\s*|\\s+(?:at\\s+)?)?(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm))?`,
       'i',
     ),
   );
@@ -1077,7 +1389,11 @@ export function guessEventStartIso(blob, now = Date.now()) {
     const day = Number(md[2]);
     const year = upcomingYearForMonthDay(monthIndex, day, now);
     const ymd = year != null ? ymdFromParts(year, monthIndex, day) : null;
-    if (ymd) return ymdAtLocalNoonIso(ymd);
+    if (ymd) {
+      const clock = md[3] ? parseClockToken(md[3]) : null;
+      if (clock) return ymdAtLocalTimeIso(ymd, clock.hours, clock.minutes);
+      return ymdAtLocalNoonIso(ymd);
+    }
   }
   return null;
 }
@@ -1189,19 +1505,69 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
 
   if (!events.length) {
     const blob = `${subject}\n${textBlob}`;
+    const blocks = extractDatedInviteBlocks(blob, Date.now(), defaultTz);
     const range = parseEventDateRange(blob);
     const start = guessEventStartIso(blob) || null;
     const startOk = start && Number.isFinite(Date.parse(start)) ? start : null;
     const endOk = range?.eventEnd
       ? ymdAtLocalNoonIso(range.eventEnd)
       : null;
-    // Platform link, invite-ish subject/body, or a parseable event date range.
+    // Platform link, invite-ish subject/body, dated blocks, or a parseable date.
     const inviteish =
       urls.length > 0
       || INVITEISH_RE.test(subject)
       || INVITEISH_RE.test(textBlob)
-      || Boolean(startOk);
-    if (inviteish) {
+      || Boolean(startOk)
+      || blocks.length > 0;
+    if (inviteish && blocks.length >= 1) {
+      const cleanedSubject = subject.replace(/^(re|fwd):\s*/i, '').trim() || subject;
+      const inboxFallback = `https://mail.google.com/mail/u/0/#inbox/${id}`;
+      for (const block of blocks) {
+        const nextStart = blocks[block.index + 1]?.matchStart;
+        const sliceEnd =
+          typeof nextStart === 'number' ? nextStart : Math.min(textBlob.length, block.matchEnd + 1200);
+        const nearUrls = extractPlatformUrls(
+          textBlob.slice(Math.max(0, block.matchStart), sliceEnd),
+        );
+        const blockUrls = nearUrls.length ? nearUrls : urls;
+        let url = pickBestPlatformUrl(blockUrls, inboxFallback);
+        if (isThinMarketingEventUrl(url) && blocks.length > 1) {
+          url = `${inboxFallback}#block-${block.index}`;
+        }
+        const platformSource = sourceFromPlatformUrls(
+          blockUrls.length ? blockUrls : [url],
+          urls.length ? sourceFromPlatformUrls(urls) : 'gmail',
+        );
+        const slugTitle = platformSource === 'secretparty' ? secretPartyTitleFromUrl(url) : null;
+        events.push({
+          id: blocks.length > 1 ? `${idPrefix}:block:${block.index}` : idPrefix,
+          title:
+            slugTitle && /^secret party$/i.test(cleanedSubject)
+              ? slugTitle
+              : (block.title || cleanedSubject),
+          start: block.start || startOk,
+          end: block.end || endOk,
+          venue: block.venue,
+          location: block.venue,
+          city: block.city,
+          url,
+          source: platformSource === 'gmail' ? 'gmail' : platformSource,
+          raw: {
+            messageId: id,
+            threadId,
+            subject,
+            from,
+            date: dateHdr,
+            mailbox: mailbox || null,
+            via: blocks.length > 1 ? 'dated_blocks' : (urls.length ? 'platform_link' : 'subject_heuristic'),
+            platform: platformSource,
+            urls: blockUrls.length ? blockUrls : urls,
+            snippet: String(message?.snippet || '').slice(0, 240),
+            blockIndex: block.index,
+          },
+        });
+      }
+    } else if (inviteish) {
       const url =
         pickBestPlatformUrl(urls, `https://mail.google.com/mail/u/0/#inbox/${id}`);
       const platformSource = sourceFromPlatformUrls(urls.length ? urls : [url]);
@@ -1216,8 +1582,9 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
         );
         return idx >= 0 ? textBlob.slice(idx) : textBlob;
       })().replace(/\s+/g, ' ');
+      // Require a capitalised place name — avoids "at all of our upcoming gatherings".
       const atPlace = placeHay.match(
-        /\bat\s+(.{5,120}?)(?:\.|This will be|,?\s*where we)/i,
+        /\bat\s+([A-Z][^.]{3,120}?)(?:\.|This will be|,?\s*where we)/,
       );
       let venue = null;
       let city = null;
@@ -1745,7 +2112,11 @@ export async function probeGmailEventsIntake(env = process.env) {
  * @param {{ maxMessages?: number }} [opts]
  */
 export async function fetchGmailEventAnnouncementsFor(email, env = process.env, opts = {}) {
-  const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 50, 1), 100);
+  const envMax = Number(env.GMAIL_EVENTS_MAX_MESSAGES);
+  const maxMessages = Math.min(
+    Math.max(Number(opts.maxMessages) || (Number.isFinite(envMax) ? envMax : 100), 1),
+    200,
+  );
   const address = normalizeGmailAddress(email);
   const appPassword = gmailAppPasswordFor(address, env);
   if (appPassword) {
@@ -1935,13 +2306,22 @@ export async function fetchGmailEventAnnouncements(env = process.env, opts = {})
       return via === 'ics' || hasPlatformLink;
     });
 
-    // Dedupe by platform URL when present, else by id
+    // Dedupe by platform URL when present, else by id.
+    // Multi-event digests (via dated_blocks) and thin marketing homepages keep id keys
+    // so distinct parties in one email are not collapsed onto one catalog URL.
     const seen = new Set();
     /** @type {typeof events} */
     const deduped = [];
     for (const ev of windowed) {
-      const urlKey = ev.url && !ev.url.includes('mail.google.com')
-        ? `url:${String(ev.url).split('#')[0].toLowerCase()}`
+      const via = String(ev?.raw?.via || '');
+      const href = String(ev.url || '');
+      const useUrlKey =
+        href
+        && !href.includes('mail.google.com')
+        && via !== 'dated_blocks'
+        && !isThinMarketingEventUrl(href);
+      const urlKey = useUrlKey
+        ? `url:${href.split('#')[0].toLowerCase()}`
         : `id:${ev.id}`;
       if (seen.has(urlKey)) continue;
       seen.add(urlKey);

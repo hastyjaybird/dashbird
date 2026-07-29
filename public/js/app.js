@@ -238,7 +238,19 @@ async function mainMobile() {
     gmailRoot: document.getElementById('mount-mobile-gmail'),
   });
 
-  /* Still paint zip / TZ when config is available (next to the view icons). */
+  /* Active-state chips (aircraft / volcano / etc.) must mount even if config
+     fetch fails — they use dedicated APIs + server watch fallbacks. */
+  void Promise.all([
+    import('./lib/mobile-aircraft-header.js'),
+    import('./lib/mobile-condition-alerts.js'),
+  ])
+    .then(([{ mountMobileAircraftHeader }, { mountMobileConditionAlerts }]) => {
+      mountMobileAircraftHeader(document.getElementById('mount-topbar-aircraft'));
+      mountMobileConditionAlerts(document.getElementById('mount-topbar-conditions'));
+    })
+    .catch((e) => console.error('Mobile active-state chips failed:', e));
+
+  /* Weather + zip / TZ still need config for device location seeding. */
   void loadConfigPreferLive()
     .then(async (config) => {
       try {
@@ -248,12 +260,8 @@ async function mainMobile() {
           if (place) renderTopbarContext(topbarEl, place);
         });
         subscribeDevicePlace((place) => renderTopbarContext(topbarEl, place));
-        const { mountMobileAircraftHeader } = await import('./lib/mobile-aircraft-header.js');
-        mountMobileAircraftHeader(document.getElementById('mount-topbar-aircraft'));
         const { mountMobileWeatherHeader } = await import('./lib/mobile-weather-header.js');
         mountMobileWeatherHeader(document.getElementById('mount-topbar-weather'));
-        const { mountMobileConditionAlerts } = await import('./lib/mobile-condition-alerts.js');
-        mountMobileConditionAlerts(document.getElementById('mount-topbar-conditions'));
       } catch (e) {
         console.error('Mobile location context failed:', e);
       }

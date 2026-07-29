@@ -146,7 +146,7 @@ export const EARTH_EVENT_MANIFEST = [
   },
   {
     id: 'fall_foliage_season',
-    label: 'Fall foliage (2nd ZIP)',
+    label: 'Fall foliage (ZIP 24066)',
     category: 'Earth',
     dataSource:
       'USA-NPN MODIS LSP Mid Greendown median (inca WCS); active 21d before start / peak / end',
@@ -155,7 +155,7 @@ export const EARTH_EVENT_MANIFEST = [
     id: 'usgs_quake_week',
     label: 'Earthquake (week)',
     category: 'Earth',
-    dataSource: 'USGS FDSNWS · strongest M>3 within 30 mi (7 days)',
+    dataSource: 'USGS FDSNWS · strongest CA M>3 within 150 mi of Oakland (7 days)',
   },
   {
     id: 'kilauea_volcano',

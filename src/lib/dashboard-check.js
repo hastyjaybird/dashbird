@@ -372,14 +372,14 @@ export async function runDashboardChecks() {
   ) {
     push(
       'dashboard_earthquake_week',
-      'Earthquake week (/api/dashboard-earthquake-week · USGS largest M>3 within 30 mi)',
+      'Earthquake week (/api/dashboard-earthquake-week · USGS largest CA M>3 within 150 mi of Oakland)',
       true,
     );
   } else {
     const msg = quakeWeek.json?.error || quakeWeek.err || `HTTP ${quakeWeek.status || 'error'}`;
     push(
       'dashboard_earthquake_week',
-      'Earthquake week (/api/dashboard-earthquake-week · USGS largest M>3 within 30 mi)',
+      'Earthquake week (/api/dashboard-earthquake-week · USGS largest CA M>3 within 150 mi of Oakland)',
       false,
       String(msg).slice(0, 240),
     );

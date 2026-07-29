@@ -106,6 +106,13 @@ Official REST search needs a token and is optional later.
 All-school calendar: https://themultiverse.school/calendar  
 Public ICS (from the page embed): Google Calendar `basic.ics` for the Multiverse School calendar. Module: `events-finder-multiverse.js` → `data/multiverse-events-cache.json`.
 
+## dorkbotSF (public homepage — wired)
+
+Homepage (next meetup): https://dorkbotsf.org/  
+Archive deep links: `https://dorkbotsf.org/archive/YYYYMM/` (e.g. https://dorkbotsf.org/archive/202606/).  
+Module: `events-finder-dorkbotsf.js` → `data/dorkbotsf-events-cache.json`.  
+Note: `/calendar.html` embeds a Google Calendar that is **not** publicly ICS-exportable (404); HTML is the source of truth. Facebook group pin remains complementary.
+
 ## Other orgs (not wired yet)
 
 - Noisebridge — name only; add site/calendar/Meetup URL when ready.

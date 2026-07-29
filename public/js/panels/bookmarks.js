@@ -39,6 +39,8 @@ const HOST_TILE = {
   'rocompliance.maxetaenergy.com': '/assets/tile-maxeta.png',
   'found.com': '/assets/tile-found.png',
   'fetlife.com': '/assets/tile-fetlife.png',
+  'secretparty.io': '/assets/tile-secretparty.png',
+  'www.secretparty.io': '/assets/tile-secretparty.png',
   'web.whatsapp.com': '/assets/tile-whatsapp.svg',
   'whatsapp.com': '/assets/tile-whatsapp.svg',
   'facebook.com': '/assets/tile-facebook.svg',
@@ -121,6 +123,7 @@ function iconSrc(row) {
   if (/^https?:\/\/(www\.)?keep\.google\.com/i.test(h)) return '/assets/tile-google-keep.png';
   if (isGoogleMessagesHttpUrl(h)) return '/assets/tile-google-messages.webp';
   if (/^https?:\/\/(www\.)?fetlife\.com/i.test(h)) return '/assets/tile-fetlife.png';
+  if (/^https?:\/\/([a-z0-9-]+\.)?secretparty\.io(\/|$)/i.test(h)) return '/assets/tile-secretparty.png';
   if (/^https?:\/\/(web\.)?whatsapp\.com/i.test(h)) return '/assets/tile-whatsapp.svg';
   if (/^https?:\/\/(www\.)?facebook\.com/i.test(h)) return '/assets/tile-facebook.svg';
   if (/^https?:\/\/my\.found\.com/i.test(h)) return '/assets/tile-found.png';

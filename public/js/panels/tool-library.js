@@ -530,6 +530,56 @@ function buildToolCard(card, tool) {
     }
   });
 
+  const payBtn = el('button');
+  payBtn.type = 'button';
+  payBtn.className = 'tool-library__card-pay';
+  if (tool.paying) payBtn.classList.add('tool-library__card-pay--on');
+  payBtn.setAttribute(
+    'aria-label',
+    tool.paying ? 'Not paying for this' : 'Mark as paying for this',
+  );
+  payBtn.title = tool.paying ? 'Paying for this — click to clear' : 'Mark as something you pay for';
+  payBtn.textContent = '$';
+  payBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (payBtn.disabled) return;
+    const next = !Boolean(tool.paying);
+    payBtn.disabled = true;
+    const root = card.closest('.tool-library');
+    const status = root?.querySelector('.tool-library__status');
+    try {
+      const r = await fetch(`/api/tool-library/tools/${encodeURIComponent(tool.id)}/paying`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paying: next }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false) {
+        throw new Error(data.error || `Could not update paying (HTTP ${r.status})`);
+      }
+      const saved = Boolean(data.tool?.paying ?? next);
+      tool.paying = saved;
+      const idx = tools.findIndex((t) => t.id === tool.id);
+      if (idx >= 0) tools[idx] = { ...tools[idx], paying: saved };
+      payBtn.classList.toggle('tool-library__card-pay--on', saved);
+      payBtn.title = saved ? 'Paying for this — click to clear' : 'Mark as something you pay for';
+      payBtn.setAttribute('aria-label', saved ? 'Not paying for this' : 'Mark as paying for this');
+      if (status?.textContent?.startsWith('Could not')) {
+        status.hidden = true;
+        status.textContent = '';
+      }
+      renderGrid(root);
+    } catch (err) {
+      if (status) {
+        status.hidden = false;
+        status.textContent = err?.message || 'Could not update paying';
+      }
+    } finally {
+      payBtn.disabled = false;
+    }
+  });
+
   const snap = el('div');
   snap.className = 'tool-library__card-snap';
   if (tool.snapshotUrl) {
@@ -625,7 +675,7 @@ function buildToolCard(card, tool) {
   });
   foot.append(editBtn, altBtn);
 
-  card.append(pick, favBtn, snap, logoRow, meta, ...(catRow ? [catRow] : []), blurb, foot);
+  card.append(pick, payBtn, favBtn, snap, logoRow, meta, ...(catRow ? [catRow] : []), blurb, foot);
   card.addEventListener('click', (e) => {
     if (e.target.closest('input, a, button, label, .tool-library__card-cats')) return;
     window.open(siteUrl, '_blank', 'noopener,noreferrer');
@@ -636,7 +686,13 @@ function renderGrid(root) {
   const grid = root.querySelector('.tool-library__grid');
   const empty = root.querySelector('.tool-library__empty');
   if (!grid) return;
-  const list = filteredTools(tools);
+  const list = filteredTools(tools).slice().sort((a, b) => {
+    const pay = Number(Boolean(b.paying)) - Number(Boolean(a.paying));
+    if (pay) return pay;
+    return String(a.name || '').localeCompare(String(b.name || ''), undefined, {
+      sensitivity: 'base',
+    });
+  });
   grid.replaceChildren();
   if (!list.length) {
     if (empty) {

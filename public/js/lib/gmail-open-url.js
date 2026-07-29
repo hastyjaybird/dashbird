@@ -1,18 +1,20 @@
 /**
  * Gmail web + native app deep links for Daily Summary "Open".
  *
- * A bare `mail.google.com/mail/u/?authuser=…#…` link loses its #fragment when
- * Google bounces through account selection (script redirect), stranding the
- * click on the inbox. Routing through accounts.google.com/AccountChooser with
- * the full target (fragment percent-encoded) inside `continue` survives that
- * bounce, so the deep link reaches the Gmail UI intact.
+ * Desktop: AccountChooser with the full target (fragment percent-encoded) inside
+ * `continue` so Google’s account bounce does not strip `#all/{threadId}` and
+ * strand the click on the inbox.
  *
- * Prefer the thread view (`#all/{threadId}`) so the email itself opens, then
- * rfc822msgid search, then hex `#all/` ids — IMAP decimal UIDs never work.
+ * Targeting (shared): hex thread → `#all/{threadId}` (open the message thread),
+ * then rfc822msgid search, then a distinct hex message id — IMAP decimal UIDs
+ * never work in the web UI or native deep links.
  *
  * Mobile handoff:
  * - iOS: googlegmail:// scheme (with web fallback if the app is missing)
- * - Android: intent:// into com.google.android.gm (browser_fallback_url)
+ * - Android: intent:// into com.google.android.gm using
+ *   `mail.google.com/mail/u/{email}/#all/{threadId}` (authuser= is ignored by
+ *   the app; AccountChooser URLs break inside intent://). browser_fallback_url
+ *   stays the desktop AccountChooser link.
  * - Last resort: web Gmail (AccountChooser), then mailto: compose when only a
  *   sender address is known (no message deep link).
  */
@@ -49,6 +51,11 @@ export function sanitizeGmailOpenSource(source) {
   if (!hexId(next.threadId)) next.threadId = '';
   if (!hexId(next.gmailId)) next.gmailId = '';
   if (!hexId(next.messageId)) next.messageId = '';
+  // IMAP OBJECTID sometimes collapses emailId to the thread id — useless for
+  // message-level deep links.
+  if (next.gmailId && next.threadId && next.gmailId === next.threadId) {
+    next.gmailId = '';
+  }
   return next;
 }
 
@@ -56,7 +63,7 @@ export function sanitizeGmailOpenSource(source) {
  * @param {GmailOpenSource | null | undefined} source
  * @returns {string} Gmail UI hash (without leading '#'), or ''.
  */
-function gmailTargetHash(source) {
+export function gmailTargetHash(source) {
   const threadId = hexId(source?.threadId);
   if (threadId) return `all/${threadId}`;
 
@@ -66,10 +73,10 @@ function gmailTargetHash(source) {
   if (rfc) return `search/${encodeURIComponent(`rfc822msgid:${rfc}`)}`;
 
   const gmailId = hexId(source?.gmailId);
-  if (gmailId) return `all/${gmailId}`;
+  if (gmailId && gmailId !== threadId) return `all/${gmailId}`;
 
   const apiId = hexId(source?.messageId);
-  if (apiId) return `all/${apiId}`;
+  if (apiId && apiId !== threadId) return `all/${apiId}`;
 
   const subject = String(source?.subject || '').trim();
   if (subject) return `search/${encodeURIComponent(`subject:${subject}`)}`;
@@ -80,12 +87,14 @@ function gmailTargetHash(source) {
 }
 
 /**
+ * Desktop / web fallback: AccountChooser → mail.google.com thread (or search).
  * @param {GmailOpenSource | null | undefined} source
  */
 export function gmailWebMessageUrl(source) {
-  if (!source?.email) return '';
-  const email = String(source.email).trim().toLowerCase();
-  const hash = gmailTargetHash(source);
+  const clean = sanitizeGmailOpenSource(source);
+  if (!clean?.email) return '';
+  const email = String(clean.email).trim().toLowerCase();
+  const hash = gmailTargetHash(clean);
   if (!hash) return '';
   const target = `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(email)}#${hash}`;
   return (
@@ -97,26 +106,27 @@ export function gmailWebMessageUrl(source) {
 
 /**
  * iOS Gmail app deep link (the googlegmail:// scheme is iOS-only).
+ * Prefers conversation-by-thread, then rfc822 search, then message id.
  * @param {GmailOpenSource | null | undefined} source
  * @returns {string}
  */
-function gmailNativeAppUrl(source) {
-  // IMAP decimal UIDs are not routable thread ids — hex only.
-  const threadId = hexId(source?.threadId);
+export function gmailNativeAppUrl(source) {
+  const clean = sanitizeGmailOpenSource(source);
+  const threadId = hexId(clean?.threadId);
   if (threadId) {
     return `googlegmail:///cv?th=${encodeURIComponent(threadId)}`;
   }
-  const rfc = String(source?.rfc822MessageId || '')
+  const rfc = String(clean?.rfc822MessageId || '')
     .trim()
     .replace(/^<|>$/g, '');
   if (rfc) {
     return `googlegmail:///search?q=${encodeURIComponent(`rfc822msgid:${rfc}`)}`;
   }
-  const msgId = hexId(source?.gmailId) || hexId(source?.messageId);
+  const msgId = hexId(clean?.gmailId) || hexId(clean?.messageId);
   if (msgId) {
     return `googlegmail:///cv?id=${encodeURIComponent(msgId)}`;
   }
-  const subject = String(source?.subject || '').trim();
+  const subject = String(clean?.subject || '').trim();
   if (subject) {
     return `googlegmail:///search?q=${encodeURIComponent(`subject:${subject}`)}`;
   }
@@ -124,17 +134,20 @@ function gmailNativeAppUrl(source) {
 }
 
 /**
- * Direct mail.google.com deep link (no AccountChooser hop).
- * Used for Android intent:// handoff — the Gmail app already owns auth.
+ * Direct mail.google.com deep link for Android intent:// handoff.
+ * Uses `/mail/u/{email}/#…` so the Gmail app can pick the mailbox; `authuser=`
+ * is ignored inside the native app.
  *
  * @param {GmailOpenSource | null | undefined} source
  */
-function gmailDirectWebMessageUrl(source) {
-  if (!source?.email) return '';
-  const email = String(source.email).trim().toLowerCase();
-  const hash = gmailTargetHash(source);
+export function gmailDirectWebMessageUrl(source) {
+  const clean = sanitizeGmailOpenSource(source);
+  if (!clean?.email) return '';
+  const email = String(clean.email).trim().toLowerCase();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return '';
+  const hash = gmailTargetHash(clean);
   if (!hash) return '';
-  return `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(email)}#${hash}`;
+  return `https://mail.google.com/mail/u/${email}/#${hash}`;
 }
 
 /**
@@ -144,11 +157,11 @@ function gmailDirectWebMessageUrl(source) {
  * @param {GmailOpenSource | null | undefined} source
  * @param {string} fallbackWebUrl
  */
-function gmailAndroidAppUrl(source, fallbackWebUrl) {
+export function gmailAndroidAppUrl(source, fallbackWebUrl) {
   const direct = gmailDirectWebMessageUrl(source);
   if (!direct) return '';
   const intentPath = direct.replace(/^https:\/\//i, '').replace(/#/g, '%23');
-  const fallback = encodeURIComponent(String(fallbackWebUrl || direct).trim());
+  const fallback = encodeURIComponent(String(fallbackWebUrl || gmailWebMessageUrl(source) || direct).trim());
   return (
     `intent://${intentPath}#Intent;`
     + 'scheme=https;'
@@ -164,15 +177,18 @@ function gmailAndroidAppUrl(source, fallbackWebUrl) {
  *
  * iOS: hand off to the Gmail app via its googlegmail:// scheme when possible.
  * Android: intent:// into com.google.android.gm with a direct mail.google.com
- * target (AccountChooser URLs break inside intent://). Falls back to web.
+ * thread URL. Falls back to web AccountChooser.
  *
  * @param {string} webUrl
  * @param {GmailOpenSource | null | undefined} [source]
+ * @param {string} [userAgent] optional UA override (tests)
  */
-export function gmailMobileOpenUrl(webUrl, source = null) {
+export function gmailMobileOpenUrl(webUrl, source = null, userAgent = '') {
   const url = String(webUrl || '').trim();
   const clean = sanitizeGmailOpenSource(source);
-  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  const ua =
+    String(userAgent || '').trim()
+    || (typeof navigator !== 'undefined' ? navigator.userAgent : '');
   if (/iPhone|iPad|iPod/i.test(ua)) {
     const native = gmailNativeAppUrl(clean);
     if (native) return native;
@@ -255,8 +271,8 @@ function mobileOpenFallbackChain(primary, webUrl) {
 }
 
 /**
- * Wire an <a> to open the message in the native Gmail app on phones, with a
- * web fallback. Desktop keeps a normal new-tab web link.
+ * Wire an <a> to open the message thread in the native Gmail app on phones, with
+ * a web fallback. Desktop keeps a normal new-tab AccountChooser link.
  *
  * iOS googlegmail:// has no built-in fallback; if the app is missing we hop to
  * web Gmail after a short delay while the page is still visible.

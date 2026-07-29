@@ -1,5 +1,6 @@
 /**
- * Mobile topbar: non-commercial aircraft icon when live GPS is active.
+ * Mobile topbar: non-commercial aircraft icon when a place with coords is known
+ * (live GPS, last-known, or server/config fallback — same coords weather uses).
  * Tap opens a popup describing nearby aircraft (ADS-B via /api/aircraft-nearby).
  */
 import { subscribeDevicePlace, devicePlaceQueryString } from './device-location.js';
@@ -201,22 +202,14 @@ function renderIcon() {
   iconBtn.hidden = false;
 }
 
-async function refreshAircraft(useDeviceCoords) {
-  if (!useDeviceCoords) {
-    nearbyAircraft = [];
-    renderIcon();
-    return;
-  }
-
+async function refreshAircraft() {
+  // Prefer current place lat/lon (device, last-known, or config). If none yet,
+  // call the API with no qs so the server rain-alert address can still seed —
+  // same path the desktop sky strip uses.
   const qs = devicePlaceQueryString({ includeLabel: false });
-  if (!qs) {
-    nearbyAircraft = [];
-    renderIcon();
-    return;
-  }
 
   try {
-    const r = await fetch(`/api/aircraft-nearby${qs}`);
+    const r = await fetch(`/api/aircraft-nearby${qs || ''}`);
     if (!r.ok) return;
     const j = await r.json();
     if (!j?.ok || j.disabled || j.geocodeError || j.fetchError) {
@@ -230,30 +223,21 @@ async function refreshAircraft(useDeviceCoords) {
   }
 }
 
-function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}
-
 /**
  * @param {import('./device-location.js').DevicePlace} place
  */
 function onPlaceChange(place) {
-  const useDevice = place?.source === 'device';
-  if (!useDevice) {
-    stopPolling();
-    nearbyAircraft = [];
-    renderIcon();
-    closePopup();
+  // Do not require source === 'device'. Last-known / server-seeded / config
+  // places still have valid lat/lon (weather + condition alerts already use them);
+  // gating on live GPS alone left the icon permanently hidden on many phones.
+  if (place && (!Number.isFinite(Number(place.lat)) || !Number.isFinite(Number(place.lon)))) {
     return;
   }
 
-  void refreshAircraft(true);
+  void refreshAircraft();
   if (!pollTimer) {
     pollTimer = setInterval(() => {
-      void refreshAircraft(true);
+      void refreshAircraft();
     }, POLL_MS);
   }
 }
@@ -284,4 +268,12 @@ export function mountMobileAircraftHeader(root) {
 
   mountEl.append(iconBtn);
   subscribeDevicePlace(onPlaceChange);
+  // If place subscription has not fired yet (or place is still null), still try
+  // the server watch address so nearby aircraft can appear immediately.
+  if (!pollTimer) {
+    void refreshAircraft();
+    pollTimer = setInterval(() => {
+      void refreshAircraft();
+    }, POLL_MS);
+  }
 }

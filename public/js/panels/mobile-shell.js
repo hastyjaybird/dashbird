@@ -266,11 +266,15 @@ export function mountMobileShell(mounts = {}) {
     tab = next;
     saveTab(tab);
     syncTabs();
-    if (tab === 'notes') await ensureNotes();
-    else if (tab === 'network') await ensureNetwork();
+    if (tab === 'notes') {
+      await ensureNotes();
+      document.dispatchEvent(new CustomEvent('dashbird:mobile-nav', { detail: { tab: 'notes', pane: 'list' } }));
+    } else if (tab === 'network') await ensureNetwork();
     else if (tab === 'groups') await ensureGroups();
-    else if (tab === 'tasks') await ensureTasks();
-    else if (tab === 'gmail') await ensureGmail();
+    else if (tab === 'tasks') {
+      await ensureTasks();
+      document.dispatchEvent(new CustomEvent('dashbird:mobile-nav', { detail: { tab: 'tasks', pane: 'list' } }));
+    } else if (tab === 'gmail') await ensureGmail();
     else await ensureEvents();
   }
 

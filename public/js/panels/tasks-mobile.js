@@ -337,38 +337,18 @@ export function mountTasksMobile(root, config = {}) {
   moveProjectSelect.setAttribute('aria-label', 'Move to project');
   moveProjectLabel.append(moveProjectText, moveProjectSelect);
 
-  const moveTagsLabel = document.createElement('div');
-  moveTagsLabel.className = 'mobile-tasks__move-rename-label';
-  const moveTagsText = document.createElement('span');
-  moveTagsText.className = 'mobile-tasks__move-title';
-  moveTagsText.textContent = 'Labels';
   const moveTagsChips = document.createElement('div');
-  moveTagsChips.className = 'mobile-tasks__move-tags';
-  moveTagsChips.style.cssText = 'display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:0.5rem;';
-  const moveTagAddRow = document.createElement('div');
-  moveTagAddRow.className = 'mobile-tasks__move-tag-add';
-  moveTagAddRow.style.cssText = 'display:flex;gap:0.4rem;';
   const moveTagInput = document.createElement('input');
   moveTagInput.type = 'text';
-  moveTagInput.className = 'mobile-tasks__input mobile-tasks__move-tag-input';
-  moveTagInput.placeholder = 'Add label…';
-  moveTagInput.maxLength = 120;
-  moveTagInput.autocomplete = 'off';
-  moveTagInput.style.flex = '1';
   const moveTagList = document.createElement('datalist');
   moveTagList.id = 'mobile-tasks-tag-options';
-  moveTagInput.setAttribute('list', moveTagList.id);
   const moveTagAddBtn = document.createElement('button');
   moveTagAddBtn.type = 'button';
-  moveTagAddBtn.className = 'mobile-tasks__add-btn';
-  moveTagAddBtn.textContent = 'Add';
-  moveTagAddRow.append(moveTagInput, moveTagAddBtn, moveTagList);
-  moveTagsLabel.append(moveTagsText, moveTagsChips, moveTagAddRow);
 
   const moveEditTagsBtn = document.createElement('button');
   moveEditTagsBtn.type = 'button';
   moveEditTagsBtn.className = 'mobile-tasks__move-edit-tags';
-  moveEditTagsBtn.textContent = 'Edit tags';
+  moveEditTagsBtn.textContent = 'Edit labels';
 
   const moveActions = document.createElement('div');
   moveActions.className = 'mobile-tasks__move-actions';
@@ -388,7 +368,6 @@ export function mountTasksMobile(root, config = {}) {
   moveOverlay.append(
     moveRenameLabel,
     moveProjectLabel,
-    moveTagsLabel,
     moveEditTagsBtn,
     moveActions,
   );
@@ -1745,6 +1724,7 @@ export function mountTasksMobile(root, config = {}) {
     if (s.pane === 'list') {
       showList();
       showStatus('');
+      void refreshProjects();
       return;
     }
     if (s.pane === 'project' && s.projectId != null) {

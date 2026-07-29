@@ -56,12 +56,11 @@ const inTasksNotEligible = tasks.filter((t) => !eligibleIds.has(String(t.id)));
 console.log('=== Random task exhaust simulation ===');
 console.log('Filters: none (all attributes allowed)');
 console.log('Projects:', projects.length);
-console.log('Per-project open counts (>100 = pagination gap):');
+console.log('Per-project open counts:');
 for (const row of perProject.sort((a, b) => b.count - a.count)) {
-  const flag = row.count >= 100 ? ' *** AT 100 CAP ***' : '';
-  console.log(`  ${row.id} ${row.title}: ${row.count}${flag}`);
+  console.log(`  ${row.id} ${row.title}: ${row.count}`);
 }
-console.log('Total in listAllPanelTodos:', tasks.length, '(cap 500)');
+console.log('Total in listAllPanelTodos:', tasks.length);
 console.log('Eligible after filters:', eligible.length);
 console.log('First pick poolSize would be:', pickRandomTask(tasks, meta, filters).poolSize);
 console.log('Skip-until-empty picks:', emptyAt ?? picks);
@@ -75,8 +74,8 @@ console.log('Tasks in pool but filtered out:', inTasksNotEligible.length);
 let rawTotal = 0;
 for (const row of perProject) rawTotal += row.count;
 if (rawTotal > tasks.length) {
-  console.log('WARNING: rawTotal open tasks', rawTotal, '> listAllPanelTodos', tasks.length, '(500 cap or early break)');
+  console.log('WARNING: rawTotal open tasks', rawTotal, '> listAllPanelTodos', tasks.length, '(global cap or early break)');
 }
-if (perProject.some((r) => r.count >= 100)) {
-  console.log('WARNING: some projects hit per_page=100 — tasks beyond 100 are invisible to randomizer');
+if (perProject.some((r) => r.count >= 10000)) {
+  console.log('WARNING: some projects hit per-project page safety stop — check PANEL_TODOS_MAX_PAGES');
 }

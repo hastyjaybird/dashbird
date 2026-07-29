@@ -7,6 +7,7 @@ import {
   getToolById,
   loadToolLibrary,
   setToolFavorite,
+  setToolPaying,
   toolLibraryAssetsDir,
   updateTool,
 } from '../lib/tool-library-store.js';
@@ -325,6 +326,26 @@ router.post('/tools/:id/favorite', async (req, res) => {
       return;
     }
     res.json({ ok: true, tool: { ...tool, favorite } });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+/** Toggle "I'm paying for this" money icon on a tool. */
+router.post('/tools/:id/paying', async (req, res) => {
+  try {
+    if (disabled()) {
+      res.status(503).json({ ok: false, error: 'disabled' });
+      return;
+    }
+    const paying = Boolean(req.body?.paying);
+    const id = String(req.params.id || '');
+    const tool = await setToolPaying(id, paying);
+    if (!tool) {
+      res.status(404).json({ ok: false, error: 'not_found' });
+      return;
+    }
+    res.json({ ok: true, tool: { ...tool, paying } });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }

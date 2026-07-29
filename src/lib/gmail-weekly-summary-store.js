@@ -88,6 +88,10 @@ export function looksLikeVerificationSummaryItem(blob) {
  * }} item
  * @param {string} [guideMarkdown] live ingestion guide — Never show / Soft skip enforced in code
  */
+/**
+ * Authoritative post-synth / post-triage hard exclude.
+ * LLM triage gates the digest prompt; this still drops events, OTP, and guide Never-show.
+ */
 export function shouldExcludeDailySummaryItem(item, guideMarkdown = '') {
   const blob = [
     item?.company,
@@ -147,6 +151,7 @@ export function shouldExcludeDailySummaryItem(item, guideMarkdown = '') {
  *   windowDays: number,
  *   items: GmailWeeklyItem[],
  *   lastError: string | null,
+ *   triageMeta?: object | null,
  * }} GmailWeeklyDigest
  */
 
@@ -158,6 +163,7 @@ const EMPTY_DIGEST = /** @type {GmailWeeklyDigest} */ ({
   windowDays: GMAIL_DAILY_SUMMARY_MAX_AGE_DAYS,
   items: [],
   lastError: null,
+  triageMeta: null,
 });
 
 /**
@@ -596,6 +602,8 @@ function normalizeDigest(raw) {
     ? src.items.map(normalizeItem).filter(Boolean)
     : [];
   const lastScanYmd = String(src.lastScanYmd || '').trim();
+  const triageMeta =
+    src.triageMeta && typeof src.triageMeta === 'object' ? src.triageMeta : null;
   return {
     summaryText: String(src.summaryText || '').trim().slice(0, 2_000),
     generatedAt: asIsoOrNull(src.generatedAt),
@@ -607,6 +615,7 @@ function normalizeDigest(raw) {
         : GMAIL_DAILY_SUMMARY_MAX_AGE_DAYS,
     items,
     lastError: src.lastError != null ? String(src.lastError).slice(0, 400) : null,
+    triageMeta,
   };
 }
 
@@ -883,6 +892,10 @@ export function mergeSynthesizedDigest(prev, synth, opts = {}) {
     collapseDuplicateDailySummaryItems(sortItemsChronological([...openByFp.values()])),
   ).filter((it) => it.status === 'open');
 
+  const triageMeta =
+    synth.triageMeta !== undefined
+      ? (synth.triageMeta && typeof synth.triageMeta === 'object' ? synth.triageMeta : null)
+      : base.triageMeta || null;
   const merged = {
     summaryText:
       synth.summaryText != null
@@ -900,6 +913,7 @@ export function mergeSynthesizedDigest(prev, synth, opts = {}) {
         : base.windowDays || GMAIL_DAILY_SUMMARY_MAX_AGE_DAYS,
     items: [...open, ...closed],
     lastError: synth.lastError === undefined ? null : synth.lastError,
+    triageMeta,
   };
   return pruneExpiredGmailDailySummary(merged, Date.now(), { guideMarkdown }).digest;
 }
@@ -1023,15 +1037,14 @@ export function resolveItemDueDate(item) {
 }
 
 /**
- * Gmail web UI deep link for a source message.
+ * Gmail web UI deep link for a source message (desktop / API replyUrl).
  *
  * Routed through accounts.google.com/AccountChooser: a bare
  * `mail.google.com/mail/u/?authuser=…#…` link loses its #fragment when Google
  * bounces through account selection, landing on the inbox instead of the
- * email. Encoding the full target (fragment included) into `continue`
- * survives that bounce. Prefers the thread view (`#all/{threadId}`, opens the
- * email directly), then rfc822msgid search, then hex `#all/` — IMAP decimal
- * UIDs never resolve in the web UI.
+ * thread. Encoding the full target (fragment included) into `continue`
+ * survives that bounce. Prefers `#all/{threadId}`, then rfc822msgid search,
+ * then a distinct hex message id — IMAP decimal UIDs never resolve in the UI.
  * @param {GmailWeeklySource | null | undefined} source
  */
 export function gmailReplyUrl(source) {
@@ -1052,8 +1065,8 @@ export function gmailReplyUrl(source) {
   const subject = String(source.subject || '').trim();
   if (threadId) hash = `all/${threadId}`;
   else if (rfc) hash = `search/${encodeURIComponent(`rfc822msgid:${rfc}`)}`;
-  else if (gmailId) hash = `all/${gmailId}`;
-  else if (apiId) hash = `all/${apiId}`;
+  else if (gmailId && gmailId !== threadId) hash = `all/${gmailId}`;
+  else if (apiId && apiId !== threadId) hash = `all/${apiId}`;
   else if (subject) hash = `search/${encodeURIComponent(`subject:${subject}`)}`;
   else if (String(source.messageId || '').trim()) {
     hash = `search/${encodeURIComponent(String(source.messageId).trim())}`;

@@ -151,6 +151,25 @@ export async function setToolFavorite(id, favorite) {
   return next;
 }
 
+/**
+ * Mark whether Jay is currently paying for this tool (money icon on card).
+ * @param {string} id
+ * @param {boolean} paying
+ */
+export async function setToolPaying(id, paying) {
+  const run = async () => {
+    const data = await loadToolLibrary();
+    const tool = data.tools.find((t) => t.id === id);
+    if (!tool) return null;
+    tool.paying = Boolean(paying);
+    await writeToolLibraryFile(data);
+    return tool;
+  };
+  const next = toolLibraryWriteChain.then(run, run);
+  toolLibraryWriteChain = next.catch(() => {});
+  return next;
+}
+
 /** Metadata fields a user may hand-edit on a tool card. */
 export const EDITABLE_TOOL_FIELDS = [
   'name',

@@ -49,7 +49,7 @@ export const DASHBOARD_MONITORING_SOURCES = [
   {
     id: 'fall_foliage_season',
     group: 'Earth',
-    label: 'Fall foliage (secondary ZIP)',
+    label: 'Fall foliage (ZIP 24066)',
     source: 'USA-NPN MODIS LSP Mid Greendown median WCS; 21-day heads-up',
   },
   {
@@ -154,7 +154,7 @@ export const DASHBOARD_MONITORING_SOURCES = [
     id: 'earth_quake',
     group: 'Earth',
     label: 'Largest nearby earthquake (week)',
-    source: 'USGS earthquake feed — strongest M>3 within 30 mi of dashboard point',
+    source: 'USGS earthquake feed — strongest California M>3 within 150 mi of Oakland',
   },
   {
     id: 'earth_kilauea',

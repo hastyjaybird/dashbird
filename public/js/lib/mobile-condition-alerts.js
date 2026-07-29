@@ -8,6 +8,8 @@ import { mountIemLeaflet } from '../panels/weather-radar.js';
 import { devicePlaceQueryString, subscribeDevicePlace } from './device-location.js';
 
 const POLL_MS = 5 * 60 * 1000;
+/** Same key as desktop `kilauea-livestream.js` so cam choice syncs across surfaces. */
+const KILAUEA_CAM_STORAGE_KEY = 'dashbird-kilauea-live-camera';
 
 /** @type {ReturnType<typeof setInterval> | null} */
 let pollTimer = null;
@@ -31,14 +33,46 @@ let popupMediaTimer = null;
 let popupRadarCleanup = null;
 
 /**
+ * @typedef {{ id?: string, label?: string, embedUrl: string }} VolcanoCam
  * @typedef {{ kind: 'image', src: string, alt?: string }
- *   | { kind: 'iframe', src: string, title?: string }
+ *   | { kind: 'iframe', src: string, title?: string, cameras?: VolcanoCam[], cameraIndex?: number }
  *   | { kind: 'frames', urls: string[], frameMs?: number, alt?: string }
  *   | { kind: 'radar', data: object }} AlertMedia
  * @typedef {{ active: boolean, title: string, lines: string[], media?: AlertMedia | null }} AlertState
  * @typedef {{ key: string, glyph: string, label: string, load: () => Promise<AlertState>,
  *   btn: HTMLButtonElement | null, state: AlertState }} AlertDef
  */
+
+function readSavedKilaueaCameraId() {
+  try {
+    return String(localStorage.getItem(KILAUEA_CAM_STORAGE_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * @param {string} id
+ */
+function writeSavedKilaueaCameraId(id) {
+  const key = String(id || '').trim();
+  if (!key) return;
+  try {
+    localStorage.setItem(KILAUEA_CAM_STORAGE_KEY, key);
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+/**
+ * @param {VolcanoCam[]} cameras
+ */
+function indexForSavedKilaueaCamera(cameras) {
+  const saved = readSavedKilaueaCameraId();
+  if (!saved || !cameras.length) return 0;
+  const found = cameras.findIndex((c) => c?.id === saved);
+  return found >= 0 ? found : 0;
+}
 
 /** @type {AlertDef[]} */
 const ALERTS = [
@@ -78,11 +112,33 @@ async function loadVolcano() {
       if (s.fountainFt != null) parts.push(`fountain ${s.fountainFt} ft`);
       if (parts.length) lines.push(parts.join(' \u00B7 '));
     }
-    const cam = Array.isArray(j.cameras) ? j.cameras.find((c) => c?.embedUrl) : null;
+    /** @type {VolcanoCam[]} */
+    const cameras = Array.isArray(j.cameras)
+      ? j.cameras
+          .filter((c) => c?.embedUrl)
+          .map((c) => ({
+            id: c.id ? String(c.id) : undefined,
+            label: c.label ? String(c.label) : undefined,
+            embedUrl: String(c.embedUrl),
+          }))
+      : [];
     /** @type {AlertMedia} */
-    const media = cam?.embedUrl
-      ? { kind: 'iframe', src: String(cam.embedUrl), title: 'K\u012Blauea summit livestream' }
-      : { kind: 'image', src: '/assets/earth-kilauea-volcano.png', alt: 'K\u012Blauea volcano' };
+    let media;
+    if (cameras.length) {
+      const cameraIndex = indexForSavedKilaueaCamera(cameras);
+      const cam = cameras[cameraIndex] || cameras[0];
+      media = {
+        kind: 'iframe',
+        src: cam.embedUrl,
+        title: cam.label
+          ? `K\u012Blauea livestream \u2014 ${cam.label}`
+          : 'K\u012Blauea summit livestream',
+        cameras,
+        cameraIndex,
+      };
+    } else {
+      media = { kind: 'image', src: '/assets/earth-kilauea-volcano.png', alt: 'K\u012Blauea volcano' };
+    }
     return {
       active: true,
       title: 'K\u012Blauea volcano \u2757',
@@ -232,6 +288,95 @@ function buildMedia(media) {
   }
 
   if (media.kind === 'iframe') {
+    const cameras = Array.isArray(media.cameras) ? media.cameras.filter((c) => c?.embedUrl) : [];
+    if (cameras.length > 1) {
+      wrap.classList.add('mobile-alert-header__media--cams');
+
+      let index = Number.isFinite(Number(media.cameraIndex))
+        ? Math.max(0, Math.min(cameras.length - 1, Number(media.cameraIndex)))
+        : 0;
+
+      const frameWrap = document.createElement('div');
+      frameWrap.className = 'mobile-alert-header__frame-wrap';
+
+      const iframe = document.createElement('iframe');
+      iframe.className = 'mobile-alert-header__media-frame';
+      iframe.loading = 'lazy';
+      iframe.referrerPolicy = 'strict-origin-when-cross-origin';
+      iframe.setAttribute(
+        'allow',
+        'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen',
+      );
+      iframe.allowFullscreen = true;
+
+      const labelEl = document.createElement('span');
+      labelEl.className = 'mobile-alert-header__cam-label';
+      const counterEl = document.createElement('span');
+      counterEl.className = 'mobile-alert-header__cam-counter';
+
+      const paint = () => {
+        const cam = cameras[index];
+        if (!cam) return;
+        iframe.src = cam.embedUrl;
+        iframe.title = cam.label
+          ? `K\u012Blauea livestream \u2014 ${cam.label}`
+          : media.title || 'K\u012Blauea summit livestream';
+        labelEl.textContent = cam.label || `Cam ${index + 1}`;
+        counterEl.textContent = `${index + 1} / ${cameras.length}`;
+        if (cam.id) writeSavedKilaueaCameraId(cam.id);
+      };
+
+      /**
+       * @param {number} delta
+       */
+      const step = (delta) => {
+        index = (index + delta + cameras.length) % cameras.length;
+        paint();
+      };
+
+      const arrowPrev = document.createElement('button');
+      arrowPrev.type = 'button';
+      arrowPrev.className = 'mobile-alert-header__cam-arrow mobile-alert-header__cam-arrow--prev';
+      arrowPrev.setAttribute('aria-label', 'Previous K\u012Blauea camera');
+      arrowPrev.textContent = '\u2039';
+      arrowPrev.addEventListener('click', (e) => {
+        e.stopPropagation();
+        step(-1);
+      });
+
+      const arrowNext = document.createElement('button');
+      arrowNext.type = 'button';
+      arrowNext.className = 'mobile-alert-header__cam-arrow mobile-alert-header__cam-arrow--next';
+      arrowNext.setAttribute('aria-label', 'Next K\u012Blauea camera');
+      arrowNext.textContent = '\u203A';
+      arrowNext.addEventListener('click', (e) => {
+        e.stopPropagation();
+        step(1);
+      });
+
+      frameWrap.append(iframe, arrowPrev, arrowNext);
+
+      const meta = document.createElement('div');
+      meta.className = 'mobile-alert-header__cam-meta';
+      const navPrev = document.createElement('button');
+      navPrev.type = 'button';
+      navPrev.className = 'mobile-alert-header__cam-nav';
+      navPrev.setAttribute('aria-label', 'Previous K\u012Blauea camera');
+      navPrev.textContent = '\u2039';
+      navPrev.addEventListener('click', () => step(-1));
+      const navNext = document.createElement('button');
+      navNext.type = 'button';
+      navNext.className = 'mobile-alert-header__cam-nav';
+      navNext.setAttribute('aria-label', 'Next K\u012Blauea camera');
+      navNext.textContent = '\u203A';
+      navNext.addEventListener('click', () => step(1));
+      meta.append(navPrev, labelEl, counterEl, navNext);
+
+      wrap.append(frameWrap, meta);
+      paint();
+      return wrap;
+    }
+
     const iframe = document.createElement('iframe');
     iframe.className = 'mobile-alert-header__media-frame';
     iframe.src = media.src;

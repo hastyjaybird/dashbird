@@ -92,9 +92,14 @@ function publicItem(item, primary = null) {
 async function publicItemsWithReply(items) {
   const out = [];
   for (const item of items) {
-    const primary = Array.isArray(item.sources) && item.sources.length ? item.sources[0] : null;
+    const sources = Array.isArray(item.sources) ? [...item.sources] : [];
+    const primary = sources.length ? sources[0] : null;
     const enriched = primary ? await enrichSourceFromMailCache(primary) : null;
-    out.push(publicItem(item, enriched));
+    if (enriched) sources[0] = enriched;
+    out.push({
+      ...publicItem(item, enriched),
+      sources,
+    });
   }
   return out;
 }

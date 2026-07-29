@@ -103,7 +103,7 @@ export function resolveThumbsDownEscalation(similarCount) {
 /**
  * @param {NodeJS.ProcessEnv} [env]
  */
-async function loadFeedbackLog(env = process.env) {
+export async function loadFeedbackLog(env = process.env) {
   try {
     const raw = await fs.readFile(gmailDailySummaryGuideFeedbackPath(env), 'utf8');
     const parsed = JSON.parse(raw);
@@ -113,6 +113,32 @@ async function loadFeedbackLog(env = process.env) {
     if (!e || (e.code !== 'ENOENT' && e.code !== 'ENOTDIR')) throw e;
     return { entries: [] };
   }
+}
+
+/**
+ * Recent 👎 patterns for triage / synth few-shot ("prefer less like these").
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ limit?: number }} [opts]
+ * @returns {Promise<Array<{ vibe: 'down', text: string, company?: string | null }>>}
+ */
+export async function loadRecentThumbsDownExamples(env = process.env, opts = {}) {
+  const limit = Math.min(Math.max(Number(opts.limit) || 8, 1), 20);
+  const log = await loadFeedbackLog(env);
+  /** @type {Array<{ vibe: 'down', text: string, company?: string | null }>} */
+  const out = [];
+  for (let i = log.entries.length - 1; i >= 0 && out.length < limit; i -= 1) {
+    const entry = log.entries[i];
+    const text = String(entry?.append || entry?.itemTitle || '')
+      .replace(/^-\s*/, '')
+      .trim();
+    if (!text) continue;
+    out.push({
+      vibe: 'down',
+      text: text.slice(0, 160),
+      company: entry?.company != null ? String(entry.company).slice(0, 80) : null,
+    });
+  }
+  return out;
 }
 
 /**
