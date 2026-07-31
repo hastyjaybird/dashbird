@@ -1,0 +1,20 @@
+---
+description: One-time reminder — verify Anthropic BD Local News feed + Important alert
+alwaysApply: true
+---
+
+# Anthropic BD news — verify on next session
+
+When Jay starts a new session in this repo (first agent turn of the chat), **remind once** to verify the Beneficial Deployments Local News lane, then continue with their request.
+
+## Checklist
+
+1. **Watch gate** — After `2026-07-31` America/Los_Angeles, `GET /api/local-news` should report `bdWatch.active: true` (see `src/lib/local-news-bd-freshness.js`). Before that day, empty BD lane is expected.
+2. **Feed pull** — Same-day BD items appear (Anthropic news HTML, Google News `when:1d`, Greenhouse BD jobs). Nothing older than the current PT day; undated items dropped.
+3. **Important alert** — Items matching BD Important rules show the **Important** badge in the Local News sidebar (`important: true` / `importance >= 8` from `local-news-bd-importance.js`).
+
+Docs: `docs/anthropic-bd-news-monitoring.md`, `docs/anthropic-bd-news-importance.md`.
+
+## After verified
+
+Delete this rule file (`.cursor/rules/anthropic-bd-news-verify.mdc`) or set `alwaysApply: false` so it stops nagging.

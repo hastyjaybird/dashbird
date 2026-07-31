@@ -19,6 +19,18 @@
         {
           "word": "Keep",
           "href": "https://keep.google.com/"
+        },
+        {
+          "word": "GitHub",
+          "href": "https://github.com/dashboard"
+        },
+        {
+          "word": "Cursor",
+          "href": "cursor://"
+        },
+        {
+          "word": "Coda",
+          "href": "https://coda.io/"
         }
       ]
     },
@@ -49,23 +61,6 @@
           "word": "Outlook",
           "href": "https://outlook.office.com/mail/",
           "icon": "/assets/tile-microsoft-outlook.png"
-        }
-      ]
-    },
-    {
-      "title": "Community",
-      "items": [
-        {
-          "word": "Coda",
-          "href": "https://coda.io/"
-        },
-        {
-          "word": "Slack",
-          "href": "https://slack.com/"
-        },
-        {
-          "word": "Discord",
-          "href": "https://discord.com/"
         }
       ]
     },

@@ -544,6 +544,18 @@ function renderArticleList(root, articles, tasteOpts) {
     link.textContent = a.title;
     li.append(link);
 
+    const isImportant = a.important === true || (Number(a.importance) >= 8);
+    if (isImportant) {
+      const badge = document.createElement('span');
+      badge.className = 'local-news__important-badge';
+      badge.textContent = 'Important';
+      const why = Array.isArray(a.importantReasons)
+        ? a.importantReasons.filter((r) => r && r !== 'normal' && !String(r).startsWith('demote')).join(' · ')
+        : '';
+      if (why) badge.title = why;
+      li.append(badge);
+    }
+
     if (a.relevance) {
       const relevance = document.createElement('p');
       relevance.className = 'local-news__row-relevance';

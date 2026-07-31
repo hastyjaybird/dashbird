@@ -1,0 +1,21 @@
+{
+  "lookFor": [
+    "Beneficial Deployments",
+    "Claude for Nonprofits",
+    "Claude Corps",
+    "Claude for Teachers",
+    "Gates Foundation",
+    "economic mobility",
+    "smallholder",
+    "agriculture",
+    "\"raising the floor\"",
+    "GAILA",
+    "Anthropic careers"
+  ],
+  "skip": [
+    "Claude Opus",
+    "Claude Sonnet",
+    "open-weights"
+  ],
+  "blacklist": []
+}

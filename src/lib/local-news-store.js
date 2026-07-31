@@ -4,7 +4,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fetchFeedItems } from './local-news-rss.js';
+import { fetchLocalNewsFeed } from './local-news-fetch.js';
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 const DIRECTORY_PATH = path.join(PKG_ROOT, 'src/data/local-news-feed-directory.json');
@@ -134,7 +134,7 @@ export async function seedBootstrapArticlesIfNeeded(state, env = process.env) {
 
   const results = await Promise.all(
     picks.map(async (feed) => {
-      const r = await fetchFeedItems(feed.url);
+      const r = await fetchLocalNewsFeed(feed);
       if (!r.ok) return [];
       return r.items.slice(0, BOOTSTRAP_PER_CATEGORY).map((it) => ({
         ...it,

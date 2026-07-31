@@ -4037,6 +4037,19 @@ html.sky-sidebar-hidden .sky-sidebar-toggle {
   text-decoration: underline;
 }
 
+.local-news__important-badge {
+  align-self: flex-start;
+  margin-top: 0.12rem;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #f0d9a8;
+  border: 1px solid rgba(240, 217, 168, 0.35);
+  border-radius: 3px;
+  padding: 0.05rem 0.28rem;
+}
+
 .local-news__row-relevance {
   margin: 0.2rem 0 0;
   font-size: 0.68rem;

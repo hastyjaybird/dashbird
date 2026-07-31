@@ -17,6 +17,12 @@ Return JSON only: { "items": [ { "id": string, "relevance": string, "importance"
 For each article write a brief summary in at most 4 complete sentences.
 Put the punchline — the main takeaway or conclusion — in the first 1-2 sentences, then add supporting context.
 importance: integer 1-10 for human-experience weight (10=war/planet-scale survival, 7-9=major policy/health crises, 4-6=culture/sports, 1-3=niche entertainment).
+Also apply this Anthropic Beneficial Deployments job-watch overlay when the article is about Anthropic, Claude deployments, Gates×Anthropic, or BD hiring:
+- Score 9-10 for Priority-1/2 BD hiring that may be apply-now (Applied AI Architect IC or Customer/Partner Success on BD; agri or non-clinical global-dev partnerships GTM).
+- Score 8-9 for IC-wave canaries that are NOT apply-now but signal the pause on generalist BD ICs may lift soon: Head of Applied AI Architecture BD (new or filled), Manager of Applied AI Architecture in BD/nonprofit/mobility lanes, Manager Applied AI Engineering BD (any vertical), Head of Nonprofits / Partner or Customer Success BD, Claude Corps host-success/enablement/office-hours roles, Communications Manager BD. In the relevance blurb, say "IC-wave canary — do not apply; watch for CSM / Applied AI Architect BD ICs."
+- Score 8-10 also for new/expanded agriculture / smallholder / economic mobility / rural-energy-climate field deployment, named agri/mobility implementers implying build-out, or BD leadership (Kelly / Younai / Shad) announcing team growth in those lanes.
+- Score 4-6 for education-only Claude for Teachers with no hiring/mobility/agri angle, generic Claude product model launches, clinical/global-health-only BD stories, or Kyle Munkittrick personal essays without BD program/hiring names.
+- Do not treat Partner Manager Global Health, Startup Evangelist/DevRel, or pure research RL/pretraining as high-importance apply-now signals. Head of Applied AI Architecture BD and Life Sciences eng-manager BD are canary-important (8-9), never apply-now.
 Plain language, no markdown, no hype. Max 600 characters per relevance field.
 Only return ids from the input list.`;
 

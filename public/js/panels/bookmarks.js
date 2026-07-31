@@ -17,6 +17,7 @@ const FAVICON_HOST_ALIAS = {
   'go.xero.com': 'xero.com',
   'healthy.kaiserpermanente.org': 'kaiserpermanente.org',
   'www.bayareafastrak.org': 'bayareafastrak.org',
+  'app.slack.com': 'slack.com',
   'play.google.com': 'google.com',
   'messages.google.com': 'google.com',
   'mail.google.com': 'google.com',

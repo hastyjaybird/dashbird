@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "purpose": "Anthropic Beneficial Deployments watch lanes that are not auto-scraped (LinkedIn auth walls / unstable HTML). See docs/anthropic-bd-news-monitoring.md.",
+  "entries": [
+    {
+      "id": "anthropic-company-linkedin",
+      "sourceNum": 5,
+      "label": "Anthropic company LinkedIn",
+      "url": "https://www.linkedin.com/company/anthropicresearch",
+      "method": "manual",
+      "cadence": "2–3×/week",
+      "notes": "No login scrape. Watch company posts for BD launches and hiring."
+    },
+    {
+      "id": "elizabeth-kelly-linkedin",
+      "sourceNum": 6,
+      "label": "Elizabeth Kelly — LinkedIn",
+      "url": "https://www.linkedin.com/in/elizabeth-kelly-dc",
+      "method": "manual",
+      "cadence": "2–3×/week",
+      "notes": "Highest BD leadership signal. Team growth / new verticals → Important."
+    },
+    {
+      "id": "ariana-younai-linkedin",
+      "sourceNum": 7,
+      "label": "Ariana Younai — LinkedIn",
+      "url": "https://www.linkedin.com/in/arianayounai",
+      "method": "manual",
+      "cadence": "2–3×/week",
+      "notes": "Nonprofit sales lead. Confirm profile URL if renamed; no scrape."
+    },
+    {
+      "id": "shad-ahmed-linkedin",
+      "sourceNum": 8,
+      "label": "Shad Ahmed — LinkedIn",
+      "url": "https://www.linkedin.com/in/shadahmed",
+      "method": "manual",
+      "cadence": "2–3×/week",
+      "notes": "Economic Mobility Lead (agri + US mobility). Confirm URL; highest domain-lane signal."
+    },
+    {
+      "id": "kyle-munkittrick-linkedin",
+      "sourceNum": 9,
+      "label": "Kyle Munkittrick — LinkedIn",
+      "url": "https://www.linkedin.com/in/kylemunkittrick",
+      "method": "manual",
+      "cadence": "weekly",
+      "notes": "Personal weight lower than Kelly/Younai/Shad. Substack is automated separately."
+    },
+    {
+      "id": "claude-customers-bd",
+      "sourceNum": 2,
+      "label": "Claude customers (BD / Nonprofits)",
+      "url": "https://claude.com/customers",
+      "method": "manual-html",
+      "cadence": "weekly",
+      "notes": "No stable RSS. Spot-check Beneficial Deployments / Nonprofits case studies."
+    },
+    {
+      "id": "anthropic-academy",
+      "sourceNum": 3,
+      "label": "Anthropic Academy (AI Fluency)",
+      "url": "https://www.anthropic.com/learn",
+      "method": "manual-html",
+      "cadence": "monthly + on launch rumor",
+      "notes": "AI Fluency for Nonprofits / PK-12 Teachers course pages; watch for new BD curricula."
+    },
+    {
+      "id": "gates-media-center",
+      "sourceNum": 10,
+      "label": "Gates Foundation media center",
+      "url": "https://www.gatesfoundation.org/ideas/media-center",
+      "method": "manual-html+google-news",
+      "cadence": "weekly",
+      "notes": "No clean official RSS for AI/Anthropic. Google News BD query covers joint releases; spot-check media center."
+    },
+    {
+      "id": "aft",
+      "sourceNum": 11,
+      "label": "AFT (Claude for Teachers)",
+      "url": "https://www.aft.org/",
+      "method": "manual",
+      "cadence": "on education launch",
+      "notes": "RSS empty/unstable. Cross-check via Google News BD query + Anthropic news."
+    },
+    {
+      "id": "teach-for-america",
+      "sourceNum": 11,
+      "label": "Teach For America",
+      "url": "https://www.teachforamerica.org/",
+      "method": "manual",
+      "cadence": "on education launch",
+      "notes": "No usable press RSS found. Partner co-announce watch."
+    },
+    {
+      "id": "codepath",
+      "sourceNum": 13,
+      "label": "CodePath (Claude Corps)",
+      "url": "https://www.codepath.org/",
+      "method": "manual",
+      "cadence": "on Corps news",
+      "notes": "No blog RSS. Claude Corps ops partner."
+    },
+    {
+      "id": "social-finance",
+      "sourceNum": 13,
+      "label": "Social Finance (Claude Corps M&E)",
+      "url": "https://socialfinance.org/",
+      "method": "manual",
+      "cadence": "on Corps news",
+      "notes": "Feed exists but is a stub; treat as manual."
+    },
+    {
+      "id": "partner-others",
+      "sourceNum": 14,
+      "label": "Other BD implementers (IRC, Epilepsy Foundation, MyFriendBen, YMCA, …)",
+      "url": "",
+      "method": "manual+google-news",
+      "cadence": "when named in Anthropic/Gates posts",
+      "notes": "Do not invent scrapers. When a partner is named in an Important item, bookmark their newsroom."
+    }
+  ]
+}

@@ -193,6 +193,32 @@ export const DASHBOARD_MONITORING_SOURCES = [
     label: 'Notes panel',
     source: 'public/data/notes.md (local file)',
   },
+  {
+    id: 'local_news_bd_anthropic',
+    group: 'News',
+    label: 'Local News — Anthropic News (BD)',
+    source:
+      'anthropic.com/news HTML list (fetchMode anthropic-news-html) · docs/anthropic-bd-news-monitoring.md',
+  },
+  {
+    id: 'local_news_bd_google',
+    group: 'News',
+    label: 'Local News — Anthropic BD Google News RSS',
+    source:
+      'Google News RSS query (Beneficial Deployments / Claude Corps / Nonprofits / Teachers / Gates×Anthropic)',
+  },
+  {
+    id: 'local_news_bd_careers',
+    group: 'News',
+    label: 'Local News — Anthropic Careers (BD filter)',
+    source: 'Greenhouse public board API · BD-relevant title filter',
+  },
+  {
+    id: 'local_news_bd_watchlist',
+    group: 'News',
+    label: 'Local News — BD LinkedIn / partner watchlist (manual)',
+    source: 'src/data/local-news-bd-watchlist.json — no login scrape',
+  },
 ];
 
 /**

@@ -6,7 +6,7 @@ import {
   seedBootstrapArticlesIfNeeded,
 } from '../lib/local-news-store.js';
 import { generateSuggestion, localNewsSuggestionsEnabled, promoteDeferredSuggestionIfDue, LOCAL_NEWS_SUGGESTION_INTERVAL_MS } from '../lib/local-news-scheduler.js';
-import { fetchFeedItems } from '../lib/local-news-rss.js';
+import { fetchLocalNewsFeed } from '../lib/local-news-fetch.js';
 import { loadLocalNewsCriteria, saveLocalNewsCriteria } from '../lib/local-news-criteria-store.js';
 import {
   scoreArticleTaste,
@@ -18,6 +18,16 @@ import {
   localNewsRelevanceEnabled,
   queueRelevanceGeneration,
 } from '../lib/local-news-relevance.js';
+import { applyBdImportance } from '../lib/local-news-bd-importance.js';
+import { mergeBdCriteriaSeeds } from '../lib/local-news-bd-criteria.js';
+import {
+  bdMinPublishedMs,
+  bdWatchActive,
+  filterBdArticlesByFreshness,
+  isBdFeed,
+  BD_WATCH_START_YMD,
+  articleMeetsBdFreshness,
+} from '../lib/local-news-bd-freshness.js';
 
 const router = Router();
 router.use(express.json({ limit: '32kb' }));
@@ -33,20 +43,37 @@ const articleCache = new Map();
  */
 async function fetchArticlesFor(subscriptions) {
   const now = Date.now();
+  const watchOn = bdWatchActive();
+  const minMs = bdMinPublishedMs();
   const results = await Promise.all(
     subscriptions.map(async (feed) => {
+      // BD lane: no network pull until watch start day; after that drop stale items.
+      if (isBdFeed(feed) && !watchOn) {
+        articleCache.delete(feed.id);
+        return { feed, items: [] };
+      }
       const cached = articleCache.get(feed.id);
       if (cached && now - cached.fetchedAt < ARTICLE_CACHE_MS) {
-        return { feed, items: cached.items };
+        const items = isBdFeed(feed)
+          ? cached.items.filter((it) => articleMeetsBdFreshness(it, minMs))
+          : cached.items;
+        return { feed, items };
       }
-      const r = await fetchFeedItems(feed.url);
+      const r = await fetchLocalNewsFeed(feed);
       if (r.ok) {
-        articleCache.set(feed.id, { fetchedAt: now, items: r.items });
-        return { feed, items: r.items };
+        const items = isBdFeed(feed)
+          ? r.items.filter((it) => articleMeetsBdFreshness(it, minMs))
+          : r.items;
+        articleCache.set(feed.id, { fetchedAt: now, items });
+        return { feed, items };
       }
       // Fetch failed — keep serving stale cache (if any) but don't bump fetchedAt,
       // so the next request retries instead of locking in a transient failure for 15min.
-      return { feed, items: cached?.items || [] };
+      const stale = cached?.items || [];
+      const items = isBdFeed(feed)
+        ? stale.filter((it) => articleMeetsBdFreshness(it, minMs))
+        : stale;
+      return { feed, items };
     }),
   );
 
@@ -57,6 +84,7 @@ async function fetchArticlesFor(subscriptions) {
       feedId: feed.id,
       feedTitle: feed.title,
       category: feed.category,
+      tags: feed.tags,
     })),
   );
   return articles;
@@ -68,13 +96,16 @@ router.get('/', async (_req, res) => {
     state = await promoteDeferredSuggestionIfDue(state);
     state = await seedBootstrapArticlesIfNeeded(state);
 
-    const [subscriptionArticles, criteria] = await Promise.all([
+    const [subscriptionArticles, criteriaRaw] = await Promise.all([
       fetchArticlesFor(state.subscriptions),
       loadLocalNewsCriteria(),
     ]);
+    const criteria = mergeBdCriteriaSeeds(criteriaRaw);
 
     const byId = new Map();
-    for (const a of [...state.bootstrapArticles, ...subscriptionArticles]) {
+    // Bootstrap is historical seed — skip once BD watch is active (new-only mode).
+    const bootstrap = bdWatchActive() ? [] : state.bootstrapArticles;
+    for (const a of filterBdArticlesByFreshness([...bootstrap, ...subscriptionArticles])) {
       if (a.id) byId.set(a.id, a);
     }
 
@@ -103,15 +134,19 @@ router.get('/', async (_req, res) => {
 
     const skippedArticles = scored.filter((a) => a.skipped).sort(byHiddenDesc);
 
-    const articlesRaw = scored
-      .filter((a) => !a.skipped && a.tasteOk)
+    // Attach cached importance before sort so Important ranking works on refresh.
+    const tasteOkRaw = scored.filter((a) => !a.skipped && a.tasteOk);
+    const [withRelevance, skippedWithRelevance] = await Promise.all([
+      attachRelevanceToArticles(tasteOkRaw),
+      attachRelevanceToArticles(skippedArticles),
+    ]);
+
+    const articles = withRelevance
+      .map((a) => applyBdImportance(a))
       .sort(compareArticlesByImportanceThenTaste(byDateDesc))
       .slice(0, ARTICLE_FEED_LIMIT);
 
-    const [articles, skippedWithRelevance] = await Promise.all([
-      attachRelevanceToArticles(articlesRaw),
-      attachRelevanceToArticles(skippedArticles),
-    ]);
+    const skippedOut = skippedWithRelevance.map((a) => applyBdImportance(a));
 
     queueRelevanceGeneration(articles, process.env);
 
@@ -122,10 +157,20 @@ router.get('/', async (_req, res) => {
       relevanceEnabled: localNewsRelevanceEnabled(),
       subscriptions: state.subscriptions,
       pendingSuggestion: state.pendingSuggestion,
-      criteria: { lookFor: criteria.lookFor, skip: criteria.skip, blacklist: criteria.blacklist },
-      skippedCount: skippedWithRelevance.length,
-      skippedArticles: skippedWithRelevance,
+      criteria: {
+        lookFor: criteria.lookFor,
+        skip: criteria.skip,
+        blacklist: criteria.blacklist,
+      },
+      skippedCount: skippedOut.length,
+      skippedArticles: skippedOut,
       articles,
+      bdWatch: {
+        startYmd: BD_WATCH_START_YMD,
+        active: bdWatchActive(),
+        sameDayOnly: true,
+        timeZone: 'America/Los_Angeles',
+      },
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
@@ -143,7 +188,7 @@ function scoreArticleTasteResult(article, criteria) {
 
 router.get('/criteria', async (_req, res) => {
   try {
-    const criteria = await loadLocalNewsCriteria();
+    const criteria = mergeBdCriteriaSeeds(await loadLocalNewsCriteria());
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, ...criteria });
   } catch (e) {
@@ -243,14 +288,36 @@ router.get('/suggestion/preview', async (_req, res) => {
     }
 
     const feed = pending.feed;
-    const [fetchResult, criteria] = await Promise.all([
-      fetchFeedItems(feed.url),
+    if (isBdFeed(feed) && !bdWatchActive()) {
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.json({
+        ok: true,
+        feed: {
+          title: feed.title,
+          siteUrl: feed.siteUrl || feed.url,
+          url: feed.url,
+        },
+        articles: [],
+        bdWatch: {
+          startYmd: BD_WATCH_START_YMD,
+          active: false,
+          sameDayOnly: true,
+          timeZone: 'America/Los_Angeles',
+        },
+      });
+      return;
+    }
+
+    const [fetchResult, criteriaRaw] = await Promise.all([
+      fetchLocalNewsFeed(feed),
       loadLocalNewsCriteria(),
     ]);
     if (!fetchResult.ok) {
       res.status(502).json({ ok: false, error: fetchResult.error || 'feed_fetch_failed' });
       return;
     }
+    const criteria = mergeBdCriteriaSeeds(criteriaRaw);
+    const minMs = bdMinPublishedMs();
 
     const byDateDesc = (a, b) => {
       const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
@@ -258,20 +325,24 @@ router.get('/suggestion/preview', async (_req, res) => {
       return tb - ta;
     };
 
-    const articlesRaw = fetchResult.items
+    const tasteFiltered = fetchResult.items
+      .filter((it) => !isBdFeed(feed) || articleMeetsBdFreshness(it, minMs))
       .map((it) => ({
         ...it,
         id: it.link || `${feed.id}:${it.title}`,
         feedId: feed.id,
         feedTitle: feed.title,
         category: feed.category,
+        tags: feed.tags,
       }))
       .map((a) => ({ ...a, ...scoreArticleTasteResult(a, criteria) }))
-      .filter((a) => a.tasteOk)
+      .filter((a) => a.tasteOk);
+
+    const withRelevance = await ensureRelevanceForArticles(tasteFiltered);
+    const articles = withRelevance
+      .map((a) => applyBdImportance(a))
       .sort(compareArticlesByImportanceThenTaste(byDateDesc))
       .slice(0, SUGGESTION_PREVIEW_LIMIT);
-
-    const articles = await ensureRelevanceForArticles(articlesRaw);
 
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({
