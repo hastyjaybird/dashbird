@@ -176,6 +176,11 @@ export function builtInNoiseExcludeReason(blob) {
   const t = String(blob || '').toLowerCase();
   if (!t.trim()) return null;
 
+  // Hard sender-domain blocks (never depend on guide / LLM).
+  if (/@westernp\.com\b/.test(t)) {
+    return 'blocked_domain';
+  }
+
   if (
     /\b(track(ing)?\s+(your\s+)?(package|order|shipment|item)|out for delivery|package\s+(has\s+)?(been\s+)?(shipped|delivered|arrived)|shipping\s+(confirm|notif|update|status)|shipment\s+confirm|deliver(y|ed)\s+(confirm|notif|update)|packages?\s+have\s+been\s+(shipped|delivered))\b/.test(
       t,

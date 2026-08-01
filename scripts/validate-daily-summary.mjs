@@ -538,6 +538,16 @@ assert.equal(
 );
 
 assert.equal(
+  shouldExcludeDailySummaryItem({
+    company: 'WesternP',
+    title: 'Follow up on lease',
+    detail: 'Please reply about the unit',
+    sources: [{ subject: 'Lease', from: 'Office <manager@westernp.com>' }],
+  }),
+  'blocked_domain',
+);
+
+assert.equal(
   guideExcludeReason(
     {
       company: 'Chase',

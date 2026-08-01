@@ -49,6 +49,7 @@ Always exclude — even if something else might match:
 - Event invites, RSVPs, info sessions, workshops (Events Finder)
 - Shipping/delivery noise with no action needed
 - Unsubscribe / list hygiene mail
+- Anything from @westernp.com
 
 ---
 

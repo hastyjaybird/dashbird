@@ -31,6 +31,8 @@ const DEFAULT_STATE = {
   lastSuggestionAt: null,
   bootstrapArticles: [],
   bootstrapSeededAt: null,
+  /** Manual/test cards (e.g. Important badge demo). Merged into GET /api/local-news. */
+  demoArticles: [],
 };
 
 let directoryCache = null;
@@ -66,6 +68,7 @@ export async function loadLocalNewsState(env = process.env) {
       lastSuggestionAt: parsed?.lastSuggestionAt || null,
       bootstrapArticles: Array.isArray(parsed?.bootstrapArticles) ? parsed.bootstrapArticles : [],
       bootstrapSeededAt: parsed?.bootstrapSeededAt || null,
+      demoArticles: Array.isArray(parsed?.demoArticles) ? parsed.demoArticles : [],
     };
   } catch {
     return { ...DEFAULT_STATE };

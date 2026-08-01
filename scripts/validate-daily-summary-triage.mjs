@@ -72,6 +72,15 @@ const fixtures = [
     expectCategory: 'money_docs',
     expectKeep: true,
   },
+  {
+    id: '7',
+    mailbox: 'jay.intake.box@gmail.com',
+    subject: 'Please reply about the lease',
+    from: 'Office <manager@westernp.com>',
+    text: 'Action required: confirm the unit by Friday.',
+    expectCategory: 'noise',
+    expectKeep: false,
+  },
 ];
 
 assert.equal(normalizeTriageCategory('money'), 'money_docs');
@@ -141,7 +150,7 @@ const classified = await classifyGmailDailySummaryMessages(fixtures, {
 });
 assert.equal(classified.via, 'heuristic');
 assert.equal(classified.kept.length, 3);
-assert.equal(classified.dropped.length, 3);
+assert.equal(classified.dropped.length, 4);
 
 // Authoritative backstop still drops event-shaped synth items even if triage misfires
 const eventItem = {

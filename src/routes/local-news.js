@@ -141,8 +141,32 @@ router.get('/', async (_req, res) => {
       attachRelevanceToArticles(skippedArticles),
     ]);
 
-    const articles = withRelevance
-      .map((a) => applyBdImportance(a))
+    /** Test/demo cards — bypass freshness/taste; preserve forced Important flags. */
+    const demoCards = (Array.isArray(state.demoArticles) ? state.demoArticles : [])
+      .filter((a) => a && a.id && !hidden.has(a.id))
+      .map((a) => {
+        const forcedImportant = a.important === true || Number(a.importance) >= 8;
+        const base = {
+          ...a,
+          tasteOk: true,
+          tasteScore: Number(a.tasteScore) || 999,
+          skipped: false,
+          demo: true,
+        };
+        if (forcedImportant) {
+          return {
+            ...base,
+            important: true,
+            importance: Math.max(Number(a.importance) || 0, 8),
+            importantReasons: Array.isArray(a.importantReasons) && a.importantReasons.length
+              ? a.importantReasons
+              : ['demo:important-alert'],
+          };
+        }
+        return applyBdImportance(base);
+      });
+
+    const articles = [...demoCards, ...withRelevance.map((a) => applyBdImportance(a))]
       .sort(compareArticlesByImportanceThenTaste(byDateDesc))
       .slice(0, ARTICLE_FEED_LIMIT);
 

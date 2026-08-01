@@ -51,6 +51,16 @@ const WAITING_RE =
 const ACTION_RE =
   /\b(please (reply|confirm|review|sign|complete|submit)|action required|needs? your|respond by|due by)\b/i;
 
+/** Sender domains that must never enter the Daily Summary digest. */
+const BLOCKED_SENDER_DOMAIN_RE = /@westernp\.com\b/i;
+
+/**
+ * @param {{ from?: string }} msg
+ */
+export function isBlockedSenderDomain(msg) {
+  return BLOCKED_SENDER_DOMAIN_RE.test(String(msg?.from || ''));
+}
+
 /**
  * @param {unknown} raw
  * @returns {TriageCategory}
@@ -98,6 +108,14 @@ export function messageShouldEnterDigest(triage) {
  * @param {{ subject?: string, from?: string, snippet?: string, text?: string }} msg
  */
 export function heuristicTriageMessage(msg) {
+  if (isBlockedSenderDomain(msg)) {
+    return {
+      category: /** @type {TriageCategory} */ ('noise'),
+      importance: 0.05,
+      why: 'blocked sender domain (@westernp.com)',
+    };
+  }
+
   const blob = [
     msg?.subject,
     msg?.from,
@@ -267,6 +285,7 @@ export function mapTriageParsedToById(parsed, messages) {
  */
 export function filterMessagesForDigest(messages, byId) {
   return (messages || []).filter((m) => {
+    if (isBlockedSenderDomain(m)) return false;
     const key = triageMessageKey(m);
     const triage = byId.get(key);
     return messageShouldEnterDigest(triage || { category: 'action', importance: 0.5 });
