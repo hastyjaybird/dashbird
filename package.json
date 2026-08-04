@@ -16,6 +16,7 @@
     "smoke:calendar": "node scripts/smoke-calendar.mjs",
     "smoke:earth": "node scripts/smoke-earth.mjs",
     "smoke:weather-radar": "node scripts/smoke-weather-radar.mjs",
+    "smoke:trusted-device-auth": "node scripts/smoke-trusted-device-auth.mjs",
     "catalog:migrate": "node scripts/migrate-to-web-catalog.mjs",
     "catalog:export": "node scripts/catalog-export.mjs",
     "catalog:import": "node scripts/catalog-import.mjs"

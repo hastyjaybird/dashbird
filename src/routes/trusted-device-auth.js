@@ -123,12 +123,10 @@ router.all('/auth', async (req, res) => {
     res.status(200).end();
     return;
   }
+  // A bare dashbird_did cookie proves nothing — the allowlisted UUIDs are published in
+  // docs/deploy-vultr.md and deploy/env.cloud.example. Only the signed cookie, minted after
+  // a password challenge at /auth/device-bind, grants passwordless access.
   const deviceId = parseDeviceIdFromCookie(req.headers.cookie);
-  if (isAllowlistedDeviceId(deviceId)) {
-    appendTrustCookies(res, deviceId);
-    res.status(200).end();
-    return;
-  }
   const authHeader = req.headers.authorization || req.headers['x-forwarded-authorization'];
   if (await verifyBasicAuthCredentials(authHeader)) {
     if (isAllowlistedDeviceId(deviceId)) {
@@ -155,11 +153,6 @@ export function trustedDeviceGateMiddleware() {
       return;
     }
     const deviceId = parseDeviceIdFromCookie(req.headers.cookie);
-    if (isAllowlistedDeviceId(deviceId)) {
-      appendTrustCookies(res, deviceId);
-      next();
-      return;
-    }
     const authHeader = req.headers.authorization || req.headers['x-forwarded-authorization'];
     if (await verifyBasicAuthCredentials(authHeader)) {
       if (isAllowlistedDeviceId(deviceId)) {

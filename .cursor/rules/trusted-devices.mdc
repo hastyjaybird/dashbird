@@ -14,6 +14,11 @@ Dashbird cloud (`dashbird.duckdns.org`) uses HTTP basic auth. **Only two devices
 
 Configured via `DASHBOARD_TRUSTED_DEVICE_IDS` in cloud `.env` (see `deploy/env.cloud.example`).
 
+The UUIDs are **identifiers, not credentials** — they live in this public repo. Passwordless
+access comes only from the HMAC-signed `dashbird_trusted` cookie minted at `/auth/device-bind`
+after one basic-auth challenge. Never re-add a code path that trusts a bare `dashbird_did`
+cookie; `npm run smoke:trusted-device-auth` guards this.
+
 ## Agent behavior
 
 - Do **not** ask Jay for the cloud basic-auth password when working on trusted-device auth for these two IDs.

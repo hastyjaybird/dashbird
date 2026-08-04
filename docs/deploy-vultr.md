@@ -55,10 +55,13 @@ docker compose -f docker-compose.cloud.yml up -d --build
 docker compose -f docker-compose.cloud.yml ps
 ```
 
-7. **One-time per device** — open these bookmarks (no password after this):
+7. **One-time per device** — open these bookmarks and enter the basic-auth password once (no password after this):
    - **Home Linux laptop:** `https://dashbird.duckdns.org/auth/device-bind?did=edd37155-3ffe-4d18-a775-d6cdcedbf343`
    - **Phone:** `https://dashbird.duckdns.org/auth/device-bind?did=1c0c1947-ad36-4032-aed5-00eb5b28e166`
-   Other browsers/devices still require basic auth every visit. Revoke trust by rotating `DASHBOARD_TRUSTED_DEVICE_SECRET` in `.env` and rebuilding.
+   Binding stores an HMAC-signed `dashbird_trusted` cookie; that signed cookie — not the UUID in
+   the URL, which is public — is what skips later prompts. Other browsers/devices still require
+   basic auth every visit. Revoke trust by rotating `DASHBOARD_TRUSTED_DEVICE_SECRET` in `.env`
+   and rebuilding.
 
 If basic-auth credentials were generated on the server:
 

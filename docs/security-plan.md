@@ -176,6 +176,14 @@ Closed from the [ops-review blast-radius](ops-review-backup-blast-radius.md) fin
 - **Backup gaps closed** — all five SQLite DBs snapshotted (added `dev-requests.db` + Vikunja),
   startup catch-up for missed days, and a Telegram staleness alert.
 - **Device-bind hardened** — requires a basic-auth challenge before binding + per-IP rate limit.
+- **Device-ID cookie bypass closed (2026-08-04)** — the gate (`trustedDeviceGateMiddleware`) and
+  the Caddy `forward_auth` endpoint used to auto-trust any request carrying a bare
+  `dashbird_did` cookie with an allowlisted UUID. Those UUIDs ship in this public repo
+  (`deploy/env.cloud.example`, `docs/deploy-vultr.md`), so one guessed-from-docs cookie granted
+  full passwordless access to cloud from any machine. Only the HMAC-signed `dashbird_trusted`
+  cookie — minted at `/auth/device-bind` after a password challenge — now skips basic auth.
+  Regression guard: `npm run smoke:trusted-device-auth`. Rotate
+  `DASHBOARD_TRUSTED_DEVICE_SECRET` to invalidate any cookies minted during the exposure.
 - **Safe destructive deploy** — `SYNC_DATA=1` defaults to dry-run and snapshots remote `data/`
   before overwrite (`SYNC_DATA_CONFIRM=1` to commit).
 - **Recovery runbook** — [`recovery-runbook.md`](recovery-runbook.md) with RPO/RTO and per-scenario steps.
