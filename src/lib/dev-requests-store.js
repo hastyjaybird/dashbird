@@ -45,6 +45,13 @@ export function devRequestsRoot(env = process.env) {
 /**
  * @param {NodeJS.ProcessEnv} [env]
  */
+export function devRequestsInboxPath(env = process.env) {
+  return path.join(devRequestsRoot(env), 'inbox.md');
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ */
 function openDb(env = process.env) {
   const dbPath = devRequestsDbPath(env);
   if (dbSingleton && dbPath === DEV_REQUESTS_DB_PATH) return dbSingleton;
@@ -172,8 +179,9 @@ function decodeImagePayload(payload) {
 
 /**
  * @param {Record<string, unknown>} row
+ * @param {NodeJS.ProcessEnv} [env]
  */
-function rowToRequest(row) {
+function rowToRequest(row, env = process.env) {
   /** @type {string[]} */
   let attachments = [];
   try {
@@ -197,7 +205,7 @@ function rowToRequest(row) {
     attachments,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
-    path: path.join(devRequestsRoot(), String(row.folder)),
+    path: path.join(devRequestsRoot(env), String(row.folder)),
   };
 }
 
@@ -215,7 +223,7 @@ export function listDevRequests(opts = {}, env = process.env) {
        ORDER BY priority ASC, created_at ASC`,
     )
     .all(status);
-  return rows.map((row) => rowToRequest(/** @type {Record<string, unknown>} */ (row)));
+  return rows.map((row) => rowToRequest(/** @type {Record<string, unknown>} */ (row), env));
 }
 
 /**
@@ -226,7 +234,7 @@ export function getDevRequest(id, env = process.env) {
   const db = openDb(env);
   const row = db.prepare('SELECT * FROM dev_requests WHERE id = ?').get(String(id || '').trim());
   if (!row) return null;
-  return rowToRequest(/** @type {Record<string, unknown>} */ (row));
+  return rowToRequest(/** @type {Record<string, unknown>} */ (row), env);
 }
 
 /**
@@ -396,7 +404,9 @@ export async function readDevRequestAttachment(id, filename, env = process.env) 
 export async function syncDevRequestsInbox(env = process.env) {
   const open = listDevRequests({ status: 'open' }, env);
   const root = devRequestsRoot(env);
-  const relRoot = path.relative(path.join(PKG_ROOT, 'data'), root) || 'dev-requests';
+  const rel = path.relative(PKG_ROOT, root);
+  // Folder links must resolve from the repo root; an out-of-tree root stays absolute.
+  const relRoot = !rel || rel.startsWith('..') ? root : rel;
 
   const lines = [
     '# Dashbird dev requests inbox',
@@ -431,10 +441,11 @@ export async function syncDevRequestsInbox(env = process.env) {
     }
   }
 
+  const inboxPath = devRequestsInboxPath(env);
   await mkdir(root, { recursive: true });
-  await writeFile(DEV_REQUESTS_INBOX_PATH, lines.join('\n'), 'utf8');
-  await fixHostOwnership([root, DEV_REQUESTS_INBOX_PATH], env);
-  return DEV_REQUESTS_INBOX_PATH;
+  await writeFile(inboxPath, lines.join('\n'), 'utf8');
+  await fixHostOwnership([root, inboxPath], env);
+  return inboxPath;
 }
 
 /**

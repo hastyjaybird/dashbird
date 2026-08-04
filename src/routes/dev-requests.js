@@ -9,8 +9,8 @@ import {
 } from '../lib/dev-request-areas.js';
 import {
   createDevRequest,
-  DEV_REQUESTS_INBOX_PATH,
-  DEV_REQUESTS_ROOT,
+  devRequestsInboxPath,
+  devRequestsRoot,
   getDevRequest,
   listDevRequests,
   readDevRequestAttachment,
@@ -25,8 +25,8 @@ router.get('/meta', (_req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
   res.json({
     ok: true,
-    root: DEV_REQUESTS_ROOT,
-    inboxPath: DEV_REQUESTS_INBOX_PATH,
+    root: devRequestsRoot(),
+    inboxPath: devRequestsInboxPath(),
     areas: DEV_REQUEST_AREAS,
     priorities: Object.values(DEV_REQUEST_PRIORITIES),
   });
@@ -37,7 +37,7 @@ router.get('/', async (req, res) => {
     const status = String(req.query?.status || 'open').trim() || 'open';
     const requests = listDevRequests({ status });
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ ok: true, requests, inboxPath: DEV_REQUESTS_INBOX_PATH });
+    res.json({ ok: true, requests, inboxPath: devRequestsInboxPath() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
@@ -54,7 +54,7 @@ router.post('/', async (req, res) => {
       attachments: req.body?.attachments,
     });
     res.setHeader('Cache-Control', 'private, no-store');
-    res.status(201).json({ ok: true, request, inboxPath: DEV_REQUESTS_INBOX_PATH });
+    res.status(201).json({ ok: true, request, inboxPath: devRequestsInboxPath() });
   } catch (e) {
     const code = String(e?.code || '');
     const map = {
@@ -71,7 +71,7 @@ router.post('/rebuild-index', async (_req, res) => {
   try {
     await rebuildDevRequestsIndex();
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ ok: true, inboxPath: DEV_REQUESTS_INBOX_PATH });
+    res.json({ ok: true, inboxPath: devRequestsInboxPath() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
@@ -100,7 +100,7 @@ router.patch('/:id', async (req, res) => {
       body: req.body?.body,
     });
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ ok: true, request, inboxPath: DEV_REQUESTS_INBOX_PATH });
+    res.json({ ok: true, request, inboxPath: devRequestsInboxPath() });
   } catch (e) {
     const code = String(e?.code || '');
     res.status(code === 'not_found' ? 404 : 500).json({ ok: false, error: String(e?.message || e) });
