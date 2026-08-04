@@ -125,6 +125,12 @@ npm run smoke:core
 
 Core checks: OpenRouter health, tool ratings, Atlantic storm watch, weather radar.
 
+## Dev requests
+
+Feature / change requests submitted from the DEV REQUEST panel (desktop) or Dev FAB (mobile) queue
+up in `data/dev-requests/`. To copy the cloud queue into a local checkout, run
+`npm run dev-requests:pull` — see [`docs/dev-requests-pull.md`](docs/dev-requests-pull.md).
+
 ## Tool Library ratings telemetry
 
 `GET /api/tool-library/ratings` logs structured events (`sourceUsed`, `nullRating`, `latencyMs`).  

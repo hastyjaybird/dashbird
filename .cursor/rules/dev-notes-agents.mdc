@@ -7,11 +7,11 @@ alwaysApply: true
 
 When the user asks to spin up agents for each task, resolve dev requests, or work through structured change requests from desktop/mobile:
 
-1. Read `data/dev-requests/inbox.md` (also `GET /api/dev-requests`). If missing or empty, say so and stop.
+1. Read `data/dev-requests/inbox.md` (also `GET /api/dev-requests`). If missing or empty, the requests are probably still only on the cloud box — run `npm run dev-requests:pull` (needs `DASHBIRD_CLOUD_PASS`; see `docs/dev-requests-pull.md`) and re-read. Still empty, or no credentials available: say so and stop.
 2. Treat each unchecked markdown task (`- [ ] …`) as one unit of work, grouped by priority (`## High`, `## Med`, etc.).
 3. For each item, open its folder under `data/dev-requests/<folder>/` — read `request.json` and any screenshot PNG/JPG in that folder.
 4. Launch one Task subagent **per open request** (parallel when independent). Each agent gets title, body, area, platform, priority, and screenshot paths.
-5. After a request is done, mark it via `PATCH /api/dev-requests/:id` with `{ "status": "done" }` (regenerates `inbox.md`). Do not delete folders until the user asks to clear resolved items.
+5. After a request is done, mark it via `PATCH /api/dev-requests/:id` with `{ "status": "done" }` (regenerates `inbox.md`) — patch the dashboard the request came from, so a pulled request is closed on cloud rather than locally. Do not delete folders until the user asks to clear resolved items.
 6. Summarize what each agent did; call out any requests that failed or need Jay.
 
 **Vikunja** (`/api/vikunja`) is for personal todos and task-location meta — not for dev/feature change requests. Use the dev-requests queue for agent-facing UX work.
