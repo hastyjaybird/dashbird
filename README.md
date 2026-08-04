@@ -117,6 +117,20 @@ Bookmark links are normal **https://** URLs opened in a new tab.
 
 Docker Compose mounts **`./public`** and **`./src`**, so static/panel changes often need only a refresh. After server or dependency changes, run **`docker compose up --build`**.
 
+## Dev requests
+
+Feature / change requests filed from the desktop **DEV REQUEST** panel or the mobile Dev FAB land on whichever instance you filed them from. Cloud is the daily driver, so pull them down before asking Cursor to work the queue:
+
+```bash
+npm run dev-requests:pull            # open requests from https://dashbird.duckdns.org
+npm run dev-requests:pull -- --dry-run
+npm run dev-requests:pull -- --status all --force
+```
+
+Each request becomes `data/dev-requests/<folder>/request.json` plus its screenshots, then `inbox.md` and the SQLite index are regenerated (through the running LAN dashboard when one is up, otherwise in-process). Existing folders are left alone unless `--force`. Cloud stays authoritative — mark items resolved with `PATCH /api/dev-requests/:id`.
+
+Auth and source host come from `.env` (see the dev-requests block in [`.env.example`](.env.example)). This is HTTP-only and touches nothing but `data/dev-requests/`; use [`scripts/sync-from-cloud.sh`](scripts/sync-from-cloud.sh) when you want the whole cloud `data/` tree over SSH.
+
 ## Validation
 
 ```bash
