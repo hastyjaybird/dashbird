@@ -104,6 +104,7 @@ import trustedDeviceAuthRouter, {
   deviceBindHandler,
   trustedDeviceGateMiddleware,
 } from './routes/trusted-device-auth.js';
+import { logMissingModuleImports } from './lib/module-graph-check.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -220,9 +221,27 @@ app.use('/api/bookmarks', bookmarksRouter);
 app.use('/api/dev-agent-log', devAgentLogRouter);
 
 
+/**
+ * SPA fallback must never answer an asset request with index.html: a missing
+ * module then arrives as 200 text/html and the browser reports only
+ * "error loading dynamically imported module" for the *entry* module, hiding
+ * which file is actually absent. Assets 404 so the failure names itself.
+ * @param {string} reqPath
+ */
+function looksLikeAssetRequest(reqPath) {
+  const p = String(reqPath || '');
+  if (/^\/(js|css|assets|icons|vendor|data|docs)\//.test(p)) return true;
+  const ext = path.extname(p).toLowerCase();
+  return Boolean(ext) && ext !== '.html';
+}
+
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api')) {
     res.status(404).json({ error: 'not_found' });
+    return;
+  }
+  if (looksLikeAssetRequest(req.path)) {
+    res.status(404).type('text/plain').send(`not_found: ${req.path}`);
     return;
   }
   res.sendFile(path.join(publicDir, 'index.html'));
@@ -279,4 +298,5 @@ app.listen(port, '0.0.0.0', () => {
   kick(() => {
     void resolveDashboardWeatherLatLon().catch(() => {});
   }, 300);
+  kick(() => logMissingModuleImports(publicDir), 1600);
 });
