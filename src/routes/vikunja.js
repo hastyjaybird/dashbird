@@ -4,7 +4,8 @@ import {
   createPanelProject,
   createPanelTodo,
   deletePanelProject,
-  listAllPanelTodos,
+  listAllPanelTodosCached,
+  invalidatePanelTodosCache,
   listPanelProjects,
   listPanelTodos,
   movePanelTodo,
@@ -191,7 +192,7 @@ router.get('/todos', async (req, res) => {
 /** Open tasks marked waiting-on, with project + notes from Dashbird meta. */
 router.get('/todos/waiting', async (_req, res) => {
   try {
-    const [tasks, meta] = await Promise.all([listAllPanelTodos(), loadTaskRandomMeta()]);
+    const [tasks, meta] = await Promise.all([listAllPanelTodosCached(), loadTaskRandomMeta()]);
     const byProject = new Map();
     for (const task of tasks) {
       const row = meta.byTaskId?.[String(task.id)];
@@ -227,6 +228,7 @@ router.post('/todos', async (req, res) => {
       dueDate,
       projectId,
     });
+    invalidatePanelTodosCache();
     res.setHeader('Cache-Control', 'private, no-store');
     res.status(201).json({ ok: true, item });
   } catch (e) {
@@ -240,6 +242,7 @@ router.patch('/todos/:id/done', async (req, res) => {
     const item = await setPanelTodoDone(req.params.id, true, process.env, {
       moveToArchive,
     });
+    invalidatePanelTodosCache();
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, item });
   } catch (e) {
@@ -253,6 +256,7 @@ router.patch('/todos/:id/undo', async (req, res) => {
     const item = await setPanelTodoDone(req.params.id, false, process.env, {
       restoreProjectId,
     });
+    invalidatePanelTodosCache();
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, item });
   } catch (e) {
@@ -268,6 +272,7 @@ router.patch('/todos/:id/move', async (req, res) => {
       return;
     }
     const item = await movePanelTodo(req.params.id, projectId);
+    invalidatePanelTodosCache();
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, item });
   } catch (e) {
@@ -279,6 +284,7 @@ router.patch('/todos/:id', async (req, res) => {
   try {
     const text = req.body?.text ?? req.body?.title;
     const item = await updatePanelTodoText(req.params.id, text);
+    invalidatePanelTodosCache();
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, item });
   } catch (e) {
@@ -332,7 +338,7 @@ router.post('/project-locations/sync', async (_req, res) => {
 router.post('/random-task', async (req, res) => {
   try {
     const filters = parseRandomTaskFilters(req.body || {});
-    const [tasks, meta] = await Promise.all([listAllPanelTodos(), loadTaskRandomMeta()]);
+    const [tasks, meta] = await Promise.all([listAllPanelTodosCached(), loadTaskRandomMeta()]);
     const result = pickRandomTask(tasks, meta, filters);
     res.setHeader('Cache-Control', 'private, no-store');
     if (!result.task) {

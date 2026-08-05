@@ -666,6 +666,8 @@ export async function listPanelTodos(env = process.env, opts = {}) {
 
 /**
  * Open tasks across all panel projects (for random task picker).
+ * Per-project fetches run in parallel (small concurrency cap) — sequential
+ * project-by-project fetching made random-card navigation visibly slow.
  * @param {NodeJS.ProcessEnv} [env]
  * @param {{ limit?: number }} [opts]
  * @returns {Promise<Array<{ id: string, text: string, done: boolean, projectId: number | null, projectTitle: string }>>}
@@ -677,19 +679,61 @@ export async function listAllPanelTodos(env = process.env, opts = {}) {
   const projects = await listPanelProjects(env);
   /** @type {Array<{ id: string, text: string, done: boolean, projectId: number | null, projectTitle: string }>} */
   const all = [];
-  for (const proj of projects) {
-    if (all.length >= cap) break;
-    const items = await listPanelTodos(env, { projectId: proj.id });
-    for (const item of items) {
-      if (all.length >= cap) break;
-      all.push({
-        ...item,
-        projectId: proj.id,
-        projectTitle: proj.title,
-      });
+  const concurrency = 4;
+  for (let i = 0; i < projects.length && all.length < cap; i += concurrency) {
+    const batch = projects.slice(i, i + concurrency);
+    const results = await Promise.all(
+      batch.map((proj) =>
+        listPanelTodos(env, { projectId: proj.id }).then((items) => ({ proj, items })),
+      ),
+    );
+    for (const { proj, items } of results) {
+      for (const item of items) {
+        if (all.length >= cap) break;
+        all.push({
+          ...item,
+          projectId: proj.id,
+          projectTitle: proj.title,
+        });
+      }
     }
   }
   return all;
+}
+
+/** Short TTL so random-card skip/done bursts don't re-hit Vikunja every tap. */
+const PANEL_TODOS_CACHE_DEFAULT_MS = 30_000;
+/** @type {{ at: number, value: Array<object> } | null} */
+let panelTodosCache = null;
+/** @type {Promise<Array<object>> | null} */
+let panelTodosInflight = null;
+
+/** Drop the cached all-todos snapshot (call after any todo create/edit/done/move). */
+export function invalidatePanelTodosCache() {
+  panelTodosCache = null;
+}
+
+/**
+ * listAllPanelTodos with a short in-memory TTL + in-flight dedupe. Mutations
+ * must call invalidatePanelTodosCache(); Vikunja-side edits settle within TTL.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ limit?: number }} [opts]
+ */
+export async function listAllPanelTodosCached(env = process.env, opts = {}) {
+  const ttlRaw = Number(env.VIKUNJA_PANEL_TODOS_CACHE_MS);
+  const ttl = Number.isFinite(ttlRaw) && ttlRaw >= 0 ? ttlRaw : PANEL_TODOS_CACHE_DEFAULT_MS;
+  if (panelTodosCache && Date.now() - panelTodosCache.at < ttl) return panelTodosCache.value;
+  if (!panelTodosInflight) {
+    panelTodosInflight = listAllPanelTodos(env, opts)
+      .then((value) => {
+        panelTodosCache = { at: Date.now(), value };
+        return value;
+      })
+      .finally(() => {
+        panelTodosInflight = null;
+      });
+  }
+  return panelTodosInflight;
 }
 
 /**
