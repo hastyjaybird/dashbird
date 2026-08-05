@@ -113,6 +113,26 @@ CLOUD_HOST=root@YOUR_VULTR_IP ./scripts/sync-to-cloud.sh
 
 To also push personal `data/` (tool PNGs, network DB, etc.): `SYNC_DATA=1 ./scripts/sync-to-cloud.sh`
 
+The sync checks the browser module graph before pushing and again inside the container after
+recreate (`npm run check:modules`). A `FAIL … (missing …)` line means a file the panels import
+never reached the server — re-run the sync rather than debugging the panel.
+
+### "Events failed: error loading dynamically imported module"
+
+A mobile tab showing this (or Chrome's "Failed to fetch dynamically imported module") means the
+entry module or one of its imports did not come back as JavaScript. The browser always names the
+entry module, never the file that is actually missing — the panel now prints the real culprit on
+the line underneath, e.g. `/js/panels/events-filter-ui.js → HTTP 404 (not deployed on this
+server?)`. To confirm from the host:
+
+```bash
+docker compose -f docker-compose.cloud.yml exec dashboard node scripts/check-module-graph.mjs
+docker compose -f docker-compose.cloud.yml logs dashboard | grep module-graph
+```
+
+Fix by re-running `./scripts/sync-to-cloud.sh` so the missing file lands in the `./public` bind
+mount.
+
 ## New tool screenshots (Playwright)
 
 On **2 GB** cloud, Chromium capture is off. To add a snapshot for a new tool:

@@ -27,6 +27,9 @@ RSYNC_CODE=(rsync -avz --delete
   --exclude 'public/data/phone-lan-url.txt'
 )
 
+echo "[dashbird] Checking local module graph before push"
+node "$ROOT/scripts/check-module-graph.mjs" "$ROOT"
+
 echo "[dashbird] Syncing repo code to ${HOST}:${REMOTE_DIR}/"
 ssh "$HOST" "mkdir -p '${REMOTE_DIR}/data' '${REMOTE_DIR}/public/data' '${REMOTE_DIR}/data/vikunja/db' '${REMOTE_DIR}/data/vikunja/files'"
 "${RSYNC_CODE[@]}" "$ROOT/" "${HOST}:${REMOTE_DIR}/"
@@ -76,6 +79,13 @@ echo "[dashbird] Remote rebuild + recreate (${COMPOSE_FILE})"
 # in memory even though the files on disk were rsynced. Force-recreate the
 # dashboard (and caddy, which depends on it) so the new code is actually loaded.
 ssh "$HOST" "cd '${REMOTE_DIR}' && docker compose -f '${COMPOSE_FILE}' up -d --build --force-recreate dashboard caddy"
+
+# A module that never landed on the server does not 404 visibly — the browser
+# only says "error loading dynamically imported module" for the entry panel.
+# Check the graph inside the running container so a half-synced deploy is loud.
+echo "[dashbird] Verifying module graph inside the container"
+ssh "$HOST" "cd '${REMOTE_DIR}' && docker compose -f '${COMPOSE_FILE}' exec -T dashboard node scripts/check-module-graph.mjs" \
+  || echo "  ⚠ module graph check FAILED on the server — panels above will not load; re-run the sync"
 
 DOMAIN="$(ssh "$HOST" "grep -E '^DASHBOARD_DOMAIN=' '${REMOTE_DIR}/.env' 2>/dev/null | cut -d= -f2-" || true)"
 echo "[dashbird] Done. Open https://${DOMAIN:-dashbird.jayhasty.com}/"
