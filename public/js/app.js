@@ -4,6 +4,7 @@
  */
 import { isMobileView } from './lib/view-mode.js';
 import { readPanelCache, writePanelCache } from './lib/panel-cache.js';
+import { MOBILE_PANELS_V } from './lib/mobile-panels-version.js';
 
 const CONFIG_CACHE_KEY = 'config';
 const CONFIG_CACHE_MAX_MS = 7 * 24 * 60 * 60 * 1000;
@@ -241,7 +242,7 @@ async function mainMobile() {
 
   const [{ mountViewModeToggle }, { mountMobileShell }] = await Promise.all([
     import('./panels/view-mode-toggle.js'),
-    import('./panels/mobile-shell.js?v=mobile-panels-20260720-attendance-1'),
+    import(`./panels/mobile-shell.js?v=${MOBILE_PANELS_V}`),
   ]);
 
   mountViewModeToggle(document.getElementById('mount-view-mode'));

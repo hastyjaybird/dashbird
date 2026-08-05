@@ -5,10 +5,10 @@ import {
   runMobileNavApply,
   isMobileNavApplying,
 } from '../lib/mobile-history.js';
+import { MOBILE_PANELS_V } from '../lib/mobile-panels-version.js';
+import { diagnoseModuleLoad } from '../lib/module-load-diagnose.js';
 
 const MOBILE_TAB_KEY = 'dashbirdMobileTab';
-/** Bump when any mobile panel module changes (cache-bust dynamic imports). */
-const MOBILE_PANELS_V = 'mobile-panels-20260720-attendance-1';
 
 /**
  * @returns {import('../lib/mobile-history.js').MobileTab}
@@ -142,120 +142,140 @@ export function mountMobileShell(mounts = {}) {
     groupsRoot.hidden = tab !== 'groups';
   }
 
+  /**
+   * Mount one lazy panel, and when its module cannot load, say which file
+   * broke instead of the browser's generic "error loading dynamically imported
+   * module" (which always blames the entry module, never the missing import).
+   * @param {HTMLElement} root
+   * @param {{
+   *   label: string,
+   *   loadingText: string,
+   *   moduleFile: string,
+   *   mount: (mod: any) => void | Promise<void>,
+   *   clearBeforeMount?: boolean,
+   * }} spec
+   * @returns {Promise<boolean>} true when the panel mounted
+   */
+  async function loadPanel(root, spec) {
+    const moduleUrl = new URL(
+      `./${spec.moduleFile}?v=${MOBILE_PANELS_V}`,
+      import.meta.url,
+    ).href;
+    root.replaceChildren();
+    const status = document.createElement('p');
+    status.className = 'mobile-shell__status';
+    status.textContent = spec.loadingText;
+    root.append(status);
+    try {
+      const mod = await import(moduleUrl);
+      if (spec.clearBeforeMount) root.replaceChildren();
+      await spec.mount(mod);
+      return true;
+    } catch (e) {
+      console.error(`[mobile-shell] ${spec.label} panel failed to load`, e);
+      root.replaceChildren();
+      status.textContent = `${spec.label} failed: ${e?.message || e}`;
+      const detail = document.createElement('p');
+      detail.className = 'mobile-shell__status mobile-shell__status--detail';
+      detail.textContent = 'Checking why…';
+      // A module that failed to load stays failed in the document's module map,
+      // so retrying the import in place can never succeed — reload instead.
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'mobile-shell__retry';
+      retry.textContent = 'Reload page';
+      retry.addEventListener('click', () => {
+        window.location.reload();
+      });
+      root.append(status, detail, retry);
+      diagnoseModuleLoad(moduleUrl)
+        .then((reason) => {
+          detail.textContent = reason;
+        })
+        .catch(() => {
+          detail.textContent = 'Could not work out why — reload the page.';
+        });
+      return false;
+    }
+  }
+
   async function ensureNotes() {
     if (notesMounted) return;
     notesMounted = true;
-    notesRoot.replaceChildren();
-    const status = document.createElement('p');
-    status.className = 'mobile-shell__status';
-    status.textContent = 'Loading notes…';
-    notesRoot.append(status);
-    try {
-      const { mountKeepNotes } = await import(`./keep-notes.js?v=${MOBILE_PANELS_V}`);
-      notesRoot.replaceChildren();
-      mountKeepNotes(notesRoot);
-    } catch (e) {
-      status.textContent = `Notes failed: ${e?.message || e}`;
-      notesMounted = false;
-    }
+    const ok = await loadPanel(notesRoot, {
+      label: 'Notes',
+      loadingText: 'Loading notes…',
+      moduleFile: 'keep-notes.js',
+      clearBeforeMount: true,
+      mount: ({ mountKeepNotes }) => mountKeepNotes(notesRoot),
+    });
+    if (!ok) notesMounted = false;
   }
 
   async function ensureNetwork() {
     if (networkMounted) return;
     networkMounted = true;
-    networkRoot.replaceChildren();
-    const status = document.createElement('p');
-    status.className = 'mobile-shell__status';
-    status.textContent = 'Loading contacts…';
-    networkRoot.append(status);
-    try {
-      const { mountNetworkContactsMobile } = await import(
-        `./network-contacts-mobile.js?v=${MOBILE_PANELS_V}`
-      );
-      mountNetworkContactsMobile(networkRoot);
-    } catch (e) {
-      status.textContent = `Contacts failed: ${e?.message || e}`;
-      networkMounted = false;
-    }
+    const ok = await loadPanel(networkRoot, {
+      label: 'Contacts',
+      loadingText: 'Loading contacts…',
+      moduleFile: 'network-contacts-mobile.js',
+      mount: ({ mountNetworkContactsMobile }) => mountNetworkContactsMobile(networkRoot),
+    });
+    if (!ok) networkMounted = false;
   }
 
   async function ensureEvents() {
     if (eventsMounted) return;
     eventsMounted = true;
-    eventsRoot.replaceChildren();
-    const status = document.createElement('p');
-    status.className = 'mobile-shell__status';
-    status.textContent = 'Loading events…';
-    eventsRoot.append(status);
-    try {
-      const { mountEventsFinderMobile } = await import(
-        `./events-finder-mobile.js?v=${MOBILE_PANELS_V}`
-      );
-      mountEventsFinderMobile(eventsRoot);
-    } catch (e) {
-      status.textContent = `Events failed: ${e?.message || e}`;
-      eventsMounted = false;
-    }
+    const ok = await loadPanel(eventsRoot, {
+      label: 'Events',
+      loadingText: 'Loading events…',
+      moduleFile: 'events-finder-mobile.js',
+      mount: ({ mountEventsFinderMobile }) => mountEventsFinderMobile(eventsRoot),
+    });
+    if (!ok) eventsMounted = false;
   }
 
   async function ensureGroups() {
     if (groupsMounted) return;
     groupsMounted = true;
-    groupsRoot.replaceChildren();
-    const status = document.createElement('p');
-    status.className = 'mobile-shell__status';
-    status.textContent = 'Loading groups…';
-    groupsRoot.append(status);
-    try {
-      const { mountNetworkGroupsMobile } = await import(
-        `./network-groups-mobile.js?v=${MOBILE_PANELS_V}`
-      );
-      mountNetworkGroupsMobile(groupsRoot);
-    } catch (e) {
-      status.textContent = `Groups failed: ${e?.message || e}`;
-      groupsMounted = false;
-    }
+    const ok = await loadPanel(groupsRoot, {
+      label: 'Groups',
+      loadingText: 'Loading groups…',
+      moduleFile: 'network-groups-mobile.js',
+      mount: ({ mountNetworkGroupsMobile }) => mountNetworkGroupsMobile(groupsRoot),
+    });
+    if (!ok) groupsMounted = false;
   }
 
   async function ensureTasks() {
     if (tasksMounted) return;
     tasksMounted = true;
-    tasksRoot.replaceChildren();
-    const status = document.createElement('p');
-    status.className = 'mobile-shell__status';
-    status.textContent = 'Loading tasks…';
-    tasksRoot.append(status);
-    try {
-      const [{ mountTasksMobile }, config] = await Promise.all([
-        import(`./tasks-mobile.js?v=${MOBILE_PANELS_V}`),
-        fetch('/api/config', { cache: 'no-store' })
-          .then((r) => r.json())
-          .catch(() => ({})),
-      ]);
-      mountTasksMobile(tasksRoot, config && typeof config === 'object' ? config : {});
-    } catch (e) {
-      status.textContent = `Tasks failed: ${e?.message || e}`;
-      tasksMounted = false;
-    }
+    const configPromise = fetch('/api/config', { cache: 'no-store' })
+      .then((r) => r.json())
+      .catch(() => ({}));
+    const ok = await loadPanel(tasksRoot, {
+      label: 'Tasks',
+      loadingText: 'Loading tasks…',
+      moduleFile: 'tasks-mobile.js',
+      mount: async ({ mountTasksMobile }) => {
+        const config = await configPromise;
+        mountTasksMobile(tasksRoot, config && typeof config === 'object' ? config : {});
+      },
+    });
+    if (!ok) tasksMounted = false;
   }
 
   async function ensureGmail() {
     if (gmailMounted) return;
     gmailMounted = true;
-    gmailRoot.replaceChildren();
-    const status = document.createElement('p');
-    status.className = 'mobile-shell__status';
-    status.textContent = 'Loading mail…';
-    gmailRoot.append(status);
-    try {
-      const { mountGmailSummaryMobile } = await import(
-        `./gmail-summary-mobile.js?v=${MOBILE_PANELS_V}`
-      );
-      mountGmailSummaryMobile(gmailRoot);
-    } catch (e) {
-      status.textContent = `Mail failed: ${e?.message || e}`;
-      gmailMounted = false;
-    }
+    const ok = await loadPanel(gmailRoot, {
+      label: 'Mail',
+      loadingText: 'Loading mail…',
+      moduleFile: 'gmail-summary-mobile.js',
+      mount: ({ mountGmailSummaryMobile }) => mountGmailSummaryMobile(gmailRoot),
+    });
+    if (!ok) gmailMounted = false;
   }
 
   /**
