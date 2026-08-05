@@ -22,6 +22,8 @@ import {
 } from './events-finder-email-link-follow.js';
 import {
   expandRecurringAndRelativeDates,
+  ymdAtLocalNoonIso,
+  ymdAtLocalTimeIso,
 } from './events-finder-recurring-dates.js';
 import {
   noteSeriesPromoFromEvents,
@@ -1118,100 +1120,9 @@ function ymdFromParts(year, monthIndex, day) {
     : null;
 }
 
-/**
- * YYYY-MM-DD at 12:00 in `timeZone` → UTC ISO (avoids UTC-noon looking like 5am PT).
- * @param {string} ymd
- * @param {string} [timeZone]
- * @returns {string | null}
- */
-export function ymdAtLocalNoonIso(ymd, timeZone = 'America/Los_Angeles') {
-  const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return null;
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const d = Number(m[3]);
-  let ms = Date.UTC(y, mo - 1, d, 19, 0, 0);
-  for (let i = 0; i < 48; i += 1) {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(ms));
-    const got = Object.fromEntries(
-      parts.filter((p) => p.type !== 'literal').map((p) => [p.type, Number(p.value)]),
-    );
-    if (
-      got.year === y
-      && got.month === mo
-      && got.day === d
-      && got.hour === 12
-      && got.minute === 0
-    ) {
-      return new Date(ms).toISOString();
-    }
-    const dayDelta =
-      Date.UTC(y, mo - 1, d) - Date.UTC(got.year, got.month - 1, got.day);
-    const minuteDelta =
-      12 * 60 - (got.hour * 60 + got.minute) + dayDelta / 60000;
-    if (!Number.isFinite(minuteDelta) || minuteDelta === 0) break;
-    ms += minuteDelta * 60 * 1000;
-  }
-  const fallback = Date.parse(`${ymd}T19:00:00.000Z`);
-  return Number.isFinite(fallback) ? new Date(fallback).toISOString() : null;
-}
-
-/**
- * YYYY-MM-DD + local clock → UTC ISO (iterative Intl resolve, same as noon helper).
- * @param {string} ymd
- * @param {number} hours
- * @param {number} minutes
- * @param {string} [timeZone]
- * @returns {string | null}
- */
-export function ymdAtLocalTimeIso(ymd, hours, minutes, timeZone = 'America/Los_Angeles') {
-  const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return null;
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const d = Number(m[3]);
-  const hh = Math.min(23, Math.max(0, Math.trunc(Number(hours) || 0)));
-  const mm = Math.min(59, Math.max(0, Math.trunc(Number(minutes) || 0)));
-  let ms = Date.UTC(y, mo - 1, d, hh + 7, mm, 0);
-  for (let i = 0; i < 48; i += 1) {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(ms));
-    const got = Object.fromEntries(
-      parts.filter((p) => p.type !== 'literal').map((p) => [p.type, Number(p.value)]),
-    );
-    if (
-      got.year === y
-      && got.month === mo
-      && got.day === d
-      && got.hour === hh
-      && got.minute === mm
-    ) {
-      return new Date(ms).toISOString();
-    }
-    const dayDelta =
-      Date.UTC(y, mo - 1, d) - Date.UTC(got.year, got.month - 1, got.day);
-    const minuteDelta =
-      hh * 60 + mm - (got.hour * 60 + got.minute) + dayDelta / 60000;
-    if (!Number.isFinite(minuteDelta) || minuteDelta === 0) break;
-    ms += minuteDelta * 60 * 1000;
-  }
-  return ymdAtLocalNoonIso(ymd, timeZone);
-}
+// ymdAtLocalNoonIso / ymdAtLocalTimeIso live in events-finder-recurring-dates.js
+// (shared with manual-calendar-events recurrence expansion); re-exported below.
+export { ymdAtLocalNoonIso, ymdAtLocalTimeIso };
 
 /**
  * @param {string} raw
