@@ -147,6 +147,8 @@ export function pickRandomTask(tasks, meta, filters) {
     if (exclude.has(String(t.id))) return false;
     if (t.projectId != null && excludeProjects.has(String(t.projectId))) return false;
     const taskMeta = meta.byTaskId[String(t.id)] || null;
+    // Waiting-on tasks are parked, never randomly assigned (dev request 3baf60ae).
+    if (taskMeta?.waitingOn === true) return false;
     const projectMeta = t.projectId != null ? meta.byProjectId[String(t.projectId)] || null : null;
     return taskMatchesRandomFilters(taskMeta, projectMeta, filters);
   });
