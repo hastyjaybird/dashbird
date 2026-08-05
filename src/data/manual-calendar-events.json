@@ -1,6 +1,26 @@
 {
   "events": [
     {
+      "id": "manual:east-bay-bike-party",
+      "title": "East Bay Bike Party",
+      "recurrence": {
+        "kind": "nth_weekday",
+        "nth": 2,
+        "weekday": "friday",
+        "time": "19:30",
+        "durationMinutes": 240,
+        "monthsAhead": 12,
+        "timeZone": "America/Los_Angeles"
+      },
+      "venue": "Meets near an East Bay BART station (spot posted ~24h before the ride)",
+      "location": "East Bay, CA",
+      "city": "Oakland",
+      "url": "https://eastbaybikeparty.wordpress.com/",
+      "description": "Monthly mobile social bike ride — every 2nd Friday, all year. Meet 7:30 PM, roll 8:00 PM. Start spot near an East Bay BART station, posted ~24h prior on the site + Facebook group. Free. Route ~10-15 mi with party stops; monthly theme.",
+      "calendarName": "Manual",
+      "source": "manual"
+    },
+    {
       "id": "manual:opensauce-2026",
       "title": "Open Sauce 2026",
       "start": "2026-07-17T16:00:00.000Z",

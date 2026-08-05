@@ -2,11 +2,30 @@
  * Hand-pinned calendar events (annual festivals, etc.) stored in
  * data/manual-calendar-events.json (fallback: src/data/) — merged into
  * Next-on-calendar + Events catalog.
+ *
+ * Entries may be one-shot ({ start, end? }) or recurring:
+ *   recurrence: {
+ *     kind: 'nth_weekday',      // e.g. every 2nd Friday
+ *     nth: 2,                   // 1-5
+ *     weekday: 'friday',        // full or 3-letter weekday name
+ *     time: '19:30',            // 24h local clock
+ *     durationMinutes: 240,     // optional, default 120
+ *     monthsAhead: 12,          // optional rolling horizon, default 12 (max 24)
+ *     timeZone: 'America/Los_Angeles', // optional
+ *   }
+ * Recurring entries expand to dated occurrences (id suffix :YYYY-MM-DD) on every
+ * load, so both the Next-on-calendar merge and the boot-time catalog sync stay
+ * current without editing the file each month.
  */
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { upsertEventsFinderEvents } from './events-finder-store.js';
+import {
+  nthWeekdayOfMonth,
+  weekdayIndexFromName,
+  ymdAtLocalTimeIso,
+} from './events-finder-recurring-dates.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..', '..');
@@ -24,6 +43,93 @@ export function manualCalendarEventsPaths(env = process.env) {
     path.join(root, 'data', 'manual-calendar-events.json'),
     path.join(root, 'src', 'data', 'manual-calendar-events.json'),
   ];
+}
+
+/**
+ * @param {unknown} raw
+ * @returns {{ kind: 'nth_weekday', nth: number, weekday: number, hours: number, minutes: number, durationMinutes: number, monthsAhead: number, timeZone: string } | null}
+ */
+function normalizeRecurrence(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const rec = /** @type {Record<string, unknown>} */ (raw);
+  if (String(rec.kind || '').trim() !== 'nth_weekday') return null;
+  const nth = Number(rec.nth);
+  const weekday = weekdayIndexFromName(rec.weekday);
+  if (!Number.isFinite(nth) || nth < 1 || nth > 5 || weekday == null) return null;
+  const time = String(rec.time || '12:00').trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!time) return null;
+  const hours = Number(time[1]);
+  const minutes = Number(time[2]);
+  if (hours > 23 || minutes > 59) return null;
+  const duration = Number(rec.durationMinutes);
+  const months = Number(rec.monthsAhead);
+  return {
+    kind: 'nth_weekday',
+    nth: Math.trunc(nth),
+    weekday,
+    hours,
+    minutes,
+    durationMinutes: Number.isFinite(duration) && duration >= 15 ? Math.min(duration, 24 * 60) : 120,
+    monthsAhead: Number.isFinite(months) && months >= 1 ? Math.min(Math.trunc(months), 24) : 12,
+    timeZone: String(rec.timeZone || 'America/Los_Angeles').trim() || 'America/Los_Angeles',
+  };
+}
+
+/**
+ * Current year/month/day in the event's time zone (so today's ride isn't dropped
+ * before it ends, and past months don't expand).
+ * @param {string} timeZone
+ * @param {number} [nowMs]
+ */
+function localYmdInZone(timeZone, nowMs = Date.now()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(nowMs));
+  return {
+    year: Number(parts.find((p) => p.type === 'year')?.value),
+    month: Number(parts.find((p) => p.type === 'month')?.value),
+    day: Number(parts.find((p) => p.type === 'day')?.value),
+  };
+}
+
+/**
+ * Expand a recurring entry into dated occurrences over the rolling horizon.
+ * @param {Record<string, unknown>} raw
+ * @param {ReturnType<typeof normalizeRecurrence>} rec
+ * @param {number} [nowMs]
+ * @returns {object[]}
+ */
+function expandRecurringManualEvent(raw, rec, nowMs = Date.now()) {
+  const baseId = String(raw.id || `manual:${String(raw.title || 'event').trim()}`).trim().slice(0, 140);
+  const today = localYmdInZone(rec.timeZone, nowMs);
+  if (!Number.isFinite(today.year) || !Number.isFinite(today.month)) return [];
+  /** @type {object[]} */
+  const out = [];
+  for (let i = 0; i < rec.monthsAhead; i += 1) {
+    const monthIndex = today.month - 1 + i;
+    const year = today.year + Math.floor(monthIndex / 12);
+    const month = (monthIndex % 12) + 1;
+    const ymd = nthWeekdayOfMonth(year, month, rec.weekday, rec.nth);
+    if (!ymd) continue;
+    const startIso = ymdAtLocalTimeIso(ymd, rec.hours, rec.minutes, rec.timeZone);
+    const startMs = startIso ? Date.parse(startIso) : Number.NaN;
+    if (!Number.isFinite(startMs)) continue;
+    const endMs = startMs + rec.durationMinutes * 60 * 1000;
+    if (endMs <= nowMs) continue;
+    const occurrence = normalizeManualEvent({
+      ...raw,
+      recurrence: undefined,
+      id: `${baseId}:${ymd}`,
+      start: startIso,
+      end: new Date(endMs).toISOString(),
+      allDay: false,
+    });
+    if (occurrence) out.push(occurrence);
+  }
+  return out;
 }
 
 /**
@@ -73,7 +179,19 @@ export async function loadManualCalendarEvents(env = process.env) {
       const raw = await readFile(fp, 'utf8');
       const j = JSON.parse(raw);
       const list = Array.isArray(j) ? j : Array.isArray(j?.events) ? j.events : [];
-      return list.map(normalizeManualEvent).filter(Boolean);
+      /** @type {object[]} */
+      const out = [];
+      for (const entry of list) {
+        if (!entry || typeof entry !== 'object') continue;
+        const rec = normalizeRecurrence(/** @type {Record<string, unknown>} */ (entry).recurrence);
+        if (rec) {
+          out.push(...expandRecurringManualEvent(/** @type {Record<string, unknown>} */ (entry), rec));
+          continue;
+        }
+        const ev = normalizeManualEvent(entry);
+        if (ev) out.push(ev);
+      }
+      return out;
     } catch {
       /* try next path */
     }
