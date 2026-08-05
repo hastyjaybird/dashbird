@@ -8,7 +8,7 @@ import {
 
 const MOBILE_TAB_KEY = 'dashbirdMobileTab';
 /** Bump when any mobile panel module changes (cache-bust dynamic imports). */
-const MOBILE_PANELS_V = 'mobile-panels-20260720-attendance-1';
+const MOBILE_PANELS_V = 'mobile-panels-20260805-sources-1';
 
 /**
  * @returns {import('../lib/mobile-history.js').MobileTab}
