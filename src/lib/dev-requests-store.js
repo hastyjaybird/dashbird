@@ -18,7 +18,6 @@ import {
 
 const PKG_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const DEV_REQUESTS_ROOT = path.join(PKG_ROOT, 'data', 'dev-requests');
-export const DEV_REQUESTS_INBOX_PATH = path.join(DEV_REQUESTS_ROOT, 'inbox.md');
 export const DEV_REQUESTS_DB_PATH = path.join(PKG_ROOT, 'data', 'dev-requests.db');
 
 /** @type {DatabaseSync | null} */
@@ -40,6 +39,13 @@ export function devRequestsRoot(env = process.env) {
   const override = String(env.DEV_REQUESTS_ROOT || '').trim();
   if (override) return path.isAbsolute(override) ? override : path.join(PKG_ROOT, override);
   return DEV_REQUESTS_ROOT;
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function devRequestsInboxPath(env = process.env) {
+  return path.join(devRequestsRoot(env), 'inbox.md');
 }
 
 /**
@@ -172,8 +178,9 @@ function decodeImagePayload(payload) {
 
 /**
  * @param {Record<string, unknown>} row
+ * @param {NodeJS.ProcessEnv} [env]
  */
-function rowToRequest(row) {
+function rowToRequest(row, env = process.env) {
   /** @type {string[]} */
   let attachments = [];
   try {
@@ -197,7 +204,7 @@ function rowToRequest(row) {
     attachments,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
-    path: path.join(devRequestsRoot(), String(row.folder)),
+    path: path.join(devRequestsRoot(env), String(row.folder)),
   };
 }
 
@@ -215,7 +222,7 @@ export function listDevRequests(opts = {}, env = process.env) {
        ORDER BY priority ASC, created_at ASC`,
     )
     .all(status);
-  return rows.map((row) => rowToRequest(/** @type {Record<string, unknown>} */ (row)));
+  return rows.map((row) => rowToRequest(/** @type {Record<string, unknown>} */ (row), env));
 }
 
 /**
@@ -226,7 +233,7 @@ export function getDevRequest(id, env = process.env) {
   const db = openDb(env);
   const row = db.prepare('SELECT * FROM dev_requests WHERE id = ?').get(String(id || '').trim());
   if (!row) return null;
-  return rowToRequest(/** @type {Record<string, unknown>} */ (row));
+  return rowToRequest(/** @type {Record<string, unknown>} */ (row), env);
 }
 
 /**
@@ -431,10 +438,11 @@ export async function syncDevRequestsInbox(env = process.env) {
     }
   }
 
+  const inboxPath = devRequestsInboxPath(env);
   await mkdir(root, { recursive: true });
-  await writeFile(DEV_REQUESTS_INBOX_PATH, lines.join('\n'), 'utf8');
-  await fixHostOwnership([root, DEV_REQUESTS_INBOX_PATH], env);
-  return DEV_REQUESTS_INBOX_PATH;
+  await writeFile(inboxPath, lines.join('\n'), 'utf8');
+  await fixHostOwnership([root, inboxPath], env);
+  return inboxPath;
 }
 
 /**
