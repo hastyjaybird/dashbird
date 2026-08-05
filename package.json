@@ -14,6 +14,7 @@
     "smoke:core": "node scripts/smoke-core.mjs",
     "smoke:avatar-crop": "node scripts/smoke-avatar-crop.mjs",
     "smoke:calendar": "node scripts/smoke-calendar.mjs",
+    "smoke:mobile-panels": "node scripts/smoke-mobile-panels.mjs",
     "smoke:earth": "node scripts/smoke-earth.mjs",
     "smoke:weather-radar": "node scripts/smoke-weather-radar.mjs",
     "catalog:migrate": "node scripts/migrate-to-web-catalog.mjs",

@@ -5,10 +5,22 @@ import {
   runMobileNavApply,
   isMobileNavApplying,
 } from '../lib/mobile-history.js';
+import { loadPanelModule } from '../lib/panel-module-loader.js';
 
 const MOBILE_TAB_KEY = 'dashbirdMobileTab';
 /** Bump when any mobile panel module changes (cache-bust dynamic imports). */
-const MOBILE_PANELS_V = 'mobile-panels-20260720-attendance-1';
+const MOBILE_PANELS_V = 'mobile-panels-20260805-panel-retry-1';
+
+/**
+ * Absolute URL for a panel module. The loader lives in another directory, so a
+ * relative specifier handed to it would resolve against the wrong folder.
+ *
+ * @param {string} file
+ * @returns {string}
+ */
+function panelUrl(file) {
+  return new URL(`./${file}?v=${MOBILE_PANELS_V}`, import.meta.url).href;
+}
 
 /**
  * @returns {import('../lib/mobile-history.js').MobileTab}
@@ -82,12 +94,8 @@ export function mountMobileShell(mounts = {}) {
   tabsRoot.classList.add('mobile-shell__tabs');
 
   let tab = loadTab();
-  let notesMounted = false;
-  let networkMounted = false;
-  let eventsMounted = false;
-  let groupsMounted = false;
-  let tasksMounted = false;
-  let gmailMounted = false;
+  /** @type {Record<string, boolean>} */
+  const mountedPanels = {};
 
   const notesBtn = document.createElement('button');
   notesBtn.type = 'button';
@@ -142,119 +150,136 @@ export function mountMobileShell(mounts = {}) {
     groupsRoot.hidden = tab !== 'groups';
   }
 
-  async function ensureNotes() {
-    if (notesMounted) return;
-    notesMounted = true;
-    notesRoot.replaceChildren();
-    const status = document.createElement('p');
-    status.className = 'mobile-shell__status';
-    status.textContent = 'Loading notes…';
-    notesRoot.append(status);
-    try {
-      const { mountKeepNotes } = await import(`./keep-notes.js?v=${MOBILE_PANELS_V}`);
-      notesRoot.replaceChildren();
-      mountKeepNotes(notesRoot);
-    } catch (e) {
-      status.textContent = `Notes failed: ${e?.message || e}`;
-      notesMounted = false;
-    }
+  /**
+   * @type {Record<string, {
+   *   root: HTMLElement,
+   *   label: string,
+   *   loading: string,
+   *   mount: (root: HTMLElement) => Promise<void>,
+   * }>}
+   */
+  const panels = {
+    notes: {
+      root: notesRoot,
+      label: 'Notes',
+      loading: 'Loading notes…',
+      async mount(root) {
+        const { mountKeepNotes } = await loadPanelModule(panelUrl('keep-notes.js'));
+        root.replaceChildren();
+        mountKeepNotes(root);
+      },
+    },
+    tasks: {
+      root: tasksRoot,
+      label: 'Tasks',
+      loading: 'Loading tasks…',
+      async mount(root) {
+        const [{ mountTasksMobile }, config] = await Promise.all([
+          loadPanelModule(panelUrl('tasks-mobile.js')),
+          fetch('/api/config', { cache: 'no-store' })
+            .then((r) => r.json())
+            .catch(() => ({})),
+        ]);
+        mountTasksMobile(root, config && typeof config === 'object' ? config : {});
+      },
+    },
+    gmail: {
+      root: gmailRoot,
+      label: 'Mail',
+      loading: 'Loading mail…',
+      async mount(root) {
+        const { mountGmailSummaryMobile } = await loadPanelModule(
+          panelUrl('gmail-summary-mobile.js'),
+        );
+        mountGmailSummaryMobile(root);
+      },
+    },
+    events: {
+      root: eventsRoot,
+      label: 'Events',
+      loading: 'Loading events…',
+      async mount(root) {
+        const { mountEventsFinderMobile } = await loadPanelModule(
+          panelUrl('events-finder-mobile.js'),
+        );
+        mountEventsFinderMobile(root);
+      },
+    },
+    network: {
+      root: networkRoot,
+      label: 'Contacts',
+      loading: 'Loading contacts…',
+      async mount(root) {
+        const { mountNetworkContactsMobile } = await loadPanelModule(
+          panelUrl('network-contacts-mobile.js'),
+        );
+        mountNetworkContactsMobile(root);
+      },
+    },
+    groups: {
+      root: groupsRoot,
+      label: 'Groups',
+      loading: 'Loading groups…',
+      async mount(root) {
+        const { mountNetworkGroupsMobile } = await loadPanelModule(
+          panelUrl('network-groups-mobile.js'),
+        );
+        mountNetworkGroupsMobile(root);
+      },
+    },
+  };
+
+  /**
+   * @param {HTMLElement} root
+   * @param {string} label
+   * @param {unknown} err
+   * @param {() => void} retry
+   */
+  function renderPanelError(root, label, err, retry) {
+    root.replaceChildren();
+    const wrap = document.createElement('div');
+    wrap.className = 'mobile-shell__error';
+
+    const msg = document.createElement('p');
+    msg.className = 'mobile-shell__status mobile-shell__status--error';
+    msg.textContent = `${label} failed: ${err?.message || err}`;
+
+    const retryBtn = document.createElement('button');
+    retryBtn.type = 'button';
+    retryBtn.className = 'mobile-shell__retry';
+    retryBtn.textContent = 'Retry';
+    retryBtn.addEventListener('click', () => {
+      retryBtn.disabled = true;
+      retry();
+    });
+
+    wrap.append(msg, retryBtn);
+    root.append(wrap);
   }
 
-  async function ensureNetwork() {
-    if (networkMounted) return;
-    networkMounted = true;
-    networkRoot.replaceChildren();
-    const status = document.createElement('p');
-    status.className = 'mobile-shell__status';
-    status.textContent = 'Loading contacts…';
-    networkRoot.append(status);
-    try {
-      const { mountNetworkContactsMobile } = await import(
-        `./network-contacts-mobile.js?v=${MOBILE_PANELS_V}`
-      );
-      mountNetworkContactsMobile(networkRoot);
-    } catch (e) {
-      status.textContent = `Contacts failed: ${e?.message || e}`;
-      networkMounted = false;
-    }
-  }
+  /**
+   * @param {string} key
+   * @param {{ force?: boolean }} [opts]
+   */
+  async function ensurePanel(key, opts = {}) {
+    const panel = panels[key];
+    if (!panel) return;
+    if (mountedPanels[key] && !opts.force) return;
+    mountedPanels[key] = true;
 
-  async function ensureEvents() {
-    if (eventsMounted) return;
-    eventsMounted = true;
-    eventsRoot.replaceChildren();
+    panel.root.replaceChildren();
     const status = document.createElement('p');
     status.className = 'mobile-shell__status';
-    status.textContent = 'Loading events…';
-    eventsRoot.append(status);
-    try {
-      const { mountEventsFinderMobile } = await import(
-        `./events-finder-mobile.js?v=${MOBILE_PANELS_V}`
-      );
-      mountEventsFinderMobile(eventsRoot);
-    } catch (e) {
-      status.textContent = `Events failed: ${e?.message || e}`;
-      eventsMounted = false;
-    }
-  }
+    status.textContent = panel.loading;
+    panel.root.append(status);
 
-  async function ensureGroups() {
-    if (groupsMounted) return;
-    groupsMounted = true;
-    groupsRoot.replaceChildren();
-    const status = document.createElement('p');
-    status.className = 'mobile-shell__status';
-    status.textContent = 'Loading groups…';
-    groupsRoot.append(status);
     try {
-      const { mountNetworkGroupsMobile } = await import(
-        `./network-groups-mobile.js?v=${MOBILE_PANELS_V}`
-      );
-      mountNetworkGroupsMobile(groupsRoot);
+      await panel.mount(panel.root);
     } catch (e) {
-      status.textContent = `Groups failed: ${e?.message || e}`;
-      groupsMounted = false;
-    }
-  }
-
-  async function ensureTasks() {
-    if (tasksMounted) return;
-    tasksMounted = true;
-    tasksRoot.replaceChildren();
-    const status = document.createElement('p');
-    status.className = 'mobile-shell__status';
-    status.textContent = 'Loading tasks…';
-    tasksRoot.append(status);
-    try {
-      const [{ mountTasksMobile }, config] = await Promise.all([
-        import(`./tasks-mobile.js?v=${MOBILE_PANELS_V}`),
-        fetch('/api/config', { cache: 'no-store' })
-          .then((r) => r.json())
-          .catch(() => ({})),
-      ]);
-      mountTasksMobile(tasksRoot, config && typeof config === 'object' ? config : {});
-    } catch (e) {
-      status.textContent = `Tasks failed: ${e?.message || e}`;
-      tasksMounted = false;
-    }
-  }
-
-  async function ensureGmail() {
-    if (gmailMounted) return;
-    gmailMounted = true;
-    gmailRoot.replaceChildren();
-    const status = document.createElement('p');
-    status.className = 'mobile-shell__status';
-    status.textContent = 'Loading mail…';
-    gmailRoot.append(status);
-    try {
-      const { mountGmailSummaryMobile } = await import(
-        `./gmail-summary-mobile.js?v=${MOBILE_PANELS_V}`
-      );
-      mountGmailSummaryMobile(gmailRoot);
-    } catch (e) {
-      status.textContent = `Mail failed: ${e?.message || e}`;
-      gmailMounted = false;
+      mountedPanels[key] = false;
+      renderPanelError(panel.root, panel.label, e, () => {
+        void ensurePanel(key, { force: true });
+      });
     }
   }
 
@@ -266,16 +291,12 @@ export function mountMobileShell(mounts = {}) {
     tab = next;
     saveTab(tab);
     syncTabs();
-    if (tab === 'notes') {
-      await ensureNotes();
-      document.dispatchEvent(new CustomEvent('dashbird:mobile-nav', { detail: { tab: 'notes', pane: 'list' } }));
-    } else if (tab === 'network') await ensureNetwork();
-    else if (tab === 'groups') await ensureGroups();
-    else if (tab === 'tasks') {
-      await ensureTasks();
-      document.dispatchEvent(new CustomEvent('dashbird:mobile-nav', { detail: { tab: 'tasks', pane: 'list' } }));
-    } else if (tab === 'gmail') await ensureGmail();
-    else await ensureEvents();
+    await ensurePanel(tab);
+    if (tab === 'notes' || tab === 'tasks') {
+      document.dispatchEvent(
+        new CustomEvent('dashbird:mobile-nav', { detail: { tab, pane: 'list' } }),
+      );
+    }
   }
 
   /**
@@ -285,6 +306,9 @@ export function mountMobileShell(mounts = {}) {
     if (isMobileNavApplying()) return;
     if (next === tab) {
       pushMobileNav({ tab: next, pane: 'list' });
+      // A panel whose module failed to load stays unmounted, so re-tapping its own
+      // tab is the most natural retry gesture on a phone.
+      if (!mountedPanels[next]) void ensurePanel(next);
       document.dispatchEvent(
         new CustomEvent('dashbird:mobile-nav', { detail: { tab: next, pane: 'list' } }),
       );
