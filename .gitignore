@@ -2,6 +2,7 @@ node_modules/
 # Local env & secrets (keep .env.example in repo as a template)
 .env*
 !.env.example
+.deploy-secrets/
 *.log
 .DS_Store
 features.txt

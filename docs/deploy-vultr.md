@@ -105,13 +105,40 @@ Keep LAN offline or read-only for a few days as fallback.
 
 ## Code-only deploys (after cutover)
 
-Default — no flags needed:
+### From phone (Cursor app) — GitHub Actions
+
+Push to `main` deploys code to Vultr automatically (no laptop SSH).
+
+**One-time setup** (from the home laptop, once):
 
 ```bash
-CLOUD_HOST=root@YOUR_VULTR_IP ./scripts/sync-to-cloud.sh
+# needs: gh auth login, and SSH to the VPS already working
+CLOUD_HOST=root@YOUR_VULTR_IP ./scripts/setup-phone-deploy.sh
 ```
 
-To also push personal `data/` (tool PNGs, network DB, etc.): `SYNC_DATA=1 ./scripts/sync-to-cloud.sh`
+That installs a deploy SSH key on the VPS and sets repo secrets `CLOUD_HOST` + `CLOUD_SSH_PRIVATE_KEY`.
+
+**Phone workflow:**
+
+1. Edit in Cursor on the phone (cloud agent is fine).
+2. Commit and **push to `main`** (or merge a PR into `main`).
+3. GitHub Action **Deploy cloud** rsyncs code → `/opt/dashbird` and rebuilds `dashboard` + `caddy`.
+4. Hard-refresh `https://dashbird.jayhasty.com`.
+
+Manual re-run: GitHub → Actions → **Deploy cloud** → Run workflow.
+
+CI is **code-only** — it never syncs `data/` or `.env`. Tool PNGs / network DB still use the laptop path below.
+
+### From laptop (rsync)
+
+Default — no flags needed (reads `CLOUD_HOST` from `.env` if set):
+
+```bash
+./scripts/sync-to-cloud.sh
+# or: CLOUD_HOST=root@YOUR_VULTR_IP ./scripts/sync-to-cloud.sh
+```
+
+To also push personal `data/` (tool PNGs, network DB, etc.): `SYNC_DATA=1 SYNC_DATA_CONFIRM=1 ./scripts/sync-to-cloud.sh`
 
 ## New tool screenshots (Playwright)
 

@@ -1,0 +1,79 @@
+# Deploy code to Vultr after push to main (phone Cursor → push → live).
+# Secrets (repo Settings → Secrets → Actions):
+#   CLOUD_HOST              e.g. root@144.202.105.150
+#   CLOUD_SSH_PRIVATE_KEY   ed25519 private key authorized on the VPS
+#
+# Code-only: never syncs data/ or .env. Laptop SYNC_DATA path unchanged.
+name: Deploy cloud
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cloud
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          CLOUD_SSH_PRIVATE_KEY: ${{ secrets.CLOUD_SSH_PRIVATE_KEY }}
+          CLOUD_HOST: ${{ secrets.CLOUD_HOST }}
+        run: |
+          set -euo pipefail
+          test -n "${CLOUD_SSH_PRIVATE_KEY:-}" || { echo "Missing secret CLOUD_SSH_PRIVATE_KEY"; exit 1; }
+          test -n "${CLOUD_HOST:-}" || { echo "Missing secret CLOUD_HOST"; exit 1; }
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$CLOUD_SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          HOST_PART="${CLOUD_HOST#*@}"
+          ssh-keyscan -H "$HOST_PART" >> ~/.ssh/known_hosts 2>/dev/null
+          {
+            echo "Host dashbird-cloud"
+            echo "  HostName ${HOST_PART}"
+            echo "  User ${CLOUD_HOST%@*}"
+            echo "  IdentityFile ~/.ssh/deploy_key"
+            echo "  IdentitiesOnly yes"
+            echo "  StrictHostKeyChecking accept-new"
+          } > ~/.ssh/config
+          chmod 600 ~/.ssh/config ~/.ssh/known_hosts
+
+      - name: Sync code + rebuild
+        env:
+          CLOUD_HOST: ${{ secrets.CLOUD_HOST }}
+        run: |
+          set -euo pipefail
+          REMOTE_DIR=/opt/dashbird
+          COMPOSE_FILE=docker-compose.cloud.yml
+
+          ssh dashbird-cloud "mkdir -p '${REMOTE_DIR}/data' '${REMOTE_DIR}/public/data' '${REMOTE_DIR}/data/vikunja/db' '${REMOTE_DIR}/data/vikunja/files'"
+
+          rsync -avz --delete \
+            --exclude node_modules \
+            --exclude .git \
+            --exclude .env \
+            --exclude data/ \
+            --exclude 'public/data/bookmarks-personal.json' \
+            --exclude 'public/data/notes.md' \
+            --exclude 'public/data/last-backup.txt' \
+            --exclude 'public/data/phone-lan-url.txt' \
+            --exclude .github \
+            ./ "dashbird-cloud:${REMOTE_DIR}/"
+
+          if [[ -f data/gmail-daily-summary-guide.md ]]; then
+            rsync -avz data/gmail-daily-summary-guide.md "dashbird-cloud:${REMOTE_DIR}/data/gmail-daily-summary-guide.md"
+          fi
+
+          ssh dashbird-cloud "cd '${REMOTE_DIR}' && docker compose -f '${COMPOSE_FILE}' up -d --build --force-recreate dashboard caddy"
+
+          DOMAIN="$(ssh dashbird-cloud "grep -E '^DASHBOARD_DOMAIN=' '${REMOTE_DIR}/.env' 2>/dev/null | cut -d= -f2-" || true)"
+          echo "Deployed. Open: https://${DOMAIN:-dashbird.jayhasty.com}"

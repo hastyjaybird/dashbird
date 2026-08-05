@@ -2,19 +2,26 @@
 # Push local dashbird to a public VPS (Vultr Silicon Valley + jayhasty.com).
 # Usage:
 #   CLOUD_HOST=root@YOUR_SERVER_IP ./scripts/sync-to-cloud.sh
+#   # or set CLOUD_HOST once in .env
 # Optional:
 #   CLOUD_DIR=/opt/dashbird
 #   SYNC_DATA=1          # also rsync data/ + public/data bookmarks/notes
+#   SYNC_DATA_CONFIRM=1  # required with SYNC_DATA=1 to actually push (else dry-run)
 #   SYNC_ENV=1           # push local .env to the server
 #   COMPOSE_FILE=docker-compose.cloud.yml
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-HOST="${CLOUD_HOST:?Set CLOUD_HOST=root@your-server-ip}"
+HOST="${CLOUD_HOST:-}"
 REMOTE_DIR="${CLOUD_DIR:-/opt/dashbird}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.cloud.yml}"
 SYNC_DATA="${SYNC_DATA:-0}"
 SYNC_ENV="${SYNC_ENV:-0}"
+
+if [[ -z "$HOST" && -f "$ROOT/.env" ]]; then
+  HOST="$(grep -E '^CLOUD_HOST=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r' || true)"
+fi
+HOST="${HOST:?Set CLOUD_HOST=root@your-server-ip (env or .env)}"
 
 RSYNC_CODE=(rsync -avz --delete
   --exclude node_modules
