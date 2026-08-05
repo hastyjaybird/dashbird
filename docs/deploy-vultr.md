@@ -113,6 +113,23 @@ CLOUD_HOST=root@YOUR_VULTR_IP ./scripts/sync-to-cloud.sh
 
 To also push personal `data/` (tool PNGs, network DB, etc.): `SYNC_DATA=1 ./scripts/sync-to-cloud.sh`
 
+## A mobile tab shows "<Panel> failed: …"
+
+Mobile panels are lazy-loaded ES modules. When one fails, the tab prints the reason and
+offers **Retry** (tapping the tab again also retries), so read the message before redeploying:
+
+- `… is missing on the server (HTTP 404)` — the file never reached `/opt/dashbird/public`.
+  Re-run `sync-to-cloud.sh`; the named path is the file to look for on the VPS.
+- `session expired — reload the page` — the trusted-device cookie lapsed; reload and re-bind
+  via `/auth/device-bind?did=<id>`.
+- `… could not be fetched` — the request never completed (phone offline, Caddy or the Node
+  container down mid-request). Retry usually clears it.
+- `script error — …; files re-fetched OK, try reloading` — every file downloaded cleanly, so
+  the browser is holding a stale module. Reload the page; if it persists, it is a code bug.
+
+Regression check against a running instance: `DASHBIRD_BASE=http://127.0.0.1:3000 npm run
+smoke:mobile-panels` (add `BROWSER=firefox` for the phone's engine).
+
 ## New tool screenshots (Playwright)
 
 On **2 GB** cloud, Chromium capture is off. To add a snapshot for a new tool:

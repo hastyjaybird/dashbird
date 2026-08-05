@@ -13,9 +13,12 @@ const PROBE_TIMEOUT_MS = 12000;
 const PROBE_MAX_FILES = 30;
 const PROBE_MAX_DEPTH = 4;
 
-/** Static `import`/`export … from '…'` specifiers, plus literal `import('…')`. */
+/**
+ * Static `import`/`export … from '…'` statements (anchored to a line start, since
+ * they may only appear at the top level), plus literal `import('…')` calls.
+ */
 const SPECIFIER_RE =
-  /(?:\bimport\s+[^'"]*?from\s*|\bexport\s+[^'"]*?from\s*|\bimport\s*)['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
+  /^\s*(?:import|export)\s+[^'"]*?from\s*['"]([^'"]+)['"]|^\s*import\s*['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/gm;
 
 /**
  * @param {string} url
@@ -114,7 +117,7 @@ async function refreshModuleGraph(entryUrl) {
     const deps = [];
     let m;
     while ((m = SPECIFIER_RE.exec(source))) {
-      const spec = m[1] || m[2];
+      const spec = m[1] || m[2] || m[3];
       if (spec && spec.startsWith('.')) deps.push(spec);
     }
     for (const spec of deps) {
