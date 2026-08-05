@@ -1,4 +1,12 @@
 import { readPanelCache, writePanelCache } from '../lib/panel-cache.js';
+import {
+  thumbUpIcon,
+  thumbDownIcon,
+  zzzIcon,
+  eyeOffIcon,
+} from '../lib/local-news-icons.js';
+import { isRead, markRead, unreadCount } from '../lib/local-news-read-state.js';
+import { openLocalNewsReader } from './local-news-reader.js';
 
 const REFRESH_MS = 5 * 60 * 1000;
 const CACHE_KEY = 'local-news';
@@ -363,12 +371,27 @@ function articleFeedbackPayload(a) {
 }
 
 /**
+ * @param {HTMLButtonElement} btn
+ * @param {SVGElement} icon
+ * @param {string} label
+ * @param {string} tip
+ */
+function feedbackButton(btn, icon, label, tip) {
+  btn.type = 'button';
+  btn.append(icon);
+  btn.setAttribute('aria-label', label);
+  btn.title = tip;
+  return btn;
+}
+
+/**
  * @param {HTMLElement} root
  * @param {Array<object>} articles
  * @param {{
  *   onFeedback: (a: object, vibe: 'up' | 'down') => Promise<void>,
  *   onSnooze: (a: object) => Promise<void>,
  *   onSkip: (a: object) => Promise<void>,
+ *   onRead?: (a: object) => void,
  * }} tasteOpts
  */
 function renderArticleList(root, articles, tasteOpts) {
@@ -385,13 +408,27 @@ function renderArticleList(root, articles, tasteOpts) {
   for (const a of articles) {
     const li = document.createElement('li');
     li.className = 'local-news__row';
+    if (isRead(a.id)) li.classList.add('local-news__row--read');
 
     const link = document.createElement('a');
     link.className = 'local-news__row-link';
     link.href = a.link || '#';
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
-    link.textContent = a.title;
+
+    const dot = document.createElement('span');
+    dot.className = 'local-news__row-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    const titleText = document.createElement('span');
+    titleText.className = 'local-news__row-title';
+    titleText.textContent = a.title;
+    link.append(dot, titleText);
+
+    link.addEventListener('click', () => {
+      markRead(a.id);
+      li.classList.add('local-news__row--read');
+      tasteOpts.onRead?.(a);
+    });
     li.append(link);
 
     const isImportant = a.important === true || (Number(a.importance) >= 8);
@@ -429,42 +466,46 @@ function renderArticleList(root, articles, tasteOpts) {
     const rowActions = document.createElement('span');
     rowActions.className = 'local-news__row-actions';
 
-    const upBtn = document.createElement('button');
-    upBtn.type = 'button';
-    upBtn.className = 'events-finder__card-action events-finder__card-action--up';
-    upBtn.textContent = '👍';
-    upBtn.setAttribute('aria-label', 'More like this');
-    upBtn.title = 'More like this — save title & summary to preferences';
+    const upBtn = feedbackButton(
+      document.createElement('button'),
+      thumbUpIcon({ size: 13 }),
+      'More like this',
+      'More like this — save title & summary to preferences',
+    );
+    upBtn.className = 'events-finder__card-action local-news__card-action local-news__card-action--up';
     upBtn.addEventListener('click', () => {
       void tasteOpts.onFeedback(a, 'up');
     });
 
-    const snoozeBtn = document.createElement('button');
-    snoozeBtn.type = 'button';
-    snoozeBtn.className = 'events-finder__card-action local-news__card-action--snooze';
-    snoozeBtn.textContent = '😴';
-    snoozeBtn.setAttribute('aria-label', 'Tired of this topic for now');
-    snoozeBtn.title = 'Tired of this topic — snooze similar for 2 weeks';
+    const snoozeBtn = feedbackButton(
+      document.createElement('button'),
+      zzzIcon({ size: 13 }),
+      'Tired of this topic for now',
+      'Tired of this topic — snooze similar for 2 weeks',
+    );
+    snoozeBtn.className = 'events-finder__card-action local-news__card-action local-news__card-action--snooze';
     snoozeBtn.addEventListener('click', () => {
       void tasteOpts.onSnooze(a);
     });
 
-    const downBtn = document.createElement('button');
-    downBtn.type = 'button';
-    downBtn.className = 'events-finder__card-action events-finder__card-action--down';
-    downBtn.textContent = '👎';
-    downBtn.setAttribute('aria-label', 'Less like this');
-    downBtn.title = 'Less like this — save title & summary to preferences';
+    const downBtn = feedbackButton(
+      document.createElement('button'),
+      thumbDownIcon({ size: 13 }),
+      'Less like this',
+      'Less like this — save title & summary to preferences',
+    );
+    downBtn.className = 'events-finder__card-action local-news__card-action local-news__card-action--down';
     downBtn.addEventListener('click', () => {
       void tasteOpts.onFeedback(a, 'down');
     });
 
-    const skipBtn = document.createElement('button');
-    skipBtn.type = 'button';
-    skipBtn.className = 'events-finder__card-action events-finder__card-action--hide';
-    skipBtn.textContent = 'Skip';
-    skipBtn.setAttribute('aria-label', 'Skip this article');
-    skipBtn.title = 'Hide this headline only';
+    const skipBtn = feedbackButton(
+      document.createElement('button'),
+      eyeOffIcon({ size: 13 }),
+      'Skip this article',
+      'Hide this headline only',
+    );
+    skipBtn.className = 'events-finder__card-action local-news__card-action local-news__card-action--skip';
     skipBtn.addEventListener('click', () => {
       void tasteOpts.onSkip(a);
     });
@@ -677,14 +718,22 @@ export function mountMainNewsFeed(root) {
 
 /**
  * @param {HTMLElement | null} root
+ * @returns {{ openReader: () => void } | undefined}
  */
 export function mountLocalNews(root) {
-  if (!root) return;
+  if (!root) return undefined;
   root.replaceChildren();
   root.classList.add('local-news');
 
   const toolbar = document.createElement('div');
   toolbar.className = 'local-news__toolbar events-finder__toolbar';
+
+  const readerBtn = document.createElement('button');
+  readerBtn.type = 'button';
+  readerBtn.className = 'local-news__btn local-news__btn--reader';
+  readerBtn.textContent = 'Reader';
+  readerBtn.title = 'Open the full reader — feeds, list views, and reading pane';
+  toolbar.append(readerBtn);
 
   const feedEditorBtn = document.createElement('button');
   feedEditorBtn.type = 'button';
@@ -693,6 +742,11 @@ export function mountLocalNews(root) {
   feedEditorBtn.title = 'Manage feeds, suggestions, and keyword lists';
   feedEditorBtn.setAttribute('aria-expanded', 'false');
   toolbar.append(feedEditorBtn);
+
+  const unreadTag = document.createElement('span');
+  unreadTag.className = 'local-news__unread';
+  unreadTag.hidden = true;
+  toolbar.append(unreadTag);
 
   const body = document.createElement('div');
   body.className = 'local-news__body';
@@ -714,6 +768,8 @@ export function mountLocalNews(root) {
   let findPopoutBackdrop = null;
   /** @type {((e: KeyboardEvent) => void) | null} */
   let findPopoutKeyHandler = null;
+  /** @type {{ update: (p: object) => void, close: () => void, isOpen: () => boolean } | null} */
+  let reader = null;
 
   async function saveTaste(patch) {
     const r = await fetch('/api/local-news/criteria', {
@@ -725,6 +781,33 @@ export function mountLocalNews(root) {
     if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
     taste = { lookFor: j.lookFor ?? '', skip: j.skip ?? '', blacklist: j.blacklist ?? '' };
     await refresh();
+  }
+
+  function paintUnread() {
+    const articles = Array.isArray(lastPayload?.articles) ? lastPayload.articles : [];
+    const n = unreadCount(articles);
+    unreadTag.hidden = n === 0;
+    unreadTag.textContent = n ? `${n} new` : '';
+  }
+
+  function openReader() {
+    if (reader?.isOpen()) return;
+    // Opened straight off a cold mount the first fetch may still be in flight.
+    if (!lastPayload) void refresh();
+    reader = openLocalNewsReader({
+      payload: lastPayload || {},
+      refresh,
+      feedback: feedbackArticle,
+      snooze: snoozeArticle,
+      skip: skipArticle,
+      openFeedEditor: () => void openFeedEditorPopout(),
+      openLists: () => openListsPopout(),
+      onClose: () => {
+        reader = null;
+        paintUnread();
+        void refresh();
+      },
+    });
   }
 
   /**
@@ -746,7 +829,10 @@ export function mountLocalNews(root) {
       onFeedback: feedbackArticle,
       onSnooze: snoozeArticle,
       onSkip: skipArticle,
+      onRead: paintUnread,
     });
+    paintUnread();
+    reader?.update(j);
 
     if (relevancePollTimer) {
       window.clearTimeout(relevancePollTimer);
@@ -1466,9 +1552,13 @@ export function mountLocalNews(root) {
     void openFeedEditorPopout();
   });
 
+  readerBtn.addEventListener('click', () => openReader());
+
   const cached = readPanelCache(CACHE_KEY, CACHE_MAX_MS);
   if (cached && typeof cached === 'object') applyPayload(cached);
 
   refresh();
   window.setInterval(refresh, REFRESH_MS);
+
+  return { openReader };
 }

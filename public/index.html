@@ -341,7 +341,27 @@
             class="life-sidebar__card life-sidebar__card--news panel panel--glass"
             aria-labelledby="h-local-news"
           >
-            <h2 id="h-local-news" class="life-sidebar__card-heading">Local News</h2>
+            <div class="life-sidebar__card-bar">
+              <h2 id="h-local-news" class="life-sidebar__card-heading">Local News</h2>
+              <button
+                type="button"
+                class="life-sidebar__card-expand"
+                id="local-news-reader"
+                aria-label="Open the news reader"
+                title="Open reader"
+              >
+                <svg class="life-sidebar__card-expand-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                  <path
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M6.5 2H2v4.5M14 9.5V14H9.5M2 9.5V14h4.5M9.5 2H14v4.5"
+                  />
+                </svg>
+              </button>
+            </div>
             <div
               id="mount-local-news"
               class="life-sidebar__card-body life-sidebar__card-body--news"

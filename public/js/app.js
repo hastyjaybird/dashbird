@@ -236,7 +236,11 @@ async function mountDeferredPanels(config) {
     ),
     mountWhenReady('local-news', () =>
       import('./panels/local-news.js').then(({ mountLocalNews }) => {
-        mountLocalNews(document.getElementById('mount-local-news'));
+        const news = mountLocalNews(document.getElementById('mount-local-news'));
+        const readerBtn = document.getElementById('local-news-reader');
+        if (news && readerBtn) {
+          readerBtn.addEventListener('click', () => news.openReader());
+        }
       }),
     ),
   ];
