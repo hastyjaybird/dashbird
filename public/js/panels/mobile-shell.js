@@ -8,7 +8,45 @@ import {
 
 const MOBILE_TAB_KEY = 'dashbirdMobileTab';
 /** Bump when any mobile panel module changes (cache-bust dynamic imports). */
-const MOBILE_PANELS_V = 'mobile-panels-20260720-attendance-1';
+const MOBILE_PANELS_V = 'mobile-panels-20260805-retry-1';
+
+/**
+ * Import a mobile panel module; on failure retry once with a cache-busting
+ * param. Browsers remember a failed module fetch for the page's lifetime, so a
+ * transient blip (mid-deploy fetch, flaky mobile link) needs a fresh URL —
+ * not a replay of the failed one — to recover.
+ * @param {string} file panel path relative to this module, e.g. './keep-notes.js'
+ * @returns {Promise<any>}
+ */
+async function importPanel(file) {
+  try {
+    return await import(`${file}?v=${MOBILE_PANELS_V}`);
+  } catch (firstErr) {
+    try {
+      return await import(`${file}?v=${MOBILE_PANELS_V}&retry=${Date.now()}`);
+    } catch {
+      throw firstErr;
+    }
+  }
+}
+
+/**
+ * Failure UI for a lazy tab: message + Retry button. Without this a failed
+ * import left dead error text that only a full page reload could clear.
+ * @param {HTMLElement} status
+ * @param {string} label e.g. 'Events'
+ * @param {unknown} err
+ * @param {() => Promise<void>} retry
+ */
+function paintPanelRetry(status, label, err, retry) {
+  status.textContent = `${label} failed: ${err?.message || err} `;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'mobile-shell__retry';
+  btn.textContent = 'Retry';
+  btn.addEventListener('click', () => void retry());
+  status.append(btn);
+}
 
 /**
  * @returns {import('../lib/mobile-history.js').MobileTab}
@@ -151,12 +189,12 @@ export function mountMobileShell(mounts = {}) {
     status.textContent = 'Loading notes…';
     notesRoot.append(status);
     try {
-      const { mountKeepNotes } = await import(`./keep-notes.js?v=${MOBILE_PANELS_V}`);
+      const { mountKeepNotes } = await importPanel('./keep-notes.js');
       notesRoot.replaceChildren();
       mountKeepNotes(notesRoot);
     } catch (e) {
-      status.textContent = `Notes failed: ${e?.message || e}`;
       notesMounted = false;
+      paintPanelRetry(status, 'Notes', e, ensureNotes);
     }
   }
 
@@ -169,13 +207,11 @@ export function mountMobileShell(mounts = {}) {
     status.textContent = 'Loading contacts…';
     networkRoot.append(status);
     try {
-      const { mountNetworkContactsMobile } = await import(
-        `./network-contacts-mobile.js?v=${MOBILE_PANELS_V}`
-      );
+      const { mountNetworkContactsMobile } = await importPanel('./network-contacts-mobile.js');
       mountNetworkContactsMobile(networkRoot);
     } catch (e) {
-      status.textContent = `Contacts failed: ${e?.message || e}`;
       networkMounted = false;
+      paintPanelRetry(status, 'Contacts', e, ensureNetwork);
     }
   }
 
@@ -188,13 +224,11 @@ export function mountMobileShell(mounts = {}) {
     status.textContent = 'Loading events…';
     eventsRoot.append(status);
     try {
-      const { mountEventsFinderMobile } = await import(
-        `./events-finder-mobile.js?v=${MOBILE_PANELS_V}`
-      );
+      const { mountEventsFinderMobile } = await importPanel('./events-finder-mobile.js');
       mountEventsFinderMobile(eventsRoot);
     } catch (e) {
-      status.textContent = `Events failed: ${e?.message || e}`;
       eventsMounted = false;
+      paintPanelRetry(status, 'Events', e, ensureEvents);
     }
   }
 
@@ -207,13 +241,11 @@ export function mountMobileShell(mounts = {}) {
     status.textContent = 'Loading groups…';
     groupsRoot.append(status);
     try {
-      const { mountNetworkGroupsMobile } = await import(
-        `./network-groups-mobile.js?v=${MOBILE_PANELS_V}`
-      );
+      const { mountNetworkGroupsMobile } = await importPanel('./network-groups-mobile.js');
       mountNetworkGroupsMobile(groupsRoot);
     } catch (e) {
-      status.textContent = `Groups failed: ${e?.message || e}`;
       groupsMounted = false;
+      paintPanelRetry(status, 'Groups', e, ensureGroups);
     }
   }
 
@@ -227,15 +259,15 @@ export function mountMobileShell(mounts = {}) {
     tasksRoot.append(status);
     try {
       const [{ mountTasksMobile }, config] = await Promise.all([
-        import(`./tasks-mobile.js?v=${MOBILE_PANELS_V}`),
+        importPanel('./tasks-mobile.js'),
         fetch('/api/config', { cache: 'no-store' })
           .then((r) => r.json())
           .catch(() => ({})),
       ]);
       mountTasksMobile(tasksRoot, config && typeof config === 'object' ? config : {});
     } catch (e) {
-      status.textContent = `Tasks failed: ${e?.message || e}`;
       tasksMounted = false;
+      paintPanelRetry(status, 'Tasks', e, ensureTasks);
     }
   }
 
@@ -248,13 +280,11 @@ export function mountMobileShell(mounts = {}) {
     status.textContent = 'Loading mail…';
     gmailRoot.append(status);
     try {
-      const { mountGmailSummaryMobile } = await import(
-        `./gmail-summary-mobile.js?v=${MOBILE_PANELS_V}`
-      );
+      const { mountGmailSummaryMobile } = await importPanel('./gmail-summary-mobile.js');
       mountGmailSummaryMobile(gmailRoot);
     } catch (e) {
-      status.textContent = `Mail failed: ${e?.message || e}`;
       gmailMounted = false;
+      paintPanelRetry(status, 'Mail', e, ensureGmail);
     }
   }
 

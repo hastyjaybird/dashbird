@@ -5645,6 +5645,20 @@ html.dashbird-view-mobile .page-view--mobile:not([hidden]) {
   font-size: 0.85rem;
 }
 
+/* Retry button shown when a lazy tab module fails to load (flaky network / mid-deploy). */
+.mobile-shell__retry {
+  margin-left: 0.5rem;
+  min-height: 2rem;
+  padding: 0.25rem 0.8rem;
+  border-radius: 0.45rem;
+  border: 1px solid var(--glass-border);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
 .mobile-mail__status--err {
   color: #ff8a8a;
 }
