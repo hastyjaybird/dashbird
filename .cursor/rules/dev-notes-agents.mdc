@@ -7,7 +7,7 @@ alwaysApply: true
 
 When the user asks to spin up agents for each task, resolve dev requests, or work through structured change requests from desktop/mobile:
 
-1. Read `data/dev-requests/inbox.md` (also `GET /api/dev-requests`). If missing or empty, say so and stop.
+1. Read `data/dev-requests/inbox.md` (also `GET /api/dev-requests`). Phone-filed requests live on the cloud box, so if the local queue is empty run `npm run dev-requests:pull` first; if it is still empty, say so and stop.
 2. Treat each unchecked markdown task (`- [ ] …`) as one unit of work, grouped by priority (`## High`, `## Med`, etc.).
 3. For each item, open its folder under `data/dev-requests/<folder>/` — read `request.json` and any screenshot PNG/JPG in that folder.
 4. Launch one Task subagent **per open request** (parallel when independent). Each agent gets title, body, area, platform, priority, and screenshot paths.

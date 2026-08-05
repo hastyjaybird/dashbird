@@ -117,10 +117,26 @@ Bookmark links are normal **https://** URLs opened in a new tab.
 
 Docker Compose mounts **`./public`** and **`./src`**, so static/panel changes often need only a refresh. After server or dependency changes, run **`docker compose up --build`**.
 
+## Dev requests filed from the phone
+
+Requests submitted through the mobile Dev FAB land on the cloud box, so a fresh local checkout
+has an empty queue. Pull them over HTTPS (read-only, no SSH):
+
+```bash
+npm run dev-requests:pull                 # open requests
+npm run dev-requests:pull -- --status all # include done/closed/archived
+```
+
+Each request becomes `data/dev-requests/<folder>/` (`request.json` + screenshots) and the local
+SQLite index and `data/dev-requests/inbox.md` are rebuilt. Local-only requests are never deleted.
+Set `DASHBIRD_CLOUD_USER` / `DASHBIRD_CLOUD_PASS` (or `DASHBIRD_CLOUD_DEVICE_ID`) in `.env` first —
+see the cloud section of [`.env.example`](.env.example).
+
 ## Validation
 
 ```bash
 npm run smoke:core
+npm run smoke:dev-requests-pull
 ```
 
 Core checks: OpenRouter health, tool ratings, Atlantic storm watch, weather radar.
