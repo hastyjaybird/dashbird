@@ -7,6 +7,20 @@ import { jobWatchEnabled } from '../lib/job-watch-scheduler.js';
 const router = Router();
 router.use(express.json({ limit: '32kb' }));
 
+/**
+ * Keep server paths and stack detail out of the panel; log the raw cause instead.
+ * @param {unknown} e
+ * @returns {string}
+ */
+function clientError(e) {
+  const raw = String(/** @type {Error} */ (e)?.message || e);
+  console.warn('[job-watch]', raw);
+  if (raw.includes('job-watch-targets.json')) {
+    return 'Job Watch config missing on this server — redeploy to fix';
+  }
+  return 'Job Watch unavailable — see server logs';
+}
+
 router.get('/', async (_req, res) => {
   try {
     if (!jobWatchEnabled()) {
@@ -17,7 +31,7 @@ router.get('/', async (_req, res) => {
     res.setHeader('Cache-Control', 'private, no-store');
     res.json(payload);
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+    res.status(500).json({ ok: false, error: clientError(e) });
   }
 });
 
@@ -32,7 +46,7 @@ router.post('/scan', async (_req, res) => {
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ...payload, scanOk: result.ok, scanError: result.error || null });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+    res.status(500).json({ ok: false, error: clientError(e) });
   }
 });
 

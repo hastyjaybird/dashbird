@@ -218,11 +218,6 @@ async function mountDeferredPanels(config) {
         mountToolLibrary(document.getElementById('mount-tool-library'));
       }),
     ),
-    mountWhenReady('events-finder', () =>
-      import('./panels/events-finder.js?v=attendance-online-1').then(({ mountEventsFinder }) => {
-        mountEventsFinder(document.getElementById('mount-events-finder'));
-      }),
-    ),
     mountWhenReady('job-watch', () =>
       import('./panels/job-watch.js').then(({ mountJobWatch }) => {
         mountJobWatch(document.getElementById('mount-job-watch'));
@@ -232,6 +227,11 @@ async function mountDeferredPanels(config) {
             document.querySelector('.job-watch__scan-btn')?.click();
           });
         }
+      }),
+    ),
+    mountWhenReady('events-finder', () =>
+      import('./panels/events-finder.js?v=attendance-online-1').then(({ mountEventsFinder }) => {
+        mountEventsFinder(document.getElementById('mount-events-finder'));
       }),
     ),
     mountWhenReady('local-news', () =>
