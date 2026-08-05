@@ -1,6 +1,6 @@
 # Anthropic Beneficial Deployments — news monitoring plan
 
-**Purpose:** Watch BD program launches, partner co-announcements, and hiring signals for Jay’s Anthropic job watch — inside Dashbird **Local News**, not a parallel news system.
+**Purpose:** Watch BD program launches, partner co-announcements, and hiring *news* signals inside Dashbird **Local News**. **Careers / open roles** moved to left-rail **Job Watch** (`docs/job-watch.md`).
 
 **Related:** [anthropic-bd-news-importance.md](./anthropic-bd-news-importance.md) · [anthropic-bd-ic-wave-trigger-prompt.md](./anthropic-bd-ic-wave-trigger-prompt.md) (daily canary / IC-reopen alerts) · watchlist `src/data/local-news-bd-watchlist.json` · feed directory `src/data/local-news-feed-directory.json`
 
@@ -34,7 +34,7 @@ Feed directory entry (id, url, optional fetchMode)
 | 1 | [anthropic.com/news](https://www.anthropic.com/news) | **HTML list** (`fetchMode: anthropic-news-html`) — no public RSS | On panel load / 15m cache | Yes | Feed `anthropic-news` |
 | 2 | [claude.com/customers](https://claude.com/customers) | Manual HTML spot-check | Weekly | No stable RSS | Watchlist only |
 | 3 | Anthropic Academy / Learn | Manual HTML | Monthly + on rumor | No | Watchlist only |
-| 4 | Anthropic careers | **Greenhouse JSON** board API, BD title filter | On panel load | Yes | Feed `anthropic-careers-bd` |
+| 4 | Anthropic careers | **Greenhouse JSON** board API | Every 2h | Yes | **Job Watch** (`/api/job-watch`) — not Local News |
 | 5 | Anthropic company LinkedIn | Manual (browser) | 2–3×/week | No | Watchlist |
 | 6 | Elizabeth Kelly LinkedIn | Manual | 2–3×/week | No | Watchlist |
 | 7 | Ariana Younai LinkedIn | Manual | 2–3×/week | No | Watchlist |
@@ -63,13 +63,9 @@ Feed directory entry (id, url, optional fetchMode)
 - **Dedupe:** `https://www.anthropic.com/news/<slug>`
 - **Failure mode:** Markup change → empty/partial list; Google News feed is the backup
 
-### `anthropic-careers-bd` (Greenhouse)
+### Anthropic careers → Job Watch
 
-- **URL:** `https://boards-api.greenhouse.io/v1/boards/anthropic/jobs` (public board API)
-- **Filter:** Titles matching Beneficial Deployments / nonprofit·education GTM·CS·architect / mobility·Corps (see `isBdRelevantJobTitle`)
-- **Dedupe:** Greenhouse `absolute_url`
-- **Title prefix:** `[Job] …` so taste/importance treat careers as hiring signals
-- **Freshness:** Open listings stamp `publishedAt` to fetch time (still-open seats stay visible under the same-day BD gate). Board `updated_at` is kept as `jobUpdatedAt` in the summary.
+Careers are **not** a Local News feed anymore. See `docs/job-watch.md` for the 2-hour Greenhouse scan, grey/green/yellow icons, and new-role assessment plan.
 
 ### RSS feeds
 

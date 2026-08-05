@@ -188,6 +188,37 @@ router.get('/todos', async (req, res) => {
   }
 });
 
+/** Open tasks marked waiting-on, with project + notes from Dashbird meta. */
+router.get('/todos/waiting', async (_req, res) => {
+  try {
+    const [tasks, meta] = await Promise.all([listAllPanelTodos(), loadTaskRandomMeta()]);
+    const byProject = new Map();
+    for (const task of tasks) {
+      const row = meta.byTaskId?.[String(task.id)];
+      if (!row?.waitingOn) continue;
+      const pid = task.projectId != null ? Number(task.projectId) : 0;
+      const projectTitle = task.projectTitle || 'Other';
+      if (!byProject.has(pid)) {
+        byProject.set(pid, { projectId: pid || null, projectTitle, items: [] });
+      }
+      byProject.get(pid).items.push({
+        id: String(task.id),
+        text: task.text,
+        waitingNotes: typeof row.waitingNotes === 'string' ? row.waitingNotes : '',
+      });
+    }
+    const groups = [...byProject.values()].sort((a, b) =>
+      String(a.projectTitle).localeCompare(String(b.projectTitle), undefined, {
+        sensitivity: 'base',
+      }),
+    );
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, groups, total: groups.reduce((n, g) => n + g.items.length, 0) });
+  } catch (e) {
+    sendErr(e, res);
+  }
+});
+
 router.post('/todos', async (req, res) => {
   try {
     const dueDate = req.body?.dueDate ?? req.body?.due_date ?? null;

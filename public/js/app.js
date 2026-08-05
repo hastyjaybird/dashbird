@@ -223,6 +223,17 @@ async function mountDeferredPanels(config) {
         mountEventsFinder(document.getElementById('mount-events-finder'));
       }),
     ),
+    mountWhenReady('job-watch', () =>
+      import('./panels/job-watch.js').then(({ mountJobWatch }) => {
+        mountJobWatch(document.getElementById('mount-job-watch'));
+        const scanBtn = document.getElementById('job-watch-scan');
+        if (scanBtn) {
+          scanBtn.addEventListener('click', () => {
+            document.querySelector('.job-watch__scan-btn')?.click();
+          });
+        }
+      }),
+    ),
     mountWhenReady('local-news', () =>
       import('./panels/local-news.js').then(({ mountLocalNews }) => {
         mountLocalNews(document.getElementById('mount-local-news'));

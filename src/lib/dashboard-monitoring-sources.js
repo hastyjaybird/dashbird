@@ -210,10 +210,11 @@ export const DASHBOARD_MONITORING_SOURCES = [
       'Google News RSS query (Beneficial Deployments / Claude Corps / Nonprofits / Teachers / Gates×Anthropic)',
   },
   {
-    id: 'local_news_bd_careers',
-    group: 'News',
-    label: 'Local News — Anthropic Careers (BD filter)',
-    source: 'Greenhouse public board API · BD-relevant title filter',
+    id: 'job_watch_anthropic',
+    group: 'Jobs',
+    label: 'Job Watch — Anthropic careers (targets + new-fit scan)',
+    source:
+      'Greenhouse public board API every 2h · /api/job-watch · docs/job-watch.md',
   },
   {
     id: 'local_news_bd_watchlist',

@@ -2,6 +2,8 @@ import {
   openRandomTaskPicker,
   openProjectLocationsTable,
   openTaskTagsEditor,
+  openWaitingOnList,
+  createWaitingOnControl,
 } from '../lib/task-random-ui.js';
 import { fetchTaskRandomMeta } from '../lib/task-location-meta.js';
 import {
@@ -271,11 +273,17 @@ export function mountTasksMobile(root, config = {}) {
   randomBtn.className = 'mobile-tasks__header-btn';
   randomBtn.textContent = TASKS_LABELS.random;
 
-  listHeadActions.append(randomBtn);
+  const waitingOnBtn = document.createElement('button');
+  waitingOnBtn.type = 'button';
+  waitingOnBtn.className = 'mobile-tasks__header-btn';
+  waitingOnBtn.textContent = TASKS_LABELS.waitingOn;
+
+  listHeadActions.append(waitingOnBtn, randomBtn);
 
   const vikunjaConfigured = config.vikunjaConfigured !== false;
   if (!vikunjaConfigured) {
     randomBtn.hidden = true;
+    waitingOnBtn.hidden = true;
   }
   listHead.append(listTitle, listHeadActions);
 
@@ -1203,6 +1211,16 @@ export function mountTasksMobile(root, config = {}) {
 
     if (canDrag) {
       const taskMeta = taskRandomMeta.byTaskId?.[String(item.id)] || null;
+      const waiting = createWaitingOnControl({
+        taskId: item.id,
+        waitingOn: taskMeta?.waitingOn === true,
+        wrapClass: 'mobile-tasks__waiting',
+        checkClass: 'mobile-tasks__waiting-check',
+        onMetaChange: (meta) => {
+          taskRandomMeta = meta;
+        },
+      });
+      row.append(waiting.wrap);
       const sched = createScheduleControl({
         wrapClass: 'task-schedule mobile-tasks__schedule-wrap',
         buttonClass: 'mobile-tasks__schedule',
@@ -1695,6 +1713,16 @@ export function mountTasksMobile(root, config = {}) {
 
   projectsList.addEventListener('pointerup', finishProjectPointerDrag);
   projectsList.addEventListener('pointercancel', finishProjectPointerDrag);
+
+  waitingOnBtn.addEventListener('click', () => {
+    void openWaitingOnList({
+      root,
+      onMetaChange: (meta) => {
+        taskRandomMeta = meta;
+        if (view === 'detail' && projectId != null && items.length) renderDetailShell();
+      },
+    });
+  });
 
   randomBtn.addEventListener('click', () => {
     openRandomTaskPicker({

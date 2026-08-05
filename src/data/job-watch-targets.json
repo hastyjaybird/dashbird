@@ -1,0 +1,126 @@
+{
+  "company": "Anthropic",
+  "boardUrl": "https://boards-api.greenhouse.io/v1/boards/anthropic/jobs",
+  "careersUiUrl": "https://job-boards.greenhouse.io/anthropic",
+  "strategyNote": "Priority rules from portfolio products/applications/anthropic/STRATEGY.md",
+  "targets": [
+    {
+      "id": "bd-applied-ai-architect-ic",
+      "label": "Applied AI Architect (IC), BD",
+      "priority": 1,
+      "summary": "Closest to engineering + field deployment. Burn-worthy when open.",
+      "matchAny": [
+        "applied ai architect.*beneficial deployments",
+        "applied ai architect.*,?\\s*beneficial",
+        "applied ai engineer.*beneficial deployments"
+      ],
+      "excludeAny": [
+        "head of applied ai",
+        "manager of applied ai",
+        "manager,\\s*applied ai",
+        "life sciences"
+      ]
+    },
+    {
+      "id": "bd-customer-partner-success",
+      "label": "Customer / Partner Success, BD",
+      "priority": 1,
+      "summary": "Literal beneficial-deployment motion; CSM titles framable from real work.",
+      "matchAny": [
+        "(customer|partner)\\s*success.*(beneficial|nonprofit|claude for nonprofits|claude corps|economic mobility)",
+        "programmatic customer success",
+        "scaled csm.*(nonprofit|beneficial|corps)"
+      ],
+      "excludeAny": [
+        "head of customer success",
+        "head of partner success",
+        "industries",
+        "enterprise tech"
+      ]
+    },
+    {
+      "id": "bd-partnerships-agri-gdev",
+      "label": "Partnerships / GTM — agri or global development",
+      "priority": 2,
+      "summary": "Only if JD emphasizes field partners, not MD/clinical research.",
+      "matchAny": [
+        "partnership.*(agriculture|smallholder|agri|global development|economic mobility)",
+        "(agriculture|smallholder|agri).*(partner|gtm|partnerships)",
+        "partner.*global development",
+        "gtm.*(nonprofit|beneficial deployments|agriculture|mobility)"
+      ],
+      "excludeAny": [
+        "global health",
+        "clinical",
+        "life sciences",
+        "medical"
+      ]
+    },
+    {
+      "id": "bd-agriculture",
+      "label": "Gates agriculture / smallholder",
+      "priority": "watch",
+      "summary": "Best thematic fit — watch lane until a real seat appears.",
+      "matchAny": [
+        "smallholder",
+        "agriculture",
+        "agricultural",
+        "agronom",
+        "gaila"
+      ],
+      "excludeAny": ["clinical", "global health", "life sciences"]
+    },
+    {
+      "id": "bd-economic-mobility",
+      "label": "Economic mobility / Claude Corps",
+      "priority": "watch",
+      "summary": "US mobility half of Shad Ahmed's vertical.",
+      "matchAny": [
+        "economic mobility",
+        "claude corps",
+        "claude for nonprofits"
+      ],
+      "excludeAny": ["sales manager, nonprofit & education, emea"]
+    },
+    {
+      "id": "startup-partnerships-lead",
+      "label": "Startup Partnerships Lead",
+      "priority": "queued",
+      "summary": "Queued cooldown burn — partnerships/GTM, not DevRel Evangelist. Confirm before submit.",
+      "matchAny": ["^startup partnerships lead$"],
+      "excludeAny": ["evangelist", "france", "india", "manager, startup partnerships"]
+    }
+  ],
+  "hardPassPatterns": [
+    "partner manager,?\\s*global health",
+    "\\bglobal health\\b",
+    "\\bclinical\\b",
+    "life sciences",
+    "startup evangelist",
+    "technical evangelist",
+    "applied ai technical evangelist",
+    "head of applied ai architecture",
+    "manager,\\s*applied ai engineering",
+    "manager of applied ai engineering",
+    "research scientist",
+    "research engineer,\\s*pretraining",
+    "reinforcement learning",
+    "\\bpretraining\\b"
+  ],
+  "candidateInterestPatterns": [
+    "beneficial deployments",
+    "claude for nonprofits",
+    "claude corps",
+    "economic mobility",
+    "smallholder",
+    "agriculture",
+    "applied ai architect",
+    "partner success",
+    "customer success",
+    "nonprofit",
+    "startup partnerships",
+    "forward.?deployed",
+    "public goods",
+    "raising the floor"
+  ]
+}

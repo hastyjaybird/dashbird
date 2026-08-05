@@ -102,6 +102,9 @@ function normalizeTaskMeta(raw) {
   if (scheduledAt) out.scheduledAt = scheduledAt;
   const scheduledFor = normalizeIsoDate(r.scheduledFor);
   if (scheduledFor) out.scheduledFor = scheduledFor;
+  if (r.waitingOn === true) out.waitingOn = true;
+  const waitingNotes = String(r.waitingNotes || '').trim().slice(0, 400);
+  if (waitingNotes) out.waitingNotes = waitingNotes;
   return Object.keys(out).length ? out : null;
 }
 
@@ -343,6 +346,15 @@ export async function patchTaskMeta(taskId, patch, env = process.env) {
       const iso = normalizeIsoDate(patch.scheduledFor);
       if (iso) next.scheduledFor = iso;
     }
+  }
+  if (patch.waitingOn !== undefined) {
+    if (patch.waitingOn === true) next.waitingOn = true;
+    else delete next.waitingOn;
+  }
+  if (patch.waitingNotes !== undefined) {
+    const notes = String(patch.waitingNotes || '').trim().slice(0, 400);
+    if (notes) next.waitingNotes = notes;
+    else delete next.waitingNotes;
   }
   if (Object.keys(next).length) meta.byTaskId[id] = next;
   else delete meta.byTaskId[id];

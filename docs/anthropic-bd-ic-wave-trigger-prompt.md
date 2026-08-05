@@ -2,7 +2,7 @@
 
 **Purpose:** Every day, review Anthropic careers for signals that Beneficial Deployments is about to **lift the pause on generalist ICs** (CSM / Partner Success / Applied AI Architect). Surface those as Dashbird **Local News → Important** alerts.
 
-**Cadence:** Daily (or on each Local News refresh; Greenhouse feed already polls via `anthropic-careers-bd`).
+**Cadence:** Job Watch scans Greenhouse every 2h (`docs/job-watch.md`). Canaries surface as yellow-dot candidates when newly posted.
 
 **Sources of truth:**
 - Greenhouse board API: `https://boards-api.greenhouse.io/v1/boards/anthropic/jobs`
@@ -87,7 +87,7 @@ Never recommend applying to Class E. For Class A, remind cooldown + STRATEGY Pri
 
 | Layer | Behavior |
 |-------|----------|
-| Feed `anthropic-careers-bd` | Already pulls Greenhouse + `isBdRelevantJobTitle` |
+| Job Watch `/api/job-watch` | Greenhouse full-board scan + target match + new-role assessment |
 | `local-news-bd-importance.js` | Class **E** canaries → `important: true` with reason `E:ic-wave-canary` (not demoted as apply-now) |
 | `local-news-relevance.js` SYSTEM | LLM also scores canaries 8–9 as wave triggers, not apply-now |
 | UI | Local News **Important** badge |

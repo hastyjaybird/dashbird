@@ -2,6 +2,8 @@ import {
   openRandomTaskPicker,
   openProjectLocationsTable,
   openTaskTagsEditor,
+  openWaitingOnList,
+  createWaitingOnControl,
 } from '../lib/task-random-ui.js';
 import { fetchTaskRandomMeta } from '../lib/task-location-meta.js';
 import {
@@ -43,12 +45,18 @@ export function mountTasks(root, config = {}) {
   randomBtn.className = 'tasks-panel__header-btn';
   randomBtn.textContent = TASKS_LABELS.random;
 
-  headerActions.append(randomBtn);
+  const waitingOnBtn = document.createElement('button');
+  waitingOnBtn.type = 'button';
+  waitingOnBtn.className = 'tasks-panel__header-btn';
+  waitingOnBtn.textContent = TASKS_LABELS.waitingOn;
+
+  headerActions.append(waitingOnBtn, randomBtn);
   header.append(headerActions);
 
   const vikunjaConfigured = config.vikunjaConfigured !== false;
   if (!vikunjaConfigured) {
     randomBtn.hidden = true;
+    waitingOnBtn.hidden = true;
   }
 
   const split = document.createElement('div');
@@ -181,21 +189,19 @@ export function mountTasks(root, config = {}) {
   moveRenameInput.autocomplete = 'off';
   moveRenameInput.setAttribute('aria-label', 'Task name');
   moveRenameLabel.append(moveRenameText, moveRenameInput);
+  const moveScheduleSlot = document.createElement('div');
+  moveScheduleSlot.className = 'tasks-panel__move-schedule';
+
   const moveTagsBtn = document.createElement('button');
   moveTagsBtn.type = 'button';
   moveTagsBtn.className = 'tasks-panel__move-edit-tags';
   moveTagsBtn.textContent = 'Edit tags';
 
-  const moveTitle = document.createElement('p');
-  moveTitle.className = 'tasks-panel__move-title';
-  moveTitle.textContent = 'Move to project';
-  const moveList = document.createElement('div');
-  moveList.className = 'tasks-panel__move-list';
   const moveCancel = document.createElement('button');
   moveCancel.type = 'button';
   moveCancel.className = 'tasks-panel__move-cancel';
-  moveCancel.textContent = 'Cancel';
-  moveDialog.append(moveRenameLabel, moveTagsBtn, moveTitle, moveList, moveCancel);
+  moveCancel.textContent = 'Close';
+  moveDialog.append(moveRenameLabel, moveScheduleSlot, moveTagsBtn, moveCancel);
   moveOverlay.append(moveDialog);
   wrap.append(moveOverlay);
 
@@ -724,29 +730,44 @@ export function mountTasks(root, config = {}) {
     movingTaskId = taskId;
     const task = items.find((it) => it.id === taskId);
     moveRenameInput.value = task?.text || '';
-    moveList.replaceChildren();
-    const others = projects.filter((p) => p.id !== projectId);
-    if (!others.length) {
-      const empty = document.createElement('p');
-      empty.className = 'tasks-panel__move-empty muted';
-      empty.textContent = 'No other projects to move into.';
-      moveList.append(empty);
-    } else {
-      for (const p of others) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'tasks-panel__move-target';
-        btn.textContent = p.title;
-        btn.addEventListener('click', () => {
-          void (async () => {
-            if (!(await commitMoveOverlayRename(taskId))) return;
-            void moveTask(taskId, p.id);
-            hideMoveOverlay();
-          })();
-        });
-        moveList.append(btn);
+    const taskMeta = taskRandomMeta.byTaskId?.[String(taskId)] || null;
+    moveScheduleSlot.replaceChildren();
+    const sched = createScheduleControl({
+      wrapClass: 'task-schedule tasks-panel__move-schedule-wrap',
+      buttonClass: 'tasks-panel__schedule tasks-panel__move-schedule-btn',
+      overdueClass: 'task-schedule__overdue',
+    });
+    sched.sync(taskMeta);
+    sched.button.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      sched.button.disabled = true;
+      try {
+        await commitMoveOverlayRename(taskId);
+        const title =
+          moveRenameInput.value.trim() ||
+          items.find((it) => it.id === taskId)?.text ||
+          '';
+        const currentMeta = taskRandomMeta.byTaskId?.[String(taskId)] || null;
+        const { meta, row: nextMeta } = await scheduleTaskToCalendar(
+          taskId,
+          title,
+          currentMeta,
+        );
+        taskRandomMeta = meta;
+        sched.sync(nextMeta);
+      } catch {
+        showStatus('Could not save schedule.', true);
+      } finally {
+        sched.button.disabled = false;
       }
-    }
+    });
+    moveScheduleSlot.append(sched.wrap);
+    void ensureOverduePriority(taskId, taskMeta).then((res) => {
+      if (!res || movingTaskId !== taskId) return;
+      taskRandomMeta = res.meta;
+      sched.sync(res.row);
+    });
     moveTagsBtn.onclick = () => openEditTagsForTask(taskId);
     moveOverlay.hidden = false;
     wrap.classList.add('tasks-panel--moving');
@@ -970,7 +991,7 @@ export function mountTasks(root, config = {}) {
     const handle = document.createElement('span');
     handle.className = 'tasks-panel__drag';
     handle.setAttribute('aria-hidden', 'true');
-    handle.title = 'Drag to another project · double-click task text to edit or move';
+    handle.title = 'Drag to another project · double-click task text to edit';
     const grip = document.createElement('span');
     grip.className = 'tasks-panel__grip';
     handle.append(grip);
@@ -986,7 +1007,7 @@ export function mountTasks(root, config = {}) {
     const text = document.createElement('span');
     text.className = 'tasks-panel__text';
     text.textContent = item.text;
-    text.title = 'Double-click to rename or move to another project';
+    text.title = 'Double-click to edit task';
 
     label.append(cb, text);
 
@@ -994,35 +1015,19 @@ export function mountTasks(root, config = {}) {
 
     if (!item.done && !pendingDone.has(item.id)) {
       const taskMeta = taskRandomMeta.byTaskId?.[String(item.id)] || null;
-      const sched = createScheduleControl({
-        wrapClass: 'task-schedule tasks-panel__schedule-wrap',
-        buttonClass: 'tasks-panel__schedule',
-        overdueClass: 'task-schedule__overdue',
-      });
-      sched.sync(taskMeta);
-      sched.button.addEventListener('click', async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        sched.button.disabled = true;
-        try {
-          const { meta, row: nextMeta } = await scheduleTaskToCalendar(
-            item.id,
-            item.text,
-            taskMeta,
-          );
+      const waiting = createWaitingOnControl({
+        taskId: item.id,
+        waitingOn: taskMeta?.waitingOn === true,
+        wrapClass: 'tasks-panel__waiting',
+        checkClass: 'tasks-panel__waiting-check',
+        onMetaChange: (meta) => {
           taskRandomMeta = meta;
-          sched.sync(nextMeta);
-        } catch {
-          showStatus('Could not save schedule.', true);
-        } finally {
-          sched.button.disabled = false;
-        }
+        },
       });
-      row.append(sched.wrap);
+      row.append(waiting.wrap);
       void ensureOverduePriority(item.id, taskMeta).then((res) => {
         if (!res) return;
         taskRandomMeta = res.meta;
-        sched.sync(res.row);
       });
     }
 
@@ -1344,6 +1349,16 @@ export function mountTasks(root, config = {}) {
   document.addEventListener('click', (e) => {
     if (!(e.target instanceof Node) || detailFoot.contains(e.target)) return;
     closeProjectEditMenu();
+  });
+
+  waitingOnBtn.addEventListener('click', () => {
+    void openWaitingOnList({
+      root: wrap,
+      onMetaChange: (meta) => {
+        taskRandomMeta = meta;
+        if (projectId != null && items.length) renderList();
+      },
+    });
   });
 
   randomBtn.addEventListener('click', () => {

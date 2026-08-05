@@ -632,9 +632,10 @@ export async function buildKilaueaDashboardPayload() {
     } else if (alertLevel || colorCode) {
       parts.push([alertLevel, colorCode].filter(Boolean).join(' · '));
     }
-    // 📅 dated next-eruption window (required for non-erupting strip visibility).
+    // Dated next-eruption window (required for non-erupting strip visibility).
+    // Calendar mark stays on the title only — not repeated in the subtitle.
     if (hasDatedForecast) {
-      parts.push(`📅 next: ${forecast.forecastWhen}`);
+      parts.push(`next: ${forecast.forecastWhen}`);
     }
 
     // ! when erupting, 📅 when a dated next-eruption forecast is available.

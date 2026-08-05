@@ -1,7 +1,7 @@
 /**
- * Do Random Task picker + project locations table.
+ * Do Random Task picker + project locations table + waiting-on list.
  */
-import { TASK_LOCATION_OPTIONS } from './task-location-meta.js';
+import { TASK_LOCATION_OPTIONS, patchTaskRandomMeta } from './task-location-meta.js';
 import {
   clearTaskSchedule,
   createScheduleControl,
@@ -957,6 +957,202 @@ export async function openProjectLocationsTable(opts) {
       syncBtn.disabled = false;
     }
   });
+}
+
+/**
+ * Compact "Waiting on" checkbox for a task row.
+ * @param {{
+ *   taskId: string,
+ *   waitingOn?: boolean,
+ *   wrapClass?: string,
+ *   checkClass?: string,
+ *   onMetaChange?: (meta: object) => void,
+ * }} opts
+ */
+export function createWaitingOnControl(opts) {
+  const {
+    taskId,
+    waitingOn = false,
+    wrapClass = 'tasks-panel__waiting',
+    checkClass = 'tasks-panel__waiting-check',
+    onMetaChange,
+  } = opts;
+
+  const wrap = document.createElement('label');
+  wrap.className = wrapClass;
+  wrap.classList.toggle('is-waiting-on', !!waitingOn);
+  wrap.title = 'Mark as waiting on something';
+
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.className = checkClass;
+  cb.checked = !!waitingOn;
+  cb.setAttribute('aria-label', 'Waiting on');
+
+  const text = document.createElement('span');
+  text.className = 'tasks-waiting-label';
+  text.textContent = 'Waiting on';
+
+  wrap.append(cb, text);
+
+  wrap.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+
+  cb.addEventListener('change', () => {
+    const next = cb.checked;
+    cb.disabled = true;
+    void patchTaskRandomMeta(taskId, { waitingOn: next })
+      .then((meta) => {
+        wrap.classList.toggle('is-waiting-on', next);
+        onMetaChange?.(meta);
+      })
+      .catch(() => {
+        cb.checked = !next;
+      })
+      .finally(() => {
+        cb.disabled = false;
+      });
+  });
+
+  return { wrap, checkbox: cb };
+}
+
+/**
+ * @param {{
+ *   item: { id: string, text: string, waitingNotes?: string },
+ *   onMetaChange?: (meta: object) => void,
+ *   onCleared?: () => void,
+ * }} opts
+ */
+function renderWaitingOnItem(opts) {
+  const { item, onMetaChange, onCleared } = opts;
+  const row = document.createElement('div');
+  row.className = 'tasks-waiting__item';
+
+  const top = document.createElement('div');
+  top.className = 'tasks-waiting__item-top';
+
+  const title = document.createElement('p');
+  title.className = 'tasks-waiting__item-title';
+  title.textContent = item.text;
+
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'tasks-random__secondary tasks-waiting__clear';
+  clearBtn.textContent = 'Clear';
+  clearBtn.title = 'Remove Waiting on';
+  clearBtn.addEventListener('click', async () => {
+    clearBtn.disabled = true;
+    try {
+      const meta = await patchTaskRandomMeta(item.id, { waitingOn: false });
+      onMetaChange?.(meta);
+      onCleared?.();
+    } catch {
+      clearBtn.disabled = false;
+    }
+  });
+
+  top.append(title, clearBtn);
+
+  const notes = document.createElement('textarea');
+  notes.className = 'tasks-waiting__notes';
+  notes.placeholder = 'What is this waiting on?';
+  notes.rows = 2;
+  notes.maxLength = 400;
+  notes.value = item.waitingNotes || '';
+  notes.setAttribute('aria-label', `Waiting notes for ${item.text}`);
+
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let saveTimer = null;
+  notes.addEventListener('input', () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      void patchTaskRandomMeta(item.id, { waitingNotes: notes.value })
+        .then((meta) => {
+          onMetaChange?.(meta);
+          row.classList.add('tasks-waiting__item--saved');
+          setTimeout(() => row.classList.remove('tasks-waiting__item--saved'), 700);
+        })
+        .catch(() => {
+          /* keep typed text; retry on next edit */
+        });
+    }, 400);
+  });
+
+  row.append(top, notes);
+  return row;
+}
+
+/**
+ * Pop-out of all tasks marked Waiting on, grouped by project, with notes.
+ * @param {{ root: HTMLElement, onMetaChange?: (meta: object) => void }} opts
+ */
+export async function openWaitingOnList(opts) {
+  const { root, onMetaChange } = opts;
+  const shell = makeModalShell(root, 'Waiting on');
+  shell.modal.classList.add('tasks-random__modal--waiting');
+
+  const hint = document.createElement('p');
+  hint.className = 'tasks-random__hint muted';
+  hint.textContent =
+    'Tasks marked Waiting on, grouped by project. Add a note for what each is blocked on.';
+
+  const list = document.createElement('div');
+  list.className = 'tasks-waiting__list';
+
+  const status = document.createElement('p');
+  status.className = 'tasks-random__status';
+  status.hidden = true;
+
+  shell.body.append(hint, list, status);
+
+  async function load() {
+    list.replaceChildren();
+    status.hidden = false;
+    status.classList.remove('tasks-random__status--err');
+    status.textContent = 'Loading…';
+    try {
+      const r = await fetch('/api/vikunja/todos/waiting', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.detail || j.error || 'load_failed');
+      status.hidden = true;
+      const groups = Array.isArray(j.groups) ? j.groups : [];
+      if (!groups.length) {
+        const empty = document.createElement('p');
+        empty.className = 'tasks-random__hint muted';
+        empty.textContent = 'No tasks marked Waiting on.';
+        list.append(empty);
+        return;
+      }
+      for (const group of groups) {
+        const section = document.createElement('section');
+        section.className = 'tasks-waiting__group';
+        const h = document.createElement('h3');
+        h.className = 'tasks-waiting__group-title';
+        h.textContent = group.projectTitle || 'Other';
+        section.append(h);
+        for (const item of group.items || []) {
+          section.append(
+            renderWaitingOnItem({
+              item,
+              onMetaChange,
+              onCleared: () => {
+                void load();
+              },
+            }),
+          );
+        }
+        list.append(section);
+      }
+    } catch (e) {
+      status.hidden = false;
+      status.classList.add('tasks-random__status--err');
+      status.textContent = String(e?.message || e || 'Could not load waiting list.');
+    }
+  }
+
+  await load();
 }
 
 export { DIFFICULTY_LABELS, DURATION_LABELS, LOCATION_LABELS, TIME_LABELS };

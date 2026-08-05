@@ -35,6 +35,23 @@ const DEFAULT_STATE = {
   demoArticles: [],
 };
 
+
+const CAREERS_FEED_ID = 'anthropic-careers-bd';
+
+/**
+ * Careers watching moved to Job Watch left-rail panel — keep it out of Local News.
+ * @param {typeof DEFAULT_STATE} state
+ */
+export function stripCareersFeedFromNews(state) {
+  const subs = Array.isArray(state?.subscriptions) ? state.subscriptions : [];
+  const next = subs.filter((s) => String(s?.id || s) !== CAREERS_FEED_ID);
+  const declined = new Set(Array.isArray(state?.declinedIds) ? state.declinedIds.map(String) : []);
+  if (next.length !== subs.length) declined.add(CAREERS_FEED_ID);
+  state.subscriptions = next;
+  state.declinedIds = [...declined];
+  return state;
+}
+
 let directoryCache = null;
 
 /**
@@ -60,7 +77,7 @@ export async function loadLocalNewsState(env = process.env) {
   try {
     const raw = await fs.readFile(localNewsStorePath(env), 'utf8');
     const parsed = JSON.parse(raw);
-    return {
+    const state = {
       subscriptions: Array.isArray(parsed?.subscriptions) ? parsed.subscriptions : [],
       declinedIds: Array.isArray(parsed?.declinedIds) ? parsed.declinedIds : [],
       pendingSuggestion: parsed?.pendingSuggestion || null,
@@ -70,6 +87,12 @@ export async function loadLocalNewsState(env = process.env) {
       bootstrapSeededAt: parsed?.bootstrapSeededAt || null,
       demoArticles: Array.isArray(parsed?.demoArticles) ? parsed.demoArticles : [],
     };
+    const before = state.subscriptions.length;
+    stripCareersFeedFromNews(state);
+    if (state.subscriptions.length !== before) {
+      saveJobWatchMigration(state).catch(() => {});
+    }
+    return state;
   } catch {
     return { ...DEFAULT_STATE };
   }
@@ -79,7 +102,13 @@ export async function loadLocalNewsState(env = process.env) {
  * @param {typeof DEFAULT_STATE} state
  * @param {NodeJS.ProcessEnv} [env]
  */
+async function saveJobWatchMigration(state, env = process.env) {
+  await saveLocalNewsState(state, env);
+}
+
 export async function saveLocalNewsState(state, env = process.env) {
+  stripCareersFeedFromNews(state);
+
   const target = localNewsStorePath(env);
   await fs.mkdir(path.dirname(target), { recursive: true });
   const staging = `${target}.tmp.${process.pid}.${Date.now()}`;
@@ -101,7 +130,7 @@ export function feedPublisher(feed) {
 }
 
 /**
- * Group directory feeds by publisher for the Find feeds browser.
+ * Group directory feeds by publisher for the Feed editor browser.
  * @param {Array<object>} feeds
  * @param {{ subscribedIds?: Set<string> | string[], declinedIds?: Set<string> | string[] }} [opts]
  */
@@ -190,6 +219,89 @@ export async function pickCandidateFeed(state, mode) {
 
   const byPopularity = [...pool].sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
   return byPopularity[0] || null;
+}
+
+/** Default pool size for Feed editor suggestions. */
+export const SUGGESTED_FEEDS_LIMIT = 24;
+
+/**
+ * Top suggested feeds for the Feed editor — ranked by subscription tag overlap,
+ * Look-for preference hits, then directory popularity.
+ * @param {{ subscriptions: Array<object>, declinedIds?: string[] }} state
+ * @param {{ lookFor?: string }} [criteria]
+ * @param {number} [limit]
+ * @param {Set<string> | string[]} [excludeIds] extra ids to omit (already shown / just hidden)
+ * @returns {Promise<Array<object>>}
+ */
+export async function rankSuggestedFeeds(
+  state,
+  criteria = {},
+  limit = SUGGESTED_FEEDS_LIMIT,
+  excludeIds = [],
+) {
+  const directory = await loadFeedDirectory();
+  const subscribedIds = new Set((state.subscriptions || []).map((f) => f.id));
+  const declinedIds = new Set(state.declinedIds || []);
+  const excluded = excludeIds instanceof Set ? excludeIds : new Set(excludeIds || []);
+  const subscribedTags = new Set((state.subscriptions || []).flatMap((f) => f.tags || []));
+  const lookForTerms = String(criteria.lookFor || '')
+    .split(/\n/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
+  const pool = directory.filter(
+    (f) =>
+      f?.id
+      && !subscribedIds.has(f.id)
+      && !declinedIds.has(f.id)
+      && !excluded.has(f.id),
+  );
+  const scored = pool.map((f) => {
+    const tags = Array.isArray(f.tags) ? f.tags : [];
+    const tagOverlap = tags.filter((t) => subscribedTags.has(t));
+    const hay = `${f.title || ''} ${f.category || ''} ${tags.join(' ')}`.toLowerCase();
+    const preferenceHits = lookForTerms.filter(
+      (term) =>
+        hay.includes(term)
+        || tags.some((tag) => String(tag).toLowerCase().includes(term) || term.includes(String(tag).toLowerCase())),
+    );
+    const popularity = Number(f.popularity) || 0;
+    // Prefer similar-to-following over pure Look-for keyword hits for discovery.
+    const score = tagOverlap.length * 12 + preferenceHits.length * 6 + popularity * 0.05;
+    /** @type {'match' | 'similar' | 'preferences' | 'popular'} */
+    let reason = 'popular';
+    if (tagOverlap.length && preferenceHits.length) reason = 'match';
+    else if (tagOverlap.length) reason = 'similar';
+    else if (preferenceHits.length) reason = 'preferences';
+    return {
+      ...f,
+      score,
+      reason,
+      matchTags: tagOverlap.slice(0, 4),
+      preferenceHits: preferenceHits.slice(0, 4),
+    };
+  });
+
+  return scored
+    .sort(
+      (a, b) =>
+        b.score - a.score
+        || (b.popularity || 0) - (a.popularity || 0)
+        || String(a.title || '').localeCompare(String(b.title || '')),
+    )
+    .slice(0, Math.max(0, Number(limit) || SUGGESTED_FEEDS_LIMIT));
+}
+
+/**
+ * Next replacement feed after a hide — biased to tag overlap with subscriptions.
+ * @param {{ subscriptions: Array<object>, declinedIds?: string[] }} state
+ * @param {{ lookFor?: string }} [criteria]
+ * @param {Set<string> | string[]} [excludeIds]
+ * @returns {Promise<object | null>}
+ */
+export async function pickReplacementSuggestedFeed(state, criteria = {}, excludeIds = []) {
+  const ranked = await rankSuggestedFeeds(state, criteria, 1, excludeIds);
+  return ranked[0] || null;
 }
 
 /**

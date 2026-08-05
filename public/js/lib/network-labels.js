@@ -18,4 +18,5 @@ export const NETWORK_LABELS = {
 
 export const TASKS_LABELS = {
   random: 'Random',
+  waitingOn: 'Waiting on',
 };

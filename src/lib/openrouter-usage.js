@@ -121,6 +121,25 @@ export const OPENROUTER_PROGRAMS = Object.freeze([
     notes:
       'Per-message intent classify (action / waiting / money_docs / scheduling / fyi / event / noise) + importance. Gates noise/events out of the digest prompt. Same free-first text chain; X-Title dashbird-daily-summary-triage. Heuristic fallback on 429/errors. No separate paid spend.',
   },
+  {
+    id: 'local-news-preferences',
+    label: 'Local News preferences',
+    area: 'Local News',
+    costMode: 'free-first',
+    relativeWeight: 4,
+    triggers: 'Thumbs up/down or snooze on a Local News headline',
+    notes:
+      'Extracts conceptual taste (tone/framing, not keyword lists) into data/local-news-preferences.md. Free-first text chain; X-Title dashbird-local-news-preferences.',
+  },
+  {
+    id: 'local-news-relevance',
+    label: 'Local News relevance',
+    area: 'Local News',
+    costMode: 'free-first',
+    relativeWeight: 6,
+    triggers: 'Background blurbs for Local News cards',
+    notes: 'Short “why this matters” summaries + importance hints for the Local News feed.',
+  },
 ]);
 
 /**

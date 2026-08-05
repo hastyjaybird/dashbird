@@ -7,6 +7,9 @@ import {
   loadFeedDirectory,
   groupFeedsByPublisher,
   findDirectoryFeed,
+  rankSuggestedFeeds,
+  pickReplacementSuggestedFeed,
+  SUGGESTED_FEEDS_LIMIT,
 } from '../lib/local-news-store.js';
 import { generateSuggestion, localNewsSuggestionsEnabled, promoteDeferredSuggestionIfDue, LOCAL_NEWS_SUGGESTION_INTERVAL_MS } from '../lib/local-news-scheduler.js';
 import { fetchLocalNewsFeed } from '../lib/local-news-fetch.js';
@@ -31,6 +34,13 @@ import {
   BD_WATCH_START_YMD,
   articleMeetsBdFreshness,
 } from '../lib/local-news-bd-freshness.js';
+import {
+  applyPreferenceRanking,
+  loadPreferencesMeta,
+  recordArticleFeedback,
+  snoozeArticleTopic,
+  sortArticlesByPreferences,
+} from '../lib/local-news-preferences.js';
 
 const router = Router();
 router.use(express.json({ limit: '32kb' }));
@@ -99,9 +109,10 @@ router.get('/', async (_req, res) => {
     state = await promoteDeferredSuggestionIfDue(state);
     state = await seedBootstrapArticlesIfNeeded(state);
 
-    const [subscriptionArticles, criteriaRaw] = await Promise.all([
+    const [subscriptionArticles, criteriaRaw, prefMeta] = await Promise.all([
       fetchArticlesFor(state.subscriptions),
       loadLocalNewsCriteria(),
+      loadPreferencesMeta(),
     ]);
     const criteria = mergeBdCriteriaSeeds(criteriaRaw);
 
@@ -153,6 +164,7 @@ router.get('/', async (_req, res) => {
           ...a,
           tasteOk: true,
           tasteScore: Number(a.tasteScore) || 999,
+          preferenceScore: 999,
           skipped: false,
           demo: true,
         };
@@ -169,9 +181,20 @@ router.get('/', async (_req, res) => {
         return applyBdImportance(base);
       });
 
-    const articles = [...demoCards, ...withRelevance.map((a) => applyBdImportance(a))]
-      .sort(compareArticlesByImportanceThenTaste(byDateDesc))
-      .slice(0, ARTICLE_FEED_LIMIT);
+    // Reconsider recent thumbs each refresh — preference concepts first, then importance/taste.
+    const rankedMain = sortArticlesByPreferences(
+      applyPreferenceRanking(
+        withRelevance.map((a) => applyBdImportance(a)),
+        prefMeta,
+      ),
+      prefMeta,
+      byDateDesc,
+    );
+
+    const articles = [
+      ...demoCards.sort(compareArticlesByImportanceThenTaste(byDateDesc)),
+      ...rankedMain,
+    ].slice(0, ARTICLE_FEED_LIMIT);
 
     const skippedOut = skippedWithRelevance.map((a) => applyBdImportance(a));
 
@@ -188,6 +211,11 @@ router.get('/', async (_req, res) => {
         lookFor: criteria.lookFor,
         skip: criteria.skip,
         blacklist: criteria.blacklist,
+      },
+      preferences: {
+        commonalities: prefMeta.commonalities,
+        recentCount: prefMeta.entries.length,
+        snoozedCount: prefMeta.snoozed.length,
       },
       skippedCount: skippedOut.length,
       skippedArticles: skippedOut,
@@ -306,6 +334,104 @@ router.post('/suggestion/fresh', async (_req, res) => {
   }
 });
 
+/**
+ * @param {object} feed
+ * @returns {Promise<object>}
+ */
+async function buildFeedPreviewPayload(feed) {
+  if (isBdFeed(feed) && !bdWatchActive()) {
+    return {
+      ok: true,
+      feed: {
+        id: feed.id,
+        title: feed.title,
+        siteUrl: feed.siteUrl || feed.url,
+        url: feed.url,
+      },
+      articles: [],
+      bdWatch: {
+        startYmd: BD_WATCH_START_YMD,
+        active: false,
+        sameDayOnly: true,
+        timeZone: 'America/Los_Angeles',
+      },
+    };
+  }
+
+  const [fetchResult, criteriaRaw] = await Promise.all([
+    fetchLocalNewsFeed(feed),
+    loadLocalNewsCriteria(),
+  ]);
+  if (!fetchResult.ok) {
+    const err = new Error(fetchResult.error || 'feed_fetch_failed');
+    err.status = 502;
+    throw err;
+  }
+  const criteria = mergeBdCriteriaSeeds(criteriaRaw);
+  const minMs = bdMinPublishedMs();
+
+  const byDateDesc = (a, b) => {
+    const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
+    const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
+    return tb - ta;
+  };
+
+  const tasteFiltered = fetchResult.items
+    .filter((it) => !isBdFeed(feed) || articleMeetsBdFreshness(it, minMs))
+    .map((it) => ({
+      ...it,
+      id: it.link || `${feed.id}:${it.title}`,
+      feedId: feed.id,
+      feedTitle: feed.title,
+      category: feed.category,
+      tags: feed.tags,
+    }))
+    .map((a) => ({ ...a, ...scoreArticleTasteResult(a, criteria) }))
+    .filter((a) => a.tasteOk);
+
+  const withRelevance = await ensureRelevanceForArticles(tasteFiltered);
+  const articles = withRelevance
+    .map((a) => applyBdImportance(a))
+    .sort(compareArticlesByImportanceThenTaste(byDateDesc))
+    .slice(0, SUGGESTION_PREVIEW_LIMIT);
+
+  return {
+    ok: true,
+    feed: {
+      id: feed.id,
+      title: feed.title,
+      siteUrl: feed.siteUrl || feed.url,
+      url: feed.url,
+    },
+    articles,
+  };
+}
+
+/**
+ * @param {string} feedId
+ * @returns {{ articleCount: number | null, latestPublishedAt: string | null, fetchedAt: string | null }}
+ */
+function feedStatsFromCache(feedId) {
+  const cached = articleCache.get(feedId);
+  if (!cached) {
+    return { articleCount: null, latestPublishedAt: null, fetchedAt: null };
+  }
+  let latestPublishedAt = null;
+  let latestMs = 0;
+  for (const it of cached.items || []) {
+    const ms = it?.publishedAt ? new Date(it.publishedAt).getTime() : 0;
+    if (ms > latestMs) {
+      latestMs = ms;
+      latestPublishedAt = it.publishedAt;
+    }
+  }
+  return {
+    articleCount: Array.isArray(cached.items) ? cached.items.length : 0,
+    latestPublishedAt,
+    fetchedAt: cached.fetchedAt ? new Date(cached.fetchedAt).toISOString() : null,
+  };
+}
+
 router.get('/suggestion/preview', async (_req, res) => {
   try {
     const state = await loadLocalNewsState();
@@ -314,93 +440,141 @@ router.get('/suggestion/preview', async (_req, res) => {
       res.status(404).json({ ok: false, error: 'no_pending_suggestion' });
       return;
     }
+    const payload = await buildFeedPreviewPayload(pending.feed);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(payload);
+  } catch (e) {
+    const status = Number(e?.status) || 500;
+    res.status(status).json({ ok: false, error: String(e?.message || e) });
+  }
+});
 
-    const feed = pending.feed;
-    if (isBdFeed(feed) && !bdWatchActive()) {
-      res.setHeader('Cache-Control', 'private, no-store');
-      res.json({
-        ok: true,
-        feed: {
-          title: feed.title,
-          siteUrl: feed.siteUrl || feed.url,
-          url: feed.url,
-        },
-        articles: [],
-        bdWatch: {
-          startYmd: BD_WATCH_START_YMD,
-          active: false,
-          sameDayOnly: true,
-          timeZone: 'America/Los_Angeles',
-        },
-      });
+router.get('/feeds/:id/preview', async (req, res) => {
+  try {
+    const feed = await findDirectoryFeed(req.params.id);
+    if (!feed?.url) {
+      res.status(404).json({ ok: false, error: 'feed_not_found' });
       return;
     }
+    const payload = await buildFeedPreviewPayload(feed);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(payload);
+  } catch (e) {
+    const status = Number(e?.status) || 500;
+    res.status(status).json({ ok: false, error: String(e?.message || e) });
+  }
+});
 
-    const [fetchResult, criteriaRaw] = await Promise.all([
-      fetchLocalNewsFeed(feed),
-      loadLocalNewsCriteria(),
-    ]);
-    if (!fetchResult.ok) {
-      res.status(502).json({ ok: false, error: fetchResult.error || 'feed_fetch_failed' });
+router.post('/feeds/:id/decline', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) {
+      res.status(400).json({ ok: false, error: 'missing_feed_id' });
       return;
     }
-    const criteria = mergeBdCriteriaSeeds(criteriaRaw);
-    const minMs = bdMinPublishedMs();
-
-    const byDateDesc = (a, b) => {
-      const ta = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
-      const tb = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
-      return tb - ta;
-    };
-
-    const tasteFiltered = fetchResult.items
-      .filter((it) => !isBdFeed(feed) || articleMeetsBdFreshness(it, minMs))
-      .map((it) => ({
-        ...it,
-        id: it.link || `${feed.id}:${it.title}`,
-        feedId: feed.id,
-        feedTitle: feed.title,
-        category: feed.category,
-        tags: feed.tags,
-      }))
-      .map((a) => ({ ...a, ...scoreArticleTasteResult(a, criteria) }))
-      .filter((a) => a.tasteOk);
-
-    const withRelevance = await ensureRelevanceForArticles(tasteFiltered);
-    const articles = withRelevance
-      .map((a) => applyBdImportance(a))
-      .sort(compareArticlesByImportanceThenTaste(byDateDesc))
-      .slice(0, SUGGESTION_PREVIEW_LIMIT);
-
+    const excludeIds = Array.isArray(req.body?.excludeIds)
+      ? req.body.excludeIds.map((x) => String(x || '').trim()).filter(Boolean)
+      : [];
+    const state = await loadLocalNewsState();
+    if (!(state.declinedIds || []).includes(id)) {
+      state.declinedIds = [...(state.declinedIds || []), id];
+    }
+    if (state.pendingSuggestion?.feed?.id === id) {
+      state.pendingSuggestion = null;
+      state.lastSuggestionAt = new Date().toISOString();
+    }
+    await saveLocalNewsState(state);
+    const criteria = mergeBdCriteriaSeeds(await loadLocalNewsCriteria());
+    const exclude = new Set([id, ...excludeIds]);
+    const replacement = await pickReplacementSuggestedFeed(state, criteria, exclude);
+    const suggestedFeeds = await rankSuggestedFeeds(
+      state,
+      criteria,
+      SUGGESTED_FEEDS_LIMIT,
+      excludeIds.filter((x) => x !== id),
+    );
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({
       ok: true,
-      feed: {
-        title: feed.title,
-        siteUrl: feed.siteUrl || feed.url,
-        url: feed.url,
-      },
-      articles,
+      declinedIds: state.declinedIds,
+      replacement,
+      suggestedFeeds,
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
+router.post('/feedback', async (req, res) => {
+  try {
+    const vibe = String(req.body?.vibe || '').trim().toLowerCase();
+    if (vibe !== 'up' && vibe !== 'down') {
+      res.status(400).json({ ok: false, error: 'invalid_vibe' });
+      return;
+    }
+    const article = req.body?.article && typeof req.body.article === 'object' ? req.body.article : null;
+    if (!article?.id || !article?.title) {
+      res.status(400).json({ ok: false, error: 'missing_article' });
+      return;
+    }
+    const result = await recordArticleFeedback(article, vibe);
+    // Thumbs down still hides this exact headline (not a keyword ban).
+    if (vibe === 'down' && article.id) {
+      await saveLocalNewsCriteria({ hiddenArticleIds: [String(article.id)] });
+    }
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    const status = Number(e?.status) || 500;
+    res.status(status).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+router.post('/snooze', async (req, res) => {
+  try {
+    const article = req.body?.article && typeof req.body.article === 'object' ? req.body.article : null;
+    if (!article?.id || !article?.title) {
+      res.status(400).json({ ok: false, error: 'missing_article' });
+      return;
+    }
+    const result = await snoozeArticleTopic(article);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    const status = Number(e?.status) || 500;
+    res.status(status).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 router.get('/directory', async (_req, res) => {
   try {
     const state = await loadLocalNewsState();
-    const directory = await loadFeedDirectory();
+    const [directory, criteriaRaw] = await Promise.all([
+      loadFeedDirectory(),
+      loadLocalNewsCriteria(),
+    ]);
+    const criteria = mergeBdCriteriaSeeds(criteriaRaw);
     const subscribedIds = new Set(state.subscriptions.map((f) => f.id));
     const publishers = groupFeedsByPublisher(directory, {
       subscribedIds,
       declinedIds: state.declinedIds,
     });
+    const subscriptions = state.subscriptions.map((feed) => ({
+      ...feed,
+      stats: feedStatsFromCache(feed.id),
+    }));
+    // Prefer Anthropic Careers first in the Tuned-in list so it stays visible.
+    subscriptions.sort((a, b) => {
+      return String(a.title || '').localeCompare(String(b.title || ''));
+    });
+    const suggestedFeeds = await rankSuggestedFeeds(state, criteria, SUGGESTED_FEEDS_LIMIT);
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({
       ok: true,
       publishers,
-      subscriptions: state.subscriptions,
+      subscriptions,
+      suggestedFeeds,
+      suggestedLimit: SUGGESTED_FEEDS_LIMIT,
       pendingSuggestion: state.pendingSuggestion,
       declinedIds: state.declinedIds,
     });
@@ -419,6 +593,14 @@ router.post('/subscriptions', async (req, res) => {
     const feed = await findDirectoryFeed(feedId);
     if (!feed) {
       res.status(404).json({ ok: false, error: 'feed_not_found' });
+      return;
+    }
+    if (feed.id === 'anthropic-careers-bd') {
+      res.status(400).json({
+        ok: false,
+        error: 'careers_moved_to_job_watch',
+        hint: 'Anthropic careers are watched in the Job Watch left-rail panel.',
+      });
       return;
     }
     const state = await loadLocalNewsState();

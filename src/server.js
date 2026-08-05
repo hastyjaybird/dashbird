@@ -85,6 +85,8 @@ import { startFacebookEventsWeeklyScheduler } from './lib/events-finder-facebook
 import { startTelegramEventsPoller } from './lib/events-finder-telegram.js';
 import { startToolsContactsBackupScheduler, startDailyDataBackupScheduler, startBackupStalenessMonitor } from './lib/data-backup-schedule.js';
 import { startLocalNewsScheduler } from './lib/local-news-scheduler.js';
+import { startJobWatchScheduler } from './lib/job-watch-scheduler.js';
+import jobWatchRouter from './routes/job-watch.js';
 import { startBigEventsDailyRefreshScheduler } from './lib/events-finder-conference-watchlist-schedule.js';
 
 import { startGmailWeeklySummaryScheduler } from './lib/gmail-weekly-summary-synth.js';
@@ -210,6 +212,7 @@ app.use('/api/network', networkRouter);
 app.use('/api/open-desktop', openDesktopRouter);
 app.use('/api/tool-library', toolLibraryRouter);
 app.use('/api/local-news', localNewsRouter);
+app.use('/api/job-watch', jobWatchRouter);
 app.use('/api/web-catalog', webCatalogRouter);
 app.use('/api/dev-notes', devNotesRouter);
 app.use('/api/dev-requests', devRequestsRouter);
@@ -265,6 +268,7 @@ app.listen(port, '0.0.0.0', () => {
   kick(() => startDailyDataBackupScheduler(), 1125);
   kick(() => startBackupStalenessMonitor(), 1140);
   kick(() => startLocalNewsScheduler(), 1150);
+  kick(() => startJobWatchScheduler(), 1160);
   kick(() => startBigEventsDailyRefreshScheduler(), 1175);
   kick(() => startGmailWeeklySummaryScheduler(), 1250);
   kick(() => warmGoogleCalendarCache(), 1200);

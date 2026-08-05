@@ -92,6 +92,10 @@ data/debug-*.ndjson
 data/*.db.bak
 data/device-place.json
 data/local-news-relevance.json
+data/local-news-preferences.md
+data/local-news-preferences-meta.json
+data/job-watch.json
+data/gmail-events-cache-testwrite
 data/gmail-daily-summary-guide.md
 data/gmail-daily-summary-guide-feedback.json
 # Agent scratch (screenshots/avatars saved during chats; rules stay tracked)
