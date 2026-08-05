@@ -1,6 +1,6 @@
-# Deploy dashbird on Vultr (Silicon Valley) + DuckDNS
+# Deploy dashbird on Vultr (Silicon Valley) + jayhasty.com
 
-**Target:** always-on personal dashboard at `https://dashbird.duckdns.org`  
+**Target:** always-on personal dashboard at `https://dashbird.jayhasty.com`  
 **Plan:** Vultr Cloud Compute **2 GB**, region **Silicon Valley**, ~**$10/mo**  
 **Image:** slim [`Dockerfile.cloud`](../Dockerfile.cloud) (no Playwright Chromium on the VPS)
 
@@ -17,7 +17,7 @@ LAN Docker ([`docker-compose.yml`](../docker-compose.yml)) remains for local des
 ## One-time server setup
 
 1. Create Vultr **Shared CPU** / Cloud Compute **2 GB** in **Silicon Valley**, Ubuntu LTS, SSH access.
-2. Point DuckDNS `dashbird` → instance IPv4 (update if it still shows a home IP).
+2. Point Cloudflare DNS A records for `dashbird.jayhasty.com` (and portfolio hosts) at the instance IPv4 — DNS only (grey cloud). See [`jayhasty-setup.md`](jayhasty-setup.md).
 3. On the VPS:
 
 ```bash
@@ -56,8 +56,8 @@ docker compose -f docker-compose.cloud.yml ps
 ```
 
 7. **One-time per device** — open these bookmarks (no password after this):
-   - **Home Linux laptop:** `https://dashbird.duckdns.org/auth/device-bind?did=edd37155-3ffe-4d18-a775-d6cdcedbf343`
-   - **Phone:** `https://dashbird.duckdns.org/auth/device-bind?did=1c0c1947-ad36-4032-aed5-00eb5b28e166`
+   - **Home Linux laptop:** `https://dashbird.jayhasty.com/auth/device-bind?did=edd37155-3ffe-4d18-a775-d6cdcedbf343`
+   - **Phone:** `https://dashbird.jayhasty.com/auth/device-bind?did=1c0c1947-ad36-4032-aed5-00eb5b28e166`
    Other browsers/devices still require basic auth every visit. Revoke trust by rotating `DASHBOARD_TRUSTED_DEVICE_SECRET` in `.env` and rebuilding.
 
 If basic-auth credentials were generated on the server:
@@ -71,7 +71,7 @@ Firewall: allow **22**, **80**, **443** (Vultr firewall group or `ufw`).
 ### LAN fallback + Playwright enrich
 
 - Keep the home LAN stack available for a few days after cutover (read-only or stopped writers) so you can fall back if needed.
-- **Daily driver:** bookmark `https://dashbird.duckdns.org` on phone and laptop.
+- **Daily driver:** bookmark `https://dashbird.jayhasty.com` on phone and laptop.
 - **New tool screenshots:** on LAN (`docker-compose.yml` Playwright image), enrich the tool so PNGs land in `data/tool-library-assets/`, then:
 
 ```bash
@@ -98,7 +98,7 @@ Smoke checklist:
 - [ ] Tool Library shows **stored** logos/snapshots
 - [ ] Network / Events panels load
 - [ ] Vikunja todos (after `VIKUNJA_TOKEN` set)
-- [ ] Gmail OAuth redirect updated to `https://dashbird.duckdns.org/...` and re-consented
+- [ ] Gmail OAuth redirect updated to `https://dashbird.jayhasty.com/...` and re-consented
 - [ ] Telegram poller if used
 
 Keep LAN offline or read-only for a few days as fallback.
@@ -131,13 +131,6 @@ mkdir -p /var/backups/dashbird
 crontab -e
 # 15 3 * * * /opt/dashbird/scripts/cloud-backup.sh >> /var/log/dashbird-backup.log 2>&1
 ```
-
-## jayhasty.com cutover (later)
-
-1. DNS A/AAAA → same Vultr IP (DNS-only if using Cloudflare).
-2. Set `DASHBOARD_DOMAIN=jayhasty.com` (and `DASHBOARD_LAN_ORIGIN`, Vikunja public URL, OAuth redirects).
-3. `docker compose -f docker-compose.cloud.yml up -d` (Caddy reloads certs).
-4. Optionally keep `dashbird.duckdns.org` as a Caddy site alias or remove it.
 
 ## Related
 

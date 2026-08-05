@@ -34,11 +34,25 @@ function isLegacyTimeToken(raw) {
   return s === 'weekend' || s === 'afterhours' || s === 'after_hours' || s === 'evening';
 }
 
+const LEGACY_DURATION_IDS = new Set([
+  '10m',
+  '30m',
+  '1hr+',
+  '5m',
+  '15m',
+  '1h+',
+  '1hr',
+  '60m',
+  '<10min',
+  '<10m',
+  '30min',
+]);
+
 function taskMetaNeedsMigration(raw) {
   if (!raw || typeof raw !== 'object') return false;
   const r = raw;
-  const dur = String(r.duration || '').trim().toLowerCase();
-  if (dur === '5m' || dur === '15m') return true;
+  const dur = String(r.duration || '').trim().toLowerCase().replace(/\s+/g, '');
+  if (LEGACY_DURATION_IDS.has(dur)) return true;
   const times = Array.isArray(r.times) ? r.times : r.time != null ? [r.time] : [];
   return times.some(isLegacyTimeToken);
 }
@@ -46,6 +60,18 @@ function taskMetaNeedsMigration(raw) {
 function metaNeedsMigration(raw) {
   const taskRaw = raw?.byTaskId && typeof raw.byTaskId === 'object' ? raw.byTaskId : {};
   return Object.values(taskRaw).some(taskMetaNeedsMigration);
+}
+
+/**
+ * @param {unknown} raw
+ * @returns {string | null}
+ */
+function normalizeIsoDate(raw) {
+  if (raw == null || raw === '') return null;
+  const s = String(raw).trim();
+  const ms = Date.parse(s);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString();
 }
 
 function normalizeTaskMeta(raw) {
@@ -72,6 +98,10 @@ function normalizeTaskMeta(raw) {
   const times = normalizeTimes(r.times ?? r.time);
   if (hadLegacyOnlyTime) out.timeAny = true;
   else if (times.length && !out.timeAny) out.times = times;
+  const scheduledAt = normalizeIsoDate(r.scheduledAt);
+  if (scheduledAt) out.scheduledAt = scheduledAt;
+  const scheduledFor = normalizeIsoDate(r.scheduledFor);
+  if (scheduledFor) out.scheduledFor = scheduledFor;
   return Object.keys(out).length ? out : null;
 }
 
@@ -295,6 +325,24 @@ export async function patchTaskMeta(taskId, patch, env = process.env) {
   if (patch.timeAny === true) {
     next.timeAny = true;
     delete next.times;
+  }
+  if (patch.clearSchedule === true) {
+    delete next.scheduledAt;
+    delete next.scheduledFor;
+  }
+  if (patch.scheduledAt !== undefined) {
+    if (patch.scheduledAt == null || patch.scheduledAt === '') delete next.scheduledAt;
+    else {
+      const iso = normalizeIsoDate(patch.scheduledAt);
+      if (iso) next.scheduledAt = iso;
+    }
+  }
+  if (patch.scheduledFor !== undefined) {
+    if (patch.scheduledFor == null || patch.scheduledFor === '') delete next.scheduledFor;
+    else {
+      const iso = normalizeIsoDate(patch.scheduledFor);
+      if (iso) next.scheduledFor = iso;
+    }
   }
   if (Object.keys(next).length) meta.byTaskId[id] = next;
   else delete meta.byTaskId[id];

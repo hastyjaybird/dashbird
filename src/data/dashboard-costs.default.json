@@ -4,7 +4,7 @@
     {
       "id": "vultr",
       "label": "Vultr",
-      "usedFor": "Cloud server (dashbird.duckdns.org)",
+      "usedFor": "Cloud server (dashbird.jayhasty.com)",
       "category": "Cloud server",
       "cadence": "fixed_monthly",
       "weeklyUsd": 2.31,
@@ -29,9 +29,9 @@
       "usedFor": "Facebook Events scrape",
       "category": "Facebook Events",
       "cadence": "usage",
-      "weeklyUsd": 1.15,
+      "weeklyUsd": 0.7,
       "monthlyBudgetUsd": 5,
-      "notes": "Free plan $5/mo credits \u00b7 daily 4am scrape on cloud",
+      "notes": "Free plan $5/mo credits \u00b7 weekly Sun 4am scrape on cloud (+ stale catch-up when credits allow)",
       "measuredSource": "facebook-billing",
       "active": true
     },

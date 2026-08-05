@@ -4,6 +4,12 @@ import {
   openTaskTagsEditor,
 } from '../lib/task-random-ui.js';
 import { fetchTaskRandomMeta } from '../lib/task-location-meta.js';
+import {
+  clearTaskSchedule,
+  createScheduleControl,
+  ensureOverduePriority,
+  scheduleTaskToCalendar,
+} from '../lib/task-schedule.js';
 
 /**
  * Mobile Vikunja Tasks: project list → task detail (add / complete).
@@ -1196,6 +1202,37 @@ export function mountTasksMobile(root, config = {}) {
     row.append(label);
 
     if (canDrag) {
+      const taskMeta = taskRandomMeta.byTaskId?.[String(item.id)] || null;
+      const sched = createScheduleControl({
+        wrapClass: 'task-schedule mobile-tasks__schedule-wrap',
+        buttonClass: 'mobile-tasks__schedule',
+        overdueClass: 'task-schedule__overdue',
+      });
+      sched.sync(taskMeta);
+      sched.button.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        sched.button.disabled = true;
+        try {
+          const { meta, row: nextMeta } = await scheduleTaskToCalendar(
+            item.id,
+            item.text,
+            taskMeta,
+          );
+          taskRandomMeta = meta;
+          sched.sync(nextMeta);
+        } catch {
+          showStatus('Could not save schedule.', true);
+        } finally {
+          sched.button.disabled = false;
+        }
+      });
+      row.append(sched.wrap);
+      void ensureOverduePriority(item.id, taskMeta).then((res) => {
+        if (!res) return;
+        taskRandomMeta = res.meta;
+        sched.sync(res.row);
+      });
       attachTaskLongPress(li, item.id, () => showMoveOverlay(item.id));
     }
 
@@ -1280,6 +1317,8 @@ export function mountTasksMobile(root, config = {}) {
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      const cleared = await clearTaskSchedule(id);
+      if (cleared) taskRandomMeta = cleared;
       items = items.filter((it) => it.id !== id);
       renderDetailShell();
       showStatus('');

@@ -137,10 +137,18 @@ export function isBdRelevantJobTitle(title) {
 
 /**
  * @param {object} payload Greenhouse board jobs JSON
+ * @param {{ listedAt?: string }} [opts]
+ * Open roles use listedAt (fetch time) as publishedAt so the BD same-day
+ * freshness gate keeps currently-open jobs visible; board updated_at alone
+ * would hide yesterday's still-open seats.
  */
-export function parseGreenhouseBdJobs(payload) {
+export function parseGreenhouseBdJobs(payload, opts = {}) {
   const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
-  /** @type {Array<{ title: string, link: string, publishedAt: string | null, summary: string, imageUrl: null }>} */
+  const listedAtRaw = opts.listedAt ? new Date(opts.listedAt) : new Date();
+  const listedAt = Number.isNaN(listedAtRaw.getTime())
+    ? new Date().toISOString()
+    : listedAtRaw.toISOString();
+  /** @type {Array<{ title: string, link: string, publishedAt: string | null, summary: string, imageUrl: null, jobUpdatedAt?: string | null }>} */
   const items = [];
   for (const job of jobs) {
     const title = String(job?.title || '').trim();
@@ -149,16 +157,21 @@ export function parseGreenhouseBdJobs(payload) {
     if (!link) continue;
     const loc = String(job?.location?.name || '').trim();
     const updated = job?.updated_at || job?.first_published || null;
-    let publishedAt = null;
+    let jobUpdatedAt = null;
     if (updated) {
       const d = new Date(updated);
-      if (!Number.isNaN(d.getTime())) publishedAt = d.toISOString();
+      if (!Number.isNaN(d.getTime())) jobUpdatedAt = d.toISOString();
     }
+    const locBit = loc ? ` · ${loc}` : '';
+    const updatedBit = jobUpdatedAt
+      ? ` · board ${jobUpdatedAt.slice(0, 10)}`
+      : '';
     items.push({
       title: `[Job] ${title}`,
       link,
-      publishedAt,
-      summary: loc ? `Anthropic careers · ${loc}` : 'Anthropic careers (Beneficial Deployments watch)',
+      publishedAt: listedAt,
+      jobUpdatedAt,
+      summary: `Anthropic careers (open)${locBit}${updatedBit}`,
       imageUrl: null,
     });
   }
@@ -213,7 +226,10 @@ export async function fetchLocalNewsFeed(feed) {
     if (!page.ok) return { ok: false, items: [], error: page.error };
     try {
       const payload = JSON.parse(page.text);
-      return { ok: true, items: parseGreenhouseBdJobs(payload) };
+      return {
+        ok: true,
+        items: parseGreenhouseBdJobs(payload, { listedAt: new Date().toISOString() }),
+      };
     } catch (e) {
       return { ok: false, items: [], error: String(e?.message || e) };
     }

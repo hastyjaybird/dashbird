@@ -32,6 +32,8 @@ function geoPayload(geo) {
     locationSlugs: geo.locationSlugs,
     homeCities: geo.homeCities,
     bayAreaHomeCities: BAY_AREA_HOME_CITIES,
+    locationMode: geo.locationMode || 'home',
+    maxMiles: geo.maxMiles ?? null,
   };
 }
 
@@ -42,10 +44,30 @@ router.get('/', async (_req, res) => {
       resolveEventsFinderGeo(),
       getFacebookBillingMonthSummary(),
     ]);
+    /** @type {Record<string, unknown>} */
+    const out = { ...criteria };
+    // Away preview/auto: expose NYC (etc.) filter cities for the UI without
+    // permanently overwriting saved Bay criteria on disk.
+    if (
+      (geo.locationMode === 'preview' || geo.locationMode === 'away') &&
+      Array.isArray(geo.homeCities) &&
+      geo.homeCities.length
+    ) {
+      const filters =
+        out.filters && typeof out.filters === 'object'
+          ? { .../** @type {object} */ (out.filters) }
+          : {};
+      filters.cities = [...geo.homeCities];
+      if (geo.maxMiles != null && Number.isFinite(geo.maxMiles)) {
+        filters.maxMiles = geo.maxMiles;
+      }
+      out.filters = filters;
+      out.awayFiltersActive = true;
+    }
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({
       ok: true,
-      ...criteria,
+      ...out,
       googleCalendar: resolveEventsFinderGoogleCalendar(),
       geo: geoPayload(geo),
       facebookBilling,

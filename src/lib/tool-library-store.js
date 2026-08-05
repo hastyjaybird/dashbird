@@ -155,11 +155,26 @@ export async function setToolFavorite(id, favorite) {
  * Mark whether Jay is currently paying for this tool (money icon on card).
  * @param {string} id
  * @param {boolean} paying
+ * @param {{ url?: string }} [opts] — also match by URL when id is missing/catalog-only
  */
-export async function setToolPaying(id, paying) {
+export async function setToolPaying(id, paying, opts = {}) {
   const run = async () => {
     const data = await loadToolLibrary();
-    const tool = data.tools.find((t) => t.id === id);
+    let tool = data.tools.find((t) => t.id === id);
+    if (!tool && opts.url) {
+      try {
+        const want = normalizeToolUrl(opts.url).toLowerCase();
+        tool = data.tools.find((t) => {
+          try {
+            return normalizeToolUrl(t.url || t.website || '').toLowerCase() === want;
+          } catch {
+            return false;
+          }
+        });
+      } catch {
+        /* ignore bad url */
+      }
+    }
     if (!tool) return null;
     tool.paying = Boolean(paying);
     await writeToolLibraryFile(data);

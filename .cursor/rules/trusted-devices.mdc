@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Trusted cloud devices (Jay only)
 
-Dashbird cloud (`dashbird.duckdns.org`) uses HTTP basic auth. **Only two devices skip the password** — never weaken this to “any device after login.”
+Dashbird cloud (`dashbird.jayhasty.com`) uses HTTP basic auth. **Only two devices skip the password** — never weaken this to “any device after login.”
 
 | Device | Unique ID |
 |--------|-----------|

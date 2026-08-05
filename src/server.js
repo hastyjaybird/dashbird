@@ -5,6 +5,24 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printLanUrl } from './lib/lan-url.js';
 
+// IMAP and other libs can emit late errors after awaits settle. Log them instead
+// of letting Node's default "throw er" tear down the whole dashboard process.
+process.on('unhandledRejection', (reason) => {
+  console.error('[process] unhandledRejection', reason?.stack || reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+  const code = err?.code || '';
+  const msg = String(err?.message || err || '');
+  // Socket resets from IMAP should not kill the process once handlers exist;
+  // keep a last-resort guard for the same class of errors.
+  if (code === 'ECONNRESET' || /ECONNRESET/i.test(msg)) {
+    console.error('[process] uncaughtException (non-fatal)', code || msg.slice(0, 160));
+    return;
+  }
+  console.error('[process] uncaughtException', err?.stack || msg);
+  process.exit(1);
+});
+
 import configRouter from './routes/config.js';
 import vikunjaRouter from './routes/vikunja.js';
 import homeAssistantRouter from './routes/homeassistant.js';
@@ -72,11 +90,13 @@ import { startBigEventsDailyRefreshScheduler } from './lib/events-finder-confere
 import { startGmailWeeklySummaryScheduler } from './lib/gmail-weekly-summary-synth.js';
 import eventsFinderTelegramRouter from './routes/events-finder-telegram.js';
 import eventsFinderBigEventsRouter from './routes/events-finder-big-events.js';
+import eventsFinderNotableRouter from './routes/events-finder-notable.js';
 import gmailWeeklySummaryRouter from './routes/gmail-weekly-summary.js';
 import networkRouter from './routes/network.js';
 import devNotesRouter from './routes/dev-notes.js';
 import devRequestsRouter from './routes/dev-requests.js';
 import devicePlaceRouter from './routes/device-place.js';
+import awayBaseRouter from './routes/away-base.js';
 import keepNotesRouter from './routes/keep-notes.js';
 import bookmarksRouter from './routes/bookmarks.js';
 import devAgentLogRouter from './routes/dev-agent-log.js';
@@ -183,6 +203,7 @@ app.use('/api/events-finder-sources', eventsFinderSourcesRouter);
 app.use('/api/events-finder/events', eventsFinderEventsRouter);
 app.use('/api/events-finder/telegram', eventsFinderTelegramRouter);
 app.use('/api/events-finder/big-events', eventsFinderBigEventsRouter);
+app.use('/api/events-finder/notable', eventsFinderNotableRouter);
 app.use('/api/gmail-daily-summary', gmailWeeklySummaryRouter);
 app.use('/api/gmail-weekly-summary', gmailWeeklySummaryRouter); // legacy alias
 app.use('/api/network', networkRouter);
@@ -193,6 +214,7 @@ app.use('/api/web-catalog', webCatalogRouter);
 app.use('/api/dev-notes', devNotesRouter);
 app.use('/api/dev-requests', devRequestsRouter);
 app.use('/api/device-place', devicePlaceRouter);
+app.use('/api/away-base', awayBaseRouter);
 app.use('/api/keep-notes', keepNotesRouter);
 app.use('/api/bookmarks', bookmarksRouter);
 app.use('/api/dev-agent-log', devAgentLogRouter);

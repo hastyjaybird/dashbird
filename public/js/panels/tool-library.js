@@ -544,15 +544,25 @@ function buildToolCard(card, tool) {
     e.preventDefault();
     e.stopPropagation();
     if (payBtn.disabled) return;
-    const next = !Boolean(tool.paying);
+    const prev = Boolean(tool.paying);
+    const next = !prev;
     payBtn.disabled = true;
+    // Optimistic: turn green immediately so click feedback is obvious.
+    tool.paying = next;
+    payBtn.classList.toggle('tool-library__card-pay--on', next);
+    payBtn.title = next ? 'Paying for this — click to clear' : 'Mark as something you pay for';
+    payBtn.setAttribute('aria-label', next ? 'Not paying for this' : 'Mark as paying for this');
     const root = card.closest('.tool-library');
     const status = root?.querySelector('.tool-library__status');
     try {
       const r = await fetch(`/api/tool-library/tools/${encodeURIComponent(tool.id)}/paying`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paying: next }),
+        body: JSON.stringify({
+          paying: next,
+          url: tool.url || tool.website || '',
+          catalogId: tool.catalogId || '',
+        }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || data.ok === false) {
@@ -571,6 +581,10 @@ function buildToolCard(card, tool) {
       }
       renderGrid(root);
     } catch (err) {
+      tool.paying = prev;
+      payBtn.classList.toggle('tool-library__card-pay--on', prev);
+      payBtn.title = prev ? 'Paying for this — click to clear' : 'Mark as something you pay for';
+      payBtn.setAttribute('aria-label', prev ? 'Not paying for this' : 'Mark as paying for this');
       if (status) {
         status.hidden = false;
         status.textContent = err?.message || 'Could not update paying';
@@ -973,6 +987,7 @@ async function refresh(root) {
             catalogId: t.catalogId || t.id,
             pricing: mergedPricing,
             favorite: Boolean(prev.favorite || t.favorite),
+            paying: Boolean(prev.paying || t.paying),
             watchEnabled: t.watchEnabled ?? prev.watchEnabled,
             watchMode: t.watchMode ?? prev.watchMode,
             lastStatus: t.lastStatus ?? prev.lastStatus,

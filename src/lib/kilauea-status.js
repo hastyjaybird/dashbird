@@ -172,10 +172,83 @@ function parseEruptionStats(text) {
   };
 }
 
+const MONTH_ABBR = {
+  january: 'Jan',
+  february: 'Feb',
+  march: 'Mar',
+  april: 'Apr',
+  may: 'May',
+  june: 'Jun',
+  july: 'Jul',
+  august: 'Aug',
+  september: 'Sep',
+  october: 'Oct',
+  november: 'Nov',
+  december: 'Dec',
+};
+
 /**
- * Detect a forecast for the NEXT Kīlauea eruption / episode in the update text.
- * USGS episodic-eruption updates usually include a sentence like
- * "The next episode … is likely to begin between …" or a precursory-activity window.
+ * @param {string} month
+ */
+function abbrevMonth(month) {
+  const key = String(month || '')
+    .replace(/\./g, '')
+    .trim()
+    .toLowerCase();
+  return MONTH_ABBR[key] || String(month || '').slice(0, 3);
+}
+
+/**
+ * Compact a dated forecast window from HVO text, e.g. "between August 8 and 14" → "Aug 8–14".
+ * Only returns a value when concrete calendar dates are present (not "within a few days").
+ * @param {string} text
+ * @returns {string | null}
+ */
+function extractForecastDateWindow(text) {
+  const s = String(text || '');
+  // between August 8 and August 14 | between August 8 and 14
+  const between = s.match(
+    /\bbetween\s+([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\s+and\s+(?:([A-Za-z]+)\.?\s+)?(\d{1,2})(?:st|nd|rd|th)?\b/i,
+  );
+  if (between) {
+    const m1 = abbrevMonth(between[1]);
+    const d1 = between[2];
+    const m2 = between[3] ? abbrevMonth(between[3]) : m1;
+    const d2 = between[4];
+    return m1 === m2 ? `${m1} ${d1}–${d2}` : `${m1} ${d1}–${m2} ${d2}`;
+  }
+  // August 8–14 | Aug. 8-14 | August 8 to 14 | August 8 through August 14
+  const enDash = s.match(
+    /\b([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\s*[–—-]\s*(?:([A-Za-z]+)\.?\s+)?(\d{1,2})(?:st|nd|rd|th)?\b/,
+  );
+  if (enDash) {
+    const m1 = abbrevMonth(enDash[1]);
+    const d1 = enDash[2];
+    const m2 = enDash[3] ? abbrevMonth(enDash[3]) : m1;
+    const d2 = enDash[4];
+    return m1 === m2 ? `${m1} ${d1}–${d2}` : `${m1} ${d1}–${m2} ${d2}`;
+  }
+  const thru = s.match(
+    /\b([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\s+(?:to|through|thru)\s+(?:([A-Za-z]+)\.?\s+)?(\d{1,2})(?:st|nd|rd|th)?\b/i,
+  );
+  if (thru) {
+    const m1 = abbrevMonth(thru[1]);
+    const d1 = thru[2];
+    const m2 = thru[3] ? abbrevMonth(thru[3]) : m1;
+    const d2 = thru[4];
+    return m1 === m2 ? `${m1} ${d1}–${d2}` : `${m1} ${d1}–${m2} ${d2}`;
+  }
+  // Single calendar day: "on August 12" / "around August 12"
+  const single = s.match(/\b(?:on|around|by|before)\s+([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/i);
+  if (single) return `${abbrevMonth(single[1])} ${single[2]}`;
+  return null;
+}
+
+/**
+ * Detect a dated forecast for the NEXT Kīlauea eruption / episode.
+ * Only counts as a forecast when concrete dates are present (e.g. Aug 8–14).
+ * Matches current HVO phrasing like "current forecast between August 8 and 14"
+ * and "forecast window for episode 53 is between August 8 and August 14".
  * @param {string} text
  * @returns {{ hasForecast: boolean, forecast: string | null, forecastWhen: string | null }}
  */
@@ -183,39 +256,30 @@ function parseNextEruptionForecast(text) {
   const blob = String(text || '').replace(/\s+/g, ' ').trim();
   if (!blob) return { hasForecast: false, forecast: null, forecastWhen: null };
 
-  // Split into sentences and look for one describing the next episode/eruption timing.
-  const sentences = blob.split(/(?<=[.!?])\s+(?=[A-Z0-9])/);
-  // "next episode", "next fountain episode", "next eruption", etc.
-  const keyword =
-    /\bnext\s+(?:(?:lava\s+|high\s+)?(?:fountain(?:ing)?\s+)?)?(?:episode|eruption|eruptive\s+episode)\b/i;
-  const timing =
-    /\b(?:likely|expected|anticipated|forecast(?:ed)?|could|may|projected|estimated)\b[^.]*\b(?:begin|start|resume|occur|erupt)/i;
-  const windowRe =
-    /\b(?:between|by|before|on|around|as early as|within the next)\b[^.]*\b(?:\d{1,2}(?::\d{2})?\s*(?:a\.m\.|p\.m\.|hst)|[A-Z][a-z]+\.?\s+\d{1,2}|\d+\s*(?:hours?|days?|weeks?))/i;
+  const sentences = blob.split(/(?<=[.!?])\s+(?=[A-Z0-9"'])/);
+  const forecastCue =
+    /\b(?:forecast(?:ed|ing)?(?:\s+window)?|next\s+(?:(?:lava\s+|high\s+)?(?:fountain(?:ing)?\s+)?)?(?:episode|eruption|eruptive\s+episode)|another\s+episode\s+is\s+likely|episode\s+\d+\s+is\s+likely|likely\s+to\s+(?:begin|start|resume)|expected\s+to\s+(?:begin|start|resume))\b/i;
 
   for (const raw of sentences) {
     const s = raw.trim();
-    if (!s) continue;
-    if (keyword.test(s) && (timing.test(s) || windowRe.test(s))) {
-      const forecast = s.replace(/\s+/g, ' ').trim().slice(0, 220);
-      const whenMatch = s.match(windowRe);
-      return {
-        hasForecast: true,
-        forecast,
-        forecastWhen: whenMatch ? whenMatch[0].replace(/\s+/g, ' ').trim().slice(0, 80) : null,
-      };
-    }
+    if (!s || !forecastCue.test(s)) continue;
+    const forecastWhen = extractForecastDateWindow(s);
+    if (!forecastWhen) continue;
+    return {
+      hasForecast: true,
+      forecast: s.replace(/\s+/g, ' ').trim().slice(0, 220),
+      forecastWhen,
+    };
   }
 
-  // Secondary: explicit forecast phrasing even without the word "next".
-  for (const raw of sentences) {
-    const s = raw.trim();
-    if (!s) continue;
-    if (/\bforecast(?:ed)?\s+to\s+(?:begin|resume|erupt|start)\b/i.test(s)) {
+  // Whole-blob fallback: cue + date window may span sentence boundaries after HTML strip.
+  if (forecastCue.test(blob)) {
+    const forecastWhen = extractForecastDateWindow(blob);
+    if (forecastWhen) {
       return {
         hasForecast: true,
-        forecast: s.replace(/\s+/g, ' ').trim().slice(0, 220),
-        forecastWhen: null,
+        forecast: blob.slice(0, 220),
+        forecastWhen,
       };
     }
   }
@@ -519,8 +583,12 @@ export async function buildKilaueaDashboardPayload() {
   const forecast = parseNextEruptionForecast(
     [updatesText, latestMessage, synopsis, noticeSummary].filter(Boolean).join(' '),
   );
+  // Dated window only — vague "likely soon" without calendar dates does not count.
+  const hasDatedForecast = Boolean(forecast.hasForecast && forecast.forecastWhen);
 
   const erupting = isEruptingAlert(alertLevel, colorCode, textBlob);
+  // Strip/active: fountaining now, or a dated next-episode forecast. Alert-only = inactive.
+  const volcanoActive = erupting || hasDatedForecast;
   const cameras =
     camerasSettled.status === 'fulfilled' && Array.isArray(camerasSettled.value)
       ? camerasSettled.value
@@ -542,13 +610,9 @@ export async function buildKilaueaDashboardPayload() {
   /** @type {object[]} */
   const items = [];
 
-  if (erupting || alertLevel || colorCode || forecast.hasForecast) {
+  if (volcanoActive) {
     const parts = [];
     if (erupting) parts.push('Erupting');
-    else if (forecast.hasForecast) parts.push('Paused');
-    else if (alertLevel || colorCode) {
-      parts.push([alertLevel, colorCode].filter(Boolean).join(' · ') || 'Elevated');
-    }
     // Episode / fountain height are only current while lava is actively erupting.
     if (erupting) {
       if (stats.episode != null) parts.push(`Ep ${stats.episode}`);
@@ -565,22 +629,18 @@ export async function buildKilaueaDashboardPayload() {
       if (alertLevel || colorCode) {
         parts.push([alertLevel, colorCode].filter(Boolean).join('/'));
       }
-    } else {
-      if (forecast.hasForecast && (alertLevel || colorCode)) {
-        parts.push([alertLevel, colorCode].filter(Boolean).join(' · '));
-      }
-      if (stats.episode != null) parts.push(`last Ep ${stats.episode}`);
-      else parts.push(`summit ${elevationFt} ft`);
+    } else if (alertLevel || colorCode) {
+      parts.push([alertLevel, colorCode].filter(Boolean).join(' · '));
     }
-    // 📅 next-eruption forecast segment (shown between episodes and during episodic eruptions).
-    if (forecast.hasForecast) {
-      parts.push(`📅 next: ${forecast.forecastWhen || forecast.forecast}`);
+    // 📅 dated next-eruption window (required for non-erupting strip visibility).
+    if (hasDatedForecast) {
+      parts.push(`📅 next: ${forecast.forecastWhen}`);
     }
 
-    // ! when erupting, 📅 when a next-eruption forecast is available.
+    // ! when erupting, 📅 when a dated next-eruption forecast is available.
     const marks = [];
     if (erupting) marks.push('❗');
-    if (forecast.hasForecast) marks.push('📅');
+    if (hasDatedForecast) marks.push('📅');
     const label = marks.length ? `Kīlauea ${marks.join('')}` : 'Kīlauea';
 
     items.push({
@@ -592,14 +652,14 @@ export async function buildKilaueaDashboardPayload() {
       eruptingMark: erupting ? '❗' : null,
       forecast: forecast.forecast,
       forecastWhen: forecast.forecastWhen,
-      hasEruptionForecast: forecast.hasForecast,
-      forecastMark: forecast.hasForecast ? '📅' : null,
+      hasEruptionForecast: hasDatedForecast,
+      forecastMark: hasDatedForecast ? '📅' : null,
       alertLevel: alertLevel || null,
       colorCode: colorCode || null,
       episode: stats.episode,
       started: stats.startedRaw,
-      fountainFt: stats.fountainFt,
-      fountainM: stats.fountainM,
+      fountainFt: erupting ? stats.fountainFt : null,
+      fountainM: erupting ? stats.fountainM : null,
       summitFt: elevationFt,
       summitM: elevationM,
       latestMessage: latestMessage || null,
@@ -617,16 +677,17 @@ export async function buildKilaueaDashboardPayload() {
     status: {
       erupting,
       eruptingMark: erupting ? '❗' : null,
+      active: volcanoActive,
       forecast: forecast.forecast,
       forecastWhen: forecast.forecastWhen,
-      hasEruptionForecast: forecast.hasForecast,
-      forecastMark: forecast.hasForecast ? '📅' : null,
+      hasEruptionForecast: hasDatedForecast,
+      forecastMark: hasDatedForecast ? '📅' : null,
       alertLevel: alertLevel || null,
       colorCode: colorCode || null,
       episode: stats.episode,
       started: stats.startedRaw,
-      fountainFt: stats.fountainFt,
-      fountainM: stats.fountainM,
+      fountainFt: erupting ? stats.fountainFt : null,
+      fountainM: erupting ? stats.fountainM : null,
       summitFt: elevationFt,
       summitM: elevationM,
       noticeUrl,

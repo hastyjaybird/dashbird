@@ -1065,6 +1065,188 @@ body.dashy--deferred-ready .boot-deferred {
   background: rgba(255, 180, 80, 0.06);
 }
 
+/* ---- Event sources + notable / logistics ---- */
+.events-finder__event-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.events-finder__event-sources-intro {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.events-finder__event-sources-toolbar {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.events-finder__event-sources-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.events-finder__event-sources-item {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+}
+.events-finder__event-sources-main {
+  min-width: 0;
+  flex: 1;
+}
+.events-finder__event-sources-name {
+  color: #ffd28c;
+  font-weight: 650;
+  text-decoration: none;
+  word-break: break-word;
+}
+.events-finder__event-sources-name:hover {
+  text-decoration: underline;
+}
+.events-finder__event-sources-meta,
+.events-finder__event-sources-url {
+  margin: 0.2rem 0 0;
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+.events-finder__event-sources-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+.events-finder__event-sources-empty {
+  padding: 0.75rem;
+}
+.events-finder__card--notable {
+  border-color: rgba(255, 200, 120, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(255, 180, 80, 0.12);
+}
+.events-finder__card-notable-badge {
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #2a1a05;
+  background: #ffd28c;
+}
+.events-finder__card-notable {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.45rem 0 0;
+  font-size: 0.8rem;
+  color: rgba(255, 230, 200, 0.9);
+  cursor: pointer;
+  user-select: none;
+}
+.events-finder__card-notable input {
+  accent-color: #e8a84a;
+}
+.events-finder__card-notable-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+.events-finder__card-earlybird {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  color: #9ddea8;
+}
+.events-finder__notable-detail,
+.events-finder__logistics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.events-finder__notable-subtitle {
+  margin: 0.4rem 0 0;
+  font-size: 0.92rem;
+  font-weight: 650;
+  color: #ffd28c;
+}
+.events-finder__notable-hint {
+  margin: 0;
+  font-size: 0.78rem;
+}
+.events-finder__notable-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.events-finder__notable-field--wide {
+  grid-column: 1 / -1;
+}
+.events-finder__notable-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.55);
+}
+.events-finder__notable-input,
+.events-finder__notable-select,
+.events-finder__notable-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.4rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(0, 0, 0, 0.28);
+  color: inherit;
+  font: inherit;
+}
+.events-finder__notable-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+}
+.events-finder__logistics-map {
+  width: 100%;
+  height: 220px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.25);
+}
+.events-finder__logistics-dist,
+.events-finder__logistics-airport {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.events-finder__logistics-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.events-finder__logistics-list a {
+  color: #ffd28c;
+  font-weight: 600;
+  text-decoration: none;
+}
+.events-finder__logistics-list a:hover {
+  text-decoration: underline;
+}
+.events-finder__logistics-list p {
+  margin: 0.15rem 0 0;
+  font-size: 0.78rem;
+}
+
 /* ---- Big Events (search → preview → add → table) ---- */
 .events-finder__big-events {
   display: flex;
@@ -3828,7 +4010,205 @@ html.sky-sidebar-hidden .sky-sidebar-toggle {
   padding: 0 0.42rem;
 }
 
-/* Local News (subscribe-to-feed suggestions + article list) */
+/* Local News (filters + find-feeds browser + article list) */
+.local-news__toolbar {
+  margin: 0 0 0.35rem;
+}
+
+.local-news__filters {
+  margin-bottom: 0.55rem;
+}
+
+.local-news__taste-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 2.4rem;
+  resize: vertical;
+  margin: 0 0 0.2rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text, #e8eaed);
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.local-news__taste-input:focus {
+  outline: none;
+  border-color: rgba(110, 200, 255, 0.45);
+}
+
+.local-news__filter-actions {
+  margin-top: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.local-news__btn--find {
+  border-color: rgba(110, 200, 255, 0.4);
+  color: #93c5fd;
+}
+
+.local-news__find-popout {
+  width: min(28rem, calc(100vw - 1.5rem));
+  max-height: min(85vh, 720px);
+}
+
+.local-news__find-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.local-news__find-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.4rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text, #e8eaed);
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.local-news__find-search:focus {
+  outline: none;
+  border-color: rgba(110, 200, 255, 0.45);
+}
+
+.local-news__find-status {
+  margin: 0;
+  font-size: 0.72rem;
+}
+
+.local-news__find-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.local-news__find-suggestion {
+  padding: 0.45rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid rgba(110, 200, 255, 0.25);
+  background: rgba(110, 200, 255, 0.06);
+}
+
+.local-news__find-section-title {
+  margin: 0 0 0.2rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted, #9aa3b2);
+}
+
+.local-news__find-suggestion-title {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.local-news__find-suggestion-reason {
+  margin: 0.15rem 0 0.35rem;
+  font-size: 0.72rem;
+}
+
+.local-news__find-suggestion-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.local-news__find-publisher {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+}
+
+.local-news__find-publisher-head {
+  appearance: none;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.45rem 0.55rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.local-news__find-publisher-head:hover,
+.local-news__find-publisher-head:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+  outline: none;
+}
+
+.local-news__find-publisher-name {
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.local-news__find-publisher-meta {
+  font-size: 0.68rem;
+  color: var(--muted, #9aa3b2);
+  white-space: nowrap;
+}
+
+.local-news__find-publisher-chev {
+  font-size: 0.75rem;
+  color: var(--muted, #9aa3b2);
+}
+
+.local-news__find-feeds {
+  list-style: none;
+  margin: 0;
+  padding: 0 0.45rem 0.45rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.local-news__find-feed {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0.4rem;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.local-news__find-feed-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.local-news__find-feed-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.local-news__find-feed-tags {
+  font-size: 0.66rem;
+}
+
+.local-news__btn--remove {
+  border-color: rgba(248, 113, 113, 0.35);
+  color: #fca5a5;
+  flex-shrink: 0;
+}
+
 .local-news__suggestion {
   margin: 0 0 0.6rem;
   padding: 0.5rem 0.55rem;
@@ -14552,6 +14932,53 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
   word-break: break-word;
 }
 
+.task-schedule,
+.tasks-panel__schedule-wrap,
+.mobile-tasks__schedule-wrap,
+.tasks-random__schedule-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.task-schedule__overdue {
+  font-size: 0.58em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: #e85d4c;
+  white-space: nowrap;
+}
+
+.tasks-panel__schedule,
+.mobile-tasks__schedule,
+.tasks-random__schedule {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.68em;
+  line-height: 1.2;
+  border-radius: 5px;
+  border: 1px solid rgba(120, 150, 200, 0.28);
+  background: rgba(0, 0, 0, 0.14);
+  color: var(--muted, #9aa3b2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tasks-panel__schedule:hover,
+.mobile-tasks__schedule:hover,
+.tasks-random__schedule:hover {
+  color: var(--text, #e8ecf4);
+  border-color: rgba(120, 170, 255, 0.45);
+}
+
+.mobile-tasks__schedule {
+  font-size: 0.7em;
+}
+
 .tasks-panel__loc-select,
 .mobile-tasks__loc-select {
   flex: 0 0 auto;
@@ -15841,16 +16268,25 @@ a.hero-astro-item.hero-astro-item--link:focus-visible {
   font-weight: 700;
   line-height: 1;
   cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
 }
 
 .tool-library__card-pay:hover,
 .tool-library__card-pay:focus-visible {
-  color: #7dcea0;
+  color: #8fd9a8;
   background: rgba(0, 0, 0, 0.6);
 }
 
+/* Distinct from hover — clear "I'm paying" signal */
 .tool-library__card-pay--on {
-  color: #7dcea0;
+  color: #1f8f4a;
+  background: #7dcea0;
+}
+
+.tool-library__card-pay--on:hover,
+.tool-library__card-pay--on:focus-visible {
+  color: #146c37;
+  background: #8fd9a8;
 }
 
 .tool-library__card-snap {
@@ -18037,4 +18473,23 @@ body.dev-request-mobile-open {
   min-height: 128px;
   font-size: 13px;
   line-height: 1.4;
+}
+
+/* Away base preview / live chip in hero */
+.hero-away-preview-chip {
+  margin: 0 0 0.35rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  color: var(--text-muted, #6b7280);
+  border: 1px solid color-mix(in srgb, var(--border, #ccc) 80%, transparent);
+  border-radius: 4px;
+  width: fit-content;
+  background: color-mix(in srgb, var(--panel-bg, #fff) 92%, #f59e0b 8%);
+}
+.hero-away-preview-chip--live {
+  background: color-mix(in srgb, var(--panel-bg, #fff) 90%, #0ea5e9 10%);
+}
+.hero-cities--away-only {
+  justify-content: flex-start;
 }

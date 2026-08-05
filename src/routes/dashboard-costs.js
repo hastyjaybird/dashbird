@@ -136,7 +136,7 @@ function attachServiceInsight(item, measured) {
       uses: [
         {
           label: 'Cloud host',
-          detail: 'Always-on VPS for dashbird.duckdns.org',
+          detail: 'Always-on VPS for dashbird.jayhasty.com',
         },
       ],
       breakdown: normalizeBreakdown(

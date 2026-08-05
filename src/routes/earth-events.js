@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { resolveDashboardWeatherLatLon } from '../lib/hero-weather-location.js';
+import { resolveActiveLocation } from '../lib/resolve-active-location.js';
 import { isEarthDebugShowInactive } from '../lib/earth-debug.js';
 import {
   formatMonarchLikelihoodSubtext,
@@ -73,11 +74,18 @@ function appendSeasonEarthItemsInactive(items, seasonSummary, ref, labelPrefix, 
 
 router.get('/', async (req, res) => {
   try {
-    const { lat, lon } = await resolveDashboardWeatherLatLon();
-    const locationLabel =
-      (process.env.DASHBOARD_LOCATION_LABEL || '').trim() || 'Dashboard coordinates';
+    const active = await resolveActiveLocation();
+    const useAway = active.mode === 'preview' || active.mode === 'away';
+    const home = useAway ? null : await resolveDashboardWeatherLatLon();
+    const lat = useAway ? active.lat : home.lat;
+    const lon = useAway ? active.lon : home.lon;
+    const locationLabel = useAway
+      ? active.label || 'Away base'
+      : (process.env.DASHBOARD_LOCATION_LABEL || '').trim() || 'Dashboard coordinates';
 
-    const timeZone = (process.env.WEATHER_TIME_ZONE || '').trim() || 'America/Los_Angeles';
+    const timeZone = useAway
+      ? active.timeZone || 'America/New_York'
+      : (process.env.WEATHER_TIME_ZONE || '').trim() || 'America/Los_Angeles';
 
     let when = new Date();
     const qd = String(req.query.date || '').trim();

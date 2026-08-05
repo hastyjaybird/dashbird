@@ -1,17 +1,22 @@
 # jayhasty.com setup (DNS, email, subdomains)
 
-One-time cutover from Squarespace to **Cloudflare DNS** + **Google Workspace** + your **Vultr** box (Dashbird + coming-soon pages).
+One-time cutover from Squarespace to **Cloudflare DNS** + **Google Workspace** + your **Vultr** box (public portfolio + private Dashbird).
+
+**URL rule:** use **subdomains for separate apps**, paths for pages inside the portfolio.
 
 **Target layout**
 
 | Host | Purpose |
 |------|---------|
-| `jayhasty.com` | Coming soon (public) |
+| `jayhasty.com` | Public portfolio (Featured-card site from `portfolio/products/website`) |
 | `www.jayhasty.com` | Redirect → apex |
-| `dashbird.jayhasty.com` | Private Dashbird |
-| `portfolio.jayhasty.com` | Portfolio placeholder (public) |
-| `otherproject.jayhasty.com` | Add later — same pattern |
+| `portfolio.jayhasty.com` | Alias → same static portfolio |
+| `dashbird.jayhasty.com` | Private Dashbird (auth) |
+| `calclaim.jayhasty.com` | Public CalClaim demo (later — Railway `CNAME` or Vultr proxy) |
+| `otherproject.jayhasty.com` | Add later — same subdomain pattern |
 | `jay@jayhasty.com` | Gmail via Google Workspace |
+
+Prefer `calclaim.jayhasty.com` / `dashbird.jayhasty.com` over `jayhasty.com/calclaim` — separate deploys, TLS, and auth stay isolated.
 
 **Rough cost after cutover:** ~$10/yr domain (Cloudflare Registrar) + ~$7/mo Google Workspace + Vultr you already pay. **Cancel Squarespace website** (~$16+/mo saved).
 
@@ -21,12 +26,14 @@ One-time cutover from Squarespace to **Cloudflare DNS** + **Google Workspace** +
 
 Collect these:
 
-1. **Vultr IPv4** — Vultr dashboard → your instance, or resolve `dashbird.duckdns.org`.
-2. **Squarespace login** — domain `jayhasty.com` is registered there today.
+1. **Vultr IPv4** — Vultr dashboard → your instance, or the Vultr dashboard IPv4.
+2. **Squarespace login** — domain `jayhasty.com` is registered there today (or already on Cloudflare NS).
 3. **Credit card** — Google Workspace (~$7/mo).
 4. **15–30 minutes** — DNS can take up to an hour to propagate; domain *transfer* to Cloudflare can take days (optional — use Cloudflare nameservers first for speed).
 
-Coming-soon static pages live in `deploy/jayhasty-*-coming-soon/`. Multi-site Caddy is ready in `deploy/Caddyfile.cloud.multisite` — **do not activate it until DNS A records point at Vultr** (Part 1), or ACME will fail and can burn Let's Encrypt rate limits. Until then, production stays on duckdns-only `deploy/Caddyfile.cloud`.
+**Portfolio publish path:** from `portfolio/products/website`, run `/usr/bin/npm run build:deploy` → copies static export into `dashbird/deploy/jayhasty-site/`. Multi-site Caddy is `deploy/Caddyfile.cloud.multisite` — **do not activate it until DNS A records are grey-cloud to Vultr** (Part 1), or ACME will fail and can burn Let's Encrypt rate limits. Until then, keep a single-host Caddyfile; after DNS is ready, activate multisite (`cp deploy/Caddyfile.cloud.multisite deploy/Caddyfile.cloud`).
+
+**Current blocker (as of 2026-08):** Cloudflare NS are live, but apex/`portfolio` resolve through **orange proxy** and return **HTTP 525**. Flip those records to **DNS only (grey cloud)** pointing at the Vultr IP before Part 3.
 
 ---
 
@@ -60,10 +67,11 @@ Add these (replace `YOUR_VULTR_IP` with your actual IPv4):
 | `A` | `www` | `YOUR_VULTR_IP` | DNS only |
 | `A` | `dashbird` | `YOUR_VULTR_IP` | DNS only |
 | `A` | `portfolio` | `YOUR_VULTR_IP` | DNS only |
+| `A` or `CNAME` | `calclaim` | Vultr IP **or** Railway/Pages target | DNS only (or CF Pages orange OK) |
 
-**Grey cloud (DNS only)** for all four — Caddy on Vultr already handles TLS; orange proxy can complicate cert issuance.
+**Grey cloud (DNS only)** for hosts terminated by Caddy on Vultr — Caddy owns TLS. **Orange proxy → HTTP 525** if origin has no cert yet (this is the current `jayhasty.com` failure mode).
 
-Future projects: add `A` `otherproject` → same IP (or `CNAME` to Pages later).
+Future apps: add `A` / `CNAME` `otherproject` → Vultr or Pages — **not** `jayhasty.com/otherproject`.
 
 ### 1.4 (Optional, recommended) Transfer domain to Cloudflare Registrar
 
@@ -169,7 +177,7 @@ SSH to the server (`ssh root@YOUR_VULTR_IP`), edit `/opt/dashbird/.env`:
 ```bash
 JAYHASTY_ROOT_DOMAIN=jayhasty.com
 PORTFOLIO_DOMAIN=portfolio.jayhasty.com
-DASHBOARD_DOMAIN=dashbird.jayhasty.com dashbird.duckdns.org
+DASHBOARD_DOMAIN=dashbird.jayhasty.com
 DASHBOARD_LAN_ORIGIN=https://dashbird.jayhasty.com
 VIKUNJA_SERVICE_PUBLICURL=https://dashbird.jayhasty.com/
 CADDY_EMAIL=jay@jayhasty.com
@@ -183,9 +191,18 @@ If Gmail OAuth is configured for Events Finder, set:
 GMAIL_OAUTH_REDIRECT_URI=https://dashbird.jayhasty.com/api/events-finder-gmail/oauth/callback
 ```
 
-(Path is `/api/events-finder-gmail/oauth/callback` — only change the hostname from duckdns.)
+(Path is `/api/events-finder-gmail/oauth/callback`.)
 
-### 3.2 Sync code + activate multi-site Caddy
+### 3.2 Publish portfolio + sync + activate multi-site Caddy
+
+From the portfolio website (local):
+
+```bash
+cd ~/jayprograms/portfolio/products/website
+/usr/bin/npm run build:deploy
+```
+
+That writes static HTML into `~/jayprograms/dashbird/deploy/jayhasty-site/`.
 
 From the dashbird repo root:
 
@@ -195,17 +212,12 @@ CLOUD_HOST=root@YOUR_VULTR_IP ./scripts/sync-to-cloud.sh
 
 Do **not** use `SYNC_ENV=1` unless you intend to overwrite the server `.env` — edit `.env` on the server manually (step 3.1).
 
-On the VPS, switch Caddy to the multi-site file and mount the coming-soon dirs:
+On the VPS, switch Caddy to the multi-site file (compose already mounts `deploy/jayhasty-site` → `/srv/jayhasty`):
 
 ```bash
 cd /opt/dashbird
 cp deploy/Caddyfile.cloud.multisite deploy/Caddyfile.cloud
 ```
-
-In `docker-compose.cloud.yml` under `caddy`:
-
-1. Uncomment `JAYHASTY_ROOT_DOMAIN` / `PORTFOLIO_DOMAIN` in `environment`.
-2. Uncomment the two `/srv/jayhasty` and `/srv/portfolio` volume lines.
 
 ### 3.3 Restart the cloud stack
 
@@ -221,7 +233,7 @@ Caddy should obtain Let's Encrypt certs for all four hostnames. First visit may 
 
 ### 3.4 Re-bind trusted devices (one-time per device)
 
-Old `dashbird.duckdns.org` cookies won't apply to the new hostname. Open once (enter basic-auth password if prompted):
+Open once on each device (enter basic-auth password if prompted):
 
 - **Home Linux:** `https://dashbird.jayhasty.com/auth/device-bind?did=edd37155-3ffe-4d18-a775-d6cdcedbf343`
 - **Phone:** `https://dashbird.jayhasty.com/auth/device-bind?did=1c0c1947-ad36-4032-aed5-00eb5b28e166`
@@ -243,14 +255,14 @@ If you use Dashbird Gmail ingest:
 
 | Check | URL / action |
 |-------|----------------|
-| Root coming soon | `https://jayhasty.com` |
+| Portfolio home (Featured cards) | `https://jayhasty.com` |
 | www redirect | `https://www.jayhasty.com` → apex |
-| Portfolio placeholder | `https://portfolio.jayhasty.com` |
+| Portfolio alias | `https://portfolio.jayhasty.com` |
 | Dashbird loads | `https://dashbird.jayhasty.com` (auth or trusted device) |
-| Old alias still works | `https://dashbird.duckdns.org` |
 | Receive mail | Send to `jay@jayhasty.com` from outside |
 | Send mail | Send from `jay@jayhasty.com` to yourself |
 | TLS | Padlock on all HTTPS URLs |
+| DNS not proxied | `dig +short jayhasty.com` returns Vultr IP (not Cloudflare `104.21.*` / `172.67.*`) |
 
 ---
 
@@ -263,7 +275,19 @@ If you use Dashbird Gmail ingest:
 
 ---
 
-## Adding `otherproject.jayhasty.com` later
+## Adding `calclaim.jayhasty.com` / `otherproject.jayhasty.com` later
+
+**CalClaim (Vultr + Caddy — current):**
+
+1. **Cloudflare:** `A` `calclaim` → Vultr IP, **DNS only (grey cloud)**.
+2. On VPS: set `CALCLAIM_DOMAIN=calclaim.jayhasty.com` in `/opt/dashbird/.env`, use multisite Caddy with the calclaim `reverse_proxy` block.
+3. From `calclaim/`: `CLOUD_HOST=root@VULTR_IP ./scripts/sync-to-cloud.sh` (deploys `/opt/calclaim`, webhook + `PUBLIC_BASE_URL=https://calclaim.jayhasty.com`).
+4. Recreate Caddy: `docker compose -f docker-compose.cloud.yml up -d --force-recreate caddy` in `/opt/dashbird`.
+5. Do **not** put CalClaim under `jayhasty.com/calclaim`.
+
+**CalClaim (Railway alternative):** `CNAME` `calclaim` → Railway hostname instead of Vultr `A`, then set the same `PUBLIC_BASE_URL`.
+
+**Other apps on Vultr:**
 
 1. **Cloudflare:** `A` record `otherproject` → Vultr IP (DNS only).
 2. **Caddy:** new site block in `deploy/Caddyfile.cloud` (static files or `reverse_proxy`).

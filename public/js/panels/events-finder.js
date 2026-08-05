@@ -428,6 +428,8 @@ const SOURCE_LABELS = {
   telegram: 'Telegram',
   multiverse: 'Multiverse',
   dorkbotsf: 'dorkbotSF',
+  coolstuff: 'Cool Happenings',
+  webpage: 'Web page',
   public: 'Web',
 };
 
@@ -658,9 +660,9 @@ export function mountEventsFinder(root) {
   conferenceToggle.className = 'events-finder__conferences-toggle';
   conferenceToggle.setAttribute('aria-expanded', 'false');
   conferenceToggle.setAttribute('aria-haspopup', 'dialog');
-  conferenceToggle.textContent = 'Big events';
+  conferenceToggle.textContent = 'Event sources';
   conferenceToggle.title =
-    'Track big conferences & festivals — search a name, preview the site, then log dates, ticket price, and early bird windows.';
+    'Websites to scrape for regular events — add listing URLs, open them, or re-scrape.';
 
   const conferenceInput = document.createElement('textarea');
   conferenceInput.id = 'events-finder-conferences';
@@ -760,8 +762,20 @@ export function mountEventsFinder(root) {
   }
 
   function syncConferenceToggleLabel() {
-    const count = readConferenceWatchlistFromForm().length;
-    conferenceToggle.textContent = count > 0 ? `Big events (${count})` : 'Big events';
+    const n = Number(conferenceToggle.dataset.sourceCount || 0);
+    conferenceToggle.textContent = n > 0 ? `Event sources (${n})` : 'Event sources';
+  }
+
+  async function refreshEventSourcesToggleCount() {
+    try {
+      const res = await fetch('/api/events-finder-sources', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      const sources = Array.isArray(data.sources) ? data.sources : [];
+      conferenceToggle.dataset.sourceCount = String(sources.length);
+      syncConferenceToggleLabel();
+    } catch {
+      /* keep prior label */
+    }
   }
 
   /**
@@ -1181,9 +1195,8 @@ export function mountEventsFinder(root) {
   }
 
   function refreshConferencePopoutIfOpen() {
+    // Event sources list is loaded on open; feed refresh does not rebuild it.
     syncConferenceNamesFromPayload();
-    if (!conferencePopoutStatusList || isBigEventEditorOpen()) return;
-    paintBigEventsTable(conferenceWatchItemsFromPayload(), conferencePopoutStatusList);
   }
 
   /**
@@ -1321,77 +1334,67 @@ export function mountEventsFinder(root) {
   }
 
   function openConferenceWatchlistPopout() {
-    const wrap = document.createElement('div');
-    wrap.className = 'events-finder__big-events';
+    openEventSourcesPopout();
+  }
 
-    // --- Add event flow ---------------------------------------------------
+  function openEventSourcesPopout() {
+    const wrap = document.createElement('div');
+    wrap.className = 'events-finder__event-sources';
+
+    const intro = document.createElement('p');
+    intro.className = 'events-finder__event-sources-intro muted';
+    intro.textContent =
+      'Sites from Personal bookmarks → Events. Listing pages are scraped into the regular feed. Add a URL to watch, open a source, or re-scrape after changes.';
+
     const addBar = document.createElement('div');
     addBar.className = 'events-finder__big-events-addbar';
     const addToggle = document.createElement('button');
     addToggle.type = 'button';
     addToggle.className = 'events-finder__big-events-add';
-    addToggle.textContent = '+ Add event';
+    addToggle.textContent = '+ Add website';
 
     const form = document.createElement('div');
     form.className = 'events-finder__big-events-form';
     form.hidden = true;
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'events-finder__big-events-input';
-    input.placeholder = 'e.g. open sauce';
-    input.autocomplete = 'off';
+    const labelInput = document.createElement('input');
+    labelInput.type = 'text';
+    labelInput.className = 'events-finder__big-events-input';
+    labelInput.placeholder = 'Label (e.g. Artisans Asylum)';
+    labelInput.autocomplete = 'off';
     const urlInput = document.createElement('input');
     urlInput.type = 'url';
     urlInput.className = 'events-finder__big-events-input events-finder__big-events-input--url';
-    urlInput.placeholder = 'Event URL (optional — paste if you already have it)';
+    urlInput.placeholder = 'https://example.com/events';
     urlInput.autocomplete = 'off';
-    const searchBtn = document.createElement('button');
-    searchBtn.type = 'button';
-    searchBtn.className = 'events-finder__big-events-search';
-    searchBtn.textContent = 'Search';
-    const manualBtn = document.createElement('button');
-    manualBtn.type = 'button';
-    manualBtn.className = 'events-finder__big-events-again';
-    manualBtn.textContent = 'Add manually';
-    manualBtn.title = 'Skip search — add by name (and optional URL), then fill details in Edit';
-    const addUrlBtn = document.createElement('button');
-    addUrlBtn.type = 'button';
-    addUrlBtn.className = 'events-finder__big-events-again';
-    addUrlBtn.textContent = 'Add URL';
-    addUrlBtn.title = 'Paste the official event page URL — no web search';
-    form.append(input, searchBtn, manualBtn, addUrlBtn, urlInput);
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'events-finder__big-events-confirm';
+    addBtn.textContent = 'Add';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'events-finder__big-events-again';
+    cancelBtn.textContent = 'Cancel';
+    form.append(labelInput, urlInput, addBtn, cancelBtn);
+    addBar.append(addToggle);
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'events-finder__event-sources-toolbar';
+    const rescrapeAllBtn = document.createElement('button');
+    rescrapeAllBtn.type = 'button';
+    rescrapeAllBtn.className = 'events-finder__big-events-again';
+    rescrapeAllBtn.textContent = 'Re-scrape listings';
+    rescrapeAllBtn.title = 'Clear the webpage listings cache and refresh the Events feed';
+    toolbar.append(rescrapeAllBtn);
 
     const msg = document.createElement('p');
     msg.className = 'events-finder__big-events-msg muted';
     msg.hidden = true;
 
-    const preview = document.createElement('div');
-    preview.className = 'events-finder__big-events-preview';
-    preview.hidden = true;
+    const list = document.createElement('ul');
+    list.className = 'events-finder__event-sources-list';
+    conferencePopoutStatusList = list;
 
-    addBar.append(addToggle);
-
-    // --- Tracked table ----------------------------------------------------
-    const tableWrap = document.createElement('div');
-    tableWrap.className = 'events-finder__big-events-table-wrap';
-    const table = document.createElement('table');
-    table.className = 'events-finder__big-events-table';
-    const thead = document.createElement('thead');
-    thead.innerHTML =
-      '<tr><th>Event</th><th>Dates</th><th>Ticket price</th><th>Ticket sales</th><th>Description</th><th aria-label="Remove"></th></tr>';
-    const tbody = document.createElement('tbody');
-    conferencePopoutStatusList = tbody;
-    paintBigEventsTable(conferenceWatchItemsFromPayload(), tbody);
-    // Always confirm against the persistent store so a stale/empty feed payload
-    // never leaves the list looking wiped after a refresh or deploy.
-    void refreshBigEventsFromStore();
-    table.append(thead, tbody);
-    tableWrap.append(table);
-
-    wrap.append(addBar, form, msg, preview, tableWrap);
-
-    /** @type {{ query: string, url: string|null, homepageUrl?: string|null, ticketUrl?: string|null, screenshotPath?: string|null, manual?: boolean }|null} */
-    let pendingPreview = null;
+    wrap.append(intro, addBar, form, toolbar, msg, list);
 
     function setMsg(text, kind) {
       msg.hidden = !text;
@@ -1399,347 +1402,185 @@ export function mountEventsFinder(root) {
       msg.className = `events-finder__big-events-msg${kind ? ` events-finder__big-events-msg--${kind}` : ' muted'}`;
     }
 
-    function showAddForm() {
-      form.hidden = false;
-      addToggle.hidden = true;
-      input.focus();
+    function deriveLabel(url) {
+      try {
+        const host = new URL(url).hostname.replace(/^www\./, '');
+        return host.split('.')[0] || host;
+      } catch {
+        return 'Event source';
+      }
     }
 
-    /** Prefix a bare host with https:// so a pasted URL is usable. */
-    function normalizeManualUrl(raw) {
+    function normalizeUrl(raw) {
       const v = String(raw || '').trim();
       if (!v) return '';
       return /^https?:\/\//i.test(v) ? v : `https://${v}`;
     }
 
-    /** Derive a short label from a pasted event URL (e.g. coolstuff.ju.mp → coolstuff). */
-    function deriveQueryFromUrl(raw) {
-      const url = normalizeManualUrl(raw);
-      if (!url) return '';
-      try {
-        const u = new URL(url);
-        const host = u.hostname.replace(/^www\./, '');
-        const slug = host.split('.')[0] || host;
-        return slug.replace(/[-_]+/g, ' ').trim() || host;
-      } catch {
-        return '';
-      }
-    }
-
-    function looksLikeHttpUrl(raw) {
-      const v = String(raw || '').trim();
-      return /^https?:\/\//i.test(v) || /^[\w.-]+\.(?:com|org|net|io|mp|edu|gov|co|me|school|dance|space)(?:\/|$)/i.test(v);
-    }
-
-    function resetAddFlow() {
-      form.hidden = true;
-      addToggle.hidden = false;
-      preview.hidden = true;
-      preview.replaceChildren();
-      pendingPreview = null;
-      input.value = '';
-      urlInput.value = '';
-      setMsg('');
-    }
-
     /**
-     * Skip web search — add by name (optional URL). Use for invite-only /
-     * unlisted events that search cannot find.
+     * @param {Array<{ id?: string, label?: string, url?: string, strategyLabel?: string, host?: string }>} sources
      */
-    function startManualAdd() {
-      let query = input.value.trim();
-      const manualUrl = normalizeManualUrl(urlInput.value) || null;
-      if (!query && manualUrl) query = deriveQueryFromUrl(manualUrl) || manualUrl;
-      if (!query) {
-        input.focus();
+    function paintSources(sources) {
+      list.replaceChildren();
+      conferenceToggle.dataset.sourceCount = String(sources.length);
+      syncConferenceToggleLabel();
+      if (!sources.length) {
+        const empty = document.createElement('li');
+        empty.className = 'events-finder__event-sources-empty muted';
+        empty.textContent = 'No scrape websites yet — add a listing URL above.';
+        list.append(empty);
         return;
       }
-      input.value = query;
-      pendingPreview = {
-        query,
-        url: manualUrl,
-        homepageUrl: manualUrl,
-        ticketUrl: null,
-        manual: true,
-      };
-      renderPreview({
-        name: query,
-        query,
-        url: manualUrl,
-        homepageUrl: manualUrl,
-        urlFound: Boolean(manualUrl),
-        manual: true,
-        deep: true,
-        candidates: [],
-        confident: true,
-      });
-      setMsg('');
-    }
+      for (const src of sources) {
+        const li = document.createElement('li');
+        li.className = 'events-finder__event-sources-item';
 
-    /** Search the web for an official site (default add path). */
-    function submitAdd() {
-      void runSearch();
-    }
+        const main = document.createElement('div');
+        main.className = 'events-finder__event-sources-main';
+        const name = document.createElement('a');
+        name.className = 'events-finder__event-sources-name';
+        name.href = String(src.url || '#');
+        name.target = '_blank';
+        name.rel = 'noopener noreferrer';
+        name.textContent = String(src.label || src.host || src.url || 'Source');
+        const meta = document.createElement('p');
+        meta.className = 'events-finder__event-sources-meta muted';
+        meta.textContent = [src.strategyLabel, src.host].filter(Boolean).join(' · ');
+        const urlLine = document.createElement('p');
+        urlLine.className = 'events-finder__event-sources-url muted';
+        urlLine.textContent = String(src.url || '');
+        main.append(name, meta, urlLine);
 
-    async function runSearch(deep = false) {
-      const query = input.value.trim();
-      if (!query) {
-        input.focus();
-        return;
-      }
-      searchBtn.disabled = true;
-      searchBtn.textContent = 'Searching…';
-      setMsg(deep ? 'Digging deeper for the official site…' : 'Searching the web for the official site…');
-      preview.hidden = true;
-      preview.replaceChildren();
-      try {
-        const res = await fetch('/api/events-finder/big-events/search', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, deep }),
+        const actions = document.createElement('div');
+        actions.className = 'events-finder__event-sources-actions';
+        const openBtn = document.createElement('a');
+        openBtn.className = 'events-finder__big-events-again';
+        openBtn.href = String(src.url || '#');
+        openBtn.target = '_blank';
+        openBtn.rel = 'noopener noreferrer';
+        openBtn.textContent = 'Open';
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'events-finder__big-events-remove';
+        removeBtn.textContent = 'Remove';
+        removeBtn.addEventListener('click', () => {
+          void removeSource(src, removeBtn);
         });
+        actions.append(openBtn, removeBtn);
+        li.append(main, actions);
+        list.append(li);
+      }
+    }
+
+    async function loadSources() {
+      setMsg('Loading…');
+      try {
+        const res = await fetch('/api/events-finder-sources', { cache: 'no-store' });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        const candidates = Array.isArray(data.preview?.candidates) ? data.preview.candidates : [];
-        const pickUrl = data.preview?.homepageUrl || data.preview?.url || candidates[0]?.url || null;
-        pendingPreview = {
-          query,
-          url: pickUrl,
-          homepageUrl: pickUrl,
-          ticketUrl: data.preview?.ticketUrl || null,
-        };
-        renderPreview({ ...(data.preview || {}), deep, candidates });
+        if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+        paintSources(Array.isArray(data.sources) ? data.sources : []);
         setMsg('');
       } catch (e) {
-        setMsg(`Search failed: ${String(e?.message || e)}`, 'error');
-      } finally {
-        searchBtn.disabled = false;
-        searchBtn.textContent = 'Search';
+        setMsg(`Could not load sources: ${String(e?.message || e)}`, 'error');
       }
     }
 
-    function renderPreview(p) {
-      preview.replaceChildren();
-      preview.hidden = false;
-      const isManual = p.manual === true || pendingPreview?.manual === true;
-
-      const nameEl = document.createElement('p');
-      nameEl.className = 'events-finder__big-events-preview-name';
-      nameEl.textContent = String(p.name || p.query || '');
-      preview.append(nameEl);
-
-      const candidates = Array.isArray(p.candidates)
-        ? p.candidates.filter((c) => c && c.url)
-        : [];
-      const unsure = !isManual && p.confident !== true && candidates.length >= 2;
-      const urlFound = Boolean(p.url) || candidates.length > 0;
-
-      if (isManual) {
-        const hint = document.createElement('p');
-        hint.className = 'events-finder__big-events-preview-hint muted';
-        hint.textContent = urlFound
-          ? 'Manual add — will scrape this URL for details (no web search).'
-          : 'Manual add — no site yet. Add it, then use Edit to fill dates, price, and a URL.';
-        preview.append(hint);
-        if (urlFound) {
-          const link = document.createElement('a');
-          link.className = 'events-finder__big-events-preview-url';
-          link.href = String(p.url || '');
-          link.target = '_blank';
-          link.rel = 'noopener noreferrer';
-          link.textContent = String(p.url || '');
-          preview.append(link);
-        }
-      } else if (unsure) {
-        const hint = document.createElement('p');
-        hint.className = 'events-finder__big-events-preview-hint muted';
-        hint.textContent = 'Not sure which site is official — pick one:';
-        preview.append(hint);
-        const list = document.createElement('div');
-        list.className = 'events-finder__big-events-candidates';
-        list.setAttribute('role', 'radiogroup');
-        list.setAttribute('aria-label', 'Official site candidates');
-        const selected = String(pendingPreview?.homepageUrl || pendingPreview?.url || candidates[0].url);
-        candidates.forEach((c, i) => {
-          const label = document.createElement('label');
-          label.className = 'events-finder__big-events-candidate';
-          const radio = document.createElement('input');
-          radio.type = 'radio';
-          radio.name = 'big-event-site-candidate';
-          radio.value = String(c.url);
-          radio.checked = String(c.url) === selected || (!selected && i === 0);
-          radio.addEventListener('change', () => {
-            if (!pendingPreview || !radio.checked) return;
-            pendingPreview.url = String(c.url);
-            pendingPreview.homepageUrl = String(c.url);
-          });
-          const body = document.createElement('span');
-          body.className = 'events-finder__big-events-candidate-body';
-          const title = document.createElement('span');
-          title.className = 'events-finder__big-events-candidate-title';
-          title.textContent = String(c.title || c.url);
-          const link = document.createElement('a');
-          link.className = 'events-finder__big-events-candidate-url';
-          link.href = String(c.url);
-          link.target = '_blank';
-          link.rel = 'noopener noreferrer';
-          link.textContent = String(c.url);
-          link.addEventListener('click', (e) => e.stopPropagation());
-          body.append(title, link);
-          label.append(radio, body);
-          list.append(label);
-        });
-        preview.append(list);
-        if (pendingPreview && !pendingPreview.homepageUrl) {
-          pendingPreview.url = String(candidates[0].url);
-          pendingPreview.homepageUrl = String(candidates[0].url);
-        }
-      } else if (urlFound) {
-        const link = document.createElement('a');
-        link.className = 'events-finder__big-events-preview-url';
-        link.href = String(p.url || candidates[0]?.url || '');
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        link.textContent = String(p.url || candidates[0]?.url || '');
-        preview.append(link);
-      } else {
-        const noUrl = document.createElement('p');
-        noUrl.className = 'events-finder__big-events-preview-url muted';
-        noUrl.textContent = p.deep
-          ? 'Still no official site found. Add anyway, or switch to manual and paste a URL.'
-          : 'No official site found — try “Search deeper”, or add manually.';
-        preview.append(noUrl);
-      }
-
-      if (!isManual && p.ticketUrl && p.ticketUrl !== (pendingPreview?.url || p.url)) {
-        const tlink = document.createElement('a');
-        tlink.className = 'events-finder__big-events-preview-url events-finder__big-events-preview-tickets';
-        tlink.href = String(p.ticketUrl);
-        tlink.target = '_blank';
-        tlink.rel = 'noopener noreferrer';
-        tlink.textContent = 'Tickets ↗';
-        preview.append(tlink);
-      }
-
-      const actions = document.createElement('div');
-      actions.className = 'events-finder__big-events-preview-actions';
-      const confirmBtn = document.createElement('button');
-      confirmBtn.type = 'button';
-      confirmBtn.className = 'events-finder__big-events-confirm';
-      confirmBtn.textContent = isManual
-        ? 'Add event'
-        : unsure
-          ? 'Add selected'
-          : 'Add event';
-      confirmBtn.addEventListener('click', () => void confirmAdd(confirmBtn));
-      actions.append(confirmBtn);
-
-      // Offer a deeper search when unsure or when nothing was found.
-      if (!isManual && (!urlFound || unsure) && !p.deep) {
-        const deeperBtn = document.createElement('button');
-        deeperBtn.type = 'button';
-        deeperBtn.className = 'events-finder__big-events-again';
-        deeperBtn.textContent = 'Search deeper';
-        deeperBtn.addEventListener('click', () => void runSearch(true));
-        actions.append(deeperBtn);
-      }
-
-      // Wrong / missing search hits → bail to name±URL without picking a junk site.
-      if (!isManual && (unsure || !urlFound)) {
-        const noneBtn = document.createElement('button');
-        noneBtn.type = 'button';
-        noneBtn.className = 'events-finder__big-events-again';
-        noneBtn.textContent = unsure ? 'None of these' : 'Add manually';
-        noneBtn.title = 'Skip these results — add by name (optional URL)';
-        noneBtn.addEventListener('click', () => {
-          urlInput.value = '';
-          startManualAdd();
-          urlInput.focus();
-        });
-        actions.append(noneBtn);
-      }
-
-      const againBtn = document.createElement('button');
-      againBtn.type = 'button';
-      againBtn.className = 'events-finder__big-events-again';
-      againBtn.textContent = isManual ? 'Cancel' : 'Edit search';
-      againBtn.addEventListener('click', () => {
-        preview.hidden = true;
-        preview.replaceChildren();
-        pendingPreview = null;
-        input.focus();
-        input.select();
-      });
-      actions.append(againBtn);
-      preview.append(actions);
-    }
-
-    async function confirmAdd(btn) {
-      if (!pendingPreview) return;
-      btn.disabled = true;
-      btn.textContent = 'Adding…';
-      const wasManual = pendingPreview.manual === true;
-      const hadUrl = Boolean(pendingPreview.url || pendingPreview.homepageUrl);
-      try {
-        const res = await fetch('/api/events-finder/big-events/add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(pendingPreview),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        resetAddFlow();
-        if (wasManual && !hadUrl) {
-          setMsg('Added — open Edit on the row to fill dates, price, and a URL.');
-        } else {
-          setMsg('Added — looking up dates, price, and early bird…');
-        }
-        setTimeout(() => setMsg(''), 8000);
-        reloadBigEventsSoon();
-      } catch (e) {
-        btn.disabled = false;
-        btn.textContent = 'Add event';
-        setMsg(`Could not add: ${String(e?.message || e)}`, 'error');
-      }
-    }
-
-    addToggle.addEventListener('click', showAddForm);
-    searchBtn.addEventListener('click', () => submitAdd());
-    manualBtn.addEventListener('click', () => startManualAdd());
-    addUrlBtn.addEventListener('click', () => {
-      const manualUrl = normalizeManualUrl(urlInput.value);
-      if (!manualUrl) {
+    async function addSource() {
+      const url = normalizeUrl(urlInput.value);
+      const label = labelInput.value.trim() || deriveLabel(url);
+      if (!url) {
         urlInput.focus();
         return;
       }
-      if (!input.value.trim()) input.value = deriveQueryFromUrl(manualUrl) || manualUrl;
-      startManualAdd();
+      addBtn.disabled = true;
+      try {
+        const res = await fetch('/api/events-finder-sources', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label, url }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+        form.hidden = true;
+        addToggle.hidden = false;
+        labelInput.value = '';
+        urlInput.value = '';
+        paintSources(Array.isArray(data.sources) ? data.sources : []);
+        setMsg(
+          data.webpageListing
+            ? 'Added — listing events appear after the next feed refresh.'
+            : 'Added to Personal bookmarks → Events.',
+        );
+        void loadEvents();
+      } catch (e) {
+        setMsg(`Could not add: ${String(e?.message || e)}`, 'error');
+      } finally {
+        addBtn.disabled = false;
+      }
+    }
+
+    async function removeSource(src, btn) {
+      if (!window.confirm(`Remove “${src.label || src.url}” from scrape websites?`)) return;
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/events-finder-sources', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: src.url, id: src.id }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+        paintSources(Array.isArray(data.sources) ? data.sources : []);
+        setMsg('Removed.');
+      } catch (e) {
+        setMsg(`Could not remove: ${String(e?.message || e)}`, 'error');
+        btn.disabled = false;
+      }
+    }
+
+    addToggle.addEventListener('click', () => {
+      form.hidden = false;
+      addToggle.hidden = true;
+      labelInput.focus();
     });
-    input.addEventListener('input', () => {
-      const v = input.value.trim();
-      if (!looksLikeHttpUrl(v)) return;
-      urlInput.value = normalizeManualUrl(v);
-      input.value = '';
-      urlInput.focus();
+    cancelBtn.addEventListener('click', () => {
+      form.hidden = true;
+      addToggle.hidden = false;
+      setMsg('');
     });
-    const onAddEnter = (e) => {
+    addBtn.addEventListener('click', () => void addSource());
+    urlInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        // URL field focus → treat as manual (paste-then-enter); name field → search.
-        if (document.activeElement === urlInput) startManualAdd();
-        else submitAdd();
+        void addSource();
       }
-    };
-    input.addEventListener('keydown', onAddEnter);
-    urlInput.addEventListener('keydown', onAddEnter);
+    });
+    rescrapeAllBtn.addEventListener('click', async () => {
+      rescrapeAllBtn.disabled = true;
+      rescrapeAllBtn.textContent = 'Re-scraping…';
+      try {
+        const res = await fetch('/api/events-finder-sources/rescrape', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+        setMsg('Cache cleared — refreshing feed…');
+        await loadEvents();
+        setMsg('Feed refresh started.');
+      } catch (e) {
+        setMsg(`Re-scrape failed: ${String(e?.message || e)}`, 'error');
+      } finally {
+        rescrapeAllBtn.disabled = false;
+        rescrapeAllBtn.textContent = 'Re-scrape listings';
+      }
+    });
 
     openConferencePopout({
-      title: 'Big events',
+      title: 'Event sources',
       body: wrap,
       onClose: () => {
         conferencePopoutStatusList = null;
       },
     });
+    void loadSources();
   }
 
   conferenceToggle.addEventListener('click', () => {
@@ -3387,6 +3228,438 @@ export function mountEventsFinder(root) {
     return card;
   }
 
+
+  /**
+   * @param {string} eventId
+   * @param {Record<string, unknown>} body
+   */
+  async function patchNotable(eventId, body) {
+    const res = await fetch(`/api/events-finder/notable/${encodeURIComponent(eventId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+
+  /**
+   * @param {object} ev
+   * @param {boolean} notable
+   */
+  async function setEventNotable(ev, notable) {
+    const id = String(ev?.id || '').trim();
+    if (!id) return;
+    await patchNotable(id, notable ? { notable: true, reminderLeadWeeks: ev.reminderLeadWeeks || 4 } : { notable: false });
+    if (lastEventsPayload && Array.isArray(lastEventsPayload.events)) {
+      lastEventsPayload.events = lastEventsPayload.events.map((e) => {
+        if (String(e.id) !== id) return e;
+        if (!notable) {
+          const next = { ...e, notable: false };
+          delete next.reminderLeadWeeks;
+          delete next.earlyBirdPrice;
+          return next;
+        }
+        return { ...e, notable: true, reminderLeadWeeks: e.reminderLeadWeeks || 4 };
+      });
+      paintEvents(lastEventsPayload, {});
+    } else {
+      void loadEvents({ catalogOnly: true, quiet: true });
+    }
+  }
+
+  /**
+   * Detail / override / early-bird editor for a notable (or soon-to-be-notable) event.
+   * @param {object} ev
+   */
+  function openNotableDetailPopout(ev) {
+    const eventId = String(ev?.id || '').trim();
+    const body = document.createElement('div');
+    body.className = 'events-finder__notable-detail';
+
+    const title = document.createElement('h3');
+    title.className = 'events-finder__conference-detail-title';
+    title.textContent = String(ev.title || 'Event');
+    body.append(title);
+
+    const whenEl = document.createElement('p');
+    whenEl.className = 'events-finder__conference-detail-when';
+    whenEl.textContent = formatWhen(ev.start) || 'Date TBD';
+    body.append(whenEl);
+
+    if (ev.venue || ev.city) {
+      const place = document.createElement('p');
+      place.className = 'events-finder__conference-detail-place';
+      place.textContent = [ev.venue, ev.city].filter(Boolean).join(' · ');
+      body.append(place);
+    }
+
+    const leadField = document.createElement('label');
+    leadField.className = 'events-finder__notable-field';
+    const leadLabel = document.createElement('span');
+    leadLabel.className = 'events-finder__notable-label';
+    leadLabel.textContent = 'Notify me';
+    const leadSelect = document.createElement('select');
+    leadSelect.className = 'events-finder__notable-select';
+    for (const [weeks, label] of [
+      [2, '2 weeks ahead'],
+      [3, '3 weeks ahead'],
+      [4, '4 weeks ahead'],
+      [6, '6 weeks ahead'],
+      [8, '8 weeks ahead'],
+      [12, '12 weeks ahead'],
+    ]) {
+      const opt = document.createElement('option');
+      opt.value = String(weeks);
+      opt.textContent = label;
+      if (Number(ev.reminderLeadWeeks) === weeks || (!ev.reminderLeadWeeks && weeks === 4)) {
+        opt.selected = true;
+      }
+      leadSelect.append(opt);
+    }
+    leadField.append(leadLabel, leadSelect);
+    body.append(leadField);
+
+    function field(label, key, value, wide = false) {
+      const lab = document.createElement('label');
+      lab.className = `events-finder__notable-field${wide ? ' events-finder__notable-field--wide' : ''}`;
+      const span = document.createElement('span');
+      span.className = 'events-finder__notable-label';
+      span.textContent = label;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'events-finder__notable-input';
+      input.dataset.key = key;
+      input.value = value != null ? String(value) : '';
+      lab.append(span, input);
+      body.append(lab);
+      return input;
+    }
+
+    field('Ticket price', 'ticketPrice', ev.ticketPrice || ev.priceLabel || '');
+    field('Ticket URL', 'ticketUrl', ev.ticketUrl || '');
+    field('Early bird price', 'earlyBirdPrice', ev.earlyBirdPrice || '');
+    field('Early bird starts', 'earlyBirdStart', ev.earlyBirdStart || '');
+    field('Early bird ends', 'earlyBirdEnd', ev.earlyBirdEnd || '');
+    field('Sales start', 'ticketSalesStart', ev.ticketSalesStart || '');
+
+    const overrideTitle = document.createElement('h4');
+    overrideTitle.className = 'events-finder__notable-subtitle';
+    overrideTitle.textContent = 'Override scraped details';
+    body.append(overrideTitle);
+    const hint = document.createElement('p');
+    hint.className = 'muted events-finder__notable-hint';
+    hint.textContent = 'If the scraper got something wrong, fix it here. Saved overrides win until you re-scrape with force.';
+    body.append(hint);
+
+    field('Title', 'ov_title', ev.title || '');
+    field('Start (ISO)', 'ov_start', ev.start || '');
+    field('End (ISO)', 'ov_end', ev.end || '');
+    field('Venue', 'ov_venue', ev.venue || '');
+    field('City', 'ov_city', ev.city || '');
+    field('Lat', 'ov_lat', ev.lat != null ? ev.lat : '');
+    field('Lon', 'ov_lon', ev.lon != null ? ev.lon : '');
+    field('Event URL', 'ov_url', ev.url || '');
+    field('Description', 'ov_description', ev.description || '', true);
+    field('Notes', 'notes', ev.notableNotes || '', true);
+
+    const msg = document.createElement('p');
+    msg.className = 'events-finder__big-events-msg muted';
+    msg.hidden = true;
+    body.append(msg);
+
+    const actions = document.createElement('div');
+    actions.className = 'events-finder__notable-actions';
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'events-finder__big-events-confirm';
+    saveBtn.textContent = 'Save';
+    const rescrapeBtn = document.createElement('button');
+    rescrapeBtn.type = 'button';
+    rescrapeBtn.className = 'events-finder__big-events-again';
+    rescrapeBtn.textContent = 'Re-scrape';
+    rescrapeBtn.title = 'Fetch the event page again and refresh fields (keeps your overrides unless you force)';
+    const forceBtn = document.createElement('button');
+    forceBtn.type = 'button';
+    forceBtn.className = 'events-finder__big-events-again';
+    forceBtn.textContent = 'Force re-scrape';
+    forceBtn.title = 'Re-scrape and clear overrides';
+    const planBtn = document.createElement('button');
+    planBtn.type = 'button';
+    planBtn.className = 'events-finder__big-events-again';
+    planBtn.textContent = 'Planning & logistics';
+    actions.append(saveBtn, rescrapeBtn, forceBtn, planBtn);
+    body.append(actions);
+
+    function setMsg(text, kind) {
+      msg.hidden = !text;
+      msg.textContent = text || '';
+      msg.className = `events-finder__big-events-msg${kind ? ` events-finder__big-events-msg--${kind}` : ' muted'}`;
+    }
+
+    function readOverrides() {
+      /** @type {Record<string, string|number|null>} */
+      const o = {};
+      for (const input of body.querySelectorAll('input[data-key^="ov_"]')) {
+        const key = String(input.dataset.key || '').slice(3);
+        const raw = input.value.trim();
+        if (!raw) continue;
+        if (key === 'lat' || key === 'lon') {
+          const n = Number(raw);
+          if (Number.isFinite(n)) o[key] = n;
+        } else {
+          o[key] = raw;
+        }
+      }
+      return o;
+    }
+
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      setMsg('Saving…');
+      try {
+        const payload = {
+          notable: true,
+          reminderLeadWeeks: Number(leadSelect.value) || 4,
+          ticketPrice: body.querySelector('input[data-key="ticketPrice"]')?.value.trim() || null,
+          ticketUrl: body.querySelector('input[data-key="ticketUrl"]')?.value.trim() || null,
+          earlyBirdPrice: body.querySelector('input[data-key="earlyBirdPrice"]')?.value.trim() || null,
+          earlyBirdStart: body.querySelector('input[data-key="earlyBirdStart"]')?.value.trim() || null,
+          earlyBirdEnd: body.querySelector('input[data-key="earlyBirdEnd"]')?.value.trim() || null,
+          ticketSalesStart: body.querySelector('input[data-key="ticketSalesStart"]')?.value.trim() || null,
+          notes: body.querySelector('input[data-key="notes"]')?.value.trim() || null,
+          overrides: readOverrides(),
+          applyOverridesToCatalog: true,
+          manualEdit: true,
+        };
+        await patchNotable(eventId, payload);
+        setMsg('Saved.');
+        void loadEvents({ catalogOnly: true, quiet: true });
+      } catch (e) {
+        setMsg(String(e?.message || e), 'error');
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+
+    async function runRescrape(force) {
+      const btn = force ? forceBtn : rescrapeBtn;
+      btn.disabled = true;
+      setMsg(force ? 'Force re-scraping…' : 'Re-scraping…');
+      try {
+        const res = await fetch(`/api/events-finder/notable/${encodeURIComponent(eventId)}/rescrape`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force: force === true, keepNotable: true }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+        setMsg('Re-scrape complete.');
+        closeConferencePopout();
+        void loadEvents({ catalogOnly: true, quiet: true });
+        if (data.event) openNotableDetailPopout(data.event);
+      } catch (e) {
+        setMsg(String(e?.message || e), 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    rescrapeBtn.addEventListener('click', () => void runRescrape(false));
+    forceBtn.addEventListener('click', () => void runRescrape(true));
+    planBtn.addEventListener('click', () => {
+      closeConferencePopout();
+      void openPlanningLogisticsPopout(ev);
+    });
+
+    openConferencePopout({
+      title: 'Notable event',
+      body,
+    });
+  }
+
+  /**
+   * @param {object} ev
+   */
+  async function openPlanningLogisticsPopout(ev) {
+    const eventId = String(ev?.id || '').trim();
+    const body = document.createElement('div');
+    body.className = 'events-finder__logistics';
+    const loading = document.createElement('p');
+    loading.className = 'muted';
+    loading.textContent = 'Loading planning & logistics…';
+    body.append(loading);
+
+    openConferencePopout({
+      title: 'Planning & logistics',
+      body,
+    });
+
+    try {
+      // Ensure notable so logistics notes can stick.
+      if (!ev.notable) {
+        await patchNotable(eventId, { notable: true, reminderLeadWeeks: 4 });
+      }
+      const res = await fetch(`/api/events-finder/notable/${encodeURIComponent(eventId)}/logistics`, {
+        cache: 'no-store',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+
+      body.replaceChildren();
+
+      const head = document.createElement('h3');
+      head.className = 'events-finder__conference-detail-title';
+      head.textContent = String(ev.title || 'Event');
+      body.append(head);
+
+      const dist = document.createElement('p');
+      dist.className = 'events-finder__logistics-dist';
+      if (data.milesFromBay != null) {
+        dist.textContent = data.outsideBay
+          ? `${data.milesFromBay} mi from the Bay Area — travel planning suggested.`
+          : `${data.milesFromBay} mi from the Bay Area centroid.`;
+      } else {
+        dist.textContent = 'Location not geocoded yet — add lat/lon in Notable overrides for map + travel.';
+        dist.classList.add('muted');
+      }
+      body.append(dist);
+
+      const mapEl = document.createElement('div');
+      mapEl.className = 'events-finder__logistics-map';
+      body.append(mapEl);
+      if (data.map?.lat != null && data.map?.lon != null) {
+        try {
+          const L = await ensureLeaflet();
+          const map = L.map(mapEl, { zoomControl: true, attributionControl: true });
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 18,
+            attribution: '&copy; OpenStreetMap',
+          }).addTo(map);
+          const latlng = [data.map.lat, data.map.lon];
+          L.marker(latlng).addTo(map).bindPopup(String(data.map.label || 'Event'));
+          map.setView(latlng, data.outsideBay ? 6 : 11);
+          setTimeout(() => map.invalidateSize(), 80);
+        } catch {
+          mapEl.textContent = 'Map unavailable.';
+          mapEl.classList.add('muted');
+        }
+      } else {
+        mapEl.textContent = 'No map coordinates for this event.';
+        mapEl.classList.add('muted');
+      }
+
+      function linkSection(titleText, items) {
+        if (!Array.isArray(items) || !items.length) return;
+        const h = document.createElement('h4');
+        h.className = 'events-finder__notable-subtitle';
+        h.textContent = titleText;
+        body.append(h);
+        const ul = document.createElement('ul');
+        ul.className = 'events-finder__logistics-list';
+        for (const it of items) {
+          const li = document.createElement('li');
+          const a = document.createElement('a');
+          a.href = String(it.url || '#');
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          a.textContent = String(it.label || 'Link');
+          const d = document.createElement('p');
+          d.className = 'muted';
+          d.textContent = String(it.detail || '');
+          li.append(a, d);
+          ul.append(li);
+        }
+        body.append(ul);
+      }
+
+      if (data.outsideBay && data.nearestAirport) {
+        const ap = document.createElement('p');
+        ap.className = 'events-finder__logistics-airport';
+        ap.textContent = `Nearest international airport: ${data.nearestAirport.name} (${data.nearestAirport.code}) — ${data.nearestAirport.miles} mi from venue.`;
+        body.append(ap);
+        linkSection('From the airport', data.transportFromAirport);
+      }
+
+      linkSection('Suggested flights', data.flights);
+      linkSection('Accommodations', data.accommodations);
+      linkSection('Other considerations', data.otherConsiderations);
+
+      if (Array.isArray(data.nearbyEvents) && data.nearbyEvents.length) {
+        const h = document.createElement('h4');
+        h.className = 'events-finder__notable-subtitle';
+        h.textContent = 'Other events in the area';
+        body.append(h);
+        const ul = document.createElement('ul');
+        ul.className = 'events-finder__logistics-list';
+        for (const ne of data.nearbyEvents) {
+          const li = document.createElement('li');
+          const a = document.createElement(ne.url ? 'a' : 'span');
+          if (ne.url) {
+            a.href = String(ne.url);
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+          }
+          a.textContent = String(ne.title || 'Event');
+          const d = document.createElement('p');
+          d.className = 'muted';
+          d.textContent = [formatWhen(ne.start), ne.city, ne.miles != null ? `${ne.miles} mi` : '']
+            .filter(Boolean)
+            .join(' · ');
+          li.append(a, d);
+          ul.append(li);
+        }
+        body.append(ul);
+      } else {
+        const none = document.createElement('p');
+        none.className = 'muted';
+        none.textContent = 'No other catalog events found nearby in the same travel window.';
+        body.append(none);
+      }
+
+      const notesLab = document.createElement('label');
+      notesLab.className = 'events-finder__notable-field events-finder__notable-field--wide';
+      const notesSpan = document.createElement('span');
+      notesSpan.className = 'events-finder__notable-label';
+      notesSpan.textContent = 'Your planning notes';
+      const notesInput = document.createElement('textarea');
+      notesInput.className = 'events-finder__notable-textarea';
+      notesInput.rows = 3;
+      notesInput.value = String(data.planningNotes || ev.planningNotes || '');
+      notesLab.append(notesSpan, notesInput);
+      body.append(notesLab);
+
+      const saveNotes = document.createElement('button');
+      saveNotes.type = 'button';
+      saveNotes.className = 'events-finder__big-events-confirm';
+      saveNotes.textContent = 'Save notes';
+      const noteMsg = document.createElement('p');
+      noteMsg.className = 'events-finder__big-events-msg muted';
+      noteMsg.hidden = true;
+      saveNotes.addEventListener('click', async () => {
+        saveNotes.disabled = true;
+        try {
+          await patchNotable(eventId, { notable: true, planningNotes: notesInput.value.trim() || null });
+          noteMsg.hidden = false;
+          noteMsg.textContent = 'Saved.';
+        } catch (e) {
+          noteMsg.hidden = false;
+          noteMsg.className = 'events-finder__big-events-msg events-finder__big-events-msg--error';
+          noteMsg.textContent = String(e?.message || e);
+        } finally {
+          saveNotes.disabled = false;
+        }
+      });
+      body.append(saveNotes, noteMsg);
+    } catch (e) {
+      body.replaceChildren();
+      const err = document.createElement('p');
+      err.className = 'events-finder__big-events-msg events-finder__big-events-msg--error';
+      err.textContent = String(e?.message || e);
+      body.append(err);
+    }
+  }
+
   /**
    * @param {object} ev
    * @param {{ fromCache?: boolean, skippedMode?: boolean, mapPopup?: boolean }} [opts]
@@ -3467,6 +3740,8 @@ export function mountEventsFinder(root) {
 
     const eventId = String(ev.id || '').trim();
     const isFav = Boolean(eventId && taste?.favoriteEventIds?.includes(eventId));
+    const isNotable = ev.notable === true;
+    if (isNotable) card.classList.add('events-finder__card--notable');
     const favBtn = document.createElement('button');
     favBtn.type = 'button';
     favBtn.className = 'events-finder__card-fav';
@@ -3477,6 +3752,12 @@ export function mountEventsFinder(root) {
       void toggleFavorite(ev, favBtn);
     });
     head.append(title, favBtn);
+    if (isNotable) {
+      const badge = document.createElement('span');
+      badge.className = 'events-finder__card-notable-badge';
+      badge.textContent = 'Notable';
+      head.append(badge);
+    }
 
     const place = String(ev.venue || ev.location || '').trim();
     const placeEl = document.createElement('p');
@@ -3619,6 +3900,7 @@ export function mountEventsFinder(root) {
     } else if (!opts.skippedMode && ev.isSeries) {
       footerBits.push('series');
     }
+    if (ev.manualEdit) footerBits.push('edited');
     const footer = document.createElement('p');
     footer.className = 'events-finder__card-footer';
     if (footerBits.length) {
@@ -3628,9 +3910,68 @@ export function mountEventsFinder(root) {
     }
 
     card.append(snap, head, placeEl, cityEl, meta, priceEl, blurb, actions, footer);
+
+    if (!opts.mapPopup && !opts.skippedMode && eventId) {
+      const notableRow = document.createElement('label');
+      notableRow.className = 'events-finder__card-notable';
+      const notableCb = document.createElement('input');
+      notableCb.type = 'checkbox';
+      notableCb.checked = isNotable;
+      notableCb.addEventListener('click', (e) => e.stopPropagation());
+      notableCb.addEventListener('change', () => {
+        void setEventNotable(ev, notableCb.checked).catch((err) => {
+          notableCb.checked = !notableCb.checked;
+          window.alert(`Could not update notable: ${String(err?.message || err)}`);
+        });
+      });
+      const notableText = document.createElement('span');
+      notableText.textContent = 'Notable event';
+      notableRow.append(notableCb, notableText);
+      notableRow.addEventListener('click', (e) => e.stopPropagation());
+
+      const notableActions = document.createElement('div');
+      notableActions.className = 'events-finder__card-notable-actions';
+      if (isNotable) {
+        const detailsBtn = document.createElement('button');
+        detailsBtn.type = 'button';
+        detailsBtn.className = 'events-finder__card-action';
+        detailsBtn.textContent = 'Details';
+        detailsBtn.title = 'Early bird, reminders, override scraped fields, re-scrape';
+        detailsBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openNotableDetailPopout(ev);
+        });
+        const planBtn = document.createElement('button');
+        planBtn.type = 'button';
+        planBtn.className = 'events-finder__card-action';
+        planBtn.textContent = 'Planning & logistics';
+        planBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void openPlanningLogisticsPopout(ev);
+        });
+        notableActions.append(detailsBtn, planBtn);
+      }
+      card.append(notableRow, notableActions);
+    }
+
+    if (isNotable && (ev.earlyBirdPrice || ev.earlyBirdStart || ev.ticketSalesStart)) {
+      const eb = document.createElement('p');
+      eb.className = 'events-finder__card-earlybird';
+      const bits = [];
+      if (ev.earlyBirdPrice) bits.push(`Early bird ${ev.earlyBirdPrice}`);
+      if (ev.earlyBirdStart || ev.earlyBirdEnd) {
+        bits.push([ev.earlyBirdStart, ev.earlyBirdEnd].filter(Boolean).join(' → '));
+      }
+      if (ev.ticketSalesStart) bits.push(`Sales ${ev.ticketSalesStart}`);
+      eb.textContent = bits.join(' · ');
+      card.append(eb);
+    }
+
     if (eventUrl) {
       card.addEventListener('click', (e) => {
-        if (e.target.closest('a, button')) return;
+        if (e.target.closest('a, button, label, input')) return;
         window.open(eventUrl, '_blank', 'noopener,noreferrer');
       });
     }
@@ -3810,15 +4151,8 @@ export function mountEventsFinder(root) {
       });
     const events = showSkipped ? skippedList : mainEvents;
     lastFilteredEvents = events;
-    // Active tracked big events surface at the top of the feed with their flier.
-    const bigEventItems = Array.isArray(data.conferenceWatchlistItems)
-      ? data.conferenceWatchlistItems
-      : [];
-    const activeBigEvents = showSkipped
-      ? []
-      : bigEventItems.filter(
-          (it) => it && it.displayActive && !it.researching && !it.skipped && !it.snoozed,
-        );
+    // Legacy conference watchlist cards retired — notable catalog events pin via API sort.
+    const activeBigEvents = [];
     const gmail = data.sources?.gmail;
     const facebook = data.sources?.facebook;
     const hadCards = listEl.querySelector('.events-finder__card') != null;
@@ -4155,7 +4489,7 @@ export function mountEventsFinder(root) {
       applyGoogleCalendarConfig(data.googleCalendar);
       syncShowSkippedButton();
       conferenceInput.value = (taste.conferenceWatchlist || []).join('\n');
-      syncConferenceToggleLabel();
+      void refreshEventSourcesToggleCount();
 
       const miles = data.filters?.maxMiles;
       milesInput.value = miles == null || miles === '' ? '25' : String(miles);

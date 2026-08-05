@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..', '..');
 const PINS_DOC = path.join(root, 'docs', 'meetup-group-pins.md');
+const PINS_DOC_NYC = path.join(root, 'docs', 'meetup-group-pins-nyc.md');
 
 const UA =
   'Mozilla/5.0 (compatible; DashbirdEvents/1.0; +https://github.com/local/dashbird)';
@@ -352,6 +353,22 @@ function cacheFresh(cache, env = process.env) {
  */
 export async function fetchMeetupPinnedEvents(env = process.env, opts = {}) {
   const pins = await loadMeetupGroupPins();
+  try {
+    const { resolveActiveLocation } = await import('./resolve-active-location.js');
+    const active = await resolveActiveLocation({ env });
+    if (active.mode === 'preview' || active.mode === 'away') {
+      const nyc = await loadMeetupGroupPins(PINS_DOC_NYC);
+      const seen = new Set(pins);
+      for (const u of nyc) {
+        if (!seen.has(u)) {
+          seen.add(u);
+          pins.push(u);
+        }
+      }
+    }
+  } catch {
+    /* Bay pins only */
+  }
   if (!pins.length) {
     return {
       ok: false,

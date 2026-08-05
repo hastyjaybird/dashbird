@@ -35,6 +35,46 @@
       ]
     },
     {
+      "title": "Deployed projects",
+      "items": [
+        {
+          "word": "Portfolio",
+          "href": "https://jayhasty.com",
+          "icon": "/assets/tile-portfolio.svg",
+          "title": "Jay Hasty \u2014 portfolio (jayhasty.com)"
+        },
+        {
+          "word": "CalClaim",
+          "href": "https://calclaim.jayhasty.com",
+          "icon": "/assets/tile-calclaim.png",
+          "title": "CalClaim \u2014 California benefits navigator"
+        }
+      ]
+    },
+    {
+      "title": "Local projects",
+      "items": [
+        {
+          "word": "Portfolio",
+          "href": "http://localhost:3000",
+          "icon": "/assets/tile-portfolio.svg",
+          "title": "Portfolio \u2014 local Next.js dev"
+        },
+        {
+          "word": "CalClaim",
+          "href": "http://localhost:3000",
+          "icon": "/assets/tile-calclaim.png",
+          "title": "CalClaim \u2014 local developer server"
+        },
+        {
+          "word": "Mingle",
+          "href": "http://192.168.5.2:3460",
+          "icon": "/assets/tile-mingle.svg",
+          "title": "Mingle \u2014 local LAN preview (not deployed)"
+        }
+      ]
+    },
+    {
       "title": "Clients",
       "items": [
         {

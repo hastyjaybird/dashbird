@@ -3,6 +3,7 @@
  */
 import { haversineMiles } from './dashboard-geo.js';
 import { resolveDashboardWeatherLatLon } from './hero-weather-location.js';
+import { resolveActiveLocation } from './resolve-active-location.js';
 
 /** @typedef {{ lat: number, lon: number, zip: string | null, city: string | null, place: string | null, stateAbbrev: string | null, stateName: string | null }} DashboardGeo */
 
@@ -192,7 +193,19 @@ export function citiesWithinRadius(lat, lon, miles, opts = {}) {
  * >}
  */
 export async function resolveEventsFinderGeo(env = process.env) {
-  const loc = await resolveDashboardWeatherLatLon(env);
+  const active = await resolveActiveLocation({ env });
+  const useAway = active.mode === 'preview' || active.mode === 'away';
+  const loc = useAway
+    ? {
+        lat: active.lat,
+        lon: active.lon,
+        zip: active.zip,
+        city: active.city,
+        place: active.place,
+        stateAbbrev: active.stateAbbrev,
+        stateName: active.stateName,
+      }
+    : await resolveDashboardWeatherLatLon(env);
   let city = loc.city;
   if (!city && loc.place) {
     city = String(loc.place).split(',')[0].trim() || null;
@@ -202,14 +215,28 @@ export async function resolveEventsFinderGeo(env = process.env) {
     place: loc.place,
     stateAbbrev: loc.stateAbbrev,
   });
+  let homeCities = home.homeCities;
+  let bayArea = home.bayArea;
+  let locationSlugs = home.locationSlugs;
+  if (useAway && Array.isArray(active.events.filterCities) && active.events.filterCities.length) {
+    homeCities = [...active.events.filterCities];
+    bayArea = false;
+    locationSlugs = homeCities
+      .map((c) => eventbriteLocationSlug({ city: c, stateAbbrev: loc.stateAbbrev || 'NY' }))
+      .filter(Boolean);
+  }
   return {
     ...loc,
     city,
     geoMode: 'city',
-    bayArea: home.bayArea,
-    homeCities: home.homeCities,
-    locationSlug: home.locationSlugs[0] || eventbriteLocationSlug({ city, stateAbbrev: loc.stateAbbrev }),
-    locationSlugs: home.locationSlugs,
+    bayArea,
+    homeCities,
+    locationSlug: locationSlugs[0] || eventbriteLocationSlug({ city, stateAbbrev: loc.stateAbbrev }),
+    locationSlugs,
+    locationMode: active.mode,
+    facebookLocation: active.events.facebookLocation || null,
+    partifulRegion: active.events.partifulRegion || null,
+    maxMiles: active.events.maxMiles,
   };
 }
 

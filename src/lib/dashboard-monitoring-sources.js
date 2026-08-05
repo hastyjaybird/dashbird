@@ -74,7 +74,8 @@ export const DASHBOARD_MONITORING_SOURCES = [
     id: 'sky_geomagnetic',
     group: 'Sky & space',
     label: 'Sky strip — geomagnetic storm (G-scale)',
-    source: 'NOAA SWPC noaa-scales.json + planetary_k_index_1m.json',
+    source:
+      'NOAA SWPC noaa-scales.json + peak planetary K (noaa-planetary-k-index-forecast.json; 1m estimated fallback)',
   },
   {
     id: 'sky_aurora',
@@ -153,8 +154,9 @@ export const DASHBOARD_MONITORING_SOURCES = [
   {
     id: 'earth_quake',
     group: 'Earth',
-    label: 'Largest nearby earthquake (week)',
-    source: 'USGS earthquake feed — strongest California M>3 within 150 mi of Oakland',
+    label: 'Largest nearby earthquake (24h)',
+    source:
+      'USGS earthquake feed — strongest California M>3 within 150 mi of Oakland; shown 24 hours after occurrence with date/time',
   },
   {
     id: 'earth_kilauea',

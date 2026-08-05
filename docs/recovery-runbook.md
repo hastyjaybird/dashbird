@@ -79,7 +79,7 @@ Full rebuild on a fresh server. This is why off-host backups exist.
 
 1. **Provision** a new Vultr instance (Debian/Ubuntu, 2 GB+), install Docker + compose, open
    firewall ports **22, 80, 443** only (see [`deploy-vultr.md`](deploy-vultr.md)).
-2. **Point DNS**: update the DuckDNS `dashbird` hostname to the new IPv4.
+2. **Point DNS**: update Cloudflare A records for `dashbird.jayhasty.com` (and portfolio hosts) to the new IPv4 (grey cloud).
 3. **Get the code**:
    ```bash
    git clone https://github.com/hastyjaybird/dashbird /opt/dashbird && cd /opt/dashbird

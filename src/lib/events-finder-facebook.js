@@ -14,8 +14,13 @@ const root = path.join(__dirname, '..', '..');
 
 const DEFAULT_ACTOR = 'apify/facebook-events-scraper';
 const DEFAULT_CACHE_MS = 60 * 60 * 1000;
-const DEFAULT_MAX_EVENTS = 60;
+const DEFAULT_MAX_EVENTS = 40;
+/** Per-run cap — Free plan is $5/mo; keep headroom for ~3–4 weekly runs. */
+const DEFAULT_MAX_CHARGE_USD = 1.25;
 const DEFAULT_WAIT_SECS = 180;
+/** Catch-up scrape when cache is older than this and budget remains. */
+const CATCHUP_STALE_MS = 6 * 24 * 60 * 60 * 1000;
+const MIN_BUDGET_USD_TO_SCRAPE = 0.2;
 
 /** @type {Promise<object> | null} */
 let inflightFetch = null;
@@ -93,7 +98,70 @@ function facebookWaitSecs(env = process.env) {
 function facebookMaxChargeUsd(env = process.env) {
   const n = Number(env.FACEBOOK_EVENTS_MAX_CHARGE_USD);
   if (Number.isFinite(n) && n >= 0.05) return Math.min(n, 40);
-  return 3;
+  return DEFAULT_MAX_CHARGE_USD;
+}
+
+/**
+ * @param {string} token
+ * @returns {Promise<{
+ *   ok: boolean,
+ *   monthlyUsageUsd: number | null,
+ *   maxMonthlyUsageUsd: number | null,
+ *   remainingUsd: number | null,
+ *   cycleEndAt: string | null,
+ *   exhausted: boolean,
+ *   error?: string,
+ * }>}
+ */
+export async function fetchApifyMonthlyBudget(token) {
+  const empty = {
+    ok: false,
+    monthlyUsageUsd: null,
+    maxMonthlyUsageUsd: null,
+    remainingUsd: null,
+    cycleEndAt: null,
+    exhausted: false,
+  };
+  try {
+    const res = await apifyFetch(token, '/users/me/limits');
+    const data = res.json?.data;
+    if (!res.ok || !data) {
+      return {
+        ...empty,
+        error: res.json?.error?.message || `HTTP ${res.status}`,
+      };
+    }
+    const monthlyUsageUsd = Number(data.current?.monthlyUsageUsd);
+    const maxMonthlyUsageUsd = Number(data.limits?.maxMonthlyUsageUsd);
+    const usage = Number.isFinite(monthlyUsageUsd) ? monthlyUsageUsd : null;
+    const max = Number.isFinite(maxMonthlyUsageUsd) ? maxMonthlyUsageUsd : null;
+    const remainingUsd =
+      usage != null && max != null ? Math.max(0, Math.round((max - usage) * 1000) / 1000) : null;
+    const cycleEndAt = data.monthlyUsageCycle?.endAt
+      ? String(data.monthlyUsageCycle.endAt)
+      : null;
+    const exhausted = remainingUsd != null && remainingUsd < MIN_BUDGET_USD_TO_SCRAPE;
+    return {
+      ok: true,
+      monthlyUsageUsd: usage,
+      maxMonthlyUsageUsd: max,
+      remainingUsd,
+      cycleEndAt,
+      exhausted,
+    };
+  } catch (e) {
+    return { ...empty, error: String(e?.message || e) };
+  }
+}
+
+/**
+ * @param {{ cycleEndAt?: string | null }} budget
+ */
+function budgetResetHint(budget) {
+  const end = budget?.cycleEndAt ? new Date(budget.cycleEndAt) : null;
+  if (!end || Number.isNaN(end.getTime())) return 'Apify monthly credits exhausted';
+  const ymd = end.toISOString().slice(0, 10);
+  return `Apify monthly credits exhausted until ~${ymd} (cycle reset)`;
 }
 
 /**
@@ -215,8 +283,10 @@ export function buildFacebookSearchQueries(env = process.env, opts = {}) {
     .filter(Boolean);
   if (explicit.length) return explicit.slice(0, maxQueries);
 
-  const place = String(opts.city || env.FACEBOOK_EVENTS_LOCATION || 'San Francisco').trim()
-    || 'San Francisco';
+  const place = String(
+    opts.city || opts.facebookLocation || env.FACEBOOK_EVENTS_LOCATION || 'San Francisco',
+  )
+    .trim() || 'San Francisco';
 
   /** @type {string[]} */
   let seeds = [];
@@ -578,13 +648,27 @@ async function runApifyFacebookScrape(env = process.env, opts = {}) {
     };
   }
 
+  const budget = await fetchApifyMonthlyBudget(token);
+  if (budget.ok && budget.exhausted) {
+    console.warn(`[facebook-events] ${budgetResetHint(budget)}`);
+    return {
+      ok: false,
+      error: 'apify_budget_exhausted',
+      hint: budgetResetHint(budget),
+      events: [],
+      fromCache: false,
+      budget,
+    };
+  }
+
   const criteria = await loadEventsFinderCriteria();
   const scrape = criteria.scrape || {};
   const geo = await resolveEventsFinderGeo(env);
   const searchQueries =
     opts.searchQueries
     || buildFacebookSearchQueries(env, {
-      city: geo.city || 'San Francisco',
+      city: geo.facebookLocation || geo.city || 'San Francisco',
+      facebookLocation: geo.facebookLocation || null,
       lookFor: criteria.lookFor,
       maxQueries: scrape.maxQueries,
       searchQueries: scrape.searchQueries,
@@ -984,43 +1068,66 @@ export async function probeFacebookEventsIntake(env = process.env) {
     };
   }
 
+  const budget = await fetchApifyMonthlyBudget(token);
   const cache = await readCache(env);
+  if (budget.ok && budget.exhausted) {
+    const n = cache?.events?.length || 0;
+    return {
+      ok: true,
+      ingestOk: n > 0,
+      active: true,
+      value: `Apify budget exhausted · ${n} cached (stale)`,
+      output: budgetResetHint(budget),
+      ingestTest: `Fail — ${budgetResetHint(budget)}; serving stale cache (${n})`,
+      count: n,
+      cachedAt: cache?.cachedAt || null,
+      budget,
+    };
+  }
+
   if (cache && Array.isArray(cache.events)) {
     const criteria = await loadEventsFinderCriteria();
     const fresh = cacheFresh(cache, env, criteria.scrape || {});
+    const rem =
+      budget.ok && budget.remainingUsd != null
+        ? ` · $${budget.remainingUsd} credits left`
+        : '';
     return {
       ok: true,
       ingestOk: cache.events.length > 0,
       active: true,
       value: `Apify ok · ${cache.events.length} cached${fresh ? '' : ' (stale)'}`,
-      output: `Token valid · ${apifyFacebookActorId(env).replace('~', '/')} · feed refreshes cache`,
+      output: `Token valid · ${apifyFacebookActorId(env).replace('~', '/')}${rem}`,
       ingestTest:
         cache.events.length > 0
           ? `Pass — ${cache.events.length} Facebook event(s) in cache${fresh ? '' : ' (stale)'}`
           : 'Weak — cache empty; open Events feed to scrape',
       count: cache.events.length,
       cachedAt: cache.cachedAt,
+      budget: budget.ok ? budget : undefined,
     };
   }
 
-  // Avoid a paid Actor run from Settings refresh — feed load / daily schedule scrapes.
+  // Avoid a paid Actor run from Settings refresh — feed load / schedule scrapes.
   return {
     ok: true,
     ingestOk: null,
     active: true,
     value: 'Apify token ok · no cache yet',
     output: facebookWeeklyEnabled(env)
-      ? 'Token valid · daily 4am scrape (or ?refreshFacebook=1)'
+      ? 'Token valid · scheduled scrape (or ?refreshFacebook=1)'
       : 'Open the Events sidebar (or ?refreshFacebook=1) to run the Actor',
     ingestTest: facebookWeeklyEnabled(env)
-      ? 'Ready — token ok; waits for daily 4am (or force refresh)'
+      ? 'Ready — token ok; waits for schedule (or force refresh)'
       : 'Ready — token ok; first feed load will scrape',
     count: 0,
+    budget: budget.ok ? budget : undefined,
   };
 }
 
 /**
  * Scheduled Apify scrape (default: every day 04:00 America/Los_Angeles).
+ * Cloud compose sets FACEBOOK_EVENTS_WEEKLY_DOW=0 (Sunday) so Free $5/mo lasts.
  * Set FACEBOOK_EVENTS_WEEKLY=0 to disable. Optional FACEBOOK_EVENTS_WEEKLY_DOW
  * (0=Sun…6=Sat) restricts to one weekday; omit for daily.
  * @param {NodeJS.ProcessEnv} [env]
@@ -1141,18 +1248,63 @@ export function startFacebookEventsWeeklyScheduler(env = process.env) {
     if (lastWeeklyYmd === ymd) return;
     weeklyInFlight = true;
     lastWeeklyYmd = ymd;
-    console.log(`[facebook-events] daily scrape starting (${ymd})`);
+    console.log(`[facebook-events] scheduled scrape starting (${ymd})`);
     try {
       const result = await fetchFacebookEvents(env, { forceRefresh: true });
+      const scrapedOk = Boolean(result.ok) && !result.error && !result.stale;
       console.log(
-        `[facebook-events] daily scrape done ok=${result.ok} count=${result.count ?? result.events?.length ?? 0}`
+        `[facebook-events] scheduled scrape done ok=${result.ok} count=${result.count ?? result.events?.length ?? 0}`
           + (result.hint ? ` hint=${result.hint}` : '')
           + (result.error ? ` error=${result.error}` : ''),
       );
+      // Budget / hard failures: allow retry later the same slot once credits return.
+      if (!scrapedOk && (result.error === 'apify_budget_exhausted' || result.error === 'apify_run_failed')) {
+        lastWeeklyYmd = null;
+      }
     } catch (e) {
-      console.warn('[facebook-events] daily scrape failed', e?.message || e);
+      console.warn('[facebook-events] scheduled scrape failed', e?.message || e);
       // Allow retry later the same morning if the run crashed before finishing.
       lastWeeklyYmd = null;
+    } finally {
+      weeklyInFlight = false;
+    }
+  };
+
+  /**
+   * If cache is badly stale and credits remain, scrape once without waiting for DOW.
+   * Avoids multi-week blackouts after Free-plan exhaustion.
+   */
+  const catchupIfStale = async () => {
+    if (weeklyInFlight) return;
+    const cache = await readCache(env);
+    const cachedAtMs = cache?.cachedAt ? new Date(cache.cachedAt).getTime() : 0;
+    const ageMs = cachedAtMs ? Date.now() - cachedAtMs : Number.POSITIVE_INFINITY;
+    if (Number.isFinite(ageMs) && ageMs < CATCHUP_STALE_MS) return;
+    const token = apifyToken(env);
+    if (!token) return;
+    const budget = await fetchApifyMonthlyBudget(token);
+    if (budget.ok && budget.exhausted) {
+      console.warn(`[facebook-events] catch-up skipped — ${budgetResetHint(budget)}`);
+      return;
+    }
+    weeklyInFlight = true;
+    console.log(
+      `[facebook-events] catch-up scrape starting (cache age ${
+        Number.isFinite(ageMs) ? `${Math.round(ageMs / 86400000)}d` : 'unknown'
+      })`,
+    );
+    try {
+      const result = await fetchFacebookEvents(env, { forceRefresh: true });
+      console.log(
+        `[facebook-events] catch-up done ok=${result.ok} count=${result.count ?? result.events?.length ?? 0}`
+          + (result.hint ? ` hint=${result.hint}` : '')
+          + (result.error ? ` error=${result.error}` : ''),
+      );
+      if (result.ok && !result.error) {
+        lastWeeklyYmd = facebookLocalParts(new Date(), tz).ymd;
+      }
+    } catch (e) {
+      console.warn('[facebook-events] catch-up failed', e?.message || e);
     } finally {
       weeklyInFlight = false;
     }
@@ -1181,4 +1333,10 @@ export function startFacebookEventsWeeklyScheduler(env = process.env) {
   setTimeout(() => {
     void tick();
   }, 15_000);
+  // Stale-cache catch-up after the slot check (budget-gated).
+  setTimeout(() => {
+    void catchupIfStale().catch((e) => {
+      console.warn('[facebook-events] catch-up error', e?.message || e);
+    });
+  }, 45_000);
 }

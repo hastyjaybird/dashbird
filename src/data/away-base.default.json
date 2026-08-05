@@ -1,0 +1,32 @@
+{
+  "activeProfileId": "nyc-climate-week",
+  "preview": false,
+  "autoAway": false,
+  "profiles": [
+    {
+      "id": "nyc-climate-week",
+      "label": "New York, NY",
+      "zip": "10001",
+      "timeZone": "America/New_York",
+      "radiusMi": 40,
+      "events": {
+        "partifulRegion": "nyc",
+        "facebookLocation": "New York",
+        "filterCities": [
+          "New York",
+          "Brooklyn",
+          "Queens",
+          "Manhattan",
+          "Jersey City"
+        ],
+        "maxMiles": 25
+      },
+      "hideEarth": [
+        "oakland_salamander",
+        "diablo_tarantula",
+        "usgs_quake_week",
+        "yosemite_moonbow"
+      ]
+    }
+  ]
+}

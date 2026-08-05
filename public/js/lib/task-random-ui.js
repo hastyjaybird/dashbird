@@ -2,6 +2,12 @@
  * Do Random Task picker + project locations table.
  */
 import { TASK_LOCATION_OPTIONS } from './task-location-meta.js';
+import {
+  clearTaskSchedule,
+  createScheduleControl,
+  ensureOverduePriority,
+  scheduleTaskToCalendar,
+} from './task-schedule.js';
 
 const DIFFICULTIES = [
   { id: 'low', label: 'Low' },
@@ -14,9 +20,10 @@ const PRIORITIES = [
   { id: 'high', label: 'High' },
 ];
 const DURATIONS = [
-  { id: '10m', label: '<10 min' },
-  { id: '30m', label: '30 min' },
-  { id: '1hr+', label: '1 hr+' },
+  { id: 'quick', label: 'quick' },
+  { id: '<1hr', label: '<1hr' },
+  { id: '1/2day', label: '1/2 day' },
+  { id: 'day+', label: 'day+' },
 ];
 const LOCATIONS = [
   { id: '', label: 'Any' },
@@ -411,6 +418,7 @@ async function archiveRandomTaskDone(id) {
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+  await clearTaskSchedule(id);
 }
 
 /**
@@ -596,16 +604,41 @@ async function renderTaskCardModal(opts) {
   skipProjectBtn.type = 'button';
   skipProjectBtn.className = 'tasks-random__secondary';
   skipProjectBtn.textContent = 'Skip project';
+  const sched = createScheduleControl({
+    wrapClass: 'task-schedule tasks-random__schedule-wrap',
+    buttonClass: 'tasks-random__secondary tasks-random__schedule',
+    overdueClass: 'task-schedule__overdue',
+  });
+  sched.sync(taskMeta);
   const doneBtn = document.createElement('button');
   doneBtn.type = 'button';
   doneBtn.className = 'tasks-random__secondary';
   doneBtn.textContent = 'Mark done';
-  actions.append(skipBtn, skipProjectBtn, doneBtn);
+  actions.append(skipBtn, skipProjectBtn, sched.wrap, doneBtn);
   card.append(actions);
   body.append(card);
 
   skipBtn.addEventListener('click', onSkip);
   skipProjectBtn.addEventListener('click', onSkipProject);
+  sched.button.addEventListener('click', async () => {
+    sched.button.disabled = true;
+    try {
+      const { row } = await scheduleTaskToCalendar(
+        String(data.task.id),
+        String(data.task.text || ''),
+        taskMeta,
+      );
+      await renderTaskCardModal({
+        ...opts,
+        data: {
+          ...data,
+          meta: row,
+        },
+      });
+    } catch {
+      sched.button.disabled = false;
+    }
+  });
   doneBtn.addEventListener('click', async () => {
     doneBtn.disabled = true;
     try {
@@ -613,6 +646,17 @@ async function renderTaskCardModal(opts) {
     } catch {
       doneBtn.disabled = false;
     }
+  });
+
+  void ensureOverduePriority(String(data.task.id), taskMeta).then((res) => {
+    if (!res) return;
+    void renderTaskCardModal({
+      ...opts,
+      data: {
+        ...data,
+        meta: res.row,
+      },
+    });
   });
 }
 

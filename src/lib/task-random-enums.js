@@ -1,17 +1,17 @@
 /** @typedef {'low' | 'med' | 'high'} TaskDifficulty */
 /** @typedef {'low' | 'med' | 'high'} TaskPriority */
-/** @typedef {'10m' | '30m' | '1hr+'} TaskDuration */
+/** @typedef {'quick' | '<1hr' | '1/2day' | 'day+'} TaskDuration */
 /** @typedef {'home' | 'out' | 'makerfarm' | 'laptop' | 'phone'} TaskLocation */
 /** @typedef {'weekday_9_5'} TaskTime */
 
 export const TASK_DIFFICULTIES = /** @type {const} */ (['low', 'med', 'high']);
 export const TASK_PRIORITIES = /** @type {const} */ (['low', 'med', 'high']);
-export const TASK_DURATIONS = /** @type {const} */ (['10m', '30m', '1hr+']);
+export const TASK_DURATIONS = /** @type {const} */ (['quick', '<1hr', '1/2day', 'day+']);
 export const TASK_LOCATIONS = /** @type {const} */ (['home', 'makerfarm', 'out', 'laptop', 'phone']);
 export const TASK_TIMES = /** @type {const} */ (['weekday_9_5']);
 
 /** @type {Record<TaskDuration, number>} */
-export const DURATION_TIER = { '10m': 1, '30m': 2, '1hr+': 3 };
+export const DURATION_TIER = { quick: 1, '<1hr': 2, '1/2day': 3, 'day+': 4 };
 
 /** @type {Record<TaskLocation, string>} */
 export const LOCATION_LABELS = {
@@ -33,7 +33,12 @@ export const PRIORITY_LABELS = { low: 'Low', med: 'Med', high: 'High' };
 export const PRIORITY_WEIGHT = { low: 1, med: 2, high: 5 };
 
 /** @type {Record<TaskDuration, string>} */
-export const DURATION_LABELS = { '10m': '<10 min', '30m': '30 min', '1hr+': '1 hr+' };
+export const DURATION_LABELS = {
+  quick: 'quick',
+  '<1hr': '<1hr',
+  '1/2day': '1/2 day',
+  'day+': 'day+',
+};
 
 /** @type {Record<TaskTime, string>} */
 export const TIME_LABELS = {
@@ -54,9 +59,14 @@ export function normalizePriority(raw) {
 
 export function normalizeDuration(raw) {
   const s = String(raw || '').trim().toLowerCase().replace(/\s+/g, '');
-  if (s === '1h+' || s === '1hr' || s === '60m') return '1hr+';
-  if (s === '5m') return '10m';
-  if (s === '15m') return '30m';
+  // Legacy → new scale
+  if (s === '10m' || s === '5m' || s === '<10min' || s === '<10m') return 'quick';
+  if (s === '30m' || s === '15m' || s === '30min') return '<1hr';
+  if (s === '1hr+' || s === '1h+' || s === '1hr' || s === '60m') return '1/2day';
+  // New aliases
+  if (s === 'half_day' || s === 'halfday' || s === '1/2d' || s === 'half') return '1/2day';
+  if (s === 'lt1hr' || s === 'under1hr' || s === '<1h') return '<1hr';
+  if (s === 'dayplus' || s === '1d+' || s === 'day') return 'day+';
   return TASK_DURATIONS.includes(/** @type {TaskDuration} */ (s)) ? /** @type {TaskDuration} */ (s) : null;
 }
 

@@ -14,6 +14,28 @@ import {
 } from './events-finder-window.js';
 
 /**
+ * ImapFlow emits 'error' on socket reset after the awaiter has settled.
+ * Without a listener, that becomes an unhandled 'error' and kills Node.
+ * @param {string} email
+ * @param {string} appPassword
+ */
+function createImapClient(email, appPassword) {
+  const client = new ImapFlow({
+    host: 'imap.gmail.com',
+    port: 993,
+    secure: true,
+    auth: { user: email, pass: appPassword },
+    logger: false,
+  });
+  client.on('error', (err) => {
+    const code = err?.code || '';
+    const msg = String(err?.message || err || 'imap_error').slice(0, 160);
+    console.warn(`[gmail-imap] ${code || 'error'}: ${msg}`);
+  });
+  return client;
+}
+
+/**
  * @param {string} s
  */
 function b64urlEncode(s) {
@@ -112,13 +134,7 @@ export async function fetchGmailEventsViaImap(email, appPassword, env = process.
     200,
   );
   const query = gmailEventsQuery(env);
-  const client = new ImapFlow({
-    host: 'imap.gmail.com',
-    port: 993,
-    secure: true,
-    auth: { user: address, pass: appPassword },
-    logger: false,
-  });
+  const client = createImapClient(address, appPassword);
 
   await client.connect();
   const lock = await client.getMailboxLock('INBOX');
@@ -201,13 +217,7 @@ export async function fetchGmailMessageListViaImap(email, appPassword, env = pro
   const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 40, 1), 100);
   const days = Math.min(Math.max(Number(opts.days) || 7, 1), 3650);
   const query = String(opts.query || `newer_than:${days}d`).trim();
-  const client = new ImapFlow({
-    host: 'imap.gmail.com',
-    port: 993,
-    secure: true,
-    auth: { user: address, pass: appPassword },
-    logger: false,
-  });
+  const client = createImapClient(address, appPassword);
 
   await client.connect();
   const lock = await client.getMailboxLock('INBOX');
@@ -373,13 +383,7 @@ export async function fetchGmailWeeklyMessagesViaImap(email, appPassword, env = 
   const maxMessages = Math.min(Math.max(Number(opts.maxMessages) || 40, 1), 100);
   const days = Math.min(Math.max(Number(opts.days) || 7, 1), 3650);
   const query = String(opts.query || `newer_than:${days}d`).trim();
-  const client = new ImapFlow({
-    host: 'imap.gmail.com',
-    port: 993,
-    secure: true,
-    auth: { user: address, pass: appPassword },
-    logger: false,
-  });
+  const client = createImapClient(address, appPassword);
 
   await client.connect();
   const lock = await client.getMailboxLock('INBOX');

@@ -23,7 +23,7 @@ function currentPageId() {
 }
 
 function defaultPosition() {
-  return clampPosition(window.innerWidth - PANEL_WIDTH - 24, 96);
+  return clampPosition((window.innerWidth - PANEL_WIDTH) / 2, 56);
 }
 
 /**

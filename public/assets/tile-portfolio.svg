@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Portfolio">
+  <rect width="128" height="128" rx="28" fill="#000000"/>
+  <g fill="#f2ebe0">
+    <!-- bracketed top bar (Didone head) -->
+    <path d="
+      M30 30
+      h68
+      c2.2 0 3.4 2.6 1.9 4.2
+      L94 41
+      H34
+      l-5.9-6.8
+      C26.6 32.6 27.8 30 30 30
+      z
+    "/>
+    <!-- thick stem -->
+    <rect x="68" y="36" width="13" height="48" rx="1"/>
+    <!-- thin hairline on stem for type contrast -->
+    <rect x="78" y="38" width="2.2" height="44" rx="1" fill="#000000" opacity="0.28"/>
+    <!-- hook -->
+    <path d="
+      M81 80
+      v5.5
+      c0 14.8-9.8 24.8-26.2 24.8
+      c-9 0-16.4-2.7-21.2-7.2
+      a3.25 3.25 0 0 1 4.2-5
+      c3.4 2.9 9 4.6 16.8 4.6
+      c11.4 0 17.4-6.8 17.4-17.2
+      V80
+      z
+    "/>
+    <!-- ball terminal -->
+    <circle cx="36.2" cy="103.2" r="8.6"/>
+  </g>
+</svg>

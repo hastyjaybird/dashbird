@@ -1,6 +1,6 @@
 /** localStorage helpers for the floating DEV NOTES sticky (climate-dash parity). */
 
-export const DEV_STICKY_STORAGE_PREFIX = 'dashbird-dev-sticky:';
+export const DEV_STICKY_STORAGE_PREFIX = 'dashbird-dev-sticky-v2:';
 
 /**
  * @typedef {{ content: string, x: number, y: number, collapsed: boolean }} DevStickyState
@@ -38,7 +38,7 @@ export function loadDevSticky(pageId, defaultPosition, clampPosition) {
   } catch {
     // ignore corrupt storage
   }
-  return { content: '', collapsed: false, ...defaultPosition() };
+  return { content: '', collapsed: true, ...defaultPosition() };
 }
 
 /**

@@ -12,7 +12,84 @@
         "programming",
         "science"
       ],
-      "popularity": 98
+      "popularity": 98,
+      "publisher": "hacker-news",
+      "publisherTitle": "Hacker News"
+    },
+    {
+      "id": "hacker-news-newest",
+      "title": "Hacker News \u2014 Newest",
+      "url": "https://hnrss.org/newest",
+      "siteUrl": "https://news.ycombinator.com/newest",
+      "category": "tech",
+      "tags": [
+        "tech",
+        "startups",
+        "programming"
+      ],
+      "popularity": 90,
+      "publisher": "hacker-news",
+      "publisherTitle": "Hacker News"
+    },
+    {
+      "id": "hacker-news-best",
+      "title": "Hacker News \u2014 Best",
+      "url": "https://hnrss.org/best",
+      "siteUrl": "https://news.ycombinator.com/best",
+      "category": "tech",
+      "tags": [
+        "tech",
+        "startups",
+        "programming"
+      ],
+      "popularity": 92,
+      "publisher": "hacker-news",
+      "publisherTitle": "Hacker News"
+    },
+    {
+      "id": "hacker-news-ask",
+      "title": "Hacker News \u2014 Ask HN",
+      "url": "https://hnrss.org/ask",
+      "siteUrl": "https://news.ycombinator.com/ask",
+      "category": "tech",
+      "tags": [
+        "tech",
+        "ask",
+        "community"
+      ],
+      "popularity": 80,
+      "publisher": "hacker-news",
+      "publisherTitle": "Hacker News"
+    },
+    {
+      "id": "hacker-news-show",
+      "title": "Hacker News \u2014 Show HN",
+      "url": "https://hnrss.org/show",
+      "siteUrl": "https://news.ycombinator.com/show",
+      "category": "tech",
+      "tags": [
+        "tech",
+        "show",
+        "startups"
+      ],
+      "popularity": 82,
+      "publisher": "hacker-news",
+      "publisherTitle": "Hacker News"
+    },
+    {
+      "id": "hacker-news-frontpage-100",
+      "title": "Hacker News \u2014 Front Page (100+ points)",
+      "url": "https://hnrss.org/frontpage?points=100",
+      "siteUrl": "https://news.ycombinator.com/",
+      "category": "tech",
+      "tags": [
+        "tech",
+        "startups",
+        "programming"
+      ],
+      "popularity": 85,
+      "publisher": "hacker-news",
+      "publisherTitle": "Hacker News"
     },
     {
       "id": "ars-technica",
@@ -26,7 +103,9 @@
         "gadgets",
         "policy"
       ],
-      "popularity": 88
+      "popularity": 88,
+      "publisher": "ars-technica",
+      "publisherTitle": "Ars Technica"
     },
     {
       "id": "the-verge",
@@ -39,7 +118,9 @@
         "gadgets",
         "culture"
       ],
-      "popularity": 90
+      "popularity": 90,
+      "publisher": "the-verge",
+      "publisherTitle": "The Verge"
     },
     {
       "id": "techcrunch",
@@ -52,7 +133,9 @@
         "startups",
         "business"
       ],
-      "popularity": 87
+      "popularity": 87,
+      "publisher": "techcrunch",
+      "publisherTitle": "TechCrunch"
     },
     {
       "id": "wired",
@@ -66,7 +149,9 @@
         "science",
         "security"
       ],
-      "popularity": 84
+      "popularity": 84,
+      "publisher": "wired",
+      "publisherTitle": "Wired"
     },
     {
       "id": "npr-news",
@@ -80,7 +165,9 @@
         "politics",
         "general"
       ],
-      "popularity": 92
+      "popularity": 92,
+      "publisher": "npr",
+      "publisherTitle": "NPR"
     },
     {
       "id": "bbc-world",
@@ -91,9 +178,145 @@
       "tags": [
         "world",
         "international",
-        "general"
+        "general",
+        "bbc"
       ],
-      "popularity": 93
+      "popularity": 93,
+      "publisher": "bbc",
+      "publisherTitle": "BBC News"
+    },
+    {
+      "id": "bbc-top",
+      "title": "BBC News \u2014 Top Stories",
+      "url": "https://feeds.bbci.co.uk/news/rss.xml",
+      "siteUrl": "https://www.bbc.com/news",
+      "category": "world",
+      "tags": [
+        "world",
+        "general",
+        "bbc"
+      ],
+      "popularity": 95,
+      "publisher": "bbc",
+      "publisherTitle": "BBC News"
+    },
+    {
+      "id": "bbc-uk",
+      "title": "BBC News \u2014 UK",
+      "url": "https://feeds.bbci.co.uk/news/uk/rss.xml",
+      "siteUrl": "https://www.bbc.com/news/uk",
+      "category": "world",
+      "tags": [
+        "uk",
+        "world",
+        "bbc"
+      ],
+      "popularity": 86,
+      "publisher": "bbc",
+      "publisherTitle": "BBC News"
+    },
+    {
+      "id": "bbc-business",
+      "title": "BBC News \u2014 Business",
+      "url": "https://feeds.bbci.co.uk/news/business/rss.xml",
+      "siteUrl": "https://www.bbc.com/news/business",
+      "category": "business",
+      "tags": [
+        "business",
+        "economy",
+        "bbc"
+      ],
+      "popularity": 84,
+      "publisher": "bbc",
+      "publisherTitle": "BBC News"
+    },
+    {
+      "id": "bbc-politics",
+      "title": "BBC News \u2014 Politics",
+      "url": "https://feeds.bbci.co.uk/news/politics/rss.xml",
+      "siteUrl": "https://www.bbc.com/news/politics",
+      "category": "world",
+      "tags": [
+        "politics",
+        "uk",
+        "bbc"
+      ],
+      "popularity": 78,
+      "publisher": "bbc",
+      "publisherTitle": "BBC News"
+    },
+    {
+      "id": "bbc-health",
+      "title": "BBC News \u2014 Health",
+      "url": "https://feeds.bbci.co.uk/news/health/rss.xml",
+      "siteUrl": "https://www.bbc.com/news/health",
+      "category": "science",
+      "tags": [
+        "health",
+        "science",
+        "bbc"
+      ],
+      "popularity": 76,
+      "publisher": "bbc",
+      "publisherTitle": "BBC News"
+    },
+    {
+      "id": "bbc-education",
+      "title": "BBC News \u2014 Education",
+      "url": "https://feeds.bbci.co.uk/news/education/rss.xml",
+      "siteUrl": "https://www.bbc.com/news/education",
+      "category": "world",
+      "tags": [
+        "education",
+        "bbc"
+      ],
+      "popularity": 70,
+      "publisher": "bbc",
+      "publisherTitle": "BBC News"
+    },
+    {
+      "id": "bbc-science",
+      "title": "BBC News \u2014 Science & Environment",
+      "url": "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
+      "siteUrl": "https://www.bbc.com/news/science_and_environment",
+      "category": "science",
+      "tags": [
+        "science",
+        "environment",
+        "bbc"
+      ],
+      "popularity": 82,
+      "publisher": "bbc",
+      "publisherTitle": "BBC News"
+    },
+    {
+      "id": "bbc-technology",
+      "title": "BBC News \u2014 Technology",
+      "url": "https://feeds.bbci.co.uk/news/technology/rss.xml",
+      "siteUrl": "https://www.bbc.com/news/technology",
+      "category": "tech",
+      "tags": [
+        "tech",
+        "bbc"
+      ],
+      "popularity": 88,
+      "publisher": "bbc",
+      "publisherTitle": "BBC News"
+    },
+    {
+      "id": "bbc-entertainment",
+      "title": "BBC News \u2014 Entertainment & Arts",
+      "url": "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml",
+      "siteUrl": "https://www.bbc.com/news/entertainment_and_arts",
+      "category": "culture",
+      "tags": [
+        "culture",
+        "arts",
+        "bbc"
+      ],
+      "popularity": 72,
+      "publisher": "bbc",
+      "publisherTitle": "BBC News"
     },
     {
       "id": "reuters-world",
@@ -106,7 +329,9 @@
         "business",
         "general"
       ],
-      "popularity": 85
+      "popularity": 85,
+      "publisher": "reuters",
+      "publisherTitle": "Reuters"
     },
     {
       "id": "ap-top-news",
@@ -119,7 +344,9 @@
         "us",
         "general"
       ],
-      "popularity": 80
+      "popularity": 80,
+      "publisher": "ap",
+      "publisherTitle": "Associated Press"
     },
     {
       "id": "sfgate",
@@ -132,7 +359,9 @@
         "bay-area",
         "california"
       ],
-      "popularity": 70
+      "popularity": 70,
+      "publisher": "sfgate",
+      "publisherTitle": "SFGATE"
     },
     {
       "id": "sf-chronicle-local",
@@ -145,7 +374,9 @@
         "bay-area",
         "california"
       ],
-      "popularity": 68
+      "popularity": 68,
+      "publisher": "sf-chronicle",
+      "publisherTitle": "San Francisco Chronicle"
     },
     {
       "id": "oaklandside",
@@ -159,7 +390,9 @@
         "bay-area",
         "community"
       ],
-      "popularity": 65
+      "popularity": 65,
+      "publisher": "oaklandside",
+      "publisherTitle": "The Oaklandside"
     },
     {
       "id": "berkeleyside",
@@ -173,7 +406,9 @@
         "bay-area",
         "community"
       ],
-      "popularity": 60
+      "popularity": 60,
+      "publisher": "berkeleyside",
+      "publisherTitle": "Berkeleyside"
     },
     {
       "id": "science-daily",
@@ -186,7 +421,9 @@
         "research",
         "environment"
       ],
-      "popularity": 74
+      "popularity": 74,
+      "publisher": "science-daily",
+      "publisherTitle": "ScienceDaily"
     },
     {
       "id": "nasa-news",
@@ -199,7 +436,9 @@
         "space",
         "astronomy"
       ],
-      "popularity": 78
+      "popularity": 78,
+      "publisher": "nasa",
+      "publisherTitle": "NASA"
     },
     {
       "id": "space-news",
@@ -213,7 +452,9 @@
         "astronomy",
         "business"
       ],
-      "popularity": 62
+      "popularity": 62,
+      "publisher": "spacenews",
+      "publisherTitle": "SpaceNews"
     },
     {
       "id": "the-atlantic",
@@ -227,7 +468,9 @@
         "world",
         "essays"
       ],
-      "popularity": 76
+      "popularity": 76,
+      "publisher": "the-atlantic",
+      "publisherTitle": "The Atlantic"
     },
     {
       "id": "longreads",
@@ -240,7 +483,9 @@
         "essays",
         "narrative"
       ],
-      "popularity": 55
+      "popularity": 55,
+      "publisher": "longreads",
+      "publisherTitle": "Longreads"
     },
     {
       "id": "bloomberg-markets",
@@ -254,7 +499,9 @@
         "markets",
         "economy"
       ],
-      "popularity": 79
+      "popularity": 79,
+      "publisher": "bloomberg",
+      "publisherTitle": "Bloomberg"
     },
     {
       "id": "nyt-business",
@@ -268,7 +515,9 @@
         "finance",
         "world"
       ],
-      "popularity": 82
+      "popularity": 82,
+      "publisher": "nyt",
+      "publisherTitle": "New York Times"
     },
     {
       "id": "weather-gov-alerts",
@@ -282,7 +531,9 @@
         "safety",
         "environment"
       ],
-      "popularity": 58
+      "popularity": 58,
+      "publisher": "noaa",
+      "publisherTitle": "NOAA / NWS"
     },
     {
       "id": "kqed-news",
@@ -296,7 +547,9 @@
         "california",
         "community"
       ],
-      "popularity": 66
+      "popularity": 66,
+      "publisher": "kqed",
+      "publisherTitle": "KQED"
     },
     {
       "id": "grist",
@@ -310,7 +563,9 @@
         "sustainability",
         "science"
       ],
-      "popularity": 63
+      "popularity": 63,
+      "publisher": "grist",
+      "publisherTitle": "Grist"
     },
     {
       "id": "yale-e360",
@@ -324,7 +579,9 @@
         "science",
         "research"
       ],
-      "popularity": 57
+      "popularity": 57,
+      "publisher": "yale-e360",
+      "publisherTitle": "Yale Environment 360"
     },
     {
       "id": "futurity",
@@ -338,7 +595,9 @@
         "science",
         "academia"
       ],
-      "popularity": 59
+      "popularity": 59,
+      "publisher": "futurity",
+      "publisherTitle": "Futurity"
     },
     {
       "id": "eurekalert",
@@ -352,7 +611,9 @@
         "science",
         "academia"
       ],
-      "popularity": 56
+      "popularity": 56,
+      "publisher": "eurekalert",
+      "publisherTitle": "EurekAlert!"
     },
     {
       "id": "anthropic-news",
@@ -367,7 +628,9 @@
         "bd"
       ],
       "popularity": 96,
-      "fetchMode": "anthropic-news-html"
+      "fetchMode": "anthropic-news-html",
+      "publisher": "anthropic",
+      "publisherTitle": "Anthropic"
     },
     {
       "id": "anthropic-bd-google-news",
@@ -382,7 +645,9 @@
         "bd",
         "nonprofits"
       ],
-      "popularity": 94
+      "popularity": 94,
+      "publisher": "anthropic",
+      "publisherTitle": "Anthropic"
     },
     {
       "id": "anthropic-careers-bd",
@@ -397,7 +662,9 @@
         "bd"
       ],
       "popularity": 93,
-      "fetchMode": "greenhouse-bd-jobs"
+      "fetchMode": "greenhouse-bd-jobs",
+      "publisher": "anthropic",
+      "publisherTitle": "Anthropic"
     },
     {
       "id": "kyle-substack-miracle",
@@ -410,7 +677,9 @@
         "beneficial-deployments",
         "ai"
       ],
-      "popularity": 55
+      "popularity": 55,
+      "publisher": "kyle-munkittrick",
+      "publisherTitle": "Kyle Munkittrick"
     },
     {
       "id": "givingtuesday",
@@ -423,7 +692,9 @@
         "beneficial-deployments",
         "anthropic"
       ],
-      "popularity": 60
+      "popularity": 60,
+      "publisher": "givingtuesday",
+      "publisherTitle": "GivingTuesday"
     }
   ]
 }

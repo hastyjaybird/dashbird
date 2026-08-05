@@ -69,6 +69,7 @@ Feed directory entry (id, url, optional fetchMode)
 - **Filter:** Titles matching Beneficial Deployments / nonprofit·education GTM·CS·architect / mobility·Corps (see `isBdRelevantJobTitle`)
 - **Dedupe:** Greenhouse `absolute_url`
 - **Title prefix:** `[Job] …` so taste/importance treat careers as hiring signals
+- **Freshness:** Open listings stamp `publishedAt` to fetch time (still-open seats stay visible under the same-day BD gate). Board `updated_at` is kept as `jobUpdatedAt` in the summary.
 
 ### RSS feeds
 
@@ -97,5 +98,6 @@ Settings monitoring inventory includes Local News BD rows via `dashboard-monitor
 
 - **No pull until** `2026-07-31` America/Los_Angeles (`BD_WATCH_START_YMD` in `src/lib/local-news-bd-freshness.js`).
 - **After that:** only items with `publishedAt` on the **current local day** (PT) or later. Undated items are dropped.
+- **Exception — Greenhouse jobs:** currently-open BD-filtered roles use fetch-time `publishedAt` so they are not hidden when the board last-touched date is yesterday.
 - Google News BD query uses `when:1d` (not a year backfill).
 - Until the watch start day, BD subscriptions stay subscribed but return an empty lane (no network fetch).

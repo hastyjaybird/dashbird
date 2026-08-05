@@ -44,7 +44,7 @@ const projects = await listPanelProjects();
 const scenarios = [
   { name: 'no filters', filters: {} },
   { name: 'difficulty=low', filters: { difficulties: ['low'] } },
-  { name: 'duration=10m', filters: { durations: ['10m'] } },
+  { name: 'duration=quick', filters: { durations: ['quick'] } },
   { name: 'location=home', filters: { locations: ['home'] } },
   { name: 'time=weekday_9_5', filters: { times: ['weekday_9_5'] } },
   { name: 'priority=high + effort=med', filters: { priorities: ['high'], difficulties: ['med'] } },

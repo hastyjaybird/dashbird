@@ -129,21 +129,38 @@ async function mountDeferredPanels(config) {
       Promise.all([
         import('./panels/hero.js'),
         import('./lib/device-location.js'),
-      ]).then(([{ mountHero }, { startDeviceLocation, subscribeDevicePlace }]) => {
-        const topbarEl = document.getElementById('mount-topbar-context');
-        startDeviceLocation(config).then((place) => {
-          if (place) renderTopbarContext(topbarEl, place);
-        });
-        subscribeDevicePlace((place) => renderTopbarContext(topbarEl, place));
-        mountHero(document.getElementById('mount-hero'), config, {
-          renderSkyStrip: true,
-          skyStripMount: document.getElementById('mount-sky-strip'),
-        });
-      }),
+        import('./lib/location-profile.js'),
+      ]).then(
+        ([
+          { mountHero },
+          { startDeviceLocation, subscribeDevicePlace },
+          { startLocationProfile, subscribeLocationMode, reloadForLocationMode },
+        ]) => {
+          const topbarEl = document.getElementById('mount-topbar-context');
+          startDeviceLocation(config).then((place) => {
+            if (place) renderTopbarContext(topbarEl, place);
+          });
+          subscribeDevicePlace((place) => renderTopbarContext(topbarEl, place));
+          startLocationProfile(config);
+          let lastMode = config.locationMode || 'home';
+          subscribeLocationMode((next) => {
+            if (next !== lastMode) {
+              lastMode = next;
+              reloadForLocationMode();
+            }
+          });
+          mountHero(document.getElementById('mount-hero'), config, {
+            renderSkyStrip: true,
+            skyStripMount: document.getElementById('mount-sky-strip'),
+          });
+        },
+      ),
     ),
     mountWhenReady('earth', () =>
       import('./panels/earth-events.js').then(({ mountEarthStrip }) => {
-        mountEarthStrip(document.getElementById('mount-earth-strip'));
+        mountEarthStrip(document.getElementById('mount-earth-strip'), {
+          hideEarth: Array.isArray(config.hideEarth) ? config.hideEarth : [],
+        });
       }),
     ),
     mountWhenReady('kilauea-live', () =>
@@ -255,11 +272,24 @@ async function mainMobile() {
     .then(async (config) => {
       try {
         const { startDeviceLocation, subscribeDevicePlace } = await import('./lib/device-location.js');
+        const {
+          startLocationProfile,
+          subscribeLocationMode,
+          reloadForLocationMode,
+        } = await import('./lib/location-profile.js');
         const topbarEl = document.getElementById('mount-topbar-context');
         startDeviceLocation(config).then((place) => {
           if (place) renderTopbarContext(topbarEl, place);
         });
         subscribeDevicePlace((place) => renderTopbarContext(topbarEl, place));
+        startLocationProfile(config);
+        let lastMode = config.locationMode || 'home';
+        subscribeLocationMode((next) => {
+          if (next !== lastMode) {
+            lastMode = next;
+            reloadForLocationMode();
+          }
+        });
         const { mountMobileWeatherHeader } = await import('./lib/mobile-weather-header.js');
         mountMobileWeatherHeader(document.getElementById('mount-topbar-weather'));
       } catch (e) {

@@ -12,6 +12,22 @@ import {
   filterEventsToIngestWindow,
 } from './events-finder-window.js';
 import { loadEventsFinderCriteria } from './events-finder-criteria-store.js';
+import {
+  isWhitelistedEventPlatformHost,
+  sourceKeyForEmailPlatform,
+} from './events-finder-email-platforms.js';
+import {
+  extractFollowableUrls,
+  enrichEventsByFollowingLinks,
+} from './events-finder-email-link-follow.js';
+import {
+  expandRecurringAndRelativeDates,
+} from './events-finder-recurring-dates.js';
+import {
+  noteSeriesPromoFromEvents,
+  expandActiveSeriesWatchesToEvents,
+  huntStaleSeriesWatches,
+} from './events-finder-series-renewal.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..', '..');
@@ -91,7 +107,7 @@ function gmailCacheFingerprint(addresses, query, windowDays) {
     futureDays: windowDays?.futureDays ?? null,
     windowWeeks: windowDays?.windowWeeks ?? null,
     // Bump when intake URL resolve / page-enrich behavior changes.
-    enrich: 'eb-clicks-v1',
+    enrich: 'link-follow-v4',
   });
 }
 
@@ -165,6 +181,14 @@ export const GMAIL_EVENTS_SUBJECT_TERMS = [
   '"pool parties"',
   'potluck',
   'potlucks',
+  'wedding',
+  'weddings',
+  '"want to come"',
+  '"this thursday"',
+  '"this friday"',
+  '"this saturday"',
+  '"this sunday"',
+  '"this coming"',
 ];
 
 /** from: hosts for DEFAULT_QUERY. */
@@ -188,6 +212,9 @@ export const GMAIL_EVENTS_FROM_HOSTS = [
   'bonobonetwork.com',
   'bonobonetwork.us11.list-manage.com',
   'plra.io',
+  'withjoy.com',
+  'fuckupnights.com',
+  'mail.withjoy.com',
 ];
 
 /** Body free-text terms for DEFAULT_QUERY (quoted hostnames). */
@@ -201,6 +228,8 @@ export const GMAIL_EVENTS_BODY_TERMS = [
   '"bonobonetwork.com"',
   '"plra.io"',
   '"wannaketchup.com"',
+  '"withjoy.com"',
+  '"fuckupnights.com"',
 ];
 
 /**
@@ -217,7 +246,25 @@ const DEFAULT_QUERY = buildDefaultGmailEventsQuery();
 
 /** Subject/body cues that a mail is announcing a dated gathering (not only RSVP platforms). */
 const INVITEISH_RE =
-  /\b(invite|invitation|rsvp|you[''\u2019]re invited|you are invited|join us|meetup|event|events|party|parties|festival|festivals|gathering|gatherings|dates|recap|calendar|request for proposals|on sale|announcement|early bird|save the date|mark your calendar|add to calendar|tickets|pool part(?:y|ies)|potluck|potlucks)\b/i;
+  /\b(invite|invitation|rsvp|you[''\u2019]re invited|you are invited|join us|meetup|event|events|party|parties|festival|festivals|gathering|gatherings|dates|recap|calendar|request for proposals|on sale|announcement|early bird|save the date|mark your calendar|add to calendar|tickets|pool part(?:y|ies)|potluck|potlucks|wedding|weddings)\b/i;
+
+/** Looser personal-invite wording (friends texting dates without platform jargon). */
+const PERSONAL_INVITEISH_RE =
+  /\b(want to come|wanna come|you free|are you free|free (?:on|this)|this coming|this (?:mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|next (?:mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|come through|hang out|join me|you(?:[''\u2019]d| would) love|should come|hope you can (?:make|come)|every (?:other )?(?:\d+(?:st|nd|rd|th)|first|second|third|fourth|fifth)?\s*(?:mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b/i;
+
+const PERSONAL_MAIL_HOSTS = new Set([
+  'gmail.com',
+  'googlemail.com',
+  'icloud.com',
+  'me.com',
+  'mac.com',
+  'yahoo.com',
+  'hotmail.com',
+  'outlook.com',
+  'live.com',
+  'proton.me',
+  'protonmail.com',
+]);
 
 /**
  * Public event / invite links. Facebook: /events/{id}, page hosted tabs, group events.
@@ -226,7 +273,7 @@ const INVITEISH_RE =
  * Bonobo / Plura / WannaKetchup: community + ticket hosts that land in Intake Gmail.
  */
 const PLATFORM_HOST_RE =
-  /(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?secretparty\.io(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?(?:partiful\.com|lu\.ma|luma\.com|eventbrite\.com|meetup\.com)(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:www\.)?facebook\.com\/(?:events\/[^\s"'<>)\]]+|[^/\s"'<>)\]]+\/(?:upcoming_hosted_events|past_hosted_events|events)|groups\/[^/\s"'<>)\]]+\/events)[^\s"'<>)\]]*|(?:https?:\/\/)?(?:www\.)?take3presents\.com(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?mailchi\.mp\/(?:take3presents|bonobonetwork)(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:(?:www|community)\.)?bonobonetwork\.com(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?plra\.io(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:www\.)?wannaketchup\.com(?:\/[^\s"'<>)\]]*)?/gi;
+  /(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?secretparty\.io(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?(?:partiful\.com|lu\.ma|luma\.com|eventbrite\.com|meetup\.com|withjoy\.com|fuckupnights\.com)(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:www\.)?facebook\.com\/(?:events\/[^\s"'<>)\]]+|[^/\s"'<>)\]]+\/(?:upcoming_hosted_events|past_hosted_events|events)|groups\/[^/\s"'<>)\]]+\/events)[^\s"'<>)\]]*|(?:https?:\/\/)?(?:www\.)?take3presents\.com(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?mailchi\.mp\/(?:take3presents|bonobonetwork|fuckupnights)(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:(?:www|community|en)\.)?(?:bonobonetwork|fuckupnights)\.com(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:(?:[a-z0-9-]+)\.)?plra\.io(?:\/[^\s"'<>)\]]*)?|(?:https?:\/\/)?(?:www\.)?wannaketchup\.com(?:\/[^\s"'<>)\]]*)?/gi;
 
 const GMAIL_FETCH_UA =
   'Mozilla/5.0 (compatible; DashbirdEvents/1.0; +https://github.com/local/dashbird)';
@@ -739,6 +786,22 @@ export function platformUrlScore(href) {
       if (path.startsWith('/events')) return 55;
       return 40;
     }
+    if (host === 'withjoy.com' || host.endsWith('.withjoy.com')) {
+      if (/\/assets\/|\.(?:woff2?|ttf|otf|eot|png|jpe?g|gif|svg|css|js)(?:$|\?)/i.test(path)) {
+        return 0;
+      }
+      // Couple site: /handle or /handle/...
+      if (/^\/[a-z0-9][a-z0-9-]{1,80}(?:\/|$)/i.test(path)) return 95;
+      return path.length > 1 ? 70 : 40;
+    }
+    if (host.includes('fuckupnights')) {
+      if (/\/at-work|\/about|\/blog|\/stories/i.test(path)) return 5;
+      if (/\/[a-z0-9-]+/i.test(path) && path.length > 1) return 85;
+      return 40;
+    }
+    if (isWhitelistedEventPlatformHost(host)) {
+      return path.length > 1 ? 70 : 35;
+    }
     return 10;
   } catch {
     return 0;
@@ -775,7 +838,12 @@ export function extractPlatformUrls(htmlOrText) {
       const unwrapped = unwrapSecretPartyTrackingUrl(parsed.href);
       const finalUrl = unwrapped || parsed.href;
       const host = new URL(finalUrl).hostname.replace(/^www\./, '').toLowerCase();
+      const path = new URL(finalUrl).pathname || '/';
       if (host === 'track.secretparty.io') continue;
+      // Skip static assets mistaken for event pages (WithJoy font CSS, etc.).
+      if (/\/assets\/|\/fonts\/|\.(?:woff2?|ttf|otf|eot|png|jpe?g|gif|svg|css|js)(?:$|\?)/i.test(path)) {
+        continue;
+      }
       const key = finalUrl.split('#')[0].toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
@@ -940,14 +1008,38 @@ export function sourceFromPlatformUrls(urls, fallback = 'gmail') {
       if (host === 'take3presents.com' || host.endsWith('.take3presents.com')) return 'take3presents';
       if (host === 'mailchi.mp' && /\/take3presents\//i.test(href)) return 'take3presents';
       if (host === 'mailchi.mp' && /\/bonobonetwork\//i.test(href)) return 'bonobo';
+      if (host === 'mailchi.mp' && /\/fuckupnights\//i.test(href)) return 'fuckupnights';
       if (host === 'bonobonetwork.com' || host.endsWith('.bonobonetwork.com')) return 'bonobo';
       if (host === 'plra.io' || host.endsWith('.plra.io')) return 'plura';
       if (host === 'wannaketchup.com' || host.endsWith('.wannaketchup.com')) return 'wannaketchup';
+      if (host === 'withjoy.com' || host.endsWith('.withjoy.com')) return 'withjoy';
+      if (host.includes('fuckupnights')) return 'fuckupnights';
+      const keyed = sourceKeyForEmailPlatform(href);
+      if (keyed) return keyed;
     } catch {
       /* ignore */
     }
   }
   return fallback;
+}
+
+/**
+ * Personal inbox invite (friend / 1:1) vs bulk ESP — looser wording allowed.
+ * @param {string} from
+ * @param {string} [textBlob]
+ * @returns {boolean}
+ */
+export function looksLikePersonalInviteMail(from, textBlob = '') {
+  const fromStr = String(from || '');
+  const addr = fromStr.match(/[\w.+-]+@([\w.-]+)/i)?.[1]?.toLowerCase() || '';
+  const blob = String(textBlob || '');
+  if (/list-unsubscribe|mailchimp|sendgrid|constantcontact|substack\.com|noreply@|no-reply@/i.test(blob + fromStr)) {
+    return false;
+  }
+  if (addr && PERSONAL_MAIL_HOSTS.has(addr)) return true;
+  // First-name From without ESP footprint still counts as personal-ish.
+  if (/^[^@<\s]{2,40}\s*</.test(fromStr) && !/@/.test(fromStr.split('<')[0])) return true;
+  return PERSONAL_INVITEISH_RE.test(blob) && !/\bunsubscribe\b/i.test(blob);
 }
 
 /**
@@ -1450,8 +1542,15 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
   const bag = { texts: [], htmls: [], ics: [] };
   collectMimeParts(message?.payload, bag);
 
+  const htmlAndText = [...bag.texts, ...bag.htmls].join('\n');
   const textBlob = [...bag.texts, ...bag.htmls.map(stripHtml)].join('\n');
-  const urls = extractPlatformUrls([...bag.texts, ...bag.htmls].join('\n'));
+  const platformUrls = extractPlatformUrls(htmlAndText);
+  const followUrls = extractFollowableUrls(htmlAndText);
+  const urls = [...new Set([
+    ...platformUrls,
+    ...followUrls.filter((u) => isWhitelistedEventPlatformHost(u) || /withjoy|fuckupnights/i.test(u)),
+  ])];
+  const personal = looksLikePersonalInviteMail(from, `${subject}\n${textBlob}`);
 
   /** @type {Array<{
    *   id: string,
@@ -1498,6 +1597,8 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
           via: 'ics',
           platform: platformSource,
           urls,
+          followUrls,
+          personal,
         },
       });
     }
@@ -1512,13 +1613,21 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
     const endOk = range?.eventEnd
       ? ymdAtLocalNoonIso(range.eventEnd)
       : null;
-    // Platform link, invite-ish subject/body, dated blocks, or a parseable date.
+    const recurring = expandRecurringAndRelativeDates(blob, {
+      now: Date.now(),
+      monthsAhead: 3,
+      timeZone: defaultTz,
+    });
+    // Platform link, invite-ish subject/body, dated blocks, personal wording, or a parseable date.
     const inviteish =
       urls.length > 0
+      || followUrls.some((u) => isWhitelistedEventPlatformHost(u))
       || INVITEISH_RE.test(subject)
       || INVITEISH_RE.test(textBlob)
+      || (personal && PERSONAL_INVITEISH_RE.test(`${subject}\n${textBlob}`))
       || Boolean(startOk)
-      || blocks.length > 0;
+      || blocks.length > 0
+      || recurring.some((ex) => (ex.days || []).length > 0);
     if (inviteish && blocks.length >= 1) {
       const cleanedSubject = subject.replace(/^(re|fwd):\s*/i, '').trim() || subject;
       const inboxFallback = `https://mail.google.com/mail/u/0/#inbox/${id}`;
@@ -1562,15 +1671,20 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
             via: blocks.length > 1 ? 'dated_blocks' : (urls.length ? 'platform_link' : 'subject_heuristic'),
             platform: platformSource,
             urls: blockUrls.length ? blockUrls : urls,
+            followUrls,
+            personal,
             snippet: String(message?.snippet || '').slice(0, 240),
             blockIndex: block.index,
           },
         });
       }
     } else if (inviteish) {
+      const urlCandidates = urls.length ? urls : followUrls;
       const url =
-        pickBestPlatformUrl(urls, `https://mail.google.com/mail/u/0/#inbox/${id}`);
-      const platformSource = sourceFromPlatformUrls(urls.length ? urls : [url]);
+        pickBestPlatformUrl(urlCandidates, `https://mail.google.com/mail/u/0/#inbox/${id}`);
+      const platformSource = sourceFromPlatformUrls(
+        urlCandidates.length ? urlCandidates : [url],
+      );
       const slugTitle = platformSource === 'secretparty' ? secretPartyTitleFromUrl(url) : null;
       const cleanedSubject = subject.replace(/^(re|fwd):\s*/i, '').trim() || subject;
       const named =
@@ -1600,32 +1714,72 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
           venue = parts[0];
         }
       }
-      events.push({
-        id: idPrefix,
-        title:
-          slugTitle && /^secret party$/i.test(cleanedSubject)
-            ? slugTitle
-            : (named || cleanedSubject),
-        start: startOk,
-        end: endOk,
-        venue,
-        location: venue,
-        city,
-        url,
-        source: platformSource === 'gmail' ? 'gmail' : platformSource,
-        raw: {
-          messageId: id,
-          threadId,
-          subject,
-          from,
-          date: dateHdr,
-          mailbox: mailbox || null,
-          via: urls.length ? 'platform_link' : 'subject_heuristic',
-          platform: platformSource,
-          urls,
-          snippet: String(message?.snippet || '').slice(0, 240),
-        },
-      });
+
+      /** @type {Array<{ ymd: string, hours: number | null, minutes: number | null, label?: string }>} */
+      const seriesDays = [];
+      // Recurring expansion: nth/every weekday always; relative weekday only for personal mail
+      // (avoids newsletter digests inventing "this Thursday" cards).
+      for (const ex of recurring) {
+        if (ex.kind === 'relative_weekday' && !personal) continue;
+        if (
+          (ex.kind === 'every_weekday' || ex.kind === 'every_other_weekday')
+          && startOk
+          && !/\bevery\b/i.test(blob)
+        ) {
+          continue;
+        }
+        for (const day of ex.days || []) {
+          seriesDays.push({ ...day, label: ex.label });
+        }
+      }
+      // One card per series occurrence; fall back to a single heuristic row.
+      const dayRows =
+        seriesDays.length > 0
+          ? seriesDays
+          : [{ ymd: null, hours: null, minutes: null, label: null }];
+
+      for (let di = 0; di < dayRows.length; di += 1) {
+        const day = dayRows[di];
+        let rowStart = startOk;
+        if (day.ymd) {
+          rowStart =
+            day.hours != null && day.minutes != null
+              ? ymdAtLocalTimeIso(day.ymd, day.hours, day.minutes, defaultTz)
+              : ymdAtLocalNoonIso(day.ymd, defaultTz);
+        }
+        const multi = dayRows.length > 1 && day.ymd;
+        events.push({
+          id: multi ? `${idPrefix}:series:${day.ymd}` : idPrefix,
+          title:
+            slugTitle && /^secret party$/i.test(cleanedSubject)
+              ? slugTitle
+              : (named || cleanedSubject),
+          start: rowStart,
+          end: multi ? null : endOk,
+          venue,
+          location: venue,
+          city,
+          url,
+          source: platformSource === 'gmail' ? 'gmail' : platformSource,
+          raw: {
+            messageId: id,
+            threadId,
+            subject,
+            from,
+            date: dateHdr,
+            mailbox: mailbox || null,
+            via: multi
+              ? 'recurring_series'
+              : (urlCandidates.length ? 'platform_link' : 'subject_heuristic'),
+            platform: platformSource,
+            urls: urlCandidates,
+            followUrls,
+            personal,
+            patternLabel: day.label || null,
+            snippet: String(message?.snippet || '').slice(0, 240),
+          },
+        });
+      }
     }
   }
 
@@ -1633,7 +1787,15 @@ export function eventsFromGmailMessage(message, defaultTz = 'America/Los_Angeles
 }
 
 /** Platforms whose public event pages expose JSON-LD / title+time we can enrich from. */
-const ENRICHABLE_SOURCES = new Set(['eventbrite', 'luma', 'partiful', 'meetup']);
+const ENRICHABLE_SOURCES = new Set([
+  'eventbrite',
+  'luma',
+  'partiful',
+  'meetup',
+  'withjoy',
+  'fuckupnights',
+  'secretparty',
+]);
 
 /**
  * Whether a Gmail-derived event can be improved by fetching its platform page
@@ -1769,13 +1931,19 @@ export async function enrichGmailEventsFromPublicPages(events, opts = {}) {
         const subjectish = String(ev.title || '');
         // Non-Eventbrite marketing emails rarely carry the real event name in the
         // subject, so trust the page title. Eventbrite subjects often embed it.
+        const pageTitleNorm = String(page.title || '')
+          .replace(/&#x27;|&apos;|&#39;/gi, "'")
+          .replace(/&amp;/g, '&')
+          .trim();
+        const pageTitleGeneric =
+          /^(you.?ve got a card|secret party|home|welcome|joy)\b/i.test(pageTitleNorm);
         const preferPageTitle =
-          source !== 'eventbrite'
-            ? Boolean(page.title)
-            : !subjectish
+          source === 'eventbrite'
+            ? !subjectish
               || /^(just added!|new event|you're invited|you are invited)\b/i.test(subjectish)
               || /📅/.test(subjectish)
-              || subjectish.length < 8;
+              || subjectish.length < 8
+            : Boolean(page.title) && !pageTitleGeneric;
 
         const canonicalUrl =
           source === 'eventbrite'
@@ -1784,7 +1952,7 @@ export async function enrichGmailEventsFromPublicPages(events, opts = {}) {
 
         out[idx] = {
           ...ev,
-          title: preferPageTitle && page.title ? page.title : ev.title,
+          title: preferPageTitle && pageTitleNorm ? pageTitleNorm : ev.title,
           start: page.start || ev.start,
           end: page.end || ev.end || null,
           venue: page.venue || ev.venue || null,
@@ -2290,10 +2458,32 @@ export async function fetchGmailEventAnnouncements(env = process.env, opts = {})
       console.warn('[events-finder] gmail public-page enrich failed:', e?.message || e);
       enriched = events;
     }
+    try {
+      enriched = await enrichEventsByFollowingLinks(enriched, {
+        guessStartIso: guessEventStartIso,
+      });
+    } catch (e) {
+      console.warn('[events-finder] gmail link-follow enrich failed:', e?.message || e);
+    }
+
+    try {
+      noteSeriesPromoFromEvents(enriched);
+      const watchCards = expandActiveSeriesWatchesToEvents({
+        ymdAtLocalNoonIso,
+        ymdAtLocalTimeIso,
+      });
+      if (watchCards.length) enriched = [...enriched, ...watchCards];
+    } catch (e) {
+      console.warn('[events-finder] series watch expand failed:', e?.message || e);
+    }
+    // Fire-and-forget renewal hunt (does not block feed).
+    huntStaleSeriesWatches().catch((e) => {
+      console.warn('[events-finder] series renewal hunt failed:', e?.message || e);
+    });
 
     // Keep past-floor only. Far-future dated invites (months out) are recorded —
     // scrape-ahead no longer truncates the catalog. Dateless events still need a
-    // platform link / .ics anchor so subject-only noise stays out.
+    // platform / whitelist link / .ics anchor so subject-only noise stays out.
     const nowMs = Date.now();
     const pastMs = windowDays.pastDays * 24 * 60 * 60 * 1000;
     const windowed = enriched.filter((ev) => {
@@ -2302,13 +2492,24 @@ export async function fetchGmailEventAnnouncements(env = process.env, opts = {})
         return ms >= nowMs - pastMs;
       }
       const via = String(ev?.raw?.via || '');
-      const hasPlatformLink = Array.isArray(ev?.raw?.urls) && ev.raw.urls.length > 0;
+      const linkPool = [
+        ...(Array.isArray(ev?.raw?.urls) ? ev.raw.urls : []),
+        ...(Array.isArray(ev?.raw?.followUrls) ? ev.raw.followUrls : []),
+        ev?.url,
+      ].filter(Boolean);
+      const hasPlatformLink = linkPool.some(
+        (u) => isWhitelistedEventPlatformHost(u) || platformUrlScore(u) >= 40,
+      );
+      // Personal invites without a recoverable date still need a followable link.
+      if (ev?.raw?.personal && linkPool.some((u) => !String(u).includes('mail.google.com'))) {
+        return true;
+      }
       return via === 'ics' || hasPlatformLink;
     });
 
     // Dedupe by platform URL when present, else by id.
-    // Multi-event digests (via dated_blocks) and thin marketing homepages keep id keys
-    // so distinct parties in one email are not collapsed onto one catalog URL.
+    // Multi-event digests (via dated_blocks / recurring_series) and thin marketing
+    // homepages keep id keys so distinct parties in one email are not collapsed.
     const seen = new Set();
     /** @type {typeof events} */
     const deduped = [];
@@ -2319,6 +2520,9 @@ export async function fetchGmailEventAnnouncements(env = process.env, opts = {})
         href
         && !href.includes('mail.google.com')
         && via !== 'dated_blocks'
+        && via !== 'recurring_series'
+        && via !== 'link_follow_series'
+        && via !== 'series_watch'
         && !isThinMarketingEventUrl(href);
       const urlKey = useUrlKey
         ? `url:${href.split('#')[0].toLowerCase()}`

@@ -313,14 +313,16 @@ function earthItemTooltip(earthType, ev) {
     return 'Oakland salamanders: Open-Meteo rain sum + air temp at dashboard point, Nov 1–Apr 1 + distance from downtown Oakland; AmphibiaWeb reference (new tab)';
   }
   if (t === 'usgs_quake_week_max') {
-    const md =
-      typeof ev?.quakeAsOfMd === 'string' && /^[0-9]{1,2}\/[0-9]{1,2}$/.test(ev.quakeAsOfMd.trim())
-        ? ev.quakeAsOfMd.trim()
-        : formatLocalQuakeMd();
-    return `Strongest California earthquake through ${md} (USGS): M>3 within 150 mi of Oakland, CA; opens USGS event (new tab)`;
+    const when =
+      typeof ev?.quakeEventAt === 'string' && ev.quakeEventAt.trim()
+        ? ev.quakeEventAt.trim()
+        : typeof ev?.quakeAsOfMd === 'string' && /^[0-9]{1,2}\/[0-9]{1,2}$/.test(ev.quakeAsOfMd.trim())
+          ? ev.quakeAsOfMd.trim()
+          : formatLocalQuakeMd();
+    return `Strongest California earthquake at ${when} (USGS): M>3 within 150 mi of Oakland, CA; shown for 24 hours after occurrence; opens USGS event (new tab)`;
   }
   if (t === 'kilauea_volcano') {
-    return 'Kīlauea (Hawaiʻi): HVO alert level, eruption episode / fountain height when erupting; opens USGS volcano update (new tab)';
+    return 'Kīlauea (Hawaiʻi): shown when fountaining or HVO posts a dated next-episode forecast; opens USGS volcano update (new tab)';
   }
   if (t === 'kilauea_quake') {
     return 'Strongest earthquake near Kīlauea summit (USGS): M>3 within 30 mi of Halemaʻumaʻu; same M · depth · mi format as the local earthquake row; opens USGS event (new tab)';
@@ -417,6 +419,23 @@ function mergeFastEarthPayloads([
   return { merged, quakeItems };
 }
 
+/**
+ * Drop Bay-only (or profile-hidden) Earth rows while Away/preview.
+ * @param {object[]} items
+ * @param {string[]} hideIds
+ */
+function filterHiddenEarthItems(items, hideIds) {
+  if (!Array.isArray(items) || !Array.isArray(hideIds) || !hideIds.length) return items;
+  const hide = new Set(hideIds.map((x) => String(x || '').trim()).filter(Boolean));
+  return items.filter((ev) => {
+    const t = String(ev?.earthType || '');
+    for (const id of hide) {
+      if (t === id || t.startsWith(`${id}_`)) return false;
+    }
+    return true;
+  });
+}
+
 /** @param {HTMLElement} container @param {object[]} items */
 function appendEarthEventRows(container, items) {
   for (let i = 0; i < items.length; i++) {
@@ -446,13 +465,15 @@ function formatLocalQuakeMd(d = new Date()) {
 }
 
 /**
- * Earth strip: USA-NPN spring, tarantulas, salamanders, monarchs, salmon, foraging, then (when active) largest nearby quake (USGS week, as-of M/D on label), strongest recent GLM flash (~200 mi), optional Sprite-class proxy row (7-day retention).
+ * Earth strip: USA-NPN spring, tarantulas, salamanders, monarchs, salmon, foraging, then (when active) largest nearby quake (USGS, date/time, 24h after occurrence), strongest recent GLM flash (~200 mi), optional Sprite-class proxy row (7-day retention).
  * Uses the same row chrome as sky events (`hero-astro-item`).
  *
  * @param {HTMLElement | null} container
+ * @param {{ hideEarth?: string[] }} [opts]
  */
-export function mountEarthStrip(container) {
+export function mountEarthStrip(container, opts = {}) {
   if (!container) return;
+  const hideEarth = Array.isArray(opts.hideEarth) ? opts.hideEarth : [];
   const card = document.getElementById('earth-sidebar-card');
   container.className = 'hero-astro-middle';
 
@@ -460,7 +481,7 @@ export function mountEarthStrip(container) {
     const md = typeof quakeAsOfMd === 'string' && quakeAsOfMd ? quakeAsOfMd : formatLocalQuakeMd();
     container.setAttribute(
       'aria-label',
-      `Earth events: USA-NPN spring when active, Diablo-area tarantulas, Oakland salamander heuristic, monarch migration, salmon seasons, wild edible / foraging notes, nasturtium bloom, lightning bugs at secondary ZIP (7-day heads-up before start), fall foliage at ZIP 24066, Atlantic Category 1+ storms with forecasted landfall location when parsed from NHC advisories, California earthquake through ${md} when strongest is M>3 within 150 mi of Oakland, Kīlauea eruption or nearby quake when active, GOES GLM strongest flash and optional Sprite-class proxy row when a tier match is stored (~200 mi, 7-day retention)`,
+      `Earth events: USA-NPN spring when active, Diablo-area tarantulas, Oakland salamander heuristic, monarch migration, salmon seasons, wild edible / foraging notes, nasturtium bloom, lightning bugs at secondary ZIP (7-day heads-up before start), fall foliage at ZIP 24066, Atlantic Category 1+ storms with forecasted landfall location when parsed from NHC advisories, California earthquake${md ? ` (${md})` : ''} when strongest is M>3 within 150 mi of Oakland (24 hours after occurrence), Kīlauea eruption or nearby quake when active, GOES GLM strongest flash and optional Sprite-class proxy row when a tier match is stored (~200 mi, 7-day retention)`,
     );
   }
 
@@ -542,13 +563,15 @@ export function mountEarthStrip(container) {
    * @param {object[]} quakeItems
    */
   function paintFastEarth(merged, quakeItems) {
+    merged = filterHiddenEarthItems(merged, hideEarth);
+    quakeItems = filterHiddenEarthItems(quakeItems, hideEarth);
     container.replaceChildren();
     fastRowCount = merged.length;
     fastDone = true;
 
     if (merged.length > 0) {
       const qEv = quakeItems.find((e) => e.earthType === 'usgs_quake_week_max');
-      setEarthAriaLabel(qEv?.quakeAsOfMd);
+      setEarthAriaLabel(qEv?.quakeEventAt || qEv?.quakeAsOfMd);
       appendEarthEventRows(container, merged);
     }
 

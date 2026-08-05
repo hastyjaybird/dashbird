@@ -456,6 +456,208 @@ function buildCostsBlock(root) {
   reload();
 }
 
+
+/**
+ * Away base: preview destination dashboard before a trip; auto when GPS is near.
+ * @param {HTMLElement} root
+ */
+function buildAwayBaseBlock(root) {
+  const { details: block, body } = createCollapsibleSection({
+    title: 'Away base',
+    headingId: 'settings-away-heading',
+    className: 'settings-page__away-block',
+  });
+
+  const blurb = document.createElement('p');
+  blurb.className = 'settings-page__secondary-blurb';
+  blurb.textContent =
+    'Travel destination for weather, Earth, and Events. Use View Away base before you leave; when your phone GPS is within the radius, Dashbird switches to Away-only automatically.';
+  body.append(blurb);
+
+  const statusRow = document.createElement('p');
+  statusRow.className = 'settings-page__secondary-current';
+  const statusLabel = document.createElement('span');
+  statusLabel.textContent = 'Mode: ';
+  const statusValue = document.createElement('strong');
+  statusValue.className = 'settings-page__away-mode';
+  statusValue.textContent = '…';
+  statusRow.append(statusLabel, statusValue);
+  body.append(statusRow);
+
+  const currentRow = document.createElement('p');
+  currentRow.className = 'settings-page__secondary-current';
+  const currentLabel = document.createElement('span');
+  currentLabel.textContent = 'Active profile: ';
+  const currentValue = document.createElement('strong');
+  currentValue.className = 'settings-page__away-profile';
+  currentValue.textContent = '…';
+  currentRow.append(currentLabel, currentValue);
+  body.append(currentRow);
+
+  const labelField = document.createElement('label');
+  labelField.className = 'settings-page__rain-label';
+  labelField.htmlFor = 'settings-away-zip';
+  labelField.textContent = 'Away ZIP';
+  body.append(labelField);
+
+  const input = document.createElement('input');
+  input.id = 'settings-away-zip';
+  input.className = 'settings-page__secondary-zip-input';
+  input.type = 'text';
+  input.inputMode = 'numeric';
+  input.maxLength = 10;
+  input.spellcheck = false;
+  input.autocomplete = 'postal-code';
+  body.append(input);
+
+  const radiusLabel = document.createElement('label');
+  radiusLabel.className = 'settings-page__rain-label';
+  radiusLabel.htmlFor = 'settings-away-radius';
+  radiusLabel.textContent = 'Auto radius (miles)';
+  body.append(radiusLabel);
+
+  const radiusInput = document.createElement('input');
+  radiusInput.id = 'settings-away-radius';
+  radiusInput.className = 'settings-page__secondary-zip-input';
+  radiusInput.type = 'number';
+  radiusInput.min = '5';
+  radiusInput.max = '200';
+  radiusInput.step = '1';
+  body.append(radiusInput);
+
+  const actions = document.createElement('div');
+  actions.className = 'settings-page__rain-actions';
+
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.className = 'settings-page__rain-save';
+  saveBtn.textContent = 'Save Away base';
+
+  const previewBtn = document.createElement('button');
+  previewBtn.type = 'button';
+  previewBtn.className = 'settings-page__rain-save';
+  previewBtn.textContent = 'View Away base';
+
+  const exitBtn = document.createElement('button');
+  exitBtn.type = 'button';
+  exitBtn.className = 'settings-page__secondary-cancel';
+  exitBtn.textContent = 'Exit preview / Away';
+
+  const msg = document.createElement('p');
+  msg.className = 'settings-page__rain-msg';
+  msg.hidden = true;
+  msg.setAttribute('aria-live', 'polite');
+
+  actions.append(saveBtn, previewBtn, exitBtn, msg);
+  body.append(actions);
+
+  const firstSection = root.querySelector('.settings-page__section');
+  if (firstSection) root.insertBefore(block, firstSection);
+  else root.append(block);
+
+  function paint(data) {
+    const mode = String(data?.locationMode || 'home');
+    statusValue.textContent =
+      mode === 'preview'
+        ? 'Preview Away'
+        : mode === 'away'
+          ? 'Away (auto)'
+          : 'Home';
+    const p = data?.activeProfile;
+    if (p) {
+      currentValue.textContent = `${p.label || p.zip} · ${p.zip}`;
+      input.value = p.zip || '';
+      radiusInput.value = String(p.radiusMi || 40);
+    } else {
+      currentValue.textContent = '—';
+    }
+    previewBtn.disabled = mode === 'preview' || mode === 'away';
+    exitBtn.disabled = mode === 'home';
+  }
+
+  function showMsg(text, isErr) {
+    msg.hidden = false;
+    msg.textContent = text;
+    msg.classList.toggle('settings-page__err', !!isErr);
+  }
+
+  async function reloadAfter() {
+    showMsg('Reloading dashboard…', false);
+    window.location.reload();
+  }
+
+  fetch('/api/away-base', { cache: 'no-store' })
+    .then((r) => r.json())
+    .then((data) => paint(data))
+    .catch(() => {
+      statusValue.textContent = 'unavailable';
+    });
+
+  saveBtn.addEventListener('click', () => {
+    const zip = String(input.value || '').replace(/\D/g, '');
+    const radiusMi = Number(radiusInput.value);
+    if (zip.length !== 5) {
+      showMsg('Enter a 5-digit US ZIP.', true);
+      return;
+    }
+    saveBtn.disabled = true;
+    fetch('/api/away-base', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        zip,
+        radiusMi: Number.isFinite(radiusMi) && radiusMi > 0 ? radiusMi : 40,
+      }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.ok === false) throw new Error(data.error || 'save failed');
+        paint(data);
+        showMsg('Saved.', false);
+      })
+      .catch((e) => showMsg(String(e.message || e), true))
+      .finally(() => {
+        saveBtn.disabled = false;
+      });
+  });
+
+  previewBtn.addEventListener('click', () => {
+    previewBtn.disabled = true;
+    fetch('/api/away-base', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preview: true, autoAway: false }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.ok === false) throw new Error(data.error || 'preview failed');
+        return reloadAfter();
+      })
+      .catch((e) => {
+        showMsg(String(e.message || e), true);
+        previewBtn.disabled = false;
+      });
+  });
+
+  exitBtn.addEventListener('click', () => {
+    exitBtn.disabled = true;
+    fetch('/api/away-base', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preview: false, autoAway: false }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.ok === false) throw new Error(data.error || 'exit failed');
+        return reloadAfter();
+      })
+      .catch((e) => {
+        showMsg(String(e.message || e), true);
+        exitBtn.disabled = false;
+      });
+  });
+}
+
 /**
  * Secondary ZIP: second hero weather tile + lightning bugs (fall foliage watches ZIP 24066).
  * Shows the stored ZIP; “Change secondary ZIP” reveals the editor.
@@ -1872,14 +2074,16 @@ function openEventsFilterCriteriaModal() {
  * @returns {Promise<boolean>} true if a source was added
  */
 async function openAddEventSourceDialog() {
-  const label = window.prompt('Source name (e.g. Noisebridge)');
+  const label = window.prompt('Source name (e.g. Prescott Market)');
   if (label == null) return false;
   const trimmedLabel = String(label).trim();
   if (!trimmedLabel) {
     window.alert('Name is required.');
     return false;
   }
-  const url = window.prompt('Source URL (https://…)');
+  const url = window.prompt(
+    'Events page URL (https://…)\n\nPaste a public page that lists events (venue calendar, Squarespace /events, Google Calendar embed page). Platform hubs (Partiful, Luma, Meetup…) already have dedicated ingest.',
+  );
   if (url == null) return false;
   const trimmedUrl = String(url).trim();
   if (!/^https?:\/\//i.test(trimmedUrl)) {
@@ -1895,6 +2099,11 @@ async function openAddEventSourceDialog() {
     const data = await r.json().catch(() => ({}));
     if (!r.ok || data.ok === false) {
       throw new Error(data.error || `HTTP ${r.status}`);
+    }
+    if (data.webpageListing) {
+      window.alert(
+        `Added “${trimmedLabel}”. Events from that page will appear after the next Events ingest refresh.`,
+      );
     }
     return true;
   } catch (e) {
@@ -2398,46 +2607,42 @@ function buildGmailWeeklySummaryBlock(root) {
   void load();
 }
 
-const BIG_EVENT_LEAD_OPTIONS = [
-  { value: '', label: 'Default (~2 months)' },
-  { value: '7', label: '1 week before' },
-  { value: '14', label: '2 weeks before' },
-  { value: '21', label: '3 weeks before' },
-  { value: '30', label: '1 month before' },
-  { value: '45', label: '6 weeks before' },
-  { value: '60', label: '2 months before' },
-  { value: '90', label: '3 months before' },
-  { value: '120', label: '4 months before' },
-  { value: '180', label: '6 months before' },
+const NOTABLE_LEAD_WEEK_OPTIONS = [
+  { value: '2', label: '2 weeks before' },
+  { value: '3', label: '3 weeks before' },
+  { value: '4', label: '4 weeks before (default)' },
+  { value: '6', label: '6 weeks before' },
+  { value: '8', label: '8 weeks before' },
+  { value: '12', label: '12 weeks before' },
 ];
 
 /**
- * Per-big-event reminder lead time — how far ahead the event website heads-up card
- * should surface in the Events feed.
+ * Per-notable-event reminder lead time — how far ahead a flagged event stays
+ * pinned near the top of the Events feed.
  * @param {HTMLElement} root
  */
 function buildBigEventsRemindersBlock(root) {
   const { details: block, body } = createCollapsibleSection({
-    title: 'Big event reminders',
-    headingId: 'settings-big-events-heading',
+    title: 'Notable event reminders',
+    headingId: 'settings-notable-events-heading',
     className: 'settings-page__big-events-block',
   });
 
   const intro = document.createElement('p');
   intro.className = 'settings-page__intro';
   intro.textContent =
-    'Tracked big events (Burning Man, Coachella, SXSW…). Choose how far in advance each event’s website reminder should appear in the Events feed. Default is about two months ahead.';
+    'Events you mark Notable in the Events feed. Choose how many weeks ahead each one should stay highlighted. Edit early bird / travel details on the event card.';
   body.append(intro);
 
   const loadStatus = document.createElement('p');
   loadStatus.className = 'settings-page__load-status';
   loadStatus.setAttribute('aria-live', 'polite');
-  loadStatus.textContent = 'Loading big events…';
+  loadStatus.textContent = 'Loading notable events…';
   body.append(loadStatus);
 
   const table = document.createElement('table');
   table.className = 'settings-page__table settings-page__table--big-events';
-  table.setAttribute('aria-labelledby', 'settings-big-events-heading');
+  table.setAttribute('aria-labelledby', 'settings-notable-events-heading');
   table.hidden = true;
 
   const thead = document.createElement('thead');
@@ -2458,15 +2663,15 @@ function buildBigEventsRemindersBlock(root) {
 
   /**
    * @param {HTMLSelectElement} select
-   * @param {number | null} leadDays
+   * @param {number | null} leadWeeks
    */
-  function fillLeadOptions(select, leadDays) {
+  function fillLeadOptions(select, leadWeeks) {
     select.replaceChildren();
-    const value = leadDays == null ? '' : String(leadDays);
-    const known = BIG_EVENT_LEAD_OPTIONS.some((o) => o.value === value);
+    const value = leadWeeks == null ? '4' : String(leadWeeks);
+    const known = NOTABLE_LEAD_WEEK_OPTIONS.some((o) => o.value === value);
     const options = known
-      ? BIG_EVENT_LEAD_OPTIONS
-      : [...BIG_EVENT_LEAD_OPTIONS, { value, label: `${leadDays} days before` }];
+      ? NOTABLE_LEAD_WEEK_OPTIONS
+      : [...NOTABLE_LEAD_WEEK_OPTIONS, { value, label: `${leadWeeks} weeks before` }];
     for (const opt of options) {
       const el = document.createElement('option');
       el.value = opt.value;
@@ -2482,48 +2687,58 @@ function buildBigEventsRemindersBlock(root) {
   function populate(items) {
     tbody.replaceChildren();
     for (const item of items) {
-      const slug = String(item.slug || '').trim();
-      if (!slug) continue;
+      const eventId = String(item.eventId || '').trim();
+      if (!eventId) continue;
+      const ev = item.event || {};
       const tr = document.createElement('tr');
 
       const tdName = document.createElement('td');
       tdName.className = 'settings-page__type-label';
-      tdName.textContent = String(item.title || item.query || slug);
+      tdName.textContent = String(ev.title || eventId);
 
       const tdWhen = document.createElement('td');
       tdWhen.className = 'settings-page__value';
-      tdWhen.textContent = String(item.whenLabel || 'Dates TBD');
+      tdWhen.textContent = ev.start
+        ? new Date(ev.start).toLocaleString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          })
+        : 'Date TBD';
 
       const tdLead = document.createElement('td');
       tdLead.className = 'settings-page__big-events-lead';
       const select = document.createElement('select');
       select.className = 'settings-page__costs-select';
-      select.setAttribute('aria-label', `Reminder lead time for ${item.title || slug}`);
-      fillLeadOptions(select, item.reminderLeadDays == null ? null : Number(item.reminderLeadDays));
+      select.setAttribute('aria-label', `Reminder lead time for ${ev.title || eventId}`);
+      fillLeadOptions(
+        select,
+        item.reminderLeadWeeks == null ? 4 : Number(item.reminderLeadWeeks),
+      );
       const savedNote = document.createElement('span');
       savedNote.className = 'settings-page__big-events-saved';
       savedNote.hidden = true;
       savedNote.setAttribute('aria-live', 'polite');
 
       select.addEventListener('change', async () => {
-        const raw = select.value;
-        const reminderLeadDays = raw === '' ? null : Number(raw);
+        const reminderLeadWeeks = Number(select.value) || 4;
         select.disabled = true;
         savedNote.hidden = false;
         savedNote.classList.remove('settings-page__err');
         savedNote.textContent = 'Saving…';
         try {
           const r = await fetch(
-            `/api/events-finder/big-events/${encodeURIComponent(slug)}`,
+            `/api/events-finder/notable/${encodeURIComponent(eventId)}`,
             {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ reminderLeadDays }),
+              body: JSON.stringify({ notable: true, reminderLeadWeeks }),
             },
           );
           const j = await r.json().catch(() => ({}));
           if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
-          const next = j.item?.reminderLeadDays == null ? null : Number(j.item.reminderLeadDays);
+          const next =
+            j.item?.reminderLeadWeeks == null ? 4 : Number(j.item.reminderLeadWeeks);
           fillLeadOptions(select, next);
           savedNote.textContent = 'Saved';
           setTimeout(() => {
@@ -2543,14 +2758,15 @@ function buildBigEventsRemindersBlock(root) {
     }
   }
 
-  fetch('/api/events-finder/big-events', { cache: 'no-store' })
+  fetch('/api/events-finder/notable', { cache: 'no-store' })
     .then(async (r) => {
       const data = await r.json().catch(() => ({}));
       if (!r.ok || data.ok === false || !Array.isArray(data.items)) {
         throw new Error(data.error || `HTTP ${r.status}`);
       }
       if (!data.items.length) {
-        loadStatus.textContent = 'No big events tracked yet — add some from the Events panel.';
+        loadStatus.textContent =
+          'No notable events yet — check “Notable event” on a card in the Events panel.';
         return;
       }
       populate(data.items);
@@ -2572,6 +2788,7 @@ export async function mountSettingsPage(mount) {
   if (!mount) return;
 
   const { tbodyByGroup, status } = buildSettingsShell(mount, WINDOW_HOURS);
+  buildAwayBaseBlock(mount);
   buildSecondaryWatchBlock(mount);
   buildEventsFinderSourcesBlock(mount);
   buildGmailWeeklySummaryBlock(mount);

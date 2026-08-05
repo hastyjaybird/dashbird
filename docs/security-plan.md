@@ -3,7 +3,7 @@
 Dashbird runs in two modes:
 
 1. **LAN** ([`docker-compose.yml`](../docker-compose.yml)) — trusted home Wi‑Fi; no public port-forward of 8787.
-2. **Public cloud** (Vultr + DuckDNS — [`deploy-vultr.md`](deploy-vultr.md)) — HTTPS via Caddy with **HTTP basic auth** required; personal `data/` never in git.
+2. **Public cloud** (Vultr + jayhasty.com — [`deploy-vultr.md`](deploy-vultr.md)) — HTTPS via Caddy with **HTTP basic auth** required; personal `data/` never in git.
 
 ## 1) Ownership and review cadence
 
@@ -25,7 +25,7 @@ Dashbird runs in two modes:
 | Prompt-injected LLM output driving server fetches | Enrich `avatarImageUrl`/page URLs from the model pass the same public-URL guard before any fetch |
 | Secrets in logs/telemetry | Never log keys; ratings telemetry is non-PII |
 
-### Public cloud (`dashbird.duckdns.org` / later `jayhasty.com`)
+### Public cloud (`dashbird.jayhasty.com`)
 
 | Risk | Mitigation |
 |------|------------|

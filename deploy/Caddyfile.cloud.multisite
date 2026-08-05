@@ -1,15 +1,20 @@
-# Multi-site cutover: jayhasty.com (public) + portfolio (public) + dashbird (private).
+# Multi-site: jayhasty.com (portfolio) + portfolio alias + dashbird (private).
 # Activate at Part 3 of docs/jayhasty-setup.md:
 #   1. Set JAYHASTY_* / PORTFOLIO_* / DASHBOARD_DOMAIN in server .env
-#   2. Point docker-compose.cloud.yml caddy volumes at this file (or:
-#        cp deploy/Caddyfile.cloud.multisite deploy/Caddyfile.cloud)
-#   3. Ensure compose passes JAYHASTY_ROOT_DOMAIN + PORTFOLIO_DOMAIN and mounts
-#      ./deploy/jayhasty-coming-soon:/srv/jayhasty:ro
-#      ./deploy/jayhasty-portfolio-coming-soon:/srv/portfolio:ro
-#   4. docker compose -f docker-compose.cloud.yml up -d --force-recreate caddy
+#   2. cp deploy/Caddyfile.cloud.multisite deploy/Caddyfile.cloud
+#   3. Uncomment JAYHASTY_* env + /srv mounts in docker-compose.cloud.yml
+#   4. Publish site: (from portfolio) products/website → npm run build:deploy
+#   5. Sync dashbird + recreate caddy
 #
-# Do NOT enable while DNS still points at Squarespace — ACME will fail and can
-# burn Let's Encrypt rate limits. Keep deploy/Caddyfile.cloud (duckdns-only) until then.
+# Host map:
+#   jayhasty.com              → public portfolio (deploy/jayhasty-site)
+#   www.jayhasty.com          → redirect → apex
+#   portfolio.jayhasty.com    → same portfolio (alias)
+#   dashbird.jayhasty.com     → private Dashbird
+#   calclaim.jayhasty.com     → CalClaim Node app (container calclaim:3000)
+#
+# DNS must be grey-cloud (DNS only) to Vultr before ACME. Orange proxy causes 525
+# until origin has certs. Do NOT enable while DNS still points at Squarespace.
 
 {
 	email {$CADDY_EMAIL}
@@ -18,7 +23,7 @@
 	}
 }
 
-# Public root — coming soon
+# Public portfolio at apex
 {$JAYHASTY_ROOT_DOMAIN} www.{$JAYHASTY_ROOT_DOMAIN} {
 	encode zstd gzip
 
@@ -30,10 +35,11 @@
 	redir @www https://{$JAYHASTY_ROOT_DOMAIN}{uri} permanent
 
 	root * /srv/jayhasty
+	try_files {path} {path}/ /index.html
 	file_server
 }
 
-# Public portfolio placeholder (replace with app/static site later)
+# Alias — same static portfolio
 {$PORTFOLIO_DOMAIN} {
 	encode zstd gzip
 
@@ -41,8 +47,20 @@
 		Alt-Svc "clear"
 	}
 
-	root * /srv/portfolio
+	root * /srv/jayhasty
+	try_files {path} {path}/ /index.html
 	file_server
+}
+
+# Public CalClaim — Node app on dashbird_default (container name: calclaim)
+{$CALCLAIM_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Alt-Svc "clear"
+	}
+
+	reverse_proxy calclaim:3000
 }
 
 # Private Dashbird — basic auth + trusted-device bypass

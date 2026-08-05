@@ -37,6 +37,9 @@ data/meetup-events-cache.json
 data/multiverse-events-cache.json
 data/dorkbotsf-events-cache.json
 data/coolstuff-events-cache.json
+data/webpage-listings-events-cache.json
+data/events-finder-notable.json
+data/events-finder-series-watches.json
 data/luma-events-cache.json
 data/gcal-ics-events-cache.json
 data/telegram-events-offset.json
@@ -95,3 +98,8 @@ data/gmail-daily-summary-guide-feedback.json
 .cursor/*.jpg
 .cursor/*.webp
 .cursor/maptest/
+
+# Generated portfolio static export (publish from portfolio/products/website)
+# Source of truth: portfolio repo → npm run build:deploy
+deploy/jayhasty-site/
+data/away-base.json

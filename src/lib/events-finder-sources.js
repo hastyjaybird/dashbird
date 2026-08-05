@@ -7,6 +7,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gmailIntakeAddresses } from './events-finder-gmail.js';
+import { isWebpageListingHost } from './events-finder-webpage-listings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..', '..');
@@ -156,6 +157,29 @@ const HOST_STRATEGIES = {
     missingEvents:
       'Items without outbound links. Events only on other lists not linked from Cool Happenings.',
   },
+  'artisansasylum.com': {
+    host: 'artisansasylum.com',
+    strategy: 'public_pages',
+    strategyLabel: 'Public Google Calendar (ICS)',
+    strategyDetail:
+      'Class / community calendar page embeds public Google Calendars; Dashbird pulls the public basic.ics feeds (same pattern as Multiverse). Cached with other webpage listings.',
+    outputHint: 'Upcoming classes & shop nights: title, time, calendar page link.',
+    devStatus: 'Wired — public ICS from page',
+    devStatusKind: 'wired',
+    missingEvents:
+      'Members-only / Nexudus portal events. Items not on the embedded public calendars.',
+  },
+  'prescottmarket.com': {
+    host: 'prescottmarket.com',
+    strategy: 'public_pages',
+    strategyLabel: 'Public events page (HTML)',
+    strategyDetail:
+      'Fetches https://www.prescottmarket.com/events (Squarespace event list). Parses upcoming articles + times. Cached with other webpage listings.',
+    outputHint: 'Market / music / community events: title, start, event URL.',
+    devStatus: 'Wired — public HTML',
+    devStatusKind: 'wired',
+    missingEvents: 'Past events. Occurrences not listed on the public /events page.',
+  },
   'fetlife.com': {
     host: 'fetlife.com',
     strategy: 'login_walled',
@@ -217,6 +241,21 @@ function hostnameFromHref(href) {
 function strategyForHost(host) {
   const known = HOST_STRATEGIES[host];
   if (known) return known;
+  // Venue / community calendars added via Settings → + Event source.
+  if (isWebpageListingHost(host)) {
+    return {
+      host: host || 'unknown',
+      strategy: 'public_pages',
+      strategyLabel: 'Public events page (HTML / ICS)',
+      strategyDetail:
+        'Generic webpage listing ingest: Google Calendar public ICS embeds, Squarespace event lists, and JSON-LD Event blocks. Cached on disk with other webpage sources.',
+      outputHint: 'Upcoming events parsed from the bookmarked page.',
+      devStatus: 'Wired — webpage listing',
+      devStatusKind: 'wired',
+      missingEvents:
+        'Login-walled calendars, JS-only widgets without ICS/JSON-LD/eventlist markup, and events not listed on this URL.',
+    };
+  }
   return {
     host: host || 'unknown',
     strategy: 'unknown',

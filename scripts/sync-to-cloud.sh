@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Push local dashbird to a public VPS (Vultr Silicon Valley + DuckDNS).
+# Push local dashbird to a public VPS (Vultr Silicon Valley + jayhasty.com).
 # Usage:
 #   CLOUD_HOST=root@YOUR_SERVER_IP ./scripts/sync-to-cloud.sh
 # Optional:
@@ -78,6 +78,6 @@ echo "[dashbird] Remote rebuild + recreate (${COMPOSE_FILE})"
 ssh "$HOST" "cd '${REMOTE_DIR}' && docker compose -f '${COMPOSE_FILE}' up -d --build --force-recreate dashboard caddy"
 
 DOMAIN="$(ssh "$HOST" "grep -E '^DASHBOARD_DOMAIN=' '${REMOTE_DIR}/.env' 2>/dev/null | cut -d= -f2-" || true)"
-echo "[dashbird] Done. Open https://${DOMAIN:-dashbird.duckdns.org}/"
+echo "[dashbird] Done. Open https://${DOMAIN:-dashbird.jayhasty.com}/"
 echo "[dashbird] Hard-refresh the browser (or close the Big Events popout) so cached JS is not reused."
 echo "[dashbird] New tool Playwright snapshots: enrich on LAN, then SYNC_DATA=1 ./scripts/sync-to-cloud.sh"

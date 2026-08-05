@@ -61,7 +61,7 @@ export const SKY_TYPE_DATA_SOURCES = {
   aurora:
     'NOAA SWPC Ovation + planetary K at dashboard coordinates; calendar aurora rows dropped when live fetch works.',
   geomagnetic:
-    'NOAA SWPC noaa-scales.json + planetary K index; calendar geomagnetic rows dropped when live merge runs.',
+    'NOAA SWPC noaa-scales.json + peak planetary K (3h forecast product; 1m fallback); calendar geomagnetic rows dropped when live merge runs.',
   lunar_eclipse: 'Curated rows in src/data/sky-events-calendar.json (Time and Date / NASA-style sources).',
   solar_eclipse: 'Curated rows in src/data/sky-events-calendar.json.',
   annular_eclipse_world:
@@ -153,15 +153,17 @@ export const EARTH_EVENT_MANIFEST = [
   },
   {
     id: 'usgs_quake_week',
-    label: 'Earthquake (week)',
+    label: 'Earthquake (24h)',
     category: 'Earth',
-    dataSource: 'USGS FDSNWS · strongest CA M>3 within 150 mi of Oakland (7 days)',
+    dataSource:
+      'USGS FDSNWS · strongest CA M>3 within 150 mi of Oakland (24 hours after occurrence)',
   },
   {
     id: 'kilauea_volcano',
     label: 'Kīlauea (Hawaiʻi)',
     category: 'Earth',
-    dataSource: 'USGS HANS + HVO messages · eruption stats; nearby M>3 quake same format as local row',
+    dataSource:
+      'USGS HANS + HVO messages · active when fountaining or dated next-episode forecast; nearby M>3 quake same format as local row',
   },
   {
     id: 'goes_glm_lightning',

@@ -1,6 +1,6 @@
 # Hetzner / legacy VPS notes
 
-Active public deploy target is **Vultr Silicon Valley + DuckDNS** — see [`deploy-vultr.md`](deploy-vultr.md).
+Active public deploy target is **Vultr Silicon Valley + jayhasty.com** — see [`deploy-vultr.md`](deploy-vultr.md).
 
 Historical files (`docker-compose.hetzner.yml`, `deploy/env.hetzner.example`, `scripts/sync-to-hetzner.sh`) may still exist but are superseded by:
 

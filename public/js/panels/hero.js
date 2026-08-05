@@ -750,6 +750,11 @@ function fillSkyEventStrip(container, timeZone) {
 export function mountHero(root, config, options = {}) {
   const renderSkyStrip = options?.renderSkyStrip !== false;
   const skyStripMount = options?.skyStripMount ?? null;
+  const locationMode =
+    config?.locationMode === 'preview' || config?.locationMode === 'away'
+      ? config.locationMode
+      : 'home';
+  const awayOnly = config?.awayOnly === true || locationMode === 'away';
   let displayTz =
     typeof config.weatherTimeZone === 'string' && config.weatherTimeZone.trim() !== ''
       ? config.weatherTimeZone.trim()
@@ -759,6 +764,18 @@ export function mountHero(root, config, options = {}) {
 
   const cluster = document.createElement('div');
   cluster.className = 'hero-cluster';
+
+  if (locationMode === 'preview') {
+    const previewChip = document.createElement('p');
+    previewChip.className = 'hero-away-preview-chip';
+    previewChip.textContent = 'Preview — Away base (not on site)';
+    cluster.append(previewChip);
+  } else if (locationMode === 'away') {
+    const awayChip = document.createElement('p');
+    awayChip.className = 'hero-away-preview-chip hero-away-preview-chip--live';
+    awayChip.textContent = `Away · ${config.awayBase?.label || config.weatherPlace || 'destination'}`;
+    cluster.append(awayChip);
+  }
 
   const timeRow = document.createElement('div');
   timeRow.className = 'hero-time-row';
@@ -786,16 +803,31 @@ export function mountHero(root, config, options = {}) {
   citiesWrap.className = 'hero-cities';
 
   const initialPlace = getDevicePlace();
-  const here = buildCityBlock(primaryPlaceLabel(config, initialPlace));
+  const hereLabel =
+    locationMode === 'preview'
+      ? (typeof config.weatherPlace === 'string' && config.weatherPlace.trim()) ||
+        config.awayBase?.label ||
+        'Away'
+      : primaryPlaceLabel(config, initialPlace);
+  const here = buildCityBlock(hereLabel);
   const sep = document.createElement('div');
   sep.className = 'hero-cities-sep';
   sep.setAttribute('role', 'presentation');
   const secondaryLabel =
-    (typeof config.sfWeatherPlace === 'string' && config.sfWeatherPlace.trim()) ||
-    'San Francisco';
+    locationMode === 'preview'
+      ? (typeof config.homeBase?.label === 'string' && config.homeBase.label.trim()) ||
+        (typeof config.sfWeatherPlace === 'string' && config.sfWeatherPlace.trim()) ||
+        'Home'
+      : (typeof config.sfWeatherPlace === 'string' && config.sfWeatherPlace.trim()) ||
+        'San Francisco';
   const sf = buildCityBlock(secondaryLabel);
 
   citiesWrap.append(here.col, sep, sf.col);
+  if (awayOnly) {
+    sep.hidden = true;
+    sf.col.hidden = true;
+    citiesWrap.classList.add('hero-cities--away-only');
+  }
 
   let astro = null;
   if (renderSkyStrip) {
@@ -1000,6 +1032,20 @@ export function mountHero(root, config, options = {}) {
   }
 
   function placePointFromDevice(place) {
+    // Preview: always use Away base coords from config (ignore home GPS).
+    if (locationMode === 'preview') {
+      return {
+        lat: Number.isFinite(fallbackLat) ? fallbackLat : 40.7505,
+        lon: Number.isFinite(fallbackLon) ? fallbackLon : -73.9971,
+        label:
+          (typeof config.weatherPlace === 'string' && config.weatherPlace.trim()) ||
+          config.awayBase?.label ||
+          'Away',
+        placeLive: false,
+        zip: config.weatherZip,
+        timeZone: displayTz,
+      };
+    }
     const lat = Number(place?.lat);
     const lon = Number(place?.lon);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) {

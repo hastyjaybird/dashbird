@@ -1,5 +1,6 @@
 /**
- * Persist the Earth-strip earthquake row for two calendar days (dashboard timezone).
+ * Persist the Earth-strip earthquake row while it remains within 24 hours
+ * of the USGS event time.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -8,8 +9,8 @@ import { fileURLToPath } from 'node:url';
 const STORE_VERSION = 1;
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 
-/** Inclusive display window: first day + second day, then drop. */
-export const EARTHQUAKE_DISPLAY_CALENDAR_DAYS = 2;
+/** How long after the quake occurred the Earth-strip row stays active. */
+export const EARTHQUAKE_DISPLAY_MS = 24 * 60 * 60 * 1000;
 
 function storePathFromEnv(env = process.env) {
   const override = String(env.USGS_EARTHQUAKE_PIN_PATH || '').trim();

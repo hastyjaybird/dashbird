@@ -47,6 +47,9 @@ const HOST_TILE = {
   'facebook.com': '/assets/tile-facebook.svg',
   'chat.co': '/assets/tile-maxeta.png',
   'energia.pr.gov': '/assets/tile-preb.png',
+  'jayhasty.com': '/assets/tile-portfolio.svg',
+  'portfolio.jayhasty.com': '/assets/tile-portfolio.svg',
+  'calclaim.jayhasty.com': '/assets/tile-calclaim.png',
 };
 
 /** Files were once mis-suffixed `.png` but are WebP; fix old bookmark `icon` paths. */
@@ -234,6 +237,9 @@ const BOOKMARK_CACHE_MAX_MS = 7 * 24 * 60 * 60 * 1000;
 const AUTO_OPEN_SECTION_TITLES = new Set([
   'tools',
   'utilities',
+  'projects',
+  'deployed projects',
+  'local projects',
   'clients',
   'community',
   'social',

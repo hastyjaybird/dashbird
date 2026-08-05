@@ -24,8 +24,14 @@ import { fetchMeetupPinnedEvents } from '../lib/events-finder-meetup.js';
 import { fetchMultiverseSchoolEvents } from '../lib/events-finder-multiverse.js';
 import { fetchDorkbotsfEvents } from '../lib/events-finder-dorkbotsf.js';
 import { fetchCoolstuffEvents } from '../lib/events-finder-coolstuff.js';
+import { fetchWebpageListingEvents } from '../lib/events-finder-webpage-listings.js';
 import { withEventPrice } from '../lib/events-finder-price.js';
 import { fetchPublicPageEvents } from '../lib/events-finder-public-pages.js';
+import {
+  loadNotableEventsStore,
+  applyNotableToEvent,
+  isNotableHeadsUpActive,
+} from '../lib/events-finder-notable-store.js';
 import {
   annotateEventsWithSeriesInfo,
   countEventSeriesKeys,
@@ -127,6 +133,7 @@ function scheduleEventsFinderIngest(opts) {
         multiverse: { ok: true, events: [], fromCache: true },
         dorkbotsf: { ok: true, events: [], fromCache: true },
         coolstuff: { ok: true, events: [], fromCache: true },
+        webpageListings: { ok: true, events: [], fromCache: true },
         luma: { ok: true, events: [], fromCache: true },
         gcalIcs: { ok: true, events: [], fromCache: true },
         upserted: 0,
@@ -255,6 +262,15 @@ function scheduleEventsFinderIngest(opts) {
         })),
       ),
       take(
+        'webpageListings',
+        fetchWebpageListingEvents(process.env, { forceRefresh: force }).catch((e) => ({
+          ok: false,
+          events: [],
+          fromCache: false,
+          error: String(e?.message || e),
+        })),
+      ),
+      take(
         'luma',
         fetchLumaPinnedEvents(process.env).catch((e) => ({
           ok: false,
@@ -310,6 +326,7 @@ function scheduleEventsFinderIngest(opts) {
       multiverse: sources.multiverse || { ok: false, events: [] },
       dorkbotsf: sources.dorkbotsf || { ok: false, events: [] },
       coolstuff: sources.coolstuff || { ok: false, events: [] },
+      webpageListings: sources.webpageListings || { ok: false, events: [] },
       luma: sources.luma || { ok: false, events: [] },
       gcalIcs: sources.gcalIcs || { ok: false, events: [] },
       upserted,
@@ -406,7 +423,8 @@ router.get('/', async (req, res) => {
       // Synchronous fill for tooling only.
       const ingestPromise = scheduleEventsFinderIngest(ingestOpts);
       const coldMs = Number(process.env.EVENTS_FINDER_COLD_INGEST_MS);
-      const waitMs = Number.isFinite(coldMs) && coldMs >= 5000 ? coldMs : 45_000;
+      // Link-follow + multi-mailbox IMAP often exceeds 45s on cold intake.
+      const waitMs = Number.isFinite(coldMs) && coldMs >= 5000 ? coldMs : 120_000;
       try {
         ingest = await Promise.race([
           ingestPromise,
@@ -466,6 +484,12 @@ router.get('/', async (req, res) => {
       stale: ingestPending,
     };
     const coolstuff = ingest?.coolstuff || {
+      ok: true,
+      events: [],
+      fromCache: true,
+      stale: ingestPending,
+    };
+    const webpageListings = ingest?.webpageListings || {
       ok: true,
       events: [],
       fromCache: true,
@@ -654,6 +678,26 @@ router.get('/', async (req, res) => {
     filtered.sort(byClosest);
     skippedFeed.sort(bySkippedAtDesc);
 
+    const notableStore = await loadNotableEventsStore(process.env);
+    const now = new Date();
+    for (let i = 0; i < filtered.length; i += 1) {
+      const id = String(filtered[i]?.id || '');
+      const n = notableStore[id];
+      if (n) filtered[i] = applyNotableToEvent(filtered[i], n);
+    }
+    for (let i = 0; i < skippedFeed.length; i += 1) {
+      const id = String(skippedFeed[i]?.id || '');
+      const n = notableStore[id];
+      if (n) skippedFeed[i] = applyNotableToEvent(skippedFeed[i], n);
+    }
+    // Notable heads-up: pin flagged events inside the reminder window to the top.
+    filtered.sort((a, b) => {
+      const aHot = a?.notable && isNotableHeadsUpActive(notableStore[String(a.id || '')], a.start, now) ? 1 : 0;
+      const bHot = b?.notable && isNotableHeadsUpActive(notableStore[String(b.id || '')], b.start, now) ? 1 : 0;
+      if (aHot !== bHot) return bHot - aHot;
+      return byClosest(a, b);
+    });
+
     let store = null;
     try {
       store = {
@@ -760,6 +804,17 @@ router.get('/', async (req, res) => {
           pageUrl: coolstuff.pageUrl || null,
           count: Array.isArray(coolstuff.events) ? coolstuff.events.length : 0,
         },
+        webpageListings: {
+          ok: webpageListings.ok === true,
+          error: webpageListings.error || null,
+          fromCache: webpageListings.fromCache === true,
+          stale: webpageListings.stale === true,
+          cachedAt: webpageListings.cachedAt || null,
+          pins: Array.isArray(webpageListings.pins) ? webpageListings.pins.length : 0,
+          pagesOk: webpageListings.pagesOk ?? 0,
+          pagesFailed: webpageListings.pagesFailed ?? 0,
+          count: Array.isArray(webpageListings.events) ? webpageListings.events.length : 0,
+        },
         luma: {
           ok: luma.ok === true,
           error: luma.error || null,
@@ -791,6 +846,7 @@ router.get('/', async (req, res) => {
       ingestWindow: eventsIngestWindowDays(process.env, { scrape: criteria.scrape }),
       conferenceWatchlistItems: conferenceHeadsUpPack.items,
       conferenceWatchlist: conferenceHeadsUpPack.watchlist,
+      notableEventIds: Object.keys(notableStore),
       events: filtered,
       skippedEvents: skippedFeed,
       skippedCount: skippedRecords.length,

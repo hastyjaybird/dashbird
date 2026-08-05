@@ -495,38 +495,46 @@ export async function buildEarthEventTypesSlow() {
   if (quakeBuilt.ok && quakeBuilt.item) {
     rows.push({
       id: 'usgs_quake_week',
-      label: 'Earthquake (week)',
+      label: 'Earthquake (24h)',
       category: 'Earth',
       active: true,
       value: `${quakeBuilt.item.label} — ${quakeBuilt.item.detailLine}`,
-      dataSource: 'USGS FDSNWS · strongest CA M>3 within 150 mi of Oakland (7 days)',
+      dataSource: 'USGS FDSNWS · strongest CA M>3 within 150 mi of Oakland (24 hours after occurrence)',
     });
   } else {
     rows.push({
       id: 'usgs_quake_week',
-      label: 'Earthquake (week)',
+      label: 'Earthquake (24h)',
       category: 'Earth',
       active: false,
       value: quakeBuilt.ok
-        ? 'No California M>3 earthquake within 150 mi of Oakland in the past 7 days'
+        ? 'No California M>3 earthquake within 150 mi of Oakland in the past 24 hours'
         : `Unavailable (${quakeBuilt.error || 'fetch failed'})`,
-      dataSource: 'USGS FDSNWS · strongest CA M>3 within 150 mi of Oakland (7 days)',
+      dataSource: 'USGS FDSNWS · strongest CA M>3 within 150 mi of Oakland (24 hours after occurrence)',
     });
   }
 
-  if (kilaueaBuilt.ok && Array.isArray(kilaueaBuilt.items) && kilaueaBuilt.items.length) {
-    const volcano = kilaueaBuilt.items.find((it) => it.earthType === 'kilauea_volcano');
-    const kQuake = kilaueaBuilt.items.find((it) => it.earthType === 'kilauea_quake');
+  if (kilaueaBuilt.ok && !kilaueaBuilt.disabled) {
+    const volcano = Array.isArray(kilaueaBuilt.items)
+      ? kilaueaBuilt.items.find((it) => it.earthType === 'kilauea_volcano')
+      : null;
+    const kQuake = Array.isArray(kilaueaBuilt.items)
+      ? kilaueaBuilt.items.find((it) => it.earthType === 'kilauea_quake')
+      : null;
     const bits = [];
     if (volcano) bits.push(`${volcano.label} — ${volcano.detailLine}`);
     if (kQuake) bits.push(`${kQuake.label} — ${kQuake.detailLine}`);
+    const volcanoActive = Boolean(volcano) || kilaueaBuilt.status?.active === true;
     rows.push({
       id: 'kilauea_volcano',
       label: 'Kīlauea (Hawaiʻi)',
       category: 'Earth',
-      active: true,
-      value: bits.join(' · ') || 'Active',
-      dataSource: 'USGS HANS + HVO messages · eruption stats; nearby M>3 quake same format as local row',
+      active: volcanoActive || Boolean(kQuake),
+      value:
+        bits.join(' · ') ||
+        'Inactive — not fountaining and no dated next-episode forecast',
+      dataSource:
+        'USGS HANS + HVO messages · active when fountaining or dated next-episode forecast; nearby M>3 quake same format as local row',
     });
   } else {
     rows.push({
@@ -537,9 +545,10 @@ export async function buildEarthEventTypesSlow() {
       value: kilaueaBuilt.ok
         ? kilaueaBuilt.disabled
           ? 'Disabled (EARTH_KILAUEA=0)'
-          : 'No elevated alert / M>3 summit quake right now'
+          : 'Inactive — not fountaining and no dated next-episode forecast'
         : `Unavailable (${kilaueaBuilt.error || 'fetch failed'})`,
-      dataSource: 'USGS HANS + HVO messages · eruption stats; nearby M>3 quake same format as local row',
+      dataSource:
+        'USGS HANS + HVO messages · active when fountaining or dated next-episode forecast; nearby M>3 quake same format as local row',
     });
   }
 

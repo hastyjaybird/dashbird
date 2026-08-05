@@ -4,6 +4,9 @@ import {
   loadLocalNewsState,
   saveLocalNewsState,
   seedBootstrapArticlesIfNeeded,
+  loadFeedDirectory,
+  groupFeedsByPublisher,
+  findDirectoryFeed,
 } from '../lib/local-news-store.js';
 import { generateSuggestion, localNewsSuggestionsEnabled, promoteDeferredSuggestionIfDue, LOCAL_NEWS_SUGGESTION_INTERVAL_MS } from '../lib/local-news-scheduler.js';
 import { fetchLocalNewsFeed } from '../lib/local-news-fetch.js';
@@ -275,17 +278,18 @@ router.post('/suggestion/respond', async (req, res) => {
     } else {
       if (!state.declinedIds.includes(pending.feed.id)) state.declinedIds.push(pending.feed.id);
     }
+    // Clear and cool down — do not immediately queue another subscribe prompt.
+    // The 4h scheduler (or "Suggest another feed") surfaces the next candidate.
+    const now = new Date().toISOString();
     state.pendingSuggestion = null;
+    state.lastSuggestionAt = now;
     await saveLocalNewsState(state);
-
-    const nextMode = state.subscriptions.length ? 'similar' : 'fresh';
-    const { state: withNext } = await generateSuggestion(nextMode);
 
     res.setHeader('Cache-Control', 'private, no-store');
     res.json({
       ok: true,
-      subscriptions: withNext.subscriptions,
-      pendingSuggestion: withNext.pendingSuggestion,
+      subscriptions: state.subscriptions,
+      pendingSuggestion: null,
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
@@ -378,6 +382,58 @@ router.get('/suggestion/preview', async (_req, res) => {
       },
       articles,
     });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+router.get('/directory', async (_req, res) => {
+  try {
+    const state = await loadLocalNewsState();
+    const directory = await loadFeedDirectory();
+    const subscribedIds = new Set(state.subscriptions.map((f) => f.id));
+    const publishers = groupFeedsByPublisher(directory, {
+      subscribedIds,
+      declinedIds: state.declinedIds,
+    });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({
+      ok: true,
+      publishers,
+      subscriptions: state.subscriptions,
+      pendingSuggestion: state.pendingSuggestion,
+      declinedIds: state.declinedIds,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+router.post('/subscriptions', async (req, res) => {
+  try {
+    const feedId = String(req.body?.feedId || req.body?.id || '').trim();
+    if (!feedId) {
+      res.status(400).json({ ok: false, error: 'missing_feed_id' });
+      return;
+    }
+    const feed = await findDirectoryFeed(feedId);
+    if (!feed) {
+      res.status(404).json({ ok: false, error: 'feed_not_found' });
+      return;
+    }
+    const state = await loadLocalNewsState();
+    if (!state.subscriptions.some((f) => f.id === feed.id)) {
+      state.subscriptions.push({ ...feed, subscribedAt: new Date().toISOString() });
+    }
+    state.declinedIds = (state.declinedIds || []).filter((id) => id !== feed.id);
+    if (state.pendingSuggestion?.feed?.id === feed.id) {
+      state.pendingSuggestion = null;
+      state.lastSuggestionAt = new Date().toISOString();
+    }
+    await saveLocalNewsState(state);
+    articleCache.delete(feed.id);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: true, subscriptions: state.subscriptions, feed });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }

@@ -596,7 +596,8 @@ export function mountEventsFinderMobile(root) {
   conferenceToggle.className = 'mobile-events__conferences-toggle';
   conferenceToggle.setAttribute('aria-expanded', 'false');
   conferenceToggle.setAttribute('aria-haspopup', 'dialog');
-  conferenceToggle.textContent = 'Big events';
+  conferenceToggle.textContent = 'Event sources';
+  conferenceToggle.title = 'Websites to scrape for regular events';
 
   const conferenceInput = document.createElement('textarea');
   conferenceInput.className = 'mobile-events__conferences-input';
@@ -693,7 +694,7 @@ export function mountEventsFinderMobile(root) {
 
   function syncConferenceToggleLabel() {
     const count = readConferenceWatchlistFromForm().length;
-    conferenceToggle.textContent = count > 0 ? `Big events (${count})` : 'Big events';
+    conferenceToggle.textContent = count > 0 ? `Event sources (${count})` : 'Event sources';
   }
 
   /**
@@ -1192,401 +1193,94 @@ export function mountEventsFinderMobile(root) {
 
   function openConferenceWatchlistPopout() {
     const wrap = document.createElement('div');
-    wrap.className = 'events-finder__big-events events-finder__big-events--mobile';
-
-    const addBar = document.createElement('div');
-    addBar.className = 'events-finder__big-events-addbar';
-    const addToggle = document.createElement('button');
-    addToggle.type = 'button';
-    addToggle.className = 'events-finder__big-events-add';
-    addToggle.textContent = '+ Add event';
-    addBar.append(addToggle);
-
-    const form = document.createElement('div');
-    form.className = 'events-finder__big-events-form';
-    form.hidden = true;
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'events-finder__big-events-input';
-    input.placeholder = 'e.g. open sauce';
-    input.autocomplete = 'off';
-    const urlInput = document.createElement('input');
-    urlInput.type = 'url';
-    urlInput.className = 'events-finder__big-events-input events-finder__big-events-input--url';
-    urlInput.placeholder = 'Event URL (optional — paste if you already have it)';
-    urlInput.autocomplete = 'off';
-    const searchBtn = document.createElement('button');
-    searchBtn.type = 'button';
-    searchBtn.className = 'events-finder__big-events-search';
-    searchBtn.textContent = 'Search';
-    const manualBtn = document.createElement('button');
-    manualBtn.type = 'button';
-    manualBtn.className = 'events-finder__big-events-again';
-    manualBtn.textContent = 'Add manually';
-    manualBtn.title = 'Skip search — add by name (and optional URL), then fill details in Edit';
-    const addUrlBtn = document.createElement('button');
-    addUrlBtn.type = 'button';
-    addUrlBtn.className = 'events-finder__big-events-again';
-    addUrlBtn.textContent = 'Add URL';
-    addUrlBtn.title = 'Paste the official event page URL — no web search';
-    form.append(input, searchBtn, manualBtn, addUrlBtn, urlInput);
-
+    wrap.className = 'events-finder__event-sources';
+    const intro = document.createElement('p');
+    intro.className = 'muted';
+    intro.textContent = 'Websites scraped into the regular Events feed.';
+    const list = document.createElement('ul');
+    list.className = 'events-finder__event-sources-list';
     const msg = document.createElement('p');
     msg.className = 'events-finder__big-events-msg muted';
-    msg.hidden = true;
+    const labelInput = document.createElement('input');
+    labelInput.className = 'events-finder__big-events-input';
+    labelInput.placeholder = 'Label';
+    const urlInput = document.createElement('input');
+    urlInput.className = 'events-finder__big-events-input events-finder__big-events-input--url';
+    urlInput.placeholder = 'https://…/events';
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'events-finder__big-events-confirm';
+    addBtn.textContent = 'Add website';
+    const rescrapeBtn = document.createElement('button');
+    rescrapeBtn.type = 'button';
+    rescrapeBtn.className = 'events-finder__big-events-again';
+    rescrapeBtn.textContent = 'Re-scrape listings';
+    wrap.append(intro, labelInput, urlInput, addBtn, rescrapeBtn, msg, list);
 
-    const preview = document.createElement('div');
-    preview.className = 'events-finder__big-events-preview';
-    preview.hidden = true;
-
-    const list = document.createElement('div');
-    list.className = 'events-finder__big-events-list';
-    conferencePopoutStatusList = list;
-    paintBigEventsTable(conferenceWatchItemsFromPayload(), list);
-    // Always confirm against the persistent store so a stale/empty feed payload
-    // never leaves the list looking wiped after a refresh or deploy.
-    void refreshBigEventsFromStore();
-
-    wrap.append(addBar, form, msg, preview, list);
-
-    /** @type {{ query: string, url: string|null, homepageUrl?: string|null, ticketUrl?: string|null, screenshotPath?: string|null, manual?: boolean }|null} */
-    let pendingPreview = null;
-
-    function setMsg(text, kind) {
-      msg.hidden = !text;
-      msg.textContent = text || '';
-      msg.className = `events-finder__big-events-msg${kind ? ` events-finder__big-events-msg--${kind}` : ' muted'}`;
-    }
-
-    /** Prefix a bare host with https:// so a pasted URL is usable. */
-    function normalizeManualUrl(raw) {
-      const v = String(raw || '').trim();
-      if (!v) return '';
-      return /^https?:\/\//i.test(v) ? v : `https://${v}`;
-    }
-
-    /** Derive a short label from a pasted event URL (e.g. coolstuff.ju.mp → coolstuff). */
-    function deriveQueryFromUrl(raw) {
-      const url = normalizeManualUrl(raw);
-      if (!url) return '';
-      try {
-        const u = new URL(url);
-        const host = u.hostname.replace(/^www\./, '');
-        const slug = host.split('.')[0] || host;
-        return slug.replace(/[-_]+/g, ' ').trim() || host;
-      } catch {
-        return '';
-      }
-    }
-
-    function looksLikeHttpUrl(raw) {
-      const v = String(raw || '').trim();
-      return /^https?:\/\//i.test(v) || /^[\w.-]+\.(?:com|org|net|io|mp|edu|gov|co|me|school|dance|space)(?:\/|$)/i.test(v);
-    }
-
-    function resetAddFlow() {
-      form.hidden = true;
-      addToggle.hidden = false;
-      preview.hidden = true;
-      preview.replaceChildren();
-      pendingPreview = null;
-      input.value = '';
-      urlInput.value = '';
-      setMsg('');
-    }
-
-    /**
-     * Skip web search — add by name (optional URL). Use for invite-only /
-     * unlisted events that search cannot find.
-     */
-    function startManualAdd() {
-      let query = input.value.trim();
-      const manualUrl = normalizeManualUrl(urlInput.value) || null;
-      if (!query && manualUrl) query = deriveQueryFromUrl(manualUrl) || manualUrl;
-      if (!query) {
-        input.focus();
+    function paint(sources) {
+      list.replaceChildren();
+      const n = sources.length;
+      conferenceToggle.textContent = n > 0 ? `Event sources (${n})` : 'Event sources';
+      if (!sources.length) {
+        const li = document.createElement('li');
+        li.className = 'muted';
+        li.textContent = 'No scrape websites yet.';
+        list.append(li);
         return;
       }
-      input.value = query;
-      pendingPreview = {
-        query,
-        url: manualUrl,
-        homepageUrl: manualUrl,
-        ticketUrl: null,
-        manual: true,
-      };
-      renderPreview({
-        name: query,
-        query,
-        url: manualUrl,
-        homepageUrl: manualUrl,
-        urlFound: Boolean(manualUrl),
-        manual: true,
-        deep: true,
-        candidates: [],
-        confident: true,
-      });
-      setMsg('');
-    }
-
-    function submitAdd() {
-      void runSearch();
-    }
-
-    async function runSearch(deep = false) {
-      const query = input.value.trim();
-      if (!query) {
-        input.focus();
-        return;
+      for (const src of sources) {
+        const li = document.createElement('li');
+        li.className = 'events-finder__event-sources-item';
+        const a = document.createElement('a');
+        a.href = String(src.url || '#');
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.textContent = String(src.label || src.url || 'Source');
+        li.append(a);
+        list.append(li);
       }
-      searchBtn.disabled = true;
-      searchBtn.textContent = 'Searching…';
-      setMsg(deep ? 'Digging deeper for the official site…' : 'Searching the web for the official site…');
-      preview.hidden = true;
-      preview.replaceChildren();
+    }
+
+    addBtn.addEventListener('click', async () => {
+      const raw = String(urlInput.value || '').trim();
+      const href = /^https?:\/\//i.test(raw) ? raw : raw ? `https://${raw}` : '';
+      const label = labelInput.value.trim() || 'Event source';
+      if (!href) return;
       try {
-        const res = await fetch('/api/events-finder/big-events/search', {
+        const res = await fetch('/api/events-finder-sources', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, deep }),
+          body: JSON.stringify({ label, url: href }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        const candidates = Array.isArray(data.preview?.candidates) ? data.preview.candidates : [];
-        const pickUrl = data.preview?.homepageUrl || data.preview?.url || candidates[0]?.url || null;
-        pendingPreview = {
-          query,
-          url: pickUrl,
-          homepageUrl: pickUrl,
-          ticketUrl: data.preview?.ticketUrl || null,
-        };
-        renderPreview({ ...(data.preview || {}), deep, candidates });
-        setMsg('');
+        if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+        labelInput.value = '';
+        urlInput.value = '';
+        paint(Array.isArray(data.sources) ? data.sources : []);
+        msg.textContent = 'Added.';
       } catch (e) {
-        setMsg(`Search failed: ${String(e?.message || e)}`, 'error');
-      } finally {
-        searchBtn.disabled = false;
-        searchBtn.textContent = 'Search';
+        msg.textContent = String(e?.message || e);
       }
-    }
-
-    function renderPreview(p) {
-      preview.replaceChildren();
-      preview.hidden = false;
-      const isManual = p.manual === true || pendingPreview?.manual === true;
-      const nameEl = document.createElement('p');
-      nameEl.className = 'events-finder__big-events-preview-name';
-      nameEl.textContent = String(p.name || p.query || '');
-      preview.append(nameEl);
-
-      const candidates = Array.isArray(p.candidates)
-        ? p.candidates.filter((c) => c && c.url)
-        : [];
-      const unsure = !isManual && p.confident !== true && candidates.length >= 2;
-      const urlFound = Boolean(p.url) || candidates.length > 0;
-
-      if (isManual) {
-        const hint = document.createElement('p');
-        hint.className = 'events-finder__big-events-preview-hint muted';
-        hint.textContent = urlFound
-          ? 'Manual add — will scrape this URL for details (no web search).'
-          : 'Manual add — no site yet. Add it, then use Edit to fill dates, price, and a URL.';
-        preview.append(hint);
-        if (urlFound) {
-          const link = document.createElement('a');
-          link.className = 'events-finder__big-events-preview-url';
-          link.href = String(p.url || '');
-          link.target = '_blank';
-          link.rel = 'noopener noreferrer';
-          link.textContent = String(p.url || '');
-          preview.append(link);
-        }
-      } else if (unsure) {
-        const hint = document.createElement('p');
-        hint.className = 'events-finder__big-events-preview-hint muted';
-        hint.textContent = 'Not sure which site is official — pick one:';
-        preview.append(hint);
-        const list = document.createElement('div');
-        list.className = 'events-finder__big-events-candidates';
-        list.setAttribute('role', 'radiogroup');
-        list.setAttribute('aria-label', 'Official site candidates');
-        const selected = String(pendingPreview?.homepageUrl || pendingPreview?.url || candidates[0].url);
-        candidates.forEach((c, i) => {
-          const label = document.createElement('label');
-          label.className = 'events-finder__big-events-candidate';
-          const radio = document.createElement('input');
-          radio.type = 'radio';
-          radio.name = 'big-event-site-candidate-mobile';
-          radio.value = String(c.url);
-          radio.checked = String(c.url) === selected || (!selected && i === 0);
-          radio.addEventListener('change', () => {
-            if (!pendingPreview || !radio.checked) return;
-            pendingPreview.url = String(c.url);
-            pendingPreview.homepageUrl = String(c.url);
-          });
-          const body = document.createElement('span');
-          body.className = 'events-finder__big-events-candidate-body';
-          const title = document.createElement('span');
-          title.className = 'events-finder__big-events-candidate-title';
-          title.textContent = String(c.title || c.url);
-          const link = document.createElement('a');
-          link.className = 'events-finder__big-events-candidate-url';
-          link.href = String(c.url);
-          link.target = '_blank';
-          link.rel = 'noopener noreferrer';
-          link.textContent = String(c.url);
-          link.addEventListener('click', (e) => e.stopPropagation());
-          body.append(title, link);
-          label.append(radio, body);
-          list.append(label);
-        });
-        preview.append(list);
-        if (pendingPreview && !pendingPreview.homepageUrl) {
-          pendingPreview.url = String(candidates[0].url);
-          pendingPreview.homepageUrl = String(candidates[0].url);
-        }
-      } else if (urlFound) {
-        const link = document.createElement('a');
-        link.className = 'events-finder__big-events-preview-url';
-        link.href = String(p.url || candidates[0]?.url || '');
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        link.textContent = String(p.url || candidates[0]?.url || '');
-        preview.append(link);
-      } else {
-        const noUrl = document.createElement('p');
-        noUrl.className = 'events-finder__big-events-preview-url muted';
-        noUrl.textContent = p.deep
-          ? 'Still no official site found. Add anyway, or switch to manual and paste a URL.'
-          : 'No official site found — try “Search deeper”, or add manually.';
-        preview.append(noUrl);
-      }
-      if (!isManual && p.ticketUrl && p.ticketUrl !== (pendingPreview?.url || p.url)) {
-        const tlink = document.createElement('a');
-        tlink.className = 'events-finder__big-events-preview-url events-finder__big-events-preview-tickets';
-        tlink.href = String(p.ticketUrl);
-        tlink.target = '_blank';
-        tlink.rel = 'noopener noreferrer';
-        tlink.textContent = 'Tickets ↗';
-        preview.append(tlink);
-      }
-      const actions = document.createElement('div');
-      actions.className = 'events-finder__big-events-preview-actions';
-      const confirmBtn = document.createElement('button');
-      confirmBtn.type = 'button';
-      confirmBtn.className = 'events-finder__big-events-confirm';
-      confirmBtn.textContent = isManual
-        ? 'Add event'
-        : unsure
-          ? 'Add selected'
-          : 'Add event';
-      confirmBtn.addEventListener('click', () => void confirmAdd(confirmBtn));
-      actions.append(confirmBtn);
-      if (!isManual && (!urlFound || unsure) && !p.deep) {
-        const deeperBtn = document.createElement('button');
-        deeperBtn.type = 'button';
-        deeperBtn.className = 'events-finder__big-events-again';
-        deeperBtn.textContent = 'Search deeper';
-        deeperBtn.addEventListener('click', () => void runSearch(true));
-        actions.append(deeperBtn);
-      }
-      if (!isManual && (unsure || !urlFound)) {
-        const noneBtn = document.createElement('button');
-        noneBtn.type = 'button';
-        noneBtn.className = 'events-finder__big-events-again';
-        noneBtn.textContent = unsure ? 'None of these' : 'Add manually';
-        noneBtn.title = 'Skip these results — add by name (optional URL)';
-        noneBtn.addEventListener('click', () => {
-          urlInput.value = '';
-          startManualAdd();
-          urlInput.focus();
-        });
-        actions.append(noneBtn);
-      }
-      const againBtn = document.createElement('button');
-      againBtn.type = 'button';
-      againBtn.className = 'events-finder__big-events-again';
-      againBtn.textContent = isManual ? 'Cancel' : 'Edit search';
-      againBtn.addEventListener('click', () => {
-        preview.hidden = true;
-        preview.replaceChildren();
-        pendingPreview = null;
-        input.focus();
-        input.select();
-      });
-      actions.append(againBtn);
-      preview.append(actions);
-    }
-
-    async function confirmAdd(btn) {
-      if (!pendingPreview) return;
-      btn.disabled = true;
-      btn.textContent = 'Adding…';
-      const wasManual = pendingPreview.manual === true;
-      const hadUrl = Boolean(pendingPreview.url || pendingPreview.homepageUrl);
+    });
+    rescrapeBtn.addEventListener('click', async () => {
       try {
-        const res = await fetch('/api/events-finder/big-events/add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(pendingPreview),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        resetAddFlow();
-        if (wasManual && !hadUrl) {
-          setMsg('Added — open Edit on the row to fill dates, price, and a URL.');
-        } else {
-          setMsg('Added — looking up dates, price, and early bird…');
-        }
-        setTimeout(() => setMsg(''), 8000);
-        reloadBigEventsSoon();
+        await fetch('/api/events-finder-sources/rescrape', { method: 'POST' });
+        msg.textContent = 'Cache cleared — refresh the feed.';
       } catch (e) {
-        btn.disabled = false;
-        btn.textContent = 'Add event';
-        setMsg(`Could not add: ${String(e?.message || e)}`, 'error');
+        msg.textContent = String(e?.message || e);
       }
-    }
+    });
 
-    addToggle.addEventListener('click', () => {
-      form.hidden = false;
-      addToggle.hidden = true;
-      input.focus();
-    });
-    searchBtn.addEventListener('click', () => submitAdd());
-    manualBtn.addEventListener('click', () => startManualAdd());
-    addUrlBtn.addEventListener('click', () => {
-      const manualUrl = normalizeManualUrl(urlInput.value);
-      if (!manualUrl) {
-        urlInput.focus();
-        return;
-      }
-      if (!input.value.trim()) input.value = deriveQueryFromUrl(manualUrl) || manualUrl;
-      startManualAdd();
-    });
-    input.addEventListener('input', () => {
-      const v = input.value.trim();
-      if (!looksLikeHttpUrl(v)) return;
-      urlInput.value = normalizeManualUrl(v);
-      input.value = '';
-      urlInput.focus();
-    });
-    const onAddEnter = (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        if (document.activeElement === urlInput) startManualAdd();
-        else submitAdd();
-      }
-    };
-    input.addEventListener('keydown', onAddEnter);
-    urlInput.addEventListener('keydown', onAddEnter);
-
-    openConferencePopout({
-      title: 'Big events',
-      body: wrap,
-      onClose: () => {
-        conferencePopoutStatusList = null;
-      },
-    });
+    openConferencePopout({ title: 'Event sources', body: wrap });
+    void fetch('/api/events-finder-sources', { cache: 'no-store' })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+        paint(Array.isArray(data.sources) ? data.sources : []);
+      })
+      .catch((e) => {
+        msg.textContent = String(e?.message || e);
+      });
   }
 
   conferenceToggle.addEventListener('click', () => {
@@ -3250,13 +2944,51 @@ export function mountEventsFinderMobile(root) {
       siteBtn.addEventListener('click', (e) => e.stopPropagation());
       actions.append(siteBtn);
     }
+
+    /** @type {HTMLElement | null} */
+    let notableRow = null;
+    if (!showSkipped && eventId) {
+      const isNotable = ev.notable === true;
+      if (isNotable) card.classList.add('events-finder__card--notable');
+      notableRow = document.createElement('label');
+      notableRow.className = 'events-finder__card-notable';
+      const notableCb = document.createElement('input');
+      notableCb.type = 'checkbox';
+      notableCb.checked = isNotable;
+      notableCb.addEventListener('click', (e) => e.stopPropagation());
+      notableCb.addEventListener('change', async () => {
+        try {
+          const res = await fetch(`/api/events-finder/notable/${encodeURIComponent(eventId)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(
+              notableCb.checked
+                ? { notable: true, reminderLeadWeeks: 4 }
+                : { notable: false },
+            ),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+          void loadEvents();
+        } catch (err) {
+          notableCb.checked = !notableCb.checked;
+          window.alert(`Could not update notable: ${String(err?.message || err)}`);
+        }
+      });
+      const notableText = document.createElement('span');
+      notableText.textContent = 'Notable event';
+      notableRow.append(notableCb, notableText);
+      notableRow.addEventListener('click', (e) => e.stopPropagation());
+    }
+
     body.append(head, meta, priceEl, actions);
+    if (notableRow) body.append(notableRow);
     row.append(icon, body);
     card.append(row);
 
     if (eventUrl) {
       card.addEventListener('click', (e) => {
-        if (e.target instanceof Element && e.target.closest('a, button')) return;
+        if (e.target instanceof Element && e.target.closest('a, button, label, input')) return;
         window.open(eventUrl, '_blank', 'noopener,noreferrer');
       });
     }
@@ -3351,14 +3083,7 @@ export function mountEventsFinderMobile(root) {
     lastFilteredEvents = events;
     if (mapBackdrop) void syncMap(events, data);
 
-    const bigEventItems = Array.isArray(data?.conferenceWatchlistItems)
-      ? data.conferenceWatchlistItems
-      : [];
-    const activeBigEvents = showSkipped
-      ? []
-      : bigEventItems.filter(
-          (it) => it && it.displayActive && !it.researching && !it.skipped && !it.snoozed,
-        );
+    const activeBigEvents = [];
 
     list.replaceChildren();
     refreshConferencePopoutIfOpen();
@@ -3370,9 +3095,6 @@ export function mountEventsFinderMobile(root) {
       return;
     }
     status.hidden = true;
-    for (const item of activeBigEvents) {
-      list.append(buildBigEventCard(item));
-    }
     for (const ev of events) {
       list.append(buildCard(ev));
     }

@@ -269,7 +269,9 @@ export async function fetchHtml(url, timeoutMs = 12000) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
+    const { assertPublicHttpUrl } = await import('./public-http-url.js');
+    const safe = await assertPublicHttpUrl(url);
+    const res = await fetch(safe, {
       signal: ac.signal,
       redirect: 'follow',
       headers: {
@@ -278,7 +280,7 @@ export async function fetchHtml(url, timeoutMs = 12000) {
       },
     });
     const html = await res.text();
-    return { ok: res.ok, status: res.status, html, finalUrl: res.url || url };
+    return { ok: res.ok, status: res.status, html, finalUrl: res.url || safe };
   } catch (e) {
     return { ok: false, status: 0, html: '', finalUrl: url, err: String(e?.message || e) };
   } finally {
@@ -301,13 +303,42 @@ export async function fetchNormalizedEventFromUrl(url, source = 'eventbrite', ti
   if (!page.ok || !page.html) return null;
   const pageUrl = page.finalUrl || href;
   const events = parsePublicEventHtml(page.html, source, pageUrl);
-  if (!events.length) return null;
-  const withStart = events.find((e) => e?.start);
-  const best = withStart || events[0];
+  let best = events.find((e) => e?.start) || events[0] || null;
+
+  // WithJoy (and similar) hide dates in client JSON — recover via loose HTML scrape.
+  if ((!best?.start) && /withjoy\.com/i.test(pageUrl + href)) {
+    try {
+      const { scrapeLooseEventFields } = await import('./events-finder-email-link-follow.js');
+      const { guessEventStartIso } = await import('./events-finder-gmail.js');
+      const loose = scrapeLooseEventFields(page.html, guessEventStartIso);
+      if (loose.start) {
+        best = {
+          ...(best || {}),
+          id: best?.id || `withjoy:${Buffer.from(pageUrl).toString('base64url').slice(0, 48)}`,
+          title:
+            (best?.title && !/you.?ve got a card/i.test(best.title) ? best.title : null)
+            || loose.title
+            || best?.title
+            || null,
+          start: loose.start,
+          end: best?.end || null,
+          venue: loose.venue || best?.venue || null,
+          city: loose.city || best?.city || null,
+          url: pageUrl.split('#')[0],
+          source: source || 'withjoy',
+          raw: { ...(best?.raw || {}), via: 'withjoy_loose_html' },
+        };
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (!best) return null;
   if (best && pageUrl && (!best.url || /eventbrite\.com\/?$/i.test(String(best.url)))) {
     best.url = pageUrl.split('#')[0];
   }
-  return best || null;
+  return best;
 }
 
 /**
@@ -521,7 +552,20 @@ function partifulExploreEventToNormalized(ev) {
  * @returns {Promise<{ events: object[], ok: boolean, url: string, error?: string }>}
  */
 export async function fetchPartifulExploreListing(env = process.env) {
-  const region = String(env.PARTIFUL_EXPLORE_REGION || PARTIFUL_EXPLORE_REGION)
+  let regionOverride = '';
+  try {
+    const { resolveActiveLocation } = await import('./resolve-active-location.js');
+    const active = await resolveActiveLocation({ env });
+    if (
+      (active.mode === 'preview' || active.mode === 'away') &&
+      active.events?.partifulRegion
+    ) {
+      regionOverride = String(active.events.partifulRegion).trim();
+    }
+  } catch {
+    /* keep env/default */
+  }
+  const region = String(regionOverride || env.PARTIFUL_EXPLORE_REGION || PARTIFUL_EXPLORE_REGION)
     .trim()
     .toLowerCase() || PARTIFUL_EXPLORE_REGION;
   const url = `https://partiful.com/explore/${region}`;

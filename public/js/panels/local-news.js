@@ -276,18 +276,49 @@ function renderSuggestionBlock(root, suggestion, opts) {
 
 /**
  * @param {HTMLElement} root
- * @param {() => void} onFresh
+ * @param {object} suggestion
+ * @param {{ onAdd: (feedId: string) => void | Promise<void>, onDecline: () => void | Promise<void>, busy: boolean }} opts
  */
-function renderNoSuggestionRow(root, onFresh) {
-  const row = document.createElement('div');
-  row.className = 'local-news__no-suggestion';
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'local-news__btn local-news__btn--fresh';
-  btn.textContent = 'Suggest fresh';
-  btn.addEventListener('click', onFresh);
-  row.append(btn);
-  root.append(row);
+function renderPopoutSuggestion(root, suggestion, opts) {
+  if (!suggestion?.feed) return;
+  const block = document.createElement('div');
+  block.className = 'local-news__find-suggestion';
+
+  const label = document.createElement('p');
+  label.className = 'local-news__find-section-title';
+  label.textContent = 'Suggested for you';
+  block.append(label);
+
+  const title = document.createElement('p');
+  title.className = 'local-news__find-suggestion-title';
+  title.textContent = suggestion.feed.title || 'Feed';
+  block.append(title);
+
+  const reason = document.createElement('p');
+  reason.className = 'muted local-news__find-suggestion-reason';
+  reason.textContent =
+    suggestion.reason === 'similar'
+      ? 'Similar to feeds you already follow'
+      : 'Popular feed you might like';
+  block.append(reason);
+
+  const actions = document.createElement('div');
+  actions.className = 'local-news__find-suggestion-actions';
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'local-news__btn local-news__btn--yes';
+  addBtn.textContent = 'Add feed';
+  addBtn.disabled = opts.busy;
+  addBtn.addEventListener('click', () => opts.onAdd(suggestion.feed.id));
+  const skipBtn = document.createElement('button');
+  skipBtn.type = 'button';
+  skipBtn.className = 'local-news__btn local-news__btn--no';
+  skipBtn.textContent = 'Not now';
+  skipBtn.disabled = opts.busy;
+  skipBtn.addEventListener('click', () => opts.onDecline());
+  actions.append(addBtn, skipBtn);
+  block.append(actions);
+  root.append(block);
 }
 
 /**
@@ -832,11 +863,58 @@ export function mountLocalNews(root) {
   root.replaceChildren();
   root.classList.add('local-news');
 
-  const suggestionMount = document.createElement('div');
-  suggestionMount.className = 'local-news__suggestion-mount';
+  const toolbar = document.createElement('div');
+  toolbar.className = 'local-news__toolbar events-finder__toolbar';
+
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.className = 'events-finder__toggle';
+  toggleBtn.setAttribute('aria-controls', 'local-news-filters');
+  toggleBtn.setAttribute('aria-label', 'News filters');
+  toggleBtn.title = 'Taste filters and find news feeds';
+  const toggleLabel = document.createElement('span');
+  toggleLabel.className = 'events-finder__toggle-label';
+  toggleLabel.textContent = 'Filters';
+  const toggleArrow = document.createElement('span');
+  toggleArrow.className = 'events-finder__toggle-arrow';
+  toggleArrow.setAttribute('aria-hidden', 'true');
+  toggleBtn.append(toggleLabel, toggleArrow);
+  toolbar.append(toggleBtn);
+
+  const filterPanel = document.createElement('div');
+  filterPanel.id = 'local-news-filters';
+  filterPanel.className = 'events-finder__filters local-news__filters';
+  filterPanel.hidden = true;
+
+  function tasteField(labelText, id, placeholder) {
+    const field = document.createElement('div');
+    field.className = 'events-finder__field';
+    const label = document.createElement('label');
+    label.className = 'events-finder__label';
+    label.htmlFor = id;
+    label.textContent = labelText;
+    const area = document.createElement('textarea');
+    area.id = id;
+    area.className = 'local-news__taste-input';
+    area.rows = 2;
+    area.placeholder = placeholder;
+    field.append(label, area);
+    return { field, area };
+  }
+
+  const look = tasteField('Look for', 'local-news-lookfor', 'Keywords or phrases to boost…');
+  const skip = tasteField('Skip (grey)', 'local-news-skip', 'Downrank these topics…');
+  const black = tasteField('Blacklist', 'local-news-blacklist', 'Never show these…');
+  filterPanel.append(look.field, skip.field, black.field);
 
   const filterActions = document.createElement('div');
-  filterActions.className = 'local-news__filter-actions';
+  filterActions.className = 'events-finder__filter-actions local-news__filter-actions';
+
+  const findFeedsBtn = document.createElement('button');
+  findFeedsBtn.type = 'button';
+  findFeedsBtn.className = 'local-news__btn local-news__btn--find';
+  findFeedsBtn.textContent = 'Find feeds';
+  findFeedsBtn.title = 'Browse publishers and add their RSS feeds';
 
   const showSkippedBtn = document.createElement('button');
   showSkippedBtn.type = 'button';
@@ -845,7 +923,13 @@ export function mountLocalNews(root) {
   showSkippedBtn.title = 'Recover articles you skipped';
   showSkippedBtn.setAttribute('aria-pressed', 'false');
 
-  filterActions.append(showSkippedBtn);
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.className = 'events-finder__save';
+  saveBtn.textContent = 'Save';
+
+  filterActions.append(findFeedsBtn, showSkippedBtn, saveBtn);
+  filterPanel.append(filterActions);
 
   const body = document.createElement('div');
   body.className = 'local-news__body';
@@ -855,7 +939,7 @@ export function mountLocalNews(root) {
   msg.hidden = true;
   msg.setAttribute('aria-live', 'polite');
 
-  root.append(suggestionMount, filterActions, body, msg);
+  root.append(toolbar, filterPanel, body, msg);
 
   let busy = false;
   let showSkipped = readShowSkipped();
@@ -865,6 +949,34 @@ export function mountLocalNews(root) {
   let taste = { lookFor: '', skip: '', blacklist: '' };
   /** @type {object | null} */
   let lastPayload = null;
+  /** @type {HTMLElement | null} */
+  let findPopoutBackdrop = null;
+  /** @type {((e: KeyboardEvent) => void) | null} */
+  let findPopoutKeyHandler = null;
+
+  /**
+   * @param {boolean} open
+   */
+  function setFiltersOpen(open) {
+    filterPanel.hidden = !open;
+    toggleBtn.classList.toggle('events-finder__toggle--open', open);
+    toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  setFiltersOpen(false);
+
+  toggleBtn.addEventListener('click', () => {
+    if (filterPanel.hidden) {
+      setFiltersOpen(true);
+      return;
+    }
+    void saveFilters().then(() => setFiltersOpen(false));
+  });
+
+  function syncTasteInputs() {
+    look.area.value = taste.lookFor || '';
+    skip.area.value = taste.skip || '';
+    black.area.value = taste.blacklist || '';
+  }
 
   async function saveTaste(patch) {
     const r = await fetch('/api/local-news/criteria', {
@@ -875,8 +987,40 @@ export function mountLocalNews(root) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
     taste = { lookFor: j.lookFor ?? '', skip: j.skip ?? '', blacklist: j.blacklist ?? '' };
+    syncTasteInputs();
     await refresh();
   }
+
+  async function saveFilters() {
+    if (busy) return;
+    busy = true;
+    saveBtn.disabled = true;
+    msg.hidden = true;
+    try {
+      await saveTaste({
+        lookFor: look.area.value,
+        skip: skip.area.value,
+        blacklist: black.area.value,
+      });
+      msg.classList.remove('local-news__status--err');
+      msg.textContent = 'Filters saved.';
+      msg.hidden = false;
+      window.setTimeout(() => {
+        if (msg.textContent === 'Filters saved.') msg.hidden = true;
+      }, 2000);
+    } catch (e) {
+      msg.classList.add('local-news__status--err');
+      msg.textContent =
+        e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Could not save filters';
+      msg.hidden = false;
+    } finally {
+      busy = false;
+      saveBtn.disabled = false;
+    }
+  }
+  saveBtn.addEventListener('click', () => {
+    void saveFilters();
+  });
 
   /**
    * @param {object} j
@@ -889,20 +1033,10 @@ export function mountLocalNews(root) {
         skip: j.criteria.skip ?? '',
         blacklist: j.criteria.blacklist ?? '',
       };
+      syncTasteInputs();
     }
     skippedCount = Number(j.skippedCount) || (Array.isArray(j.skippedArticles) ? j.skippedArticles.length : 0);
     syncShowSkippedButton();
-
-    suggestionMount.replaceChildren();
-    if (j.pendingSuggestion) {
-      renderSuggestionBlock(suggestionMount, j.pendingSuggestion, {
-        busy,
-        onRespond: respond,
-        onFresh: suggestFresh,
-      });
-    } else {
-      renderNoSuggestionRow(suggestionMount, suggestFresh);
-    }
 
     body.replaceChildren();
     if (showSkipped) {
@@ -987,7 +1121,7 @@ export function mountLocalNews(root) {
       if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
       writePanelCache(CACHE_KEY, j);
       applyPayload(j);
-      msg.hidden = true;
+      if (msg.textContent !== 'Filters saved.') msg.hidden = true;
     } catch (e) {
       if (body.querySelector('.local-news__list') || body.querySelector('.local-news__empty')) return;
       msg.textContent =
@@ -996,53 +1130,322 @@ export function mountLocalNews(root) {
     }
   }
 
-  async function respond(response) {
-    if (busy) return;
-    busy = true;
-    msg.hidden = true;
-    try {
-      const r = await fetch('/api/local-news/suggestion/respond', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ response }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
-      busy = false;
-      await refresh();
-    } catch (e) {
-      busy = false;
-      msg.classList.add('local-news__status--err');
-      msg.textContent =
-        e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Could not save response';
-      msg.hidden = false;
-      throw e;
-    }
+  async function subscribeFeed(feedId) {
+    const r = await fetch('/api/local-news/subscriptions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feedId }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+    return j;
   }
 
-  async function suggestFresh() {
-    if (busy) return;
-    busy = true;
-    msg.hidden = true;
-    try {
-      const r = await fetch('/api/local-news/suggestion/fresh', { method: 'POST' });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
-      busy = false;
-      await refresh();
-      if (j.exhausted) {
-        msg.classList.remove('local-news__status--err');
-        msg.textContent = "You're subscribed to or have declined every feed we know about.";
-        msg.hidden = false;
-      }
-    } catch (e) {
-      busy = false;
-      msg.classList.add('local-news__status--err');
-      msg.textContent =
-        e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Could not fetch a suggestion';
-      msg.hidden = false;
-    }
+  async function unsubscribeFeed(feedId) {
+    const r = await fetch(`/api/local-news/subscriptions/${encodeURIComponent(feedId)}/unsubscribe`, {
+      method: 'POST',
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+    return j;
   }
+
+  async function respond(response) {
+    const r = await fetch('/api/local-news/suggestion/respond', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ response }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+    return j;
+  }
+
+  function closeFindFeedsPopout() {
+    if (findPopoutKeyHandler) {
+      document.removeEventListener('keydown', findPopoutKeyHandler);
+      findPopoutKeyHandler = null;
+    }
+    if (findPopoutBackdrop) {
+      findPopoutBackdrop.remove();
+      findPopoutBackdrop = null;
+    }
+    findFeedsBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  async function openFindFeedsPopout() {
+    closeFindFeedsPopout();
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'events-finder__conference-popout-backdrop local-news__find-backdrop';
+    const shell = document.createElement('div');
+    shell.className = 'events-finder__conference-popout local-news__find-popout';
+    shell.setAttribute('role', 'dialog');
+    shell.setAttribute('aria-modal', 'true');
+    shell.setAttribute('aria-label', 'Find news feeds');
+
+    const bar = document.createElement('div');
+    bar.className = 'events-finder__conference-popout-bar';
+    const title = document.createElement('h2');
+    title.className = 'events-finder__conference-popout-title';
+    title.textContent = 'Find feeds';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'events-finder__conference-popout-close';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.title = 'Close';
+    closeBtn.innerHTML =
+      '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M4 4l8 8M12 4l-8 8"/></svg>';
+    bar.append(title, closeBtn);
+
+    const popBody = document.createElement('div');
+    popBody.className = 'events-finder__conference-popout-body local-news__find-body';
+
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.className = 'local-news__find-search';
+    search.placeholder = 'Search publishers (BBC, Hacker News, …)';
+    search.autocomplete = 'off';
+
+    const status = document.createElement('p');
+    status.className = 'muted local-news__find-status';
+    status.textContent = 'Loading publishers…';
+
+    const listMount = document.createElement('div');
+    listMount.className = 'local-news__find-list';
+
+    popBody.append(search, status, listMount);
+    shell.append(bar, popBody);
+    backdrop.append(shell);
+    document.body.append(backdrop);
+    findPopoutBackdrop = backdrop;
+    findFeedsBtn.setAttribute('aria-expanded', 'true');
+
+    /** @type {object[]} */
+    let publishers = [];
+    /** @type {object | null} */
+    let pendingSuggestion = null;
+    /** @type {string | null} */
+    let openPublisherId = null;
+
+    const finishClose = () => {
+      closeFindFeedsPopout();
+      void refresh();
+    };
+    closeBtn.addEventListener('click', finishClose);
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) finishClose();
+    });
+    findPopoutKeyHandler = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        finishClose();
+      }
+    };
+    document.addEventListener('keydown', findPopoutKeyHandler);
+
+    /**
+     * @param {string} feedId
+     * @param {HTMLButtonElement} btn
+     */
+    async function onAddFeed(feedId, btn) {
+      if (busy) return;
+      busy = true;
+      btn.disabled = true;
+      btn.textContent = 'Adding…';
+      try {
+        await subscribeFeed(feedId);
+        btn.textContent = 'Added';
+        await loadDirectory();
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Add';
+        status.textContent =
+          e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Could not add feed';
+      } finally {
+        busy = false;
+      }
+    }
+
+    /**
+     * @param {string} feedId
+     * @param {HTMLButtonElement} btn
+     */
+    async function onRemoveFeed(feedId, btn) {
+      if (busy) return;
+      busy = true;
+      btn.disabled = true;
+      try {
+        await unsubscribeFeed(feedId);
+        await loadDirectory();
+      } catch (e) {
+        btn.disabled = false;
+        status.textContent =
+          e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Could not remove feed';
+      } finally {
+        busy = false;
+      }
+    }
+
+    function paint() {
+      listMount.replaceChildren();
+      const q = search.value.trim().toLowerCase();
+
+      renderPopoutSuggestion(listMount, pendingSuggestion, {
+        busy,
+        onAdd: async (feedId) => {
+          if (busy) return;
+          busy = true;
+          try {
+            await subscribeFeed(feedId);
+            pendingSuggestion = null;
+            await loadDirectory();
+          } catch (e) {
+            status.textContent =
+              e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Could not add feed';
+          } finally {
+            busy = false;
+          }
+        },
+        onDecline: async () => {
+          if (busy) return;
+          busy = true;
+          try {
+            await respond('no');
+            pendingSuggestion = null;
+            paint();
+          } catch (e) {
+            status.textContent =
+              e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Could not dismiss';
+          } finally {
+            busy = false;
+          }
+        },
+      });
+
+      const filtered = publishers.filter((p) => {
+        if (!q) return true;
+        const hay = `${p.title} ${p.id} ${(p.feeds || []).map((f) => f.title).join(' ')}`.toLowerCase();
+        return hay.includes(q);
+      });
+
+      if (!filtered.length) {
+        const empty = document.createElement('p');
+        empty.className = 'muted';
+        empty.textContent = q ? 'No publishers match that search.' : 'No feeds in the directory yet.';
+        listMount.append(empty);
+        status.textContent = '';
+        return;
+      }
+
+      status.textContent = `${filtered.length} publisher${filtered.length === 1 ? '' : 's'}`;
+
+      for (const pub of filtered) {
+        const card = document.createElement('div');
+        card.className = 'local-news__find-publisher';
+
+        const head = document.createElement('button');
+        head.type = 'button';
+        head.className = 'local-news__find-publisher-head';
+        const open = openPublisherId === pub.id;
+        head.setAttribute('aria-expanded', open ? 'true' : 'false');
+
+        const name = document.createElement('span');
+        name.className = 'local-news__find-publisher-name';
+        name.textContent = pub.title;
+
+        const meta = document.createElement('span');
+        meta.className = 'local-news__find-publisher-meta';
+        const subN = Number(pub.subscribedCount) || 0;
+        meta.textContent = subN
+          ? `${pub.feedCount} feeds · ${subN} subscribed`
+          : `${pub.feedCount} feed${pub.feedCount === 1 ? '' : 's'}`;
+
+        const chev = document.createElement('span');
+        chev.className = 'local-news__find-publisher-chev';
+        chev.setAttribute('aria-hidden', 'true');
+        chev.textContent = open ? '▾' : '▸';
+
+        head.append(name, meta, chev);
+        head.addEventListener('click', () => {
+          openPublisherId = open ? null : pub.id;
+          paint();
+        });
+        card.append(head);
+
+        if (open) {
+          const feedList = document.createElement('ul');
+          feedList.className = 'local-news__find-feeds';
+          for (const feed of pub.feeds || []) {
+            const li = document.createElement('li');
+            li.className = 'local-news__find-feed';
+
+            const info = document.createElement('div');
+            info.className = 'local-news__find-feed-info';
+            const feedTitle = document.createElement('span');
+            feedTitle.className = 'local-news__find-feed-title';
+            feedTitle.textContent = feed.title;
+            info.append(feedTitle);
+            if (Array.isArray(feed.tags) && feed.tags.length) {
+              const tags = document.createElement('span');
+              tags.className = 'muted local-news__find-feed-tags';
+              tags.textContent = feed.tags.slice(0, 4).join(' · ');
+              info.append(tags);
+            }
+
+            const action = document.createElement('button');
+            action.type = 'button';
+            if (feed.subscribed) {
+              action.className = 'local-news__btn local-news__btn--remove';
+              action.textContent = 'Remove';
+              action.addEventListener('click', () => onRemoveFeed(feed.id, action));
+            } else {
+              action.className = 'local-news__btn local-news__btn--yes';
+              action.textContent = 'Add';
+              action.addEventListener('click', () => onAddFeed(feed.id, action));
+            }
+
+            li.append(info, action);
+            feedList.append(li);
+          }
+          card.append(feedList);
+        }
+
+        listMount.append(card);
+      }
+    }
+
+    async function loadDirectory() {
+      status.textContent = 'Loading publishers…';
+      try {
+        const r = await fetch('/api/local-news/directory', { cache: 'no-store' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+        publishers = Array.isArray(j.publishers) ? j.publishers : [];
+        pendingSuggestion = j.pendingSuggestion || null;
+        paint();
+      } catch (e) {
+        status.textContent =
+          e && typeof e === 'object' && 'message' in e ? String(e.message) : 'Could not load directory';
+      }
+    }
+
+    search.addEventListener('input', () => {
+      const q = search.value.trim().toLowerCase();
+      if (q) {
+        const hits = publishers.filter((p) => `${p.title} ${p.id}`.toLowerCase().includes(q));
+        if (hits.length === 1) openPublisherId = hits[0].id;
+      }
+      paint();
+    });
+
+    closeBtn.focus();
+    await loadDirectory();
+  }
+
+  findFeedsBtn.addEventListener('click', () => {
+    void openFindFeedsPopout();
+  });
 
   const cached = readPanelCache(CACHE_KEY, CACHE_MAX_MS);
   if (cached && typeof cached === 'object') applyPayload(cached);

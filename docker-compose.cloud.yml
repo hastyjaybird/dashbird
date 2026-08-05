@@ -1,4 +1,4 @@
-# Production stack for Vultr (or any public VPS) — Silicon Valley / DuckDNS.
+# Production stack for Vultr (or any public VPS) — jayhasty.com + dashbird.jayhasty.com.
 # Usage:
 #   docker compose -f docker-compose.cloud.yml up -d --build
 #
@@ -14,9 +14,10 @@ services:
       - '443:443'
       # No 443/udp: HTTP/3 disabled; publishing QUIC lets Firefox Alt-Svc hang.
     environment:
-      # Optional (jayhasty cutover — only needed with Caddyfile.cloud.multisite):
-      # JAYHASTY_ROOT_DOMAIN: ${JAYHASTY_ROOT_DOMAIN}
-      # PORTFOLIO_DOMAIN: ${PORTFOLIO_DOMAIN}
+      # jayhasty multisite (Caddyfile.cloud.multisite) — set in .env at cutover
+      JAYHASTY_ROOT_DOMAIN: ${JAYHASTY_ROOT_DOMAIN:-}
+      PORTFOLIO_DOMAIN: ${PORTFOLIO_DOMAIN:-}
+      CALCLAIM_DOMAIN: ${CALCLAIM_DOMAIN:-}
       DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}
       CADDY_EMAIL: ${CADDY_EMAIL:?Set CADDY_EMAIL in .env}
       # In .env store bcrypt with doubled dollars ($$) so Compose does not interpolate.
@@ -24,9 +25,8 @@ services:
       DASHBOARD_BASIC_AUTH_HASH: ${DASHBOARD_BASIC_AUTH_HASH:?Set DASHBOARD_BASIC_AUTH_HASH in .env}
     volumes:
       - ./deploy/Caddyfile.cloud:/etc/caddy/Caddyfile:ro
-      # Uncomment with Caddyfile.cloud.multisite at jayhasty cutover:
-      # - ./deploy/jayhasty-coming-soon:/srv/jayhasty:ro
-      # - ./deploy/jayhasty-portfolio-coming-soon:/srv/portfolio:ro
+      # Static portfolio (npm run build:deploy from portfolio/products/website)
+      - ./deploy/jayhasty-site:/srv/jayhasty:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -48,6 +48,11 @@ services:
       # Retain events up to 8 weeks out (post-fetch filter only — no extra Apify/API cost).
       # Defaulted here so the wider horizon ships with the cloud stack without a manual .env edit.
       EVENTS_FINDER_INGEST_FUTURE_DAYS: ${EVENTS_FINDER_INGEST_FUTURE_DAYS:-56}
+      # Free Apify $5/mo ≈ 3–4 successful scrapes. Weekly (Sun 04:00 PT) stays in budget;
+      # daily 4am burned the cycle by mid-month and left a stale Facebook cache.
+      FACEBOOK_EVENTS_WEEKLY: ${FACEBOOK_EVENTS_WEEKLY:-1}
+      FACEBOOK_EVENTS_WEEKLY_DOW: ${FACEBOOK_EVENTS_WEEKLY_DOW:-0}
+      FACEBOOK_EVENTS_MAX_CHARGE_USD: ${FACEBOOK_EVENTS_MAX_CHARGE_USD:-1.25}
       TOOL_LIBRARY_SCREENSHOT: ${TOOL_LIBRARY_SCREENSHOT:-0}
       VIKUNJA_BASE_URL: ${VIKUNJA_BASE_URL:-http://vikunja:3456}
       DASHBOARD_BASIC_AUTH_USER: ${DASHBOARD_BASIC_AUTH_USER:?Set DASHBOARD_BASIC_AUTH_USER in .env}
@@ -70,7 +75,7 @@ services:
     expose:
       - '3456'
     environment:
-      VIKUNJA_SERVICE_PUBLICURL: ${VIKUNJA_SERVICE_PUBLICURL:-https://dashbird.duckdns.org/}
+      VIKUNJA_SERVICE_PUBLICURL: ${VIKUNJA_SERVICE_PUBLICURL:-https://dashbird.jayhasty.com/}
       VIKUNJA_SERVICE_JWTSECRET: ${VIKUNJA_SERVICE_SECRET:-changeme-set-in-env}
       VIKUNJA_SERVICE_SECRET: ${VIKUNJA_SERVICE_SECRET:-changeme-set-in-env}
       VIKUNJA_SERVICE_ENABLEREGISTRATION: ${VIKUNJA_SERVICE_ENABLEREGISTRATION:-false}

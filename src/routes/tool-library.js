@@ -2,6 +2,7 @@ import { Router } from 'express';
 import express from 'express';
 import path from 'node:path';
 import {
+  addTool,
   collectCategories,
   deleteTools,
   getToolById,
@@ -340,12 +341,36 @@ router.post('/tools/:id/paying', async (req, res) => {
     }
     const paying = Boolean(req.body?.paying);
     const id = String(req.params.id || '');
-    const tool = await setToolPaying(id, paying);
+    const url = String(req.body?.url || '').trim();
+    const catalogId = String(req.body?.catalogId || '').trim();
+    let tool = await setToolPaying(id, paying, { url });
+
+    // Catalog-only tools may not be in tool-library.json yet — promote then mark.
+    if (!tool && (catalogId || url)) {
+      try {
+        let resource = catalogId ? await getResourceById(catalogId) : null;
+        if (!resource && url) resource = await getResourceByUrl(url);
+        if (resource) {
+          const record = {
+            ...resourceToToolRecord(resource),
+            paying,
+          };
+          // Prefer updating an existing library row matched by URL.
+          tool = await setToolPaying(record.id, paying, { url: record.url });
+          if (!tool) {
+            tool = await addTool(record);
+          }
+        }
+      } catch (e) {
+        console.warn('[tool-library] catalog paying fallback failed:', e?.message || e);
+      }
+    }
+
     if (!tool) {
       res.status(404).json({ ok: false, error: 'not_found' });
       return;
     }
-    res.json({ ok: true, tool: { ...tool, paying } });
+    res.json({ ok: true, tool: { ...tool, paying: Boolean(tool.paying ?? paying) } });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }

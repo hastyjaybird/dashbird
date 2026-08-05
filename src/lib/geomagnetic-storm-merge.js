@@ -1,10 +1,11 @@
 /**
  * Sky strip geomagnetic (“solar storm” / Dst-related) visibility from NOAA G-scale +
- * planar K realtime threshold (G2+).
+ * planetary K threshold (G2+).
  *
  * @see https://www.swpc.noaa.gov/products/noaa-scales (G geomagnetic storms)
  * @see https://services.swpc.noaa.gov/products/noaa-scales.json
  * @see https://services.swpc.noaa.gov/json/planetary_k_index_1m.json
+ * @see https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json
  *
  * G2 Moderate NOAA pair: planar K reaches **Kp 6−** onward (≈ G2 tier). Threshold uses
  * Kp-coded floor **17 / 3** so “6−” counts as ≥G2.
@@ -12,12 +13,17 @@
  * NOAA `noaa-scales.json` keys `"0"`…`"3"` are checked: any block whose **UTC calendar day**
  * overlaps the hero time window and reports **G ≥ 2** counts as active (the `"0"` row can sit
  * at G0 while `"1"` already carries the same-day **forecast** G2+ — reading only `"0"` hid that).
+ *
+ * Displayed Kp is the **peak** 3-hour planetary K on the storm day (forecast product), not the
+ * latest 1-minute sample — a calm minute during a G2 day previously showed “Kp 0.00”.
  */
 
 import { isSkyDebugGeomagneticActive } from './sky-debug.js';
 
 const NOAA_SCALES_URL = 'https://services.swpc.noaa.gov/products/noaa-scales.json';
-const PLANETARY_KP_URL = 'https://services.swpc.noaa.gov/json/planetary_k_index_1m.json';
+const PLANETARY_KP_1M_URL = 'https://services.swpc.noaa.gov/json/planetary_k_index_1m.json';
+const PLANETARY_KP_FORECAST_URL =
+  'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json';
 
 /** Show geomagnetic panels / strip only at G2+ (above G1 minor). */
 export const GEOMAGNETIC_STORM_G_MIN = 2;
@@ -63,6 +69,40 @@ function formatKp(est) {
 }
 
 /**
+ * SWPC `time_tag` values are UTC; many omit the trailing `Z`. Parse as UTC.
+ * @param {unknown} timeTag
+ */
+export function parseSwpcUtcMs(timeTag) {
+  if (typeof timeTag !== 'string' || !timeTag.trim()) return NaN;
+  const s = timeTag.trim();
+  const iso = /Z$/i.test(s) || /[+-]\d{2}:\d{2}$/.test(s) ? s : `${s}Z`;
+  return new Date(iso).getTime();
+}
+
+/**
+ * @param {unknown} row
+ * @returns {number | null}
+ */
+function readKpNumber(row) {
+  if (!row || typeof row !== 'object') return null;
+  const candidates = [
+    /** @type {{ estimated_kp?: unknown, kp?: unknown, Kp?: unknown, kp_index?: unknown }} */ (row)
+      .estimated_kp,
+    /** @type {{ kp?: unknown }} */ (row).kp,
+    /** @type {{ Kp?: unknown }} */ (row).Kp,
+    /** @type {{ kp_index?: unknown }} */ (row).kp_index,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'number' && Number.isFinite(c)) return c;
+    if (typeof c === 'string' && c.trim() !== '') {
+      const n = Number(c);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return null;
+}
+
+/**
  * When NOAA’s daily “0” G block is still below G2 but Kp already qualifies, map planetary K → G level
  * (NOAA pairing: storm K=6 → G2 … K=9 → G5).
  * @returns {number | null}
@@ -92,25 +132,35 @@ function geomagneticCategoryWord(noaaTxt, gNum) {
 }
 
 /**
- * @returns {Promise<{ scales: unknown, kpRows: unknown[] | null }>}
+ * @returns {Promise<{ scales: unknown, kpRows: unknown[] | null, kpForecastRows: unknown[] | null }>}
  */
 async function fetchNoaaGAndKpRows(signal = AbortSignal.timeout(14_000)) {
-  const [scRes, kpRes] = await Promise.all([
+  const [scRes, kp1mRes, kpFcRes] = await Promise.all([
     fetch(NOAA_SCALES_URL, { signal }),
-    fetch(PLANETARY_KP_URL, { signal }),
+    fetch(PLANETARY_KP_1M_URL, { signal }),
+    fetch(PLANETARY_KP_FORECAST_URL, { signal }),
   ]);
   let scalesJson = null;
   if (!scRes.ok) throw new Error(`noaa_scales_http_${scRes.status}`);
   scalesJson = await scRes.json();
 
   let kpRows = null;
-  if (!kpRes.ok) {
-    console.warn('[geomagnetic-merge] planar K HTTP', kpRes.status);
+  if (!kp1mRes.ok) {
+    console.warn('[geomagnetic-merge] planar K 1m HTTP', kp1mRes.status);
   } else {
-    kpRows = await kpRes.json();
+    kpRows = await kp1mRes.json();
     if (!Array.isArray(kpRows) || kpRows.length === 0) kpRows = null;
   }
-  return { scales: scalesJson, kpRows };
+
+  let kpForecastRows = null;
+  if (!kpFcRes.ok) {
+    console.warn('[geomagnetic-merge] planetary K forecast HTTP', kpFcRes.status);
+  } else {
+    kpForecastRows = await kpFcRes.json();
+    if (!Array.isArray(kpForecastRows) || kpForecastRows.length === 0) kpForecastRows = null;
+  }
+
+  return { scales: scalesJson, kpRows, kpForecastRows };
 }
 
 /**
@@ -134,24 +184,111 @@ function readCurrentNoaaG(scalesJson) {
 }
 
 /**
- * @param {unknown[] | null} kpRows
+ * Storm-relevant Kp: peak 3-hour planetary K on the NOAA G-scale day (or recent hero window),
+ * falling back to peak 1-minute estimated Kp over the last 3 hours — never the lone latest
+ * 1-minute sample when a better peak exists.
+ *
+ * @param {unknown[] | null} kpForecastRows
+ * @param {unknown[] | null} kp1mRows
+ * @param {string | null | undefined} stormDateStamp YYYY-MM-DD from noaa-scales when G≥2
+ * @param {Date} now
+ * @param {number} windowMs
+ * @returns {{ kp: number | null, time_tag: string | null }}
  */
-function latestEstimatedKp(kpRows) {
-  if (!Array.isArray(kpRows) || kpRows.length === 0) return { kp: null, time_tag: null };
-  const last = kpRows[kpRows.length - 1];
-  if (!last || typeof last !== 'object') return { kp: null, time_tag: null };
-  const kp =
-    typeof last.estimated_kp === 'number' && Number.isFinite(last.estimated_kp)
-      ? last.estimated_kp
-      : Number(last.kp_index ?? NaN);
-  const kpNum = Number.isFinite(kp) ? kp : null;
+export function resolveStormKp(kpForecastRows, kp1mRows, stormDateStamp, now, windowMs) {
+  /** @type {{ kp: number | null, time_tag: string | null }} */
+  let best = { kp: null, time_tag: null };
+
+  const consider = (kp, time_tag) => {
+    if (typeof kp !== 'number' || !Number.isFinite(kp)) return;
+    if (best.kp == null || kp > best.kp) {
+      best = {
+        kp,
+        time_tag: typeof time_tag === 'string' && time_tag.trim() !== '' ? time_tag.trim() : null,
+      };
+    }
+  };
+
+  const t0 = now.getTime();
+  const t1 = t0 + windowMs;
+  const recentFloor = t0 - 24 * 60 * 60 * 1000;
+  const day =
+    typeof stormDateStamp === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(stormDateStamp.trim())
+      ? stormDateStamp.trim()
+      : null;
+
+  if (Array.isArray(kpForecastRows)) {
+    for (const row of kpForecastRows) {
+      const kp = readKpNumber(row);
+      if (kp == null) continue;
+      const tag =
+        row && typeof row === 'object' && typeof /** @type {{ time_tag?: unknown }} */ (row).time_tag === 'string'
+          ? /** @type {{ time_tag: string }} */ (row).time_tag.trim()
+          : '';
+      const t = parseSwpcUtcMs(tag);
+      if (Number.isNaN(t)) continue;
+
+      const onStormDay = day != null && tag.startsWith(day);
+      const inHeroOrRecent = t >= recentFloor && t < t1;
+      if (onStormDay || inHeroOrRecent) consider(kp, tag);
+    }
+  }
+
+  if (Array.isArray(kp1mRows)) {
+    const cut = t0 - 3 * 60 * 60 * 1000;
+    for (const row of kp1mRows) {
+      if (!row || typeof row !== 'object') continue;
+      const kp = readKpNumber(row);
+      if (kp == null) continue;
+      const tag =
+        typeof /** @type {{ time_tag?: unknown }} */ (row).time_tag === 'string'
+          ? /** @type {{ time_tag: string }} */ (row).time_tag.trim()
+          : '';
+      const t = parseSwpcUtcMs(tag);
+      if (!Number.isNaN(t) && t < cut) continue;
+      consider(kp, tag || null);
+    }
+  }
+
+  return best;
+}
+
+/**
+ * Latest 1-minute estimated Kp (live reading for calm / settings snapshot).
+ * @param {unknown[] | null} kp1mRows
+ * @returns {{ kp: number | null, time_tag: string | null }}
+ */
+function latestEstimatedKp1m(kp1mRows) {
+  if (!Array.isArray(kp1mRows) || kp1mRows.length === 0) return { kp: null, time_tag: null };
+  const last = kp1mRows[kp1mRows.length - 1];
+  const kp = readKpNumber(last);
   const time_tag =
-    typeof last.time_tag === 'string' && last.time_tag.trim() !== '' ? last.time_tag.trim() : null;
-  return { kp: kpNum, time_tag };
+    last &&
+    typeof last === 'object' &&
+    typeof /** @type {{ time_tag?: unknown }} */ (last).time_tag === 'string' &&
+    /** @type {{ time_tag: string }} */ (last).time_tag.trim() !== ''
+      ? /** @type {{ time_tag: string }} */ (last).time_tag.trim()
+      : null;
+  return { kp: kp != null && Number.isFinite(kp) ? kp : null, time_tag };
+}
+
+/**
+ * Kp to show next to a G-scale label. Suppress calm values when scales already report G2+
+ * so we never render “G2 · Kp 0.00”.
+ * @param {number | null} kp
+ * @param {boolean} gOk
+ */
+function kpForStormLabel(kp, gOk) {
+  if (kp == null || !Number.isFinite(kp)) return null;
+  if (gOk && kp < 1) return null;
+  return kp;
 }
 
 function combineNoaaUtcStart(dateStamp, timeStamp, kpIso) {
-  if (kpIso && !Number.isNaN(new Date(kpIso).getTime())) return kpIso;
+  if (kpIso) {
+    const ms = parseSwpcUtcMs(kpIso);
+    if (!Number.isNaN(ms)) return new Date(ms).toISOString();
+  }
   if (dateStamp && timeStamp && /^\d{4}-\d{2}-\d{2}$/.test(dateStamp.trim())) {
     const t = timeStamp.trim();
     const guess = `${dateStamp.trim()}T${t}Z`;
@@ -247,8 +384,9 @@ export async function mergeGeomagneticStormGScale(events, now, windowMs) {
 
   let scales;
   let kpRows;
+  let kpForecastRows;
   try {
-    ({ scales, kpRows } = await fetchNoaaGAndKpRows());
+    ({ scales, kpRows, kpForecastRows } = await fetchNoaaGAndKpRows());
   } catch (err) {
     console.warn('[geomagnetic-merge] NOAA scales/Kp fetch failed:', err?.message || err);
     return withoutGeom;
@@ -256,16 +394,22 @@ export async function mergeGeomagneticStormGScale(events, now, windowMs) {
 
   const pick = pickStrongestNoaaGInHeroWindow(scales, now, windowMs);
   const zero = readCurrentNoaaG(scales);
-  const { kp, time_tag: kpTag } = latestEstimatedKp(kpRows);
-
   const gOk = pick.g >= ACTIVE_G_MIN;
-  const kpOk = kp != null && kp >= KP_NUMERIC_G2_FLOOR;
+  const { kp: peakKp, time_tag: kpTag } = resolveStormKp(
+    kpForecastRows,
+    kpRows,
+    gOk ? pick.dateStamp : null,
+    now,
+    windowMs,
+  );
+  const kpOk = peakKp != null && peakKp >= KP_NUMERIC_G2_FLOOR;
   if (!gOk && !kpOk) return withoutGeom;
 
+  const kp = kpForStormLabel(peakKp, gOk);
   const kpStr = formatKp(kp ?? NaN);
 
   const noaaTxtForMerge = pick.text;
-  const gScaleNum = gOk ? pick.g : inferredGFromPlanetaryKp(kp);
+  const gScaleNum = gOk ? pick.g : inferredGFromPlanetaryKp(peakKp);
   const category =
     gScaleNum != null ? geomagneticCategoryWord(gOk ? noaaTxtForMerge : '', gScaleNum) : 'Elevated';
 
@@ -293,7 +437,7 @@ export async function mergeGeomagneticStormGScale(events, now, windowMs) {
     peakAt: null,
     detailLine,
     source:
-      'NOAA SWPC noaa-scales.json (G scales on overlapping days via blocks 0–3) plus planetary K when the G≥2 threshold is met.',
+      'NOAA SWPC noaa-scales.json (G on overlapping days via blocks 0–3) + planetary K peak from noaa-planetary-k-index-forecast.json (1m estimated as fallback).',
     forecastUrl: 'https://www.swpc.noaa.gov/products/noaa-scales',
   };
 
@@ -314,22 +458,31 @@ export async function assessGeomagneticStormActivity(
   windowMs = 24 * 60 * 60 * 1000,
 ) {
   try {
-    const { scales, kpRows } = await fetchNoaaGAndKpRows();
+    const { scales, kpRows, kpForecastRows } = await fetchNoaaGAndKpRows();
     const pick = pickStrongestNoaaGInHeroWindow(scales, now, windowMs);
     const zero = readCurrentNoaaG(scales);
-    const { kp } = latestEstimatedKp(kpRows);
     const gOk = pick.g >= ACTIVE_G_MIN;
-    const kpOk = kp != null && kp >= KP_NUMERIC_G2_FLOOR;
+    const { kp: peakKp } = resolveStormKp(
+      kpForecastRows,
+      kpRows,
+      gOk ? pick.dateStamp : null,
+      now,
+      windowMs,
+    );
+    const { kp: liveKp } = latestEstimatedKp1m(kpRows);
+    const kpOk = peakKp != null && peakKp >= KP_NUMERIC_G2_FLOOR;
     const meetsG2Threshold = gOk || kpOk;
     const gNum = meetsG2Threshold
       ? gOk
         ? pick.g
-        : (inferredGFromPlanetaryKp(kp) ?? pick.g)
+        : (inferredGFromPlanetaryKp(peakKp) ?? pick.g)
       : zero.g;
     const category = geomagneticCategoryWord(
       meetsG2Threshold ? (gOk ? pick.text : '') : zero.text,
       gNum,
     );
+    // Storm label uses peak K on the G-scale day; calm/settings uses live 1-minute Kp.
+    const kp = meetsG2Threshold ? kpForStormLabel(peakKp, gOk) : liveKp;
     const lineParts = [];
     if (gNum != null) lineParts.push(`G${gNum}`);
     if (kp != null) lineParts.push(`Kp ${formatKp(kp)}`);
@@ -359,7 +512,7 @@ export async function snapshotGeomagneticLive(now = new Date(), windowMs = 24 * 
       stripActive: false,
       value: `Unavailable (${a.error})`,
       dataSource:
-        'NOAA SWPC noaa-scales.json + planetary_k_index_1m.json (fetch failed).',
+        'NOAA SWPC noaa-scales.json + planetary K forecast/1m (fetch failed).',
     };
   }
   const parts = [];
@@ -370,6 +523,6 @@ export async function snapshotGeomagneticLive(now = new Date(), windowMs = 24 * 
     stripActive: a.active,
     value: parts.join(' · '),
     dataSource:
-      'NOAA SWPC noaa-scales.json (blocks 0–3) + planetary_k_index_1m.json. Strip active when G≥2 on an overlapping UTC day or estimated Kp ≥ G2 tier.',
+      'NOAA SWPC noaa-scales.json (blocks 0–3) + peak planetary K from noaa-planetary-k-index-forecast.json (1m estimated fallback). Strip active when G≥2 on an overlapping UTC day or peak Kp ≥ G2 tier.',
   };
 }

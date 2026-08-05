@@ -88,6 +88,81 @@ export async function saveLocalNewsState(state, env = process.env) {
 }
 
 /**
+ * @param {object} feed
+ * @returns {{ id: string, title: string }}
+ */
+export function feedPublisher(feed) {
+  const id = String(feed?.publisher || feed?.id || '').trim() || 'other';
+  const title =
+    String(feed?.publisherTitle || '').trim()
+    || String(feed?.title || id).split('—')[0].split('(')[0].trim()
+    || id;
+  return { id, title };
+}
+
+/**
+ * Group directory feeds by publisher for the Find feeds browser.
+ * @param {Array<object>} feeds
+ * @param {{ subscribedIds?: Set<string> | string[], declinedIds?: Set<string> | string[] }} [opts]
+ */
+export function groupFeedsByPublisher(feeds, opts = {}) {
+  const subscribed = opts.subscribedIds instanceof Set
+    ? opts.subscribedIds
+    : new Set(opts.subscribedIds || []);
+  const declined = opts.declinedIds instanceof Set
+    ? opts.declinedIds
+    : new Set(opts.declinedIds || []);
+  /** @type {Map<string, { id: string, title: string, siteUrl: string | null, feedCount: number, subscribedCount: number, feeds: object[] }>} */
+  const byPub = new Map();
+  for (const raw of Array.isArray(feeds) ? feeds : []) {
+    if (!raw?.id) continue;
+    const pub = feedPublisher(raw);
+    let group = byPub.get(pub.id);
+    if (!group) {
+      group = {
+        id: pub.id,
+        title: pub.title,
+        siteUrl: raw.siteUrl || null,
+        feedCount: 0,
+        subscribedCount: 0,
+        feeds: [],
+      };
+      byPub.set(pub.id, group);
+    }
+    const subscribedFlag = subscribed.has(raw.id);
+    if (subscribedFlag) group.subscribedCount += 1;
+    if (!group.siteUrl && raw.siteUrl) group.siteUrl = raw.siteUrl;
+    group.feeds.push({
+      ...raw,
+      publisher: pub.id,
+      publisherTitle: pub.title,
+      subscribed: subscribedFlag,
+      declined: declined.has(raw.id),
+    });
+    group.feedCount += 1;
+  }
+  for (const group of byPub.values()) {
+    group.feeds.sort(
+      (a, b) => (b.popularity || 0) - (a.popularity || 0) || String(a.title).localeCompare(String(b.title)),
+    );
+  }
+  return [...byPub.values()].sort(
+    (a, b) => b.feedCount - a.feedCount || a.title.localeCompare(b.title),
+  );
+}
+
+/**
+ * @param {string} feedId
+ * @returns {Promise<object | null>}
+ */
+export async function findDirectoryFeed(feedId) {
+  const id = String(feedId || '').trim();
+  if (!id) return null;
+  const directory = await loadFeedDirectory();
+  return directory.find((f) => f.id === id) || null;
+}
+
+/**
  * Pick a candidate feed from the directory, biased toward tag overlap with
  * current subscriptions ('similar') or raw popularity ('fresh').
  * @param {{ subscriptions: Array<object>, declinedIds: string[] }} state

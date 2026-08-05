@@ -1,11 +1,11 @@
 /**
  * Largest recent California earthquake within 150 miles of Oakland, CA (USGS FDSNWS event API).
- * Qualifying rows persist on the Earth strip for two calendar days; the event date
- * appears on the second day (dashboard `WEATHER_TIME_ZONE`).
+ * Qualifying rows stay on the Earth strip for 24 hours after the event time
+ * (dashboard `WEATHER_TIME_ZONE` for display clock).
  * @see https://earthquake.usgs.gov/fdsnws/event/1/
  */
 import {
-  EARTHQUAKE_DISPLAY_CALENDAR_DAYS,
+  EARTHQUAKE_DISPLAY_MS,
   earthquakePinLocationKey,
   loadEarthquakePin,
   saveEarthquakePin,
@@ -14,7 +14,7 @@ import {
 const USGS_QUERY = 'https://earthquake.usgs.gov/fdsnws/event/1/query';
 const EARTH_RADIUS_MI = 3958.7613; // mean Earth radius, statute miles
 const KM_PER_MI = 1.609344;
-const WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const WINDOW_MS = EARTHQUAKE_DISPLAY_MS;
 const RADIUS_MI = 150;
 // Search center: downtown Oakland, CA (fixed — not the dashboard weather point).
 const CENTER_LAT = 37.8044;
@@ -68,35 +68,13 @@ function dashTimeZone(env = process.env) {
 }
 
 /**
- * @param {Date} date
- * @param {string} timeZone
- * @returns {string} YYYY-MM-DD
+ * @param {number} timeMs
+ * @param {number} [nowMs]
  */
-function wallYmdAt(date, timeZone) {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(date);
-}
-
-/**
- * @param {string} ymd YYYY-MM-DD
- */
-function wallYmdToUtcNoon(ymd) {
-  const [y, m, d] = ymd.split('-').map((x) => Number.parseInt(x, 10));
-  return Date.UTC(y, m - 1, d, 12, 0, 0);
-}
-
-/**
- * @param {string} fromYmd
- * @param {string} toYmd
- */
-function calendarDaysSince(fromYmd, toYmd) {
-  const a = wallYmdToUtcNoon(fromYmd);
-  const b = wallYmdToUtcNoon(toYmd);
-  return Math.round((b - a) / 86400000);
+function isWithinDisplayWindow(timeMs, nowMs = Date.now()) {
+  if (!Number.isFinite(timeMs)) return false;
+  const age = nowMs - timeMs;
+  return age >= 0 && age < EARTHQUAKE_DISPLAY_MS;
 }
 
 /**
@@ -116,21 +94,30 @@ function eventMdFromMs(timeMs, timeZone) {
   return mo && da ? `${mo}/${da}` : '';
 }
 
-/** @param {string} ymd YYYY-MM-DD */
-function ymdToMdSlash(ymd) {
-  const m = String(ymd).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return '';
-  return `${Number.parseInt(m[2], 10)}/${Number.parseInt(m[3], 10)}`;
+/**
+ * @param {number} timeMs
+ * @param {string} timeZone
+ * @returns {string} e.g. "8/4 2:15 PM"
+ */
+function eventDateTimeFromMs(timeMs, timeZone) {
+  if (!Number.isFinite(timeMs)) return '';
+  const formatted = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(timeMs));
+  return formatted.replace(',', '');
 }
 
 /**
  * @param {object} pin
- * @param {string} todayYmd
  * @param {string} timeZone
+ * @param {number} [nowMs]
  */
-function buildStripItemFromPin(pin, todayYmd, timeZone) {
-  const dayIndex = calendarDaysSince(pin.firstShownYmd, todayYmd);
-  if (dayIndex < 0 || dayIndex >= EARTHQUAKE_DISPLAY_CALENDAR_DAYS) return null;
+function buildStripItemFromPin(pin, timeZone, nowMs = Date.now()) {
+  if (!isWithinDisplayWindow(pin.timeMs, nowMs)) return null;
 
   const distWhole = Math.max(0, Math.round(pin.distMi));
   const depthStr = formatDepthKmShort(pin.depthKm);
@@ -140,17 +127,17 @@ function buildStripItemFromPin(pin, todayYmd, timeZone) {
   parts.push(`${distWhole} mi`);
 
   const eventMd = eventMdFromMs(pin.timeMs, timeZone);
-  const showEventDate = dayIndex >= 1;
-  if (showEventDate && eventMd) parts.push(eventMd);
+  const eventAt = eventDateTimeFromMs(pin.timeMs, timeZone);
+  if (eventAt) parts.push(eventAt);
 
   return {
     earthType: 'usgs_quake_week_max',
     label: 'Earthquake',
-    quakeAsOfMd: showEventDate && eventMd ? eventMd : ymdToMdSlash(todayYmd),
+    quakeAsOfMd: eventMd || null,
     detailLine: parts.join(' · '),
     forecastUrl: pin.url || 'https://earthquake.usgs.gov/earthquakes/map/',
     quakeEventMd: eventMd || null,
-    quakeDisplayDay: dayIndex + 1,
+    quakeEventAt: eventAt || null,
   };
 }
 
@@ -236,6 +223,8 @@ async function fetchStrongestUsgsQuake(lat, lon) {
     if (!Number.isFinite(distMi) || distMi > RADIUS_MI + 0.25) continue;
 
     const timeMs = Number(props.time);
+    if (!isWithinDisplayWindow(timeMs)) continue;
+
     const eventId =
       typeof f.id === 'string' && f.id.trim() !== ''
         ? f.id.trim()
@@ -269,15 +258,11 @@ export async function buildUsgsEarthquakeWeekItem() {
   const lon = CENTER_LON;
 
   const timeZone = dashTimeZone();
-  const todayYmd = wallYmdAt(new Date(), timeZone);
+  const nowMs = Date.now();
   const locKey = earthquakePinLocationKey(lat, lon);
 
   let pin = await loadEarthquakePin(locKey);
-  if (
-    pin &&
-    typeof pin.firstShownYmd === 'string' &&
-    calendarDaysSince(pin.firstShownYmd, todayYmd) >= EARTHQUAKE_DISPLAY_CALENDAR_DAYS
-  ) {
+  if (pin && !isWithinDisplayWindow(pin.timeMs, nowMs)) {
     pin = null;
     await saveEarthquakePin(locKey, null);
   }
@@ -285,7 +270,7 @@ export async function buildUsgsEarthquakeWeekItem() {
   const fetched = await fetchStrongestUsgsQuake(lat, lon);
   if (!fetched.ok) {
     if (pin) {
-      const item = buildStripItemFromPin(pin, todayYmd, timeZone);
+      const item = buildStripItemFromPin(pin, timeZone, nowMs);
       return { ok: true, item, pinned: true, upstream: fetched.error };
     }
     return { ok: false, error: fetched.error };
@@ -295,10 +280,7 @@ export async function buildUsgsEarthquakeWeekItem() {
   if (fresh) {
     const isNewEvent = !pin || pin.eventId !== fresh.eventId;
     if (isNewEvent) {
-      pin = {
-        ...fresh,
-        firstShownYmd: todayYmd,
-      };
+      pin = { ...fresh };
       await saveEarthquakePin(locKey, pin);
     } else {
       pin = { ...pin, ...fresh };
@@ -309,11 +291,15 @@ export async function buildUsgsEarthquakeWeekItem() {
     return { ok: true, item: null };
   }
 
-  const item = buildStripItemFromPin(pin, todayYmd, timeZone);
+  const item = buildStripItemFromPin(pin, timeZone, nowMs);
   if (!item) {
     await saveEarthquakePin(locKey, null);
     return { ok: true, item: null };
   }
 
-  return { ok: true, item, pinned: Boolean(fresh) || calendarDaysSince(pin.firstShownYmd, todayYmd) > 0 };
+  return {
+    ok: true,
+    item,
+    pinned: Boolean(fresh) || Boolean(pin),
+  };
 }

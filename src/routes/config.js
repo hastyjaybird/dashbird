@@ -10,6 +10,8 @@ import {
 } from '../lib/google-calendar-ical.js';
 import { resolveEventsFinderGoogleCalendar } from '../lib/events-finder-google-calendar.js';
 import { resolveDashboardWeatherLatLon } from '../lib/hero-weather-location.js';
+import { resolveActiveLocation } from '../lib/resolve-active-location.js';
+import { loadAwayBase, getActiveAwayProfile } from '../lib/away-base-store.js';
 import { fetchNwsPointsDocument, mapClickUrlForLatLon } from '../lib/nws-points.js';
 import { reverseGeocodeCoords } from '../lib/reverse-geocode.js';
 import { resolveSecondaryWatchLocation } from '../lib/secondary-watch-location.js';
@@ -47,8 +49,17 @@ async function readLastBackupFromFile() {
 }
 
 router.get('/', async (req, res) => {
-  const { lat, lon, zip: weatherZip, place: weatherPlace, stateAbbrev } =
-    await resolveDashboardWeatherLatLon();
+  const homeLoc = await resolveDashboardWeatherLatLon();
+  const awayState = await loadAwayBase();
+  const active = await resolveActiveLocation({
+    forceMode: awayState.autoAway ? 'away' : awayState.preview ? 'preview' : 'home',
+  });
+  const useAway = active.mode === 'preview' || active.mode === 'away';
+  const lat = useAway ? active.lat : homeLoc.lat;
+  const lon = useAway ? active.lon : homeLoc.lon;
+  const weatherZip = useAway ? active.zip : homeLoc.zip;
+  const weatherPlace = useAway ? active.place : homeLoc.place;
+  const stateAbbrev = useAway ? active.stateAbbrev : homeLoc.stateAbbrev;
 
   // Second hero weather tile: Settings → Secondary ZIP when set; else SF_WEATHER_* env.
   let sfLat = parseFloat(process.env.SF_WEATHER_LAT ?? '37.7749');
@@ -71,7 +82,9 @@ router.get('/', async (req, res) => {
     }
   }
 
-  let weatherTimeZone = (process.env.WEATHER_TIME_ZONE || '').trim();
+  let weatherTimeZone = useAway
+    ? (active.timeZone || '').trim()
+    : (process.env.WEATHER_TIME_ZONE || '').trim();
   let nwsMapClickUrl = mapClickUrlForLatLon(lat, lon);
   if (!weatherTimeZone) {
     try {
@@ -148,6 +161,24 @@ router.get('/', async (req, res) => {
     }
   }
 
+  const awayProfile = getActiveAwayProfile(awayState);
+  const locationMode = active.mode;
+  const effectiveLabel = useAway
+    ? active.label
+    : envLabel || `${placeLabel}${weatherZip ? ` · ${weatherZip}` : ''}`;
+
+  // Preview: secondary tile shows home. Auto-away: client hides secondary.
+  let outSfLat = Number.isFinite(sfLat) ? sfLat : 37.7749;
+  let outSfLon = Number.isFinite(sfLon) ? sfLon : -122.4194;
+  let outSfPlace = sfWeatherPlace;
+  let outSfZip = sfWeatherZip;
+  if (locationMode === 'preview') {
+    outSfLat = homeLoc.lat;
+    outSfLon = homeLoc.lon;
+    outSfPlace = homeLoc.place || envLabel || 'Home';
+    outSfZip = homeLoc.zip;
+  }
+
   res.json({
     lanOrigin,
     calendarEmbedUrl,
@@ -158,14 +189,40 @@ router.get('/', async (req, res) => {
     weatherLat: lat,
     weatherLon: lon,
     weatherZip,
-    weatherPlace: placeLabel,
+    weatherPlace: useAway ? (active.place || active.label || placeLabel) : placeLabel,
     weatherTimeZone,
     nwsMapClickUrl,
-    sfWeatherLat: Number.isFinite(sfLat) ? sfLat : 37.7749,
-    sfWeatherLon: Number.isFinite(sfLon) ? sfLon : -122.4194,
-    sfWeatherPlace,
-    sfWeatherZip,
-    locationLabel: envLabel || `${placeLabel}${weatherZip ? ` · ${weatherZip}` : ''}`,
+    sfWeatherLat: outSfLat,
+    sfWeatherLon: outSfLon,
+    sfWeatherPlace: outSfPlace,
+    sfWeatherZip: outSfZip,
+    locationLabel: effectiveLabel,
+    locationMode,
+    homeBase: {
+      lat: homeLoc.lat,
+      lon: homeLoc.lon,
+      zip: homeLoc.zip,
+      place: homeLoc.place,
+      label: envLabel || homeLoc.place || 'Home',
+      timeZone: (process.env.WEATHER_TIME_ZONE || '').trim() || 'America/Los_Angeles',
+    },
+    awayBase: awayProfile
+      ? {
+          id: awayProfile.id,
+          label: awayProfile.label,
+          zip: awayProfile.zip,
+          timeZone: awayProfile.timeZone,
+          radiusMi: awayProfile.radiusMi,
+          preview: awayState.preview === true,
+          autoAway: awayState.autoAway === true,
+          hideEarth: Array.isArray(awayProfile.hideEarth) ? awayProfile.hideEarth : [],
+          events: awayProfile.events || null,
+          lat: useAway ? active.lat : null,
+          lon: useAway ? active.lon : null,
+        }
+      : null,
+    hideEarth: useAway && Array.isArray(active.hideEarth) ? active.hideEarth : [],
+    awayOnly: locationMode === 'away',
     lastBackupAt,
     vikunjaConfigured,
     vikunjaProjectConfigured: vikunjaConfigured && vikunjaProjectId != null,

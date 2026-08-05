@@ -4,7 +4,7 @@
  * The headless-Chrome scrapers in chrome-web-search.js work great from a home
  * IP but can't run on the slim cloud image (no Chromium) and get bot-challenged
  * from datacenter IPs. This official API returns real Brave results over plain
- * HTTPS, so the cloud (Vultr / duckdns) can discover event URLs and fliers
+ * HTTPS, so the cloud (Vultr / jayhasty.com) can discover event URLs and fliers
  * without a browser. Free tier ≈ 2k queries/month.
  *
  * Set BRAVE_SEARCH_API_KEY (subscription token) to enable. When unset, every

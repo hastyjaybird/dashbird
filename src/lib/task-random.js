@@ -111,7 +111,10 @@ export function missingTaskMetaFields(taskMeta, projectMeta) {
   if (!taskMeta?.priority) missing.push('priority');
   if (!taskMeta?.difficulty) missing.push('difficulty');
   if (!taskMeta?.duration) missing.push('duration');
-  if (!effectiveTaskLocations(taskMeta, projectMeta).length) missing.push('locations');
+  // locationAny counts as set (same as the card UI).
+  if (!taskMeta?.locationAny && !effectiveTaskLocations(taskMeta, projectMeta).length) {
+    missing.push('locations');
+  }
   if (!taskMeta?.timeAny && !effectiveTaskTimes(taskMeta).length) missing.push('times');
   return missing;
 }
@@ -148,12 +151,28 @@ export function pickRandomTask(tasks, meta, filters) {
     return taskMatchesRandomFilters(taskMeta, projectMeta, filters);
   });
   if (!pool.length) return { task: null, poolSize: 0, totalOpen: tasks.length };
-  const task = pickWeightedTask(pool, meta.byTaskId);
+
+  // Prefer incomplete tags first so Random surfaces tasks that still need attributes.
+  /** @type {typeof pool} */
+  const incomplete = [];
+  /** @type {typeof pool} */
+  const complete = [];
+  for (const t of pool) {
+    const taskMeta = meta.byTaskId[String(t.id)] || null;
+    const projectMeta = t.projectId != null ? meta.byProjectId[String(t.projectId)] || null : null;
+    if (missingTaskMetaFields(taskMeta, projectMeta).length) incomplete.push(t);
+    else complete.push(t);
+  }
+  const active = incomplete.length ? incomplete : complete;
+  const task = pickWeightedTask(active, meta.byTaskId);
   const taskMeta = meta.byTaskId[String(task.id)] || null;
   const projectMeta = task.projectId != null ? meta.byProjectId[String(task.projectId)] || null : null;
   return {
     task,
     poolSize: pool.length,
+    incompletePoolSize: incomplete.length,
+    completePoolSize: complete.length,
+    pickPhase: incomplete.length ? 'incomplete' : 'complete',
     totalOpen: tasks.length,
     meta: taskMeta,
     projectMeta,

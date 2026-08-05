@@ -236,6 +236,8 @@ const SOURCE_PREF = {
   meetup: 4,
   multiverse: 4,
   dorkbotsf: 4,
+  coolstuff: 3,
+  webpage: 3,
   secretparty: 3,
   gmail: 1,
 };
@@ -741,6 +743,27 @@ export function getEventsFinderEventById(id, env = process.env) {
   const db = openEventsFinderDb(env);
   const row = db.prepare('SELECT * FROM events WHERE id = ?').get(key);
   return row ? rowToEvent(row) : null;
+}
+
+/**
+ * Apply user overrides onto an existing catalog row (keeps id/source).
+ * @param {string} id
+ * @param {Record<string, unknown>} patch
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {object | null}
+ */
+export function patchEventsFinderEvent(id, patch, env = process.env) {
+  const existing = getEventsFinderEventById(id, env);
+  if (!existing) return null;
+  const merged = {
+    ...existing,
+    ...patch,
+    id: existing.id,
+    source: existing.source,
+    manualEdit: true,
+  };
+  upsertEventsFinderEvents([merged], env);
+  return getEventsFinderEventById(id, env);
 }
 
 /**

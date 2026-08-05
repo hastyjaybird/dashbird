@@ -10,7 +10,7 @@ Cross-reference: v1 ships the dashboard shell and core panels; v2 items mount in
 
 - **Chat** — out of scope for this dashboard repo.
 - **CompHealth** — separate project; not built here.
-- **Public cloud** — **live path:** Vultr Silicon Valley + DuckDNS ([`deploy-vultr.md`](deploy-vultr.md)). LAN compose remains for desktop/Playwright enrich.
+- **Public cloud** — **live path:** Vultr Silicon Valley + jayhasty.com ([`deploy-vultr.md`](deploy-vultr.md)). LAN compose remains for desktop/Playwright enrich.
 - **Desktop protocol tiles** (`cursor://`, local app launchers) — out of scope; bookmarks are web URLs only.
 
 ---
@@ -44,8 +44,9 @@ Cross-reference: v1 ships the dashboard shell and core panels; v2 items mount in
 
 ### 5. Personal / local news
 
-- **UI slot today:** left sidebar card `Local News` — **visual placeholder only**.
-- **V2 build:** personal/local feed with the same preference-learning pattern as Events.
+- **UI slot today:** left sidebar card `Local News` — live feeds, Filters panel, Find feeds browser (publisher → RSS lanes), taste criteria, Important badge for BD watch.
+- **V2 build:** preference-learning refinements (same pattern as Events).
+- **Fact-checker (v2 reminder):** run each article through a fact-checker **before displaying** it in Local News (block or badge low-confidence / contested claims; do not show raw headlines unvetted once this lands).
 
 ### 6. Network (CRM)
 

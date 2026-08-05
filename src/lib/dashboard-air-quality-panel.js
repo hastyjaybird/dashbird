@@ -6,6 +6,7 @@
  */
 import { fetchOpenMeteoCurrentUsAqi, usAqiCategoryStyle } from './dashboard-air-quality.js';
 import { resolveDashboardWeatherLatLon } from './hero-weather-location.js';
+import { resolveActiveLocation } from './resolve-active-location.js';
 
 /** Show panel / alerts when current US AQI is strictly above this value (>100 = Unhealthy for sensitive groups or worse). */
 export const AQI_SHOW_THRESHOLD = 100;
@@ -81,8 +82,15 @@ export async function getAirQualityPanelPayload() {
   }
 
   const forceShow = airQualityForceShow();
-  const { lat, lon, zip } = await resolveDashboardWeatherLatLon();
-  const timeZone = (process.env.WEATHER_TIME_ZONE || '').trim() || 'America/Los_Angeles';
+  const active = await resolveActiveLocation();
+  const useAway = active.mode === 'preview' || active.mode === 'away';
+  const home = useAway ? null : await resolveDashboardWeatherLatLon();
+  const lat = useAway ? active.lat : home.lat;
+  const lon = useAway ? active.lon : home.lon;
+  const zip = useAway ? active.zip : home.zip;
+  const timeZone = useAway
+    ? active.timeZone || 'America/New_York'
+    : (process.env.WEATHER_TIME_ZONE || '').trim() || 'America/Los_Angeles';
   const mapUrl = airQualityMapEmbedUrl(lat, lon);
   const mapPageUrl = airQualityMapPageUrl(lat, lon);
 
