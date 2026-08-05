@@ -18,7 +18,8 @@
     "smoke:weather-radar": "node scripts/smoke-weather-radar.mjs",
     "catalog:migrate": "node scripts/migrate-to-web-catalog.mjs",
     "catalog:export": "node scripts/catalog-export.mjs",
-    "catalog:import": "node scripts/catalog-import.mjs"
+    "catalog:import": "node scripts/catalog-import.mjs",
+    "pull:dev-requests": "node scripts/pull-dev-requests-from-cloud.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
