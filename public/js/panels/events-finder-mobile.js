@@ -9,7 +9,7 @@ import {
   createCityChecks,
   createRangeCalendar,
   normalizeLocalTime,
-} from './events-filter-ui.js';
+} from './events-filter-ui.js?v=events-filter-ui-20260805-1';
 
 const EVENTS_CACHE_KEY = 'events-finder:events';
 const EVENTS_CACHE_MAX_MS = 6 * 60 * 60 * 1000;

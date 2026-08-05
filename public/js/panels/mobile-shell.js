@@ -8,7 +8,34 @@ import {
 
 const MOBILE_TAB_KEY = 'dashbirdMobileTab';
 /** Bump when any mobile panel module changes (cache-bust dynamic imports). */
-const MOBILE_PANELS_V = 'mobile-panels-20260720-attendance-1';
+const MOBILE_PANELS_V = 'mobile-panels-20260805-events-1';
+
+/**
+ * @param {unknown} err
+ * @param {string} moduleUrl
+ * @returns {Promise<string>}
+ */
+async function describeModuleImportError(err, moduleUrl) {
+  let detail = err instanceof Error ? err.message : String(err);
+  const cause = err instanceof Error && err.cause instanceof Error ? err.cause.message : '';
+  if (cause && !detail.includes(cause)) detail += ` (${cause})`;
+  try {
+    const r = await fetch(moduleUrl, { credentials: 'same-origin', cache: 'no-store' });
+    if (!r.ok) {
+      detail += r.status === 401
+        ? ' — session expired; open /auth/device-bind on this phone'
+        : ` — server returned HTTP ${r.status}`;
+      return detail;
+    }
+    const ct = String(r.headers.get('content-type') || '').toLowerCase();
+    if (ct && !ct.includes('javascript') && !ct.includes('ecmascript')) {
+      detail += ` — expected JavaScript, got ${ct.split(';')[0]}`;
+    }
+  } catch {
+    /* ignore probe errors */
+  }
+  return detail;
+}
 
 /**
  * @returns {import('../lib/mobile-history.js').MobileTab}
@@ -187,13 +214,12 @@ export function mountMobileShell(mounts = {}) {
     status.className = 'mobile-shell__status';
     status.textContent = 'Loading events…';
     eventsRoot.append(status);
+    const eventsModuleUrl = new URL(`./events-finder-mobile.js?v=${MOBILE_PANELS_V}`, import.meta.url).href;
     try {
-      const { mountEventsFinderMobile } = await import(
-        `./events-finder-mobile.js?v=${MOBILE_PANELS_V}`
-      );
+      const { mountEventsFinderMobile } = await import(eventsModuleUrl);
       mountEventsFinderMobile(eventsRoot);
     } catch (e) {
-      status.textContent = `Events failed: ${e?.message || e}`;
+      status.textContent = `Events failed: ${await describeModuleImportError(e, eventsModuleUrl)}`;
       eventsMounted = false;
     }
   }

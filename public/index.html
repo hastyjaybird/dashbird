@@ -53,6 +53,16 @@
           }
           if (view === 'mobile') {
             document.documentElement.classList.add('dashbird-view-mobile');
+            var mobileModulePreloads = [
+              '/js/panels/events-filter-ui.js?v=events-filter-ui-20260805-1',
+              '/js/panels/events-finder-mobile.js?v=mobile-panels-20260805-events-1',
+            ];
+            for (var mi = 0; mi < mobileModulePreloads.length; mi++) {
+              var mpl = document.createElement('link');
+              mpl.rel = 'modulepreload';
+              mpl.href = mobileModulePreloads[mi];
+              document.head.appendChild(mpl);
+            }
             document.addEventListener('DOMContentLoaded', function () {
               var pm = document.getElementById('page-mobile');
               if (!pm) return;
@@ -663,6 +673,6 @@
       </section>
     </div>
     </div>
-    <script type="module" src="/js/app.js?v=attendance-online-1"></script>
+    <script type="module" src="/js/app.js?v=mobile-panels-20260805-events-1"></script>
   </body>
 </html>
