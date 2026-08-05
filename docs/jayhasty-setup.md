@@ -238,7 +238,10 @@ Open once on each device (enter basic-auth password if prompted):
 - **Home Linux:** `https://dashbird.jayhasty.com/auth/device-bind?did=edd37155-3ffe-4d18-a775-d6cdcedbf343`
 - **Phone:** `https://dashbird.jayhasty.com/auth/device-bind?did=1c0c1947-ad36-4032-aed5-00eb5b28e166`
 
-Update phone/laptop bookmarks to `https://dashbird.jayhasty.com`.
+Update phone/laptop bookmarks to `https://dashbird.jayhasty.com`. Old
+`https://dashbird.duckdns.org/...` links (including home-screen icons) keep working:
+Caddy redirects them permanently to `dashbird.jayhasty.com` — trusted-device trust
+is per-domain, so each device still needs the one-time bind above on the new domain.
 
 ### 3.5 Google Cloud OAuth (Events Finder Gmail)
 
@@ -259,6 +262,7 @@ If you use Dashbird Gmail ingest:
 | www redirect | `https://www.jayhasty.com` → apex |
 | Portfolio alias | `https://portfolio.jayhasty.com` |
 | Dashbird loads | `https://dashbird.jayhasty.com` (auth or trusted device) |
+| Legacy redirect | `https://dashbird.duckdns.org` → `https://dashbird.jayhasty.com` |
 | Receive mail | Send to `jay@jayhasty.com` from outside |
 | Send mail | Send from `jay@jayhasty.com` to yourself |
 | TLS | Padlock on all HTTPS URLs |

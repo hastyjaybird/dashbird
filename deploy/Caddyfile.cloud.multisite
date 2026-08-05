@@ -12,6 +12,7 @@
 #   portfolio.jayhasty.com    → same portfolio (alias)
 #   dashbird.jayhasty.com     → private Dashbird
 #   calclaim.jayhasty.com     → CalClaim Node app (container calclaim:3000)
+#   dashbird.duckdns.org      → legacy redirect → dashbird.jayhasty.com
 #
 # DNS must be grey-cloud (DNS only) to Vultr before ACME. Orange proxy causes 525
 # until origin has certs. Do NOT enable while DNS still points at Squarespace.
@@ -61,6 +62,13 @@
 	}
 
 	reverse_proxy calclaim:3000
+}
+
+# Legacy DuckDNS host — pre-cutover phone/laptop bookmarks and home-screen icons
+# still point here. With no site block Caddy fails the TLS handshake entirely
+# ("can't establish a secure connection"), so redirect every path permanently.
+dashbird.duckdns.org {
+	redir https://{$DASHBOARD_DOMAIN}{uri} permanent
 }
 
 # Private Dashbird — basic auth + trusted-device bypass
