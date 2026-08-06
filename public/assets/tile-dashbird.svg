@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Dashbird">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a1018"/>
+      <stop offset="55%" stop-color="#101a28"/>
+      <stop offset="100%" stop-color="#0c1520"/>
+    </linearGradient>
+    <linearGradient id="bird" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7bffce"/>
+      <stop offset="100%" stop-color="#6ec8ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <!-- soft horizon -->
+  <path d="M18 86c22-18 70-18 92 0" fill="none" stroke="#6ec8ff" stroke-width="3" stroke-linecap="round" opacity="0.28"/>
+  <!-- compact bird mark -->
+  <path
+    d="M34 72c18-28 42-36 60-28-10 4-18 12-22 22 14-2 28 4 36 14-20 2-38-2-52-12-6 8-14 14-22 16 2-4 2-8 0-12z"
+    fill="url(#bird)"
+  />
+  <circle cx="78" cy="48" r="4.5" fill="#f2f6ff"/>
+</svg>
