@@ -1194,9 +1194,28 @@ export function mountEventsFinderMobile(root) {
   function openConferenceWatchlistPopout() {
     const wrap = document.createElement('div');
     wrap.className = 'events-finder__event-sources';
+
+    const tabs = document.createElement('div');
+    tabs.className = 'events-finder__event-sources-tabs';
+    const feedsTab = document.createElement('button');
+    feedsTab.type = 'button';
+    feedsTab.className = 'events-finder__event-sources-tab events-finder__event-sources-tab--active';
+    feedsTab.textContent = 'Event feeds';
+    const producersTab = document.createElement('button');
+    producersTab.type = 'button';
+    producersTab.className = 'events-finder__event-sources-tab';
+    producersTab.textContent = 'Producers';
+    tabs.append(feedsTab, producersTab);
+
+    const feedsPanel = document.createElement('div');
+    feedsPanel.className = 'events-finder__event-sources-panel';
+    const producersPanel = document.createElement('div');
+    producersPanel.className = 'events-finder__event-sources-panel';
+    producersPanel.hidden = true;
+
     const intro = document.createElement('p');
     intro.className = 'muted';
-    intro.textContent = 'Websites scraped into the regular Events feed.';
+    intro.textContent = 'Platform feeds — scraped often, filtered by location.';
     const list = document.createElement('ul');
     list.className = 'events-finder__event-sources-list';
     const msg = document.createElement('p');
@@ -1215,12 +1234,48 @@ export function mountEventsFinderMobile(root) {
     rescrapeBtn.type = 'button';
     rescrapeBtn.className = 'events-finder__big-events-again';
     rescrapeBtn.textContent = 'Re-scrape listings';
-    wrap.append(intro, labelInput, urlInput, addBtn, rescrapeBtn, msg, list);
+    feedsPanel.append(intro, labelInput, urlInput, addBtn, rescrapeBtn, msg, list);
+
+    const prodIntro = document.createElement('p');
+    prodIntro.className = 'muted';
+    prodIntro.textContent =
+      'Paste an official URL (e.g. burningman.org). Not location-filtered. Double-tap Edit to fix details.';
+    const prodUrl = document.createElement('input');
+    prodUrl.className = 'events-finder__big-events-input events-finder__big-events-input--url';
+    prodUrl.placeholder = 'https://burningman.org/';
+    const prodAdd = document.createElement('button');
+    prodAdd.type = 'button';
+    prodAdd.className = 'events-finder__big-events-confirm';
+    prodAdd.textContent = 'Add & scrape';
+    const prodMsg = document.createElement('p');
+    prodMsg.className = 'events-finder__big-events-msg muted';
+    const prodList = document.createElement('div');
+    prodList.className = 'events-finder__big-events-mobile-list';
+    conferencePopoutStatusList = prodList;
+    paintBigEventsTable(conferenceWatchItemsFromPayload(), prodList);
+    void refreshBigEventsFromStore();
+    producersPanel.append(prodIntro, prodUrl, prodAdd, prodMsg, prodList);
+
+    wrap.append(tabs, feedsPanel, producersPanel);
+
+    function showTab(which) {
+      const onFeeds = which === 'feeds';
+      feedsPanel.hidden = !onFeeds;
+      producersPanel.hidden = onFeeds;
+      feedsTab.classList.toggle('events-finder__event-sources-tab--active', onFeeds);
+      producersTab.classList.toggle('events-finder__event-sources-tab--active', !onFeeds);
+      if (!onFeeds) void refreshBigEventsFromStore();
+    }
+    feedsTab.addEventListener('click', () => showTab('feeds'));
+    producersTab.addEventListener('click', () => showTab('producers'));
 
     function paint(sources) {
       list.replaceChildren();
       const n = sources.length;
-      conferenceToggle.textContent = n > 0 ? `Event sources (${n})` : 'Event sources';
+      conferenceToggle.dataset.sourceCount = String(n);
+      const p = Number(conferenceToggle.dataset.producerCount || 0);
+      const total = n + p;
+      conferenceToggle.textContent = total > 0 ? `Event sources (${total})` : 'Event sources';
       if (!sources.length) {
         const li = document.createElement('li');
         li.className = 'muted';
@@ -1270,8 +1325,38 @@ export function mountEventsFinderMobile(root) {
         msg.textContent = String(e?.message || e);
       }
     });
+    prodAdd.addEventListener('click', async () => {
+      const raw = String(prodUrl.value || '').trim();
+      const href = /^https?:\/\//i.test(raw) ? raw : raw ? `https://${raw}` : '';
+      if (!href) return;
+      prodAdd.disabled = true;
+      prodMsg.textContent = 'Scraping…';
+      try {
+        const res = await fetch('/api/events-finder/big-events/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: href }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        prodUrl.value = '';
+        prodMsg.textContent = 'Added — researching dates & tickets…';
+        void refreshBigEventsFromStore();
+        reloadBigEventsSoon();
+      } catch (e) {
+        prodMsg.textContent = String(e?.message || e);
+      } finally {
+        prodAdd.disabled = false;
+      }
+    });
 
-    openConferencePopout({ title: 'Event sources', body: wrap });
+    openConferencePopout({
+      title: 'Event sources',
+      body: wrap,
+      onClose: () => {
+        conferencePopoutStatusList = null;
+      },
+    });
     void fetch('/api/events-finder-sources', { cache: 'no-store' })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
@@ -1281,6 +1366,17 @@ export function mountEventsFinderMobile(root) {
       .catch((e) => {
         msg.textContent = String(e?.message || e);
       });
+    void fetch('/api/events-finder/big-events/', { cache: 'no-store' })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (Array.isArray(data.items)) {
+          conferenceToggle.dataset.producerCount = String(data.items.length);
+          const n = Number(conferenceToggle.dataset.sourceCount || 0);
+          const total = n + data.items.length;
+          conferenceToggle.textContent = total > 0 ? `Event sources (${total})` : 'Event sources';
+        }
+      })
+      .catch(() => {});
   }
 
   conferenceToggle.addEventListener('click', () => {
@@ -2694,8 +2790,16 @@ export function mountEventsFinderMobile(root) {
       title.textContent = titleText;
     }
     const badge = document.createElement('span');
-    badge.className = 'events-finder__card-bigbadge';
-    badge.textContent = 'Big event';
+    badge.className = 'events-finder__card-bigbadge events-finder__card-bigbadge--icon';
+    badge.title = 'Producer event';
+    badge.setAttribute('aria-label', 'Producer event');
+    const badgeImg = document.createElement('img');
+    badgeImg.className = 'events-finder__card-bigbadge-img';
+    badgeImg.src = '/icons/producer-tent.png';
+    badgeImg.srcset = '/icons/producer-tent.png 1x, /icons/producer-tent@2x.png 2x';
+    badgeImg.alt = '';
+    badgeImg.decoding = 'async';
+    badge.append(badgeImg);
     head.append(title, badge);
 
     const meta = document.createElement('p');
@@ -3083,7 +3187,10 @@ export function mountEventsFinderMobile(root) {
     lastFilteredEvents = events;
     if (mapBackdrop) void syncMap(events, data);
 
-    const activeBigEvents = [];
+    const activeBigEvents = showSkipped
+      ? []
+      : (Array.isArray(data.conferenceWatchlistItems) ? data.conferenceWatchlistItems : [])
+          .filter((it) => it && it.displayActive && !it.skipped && !it.snoozed);
 
     list.replaceChildren();
     refreshConferencePopoutIfOpen();
@@ -3095,6 +3202,9 @@ export function mountEventsFinderMobile(root) {
       return;
     }
     status.hidden = true;
+    for (const item of activeBigEvents) {
+      list.append(buildBigEventCard(item));
+    }
     for (const ev of events) {
       list.append(buildCard(ev));
     }

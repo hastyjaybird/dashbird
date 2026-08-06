@@ -279,11 +279,12 @@ If you use Dashbird Gmail ingest:
 
 **CalClaim (Vultr + Caddy — current):**
 
-1. **Cloudflare:** `A` `calclaim` → Vultr IP, **DNS only (grey cloud)**.
-2. On VPS: set `CALCLAIM_DOMAIN=calclaim.jayhasty.com` in `/opt/dashbird/.env`, use multisite Caddy with the calclaim `reverse_proxy` block.
-3. From `calclaim/`: `CLOUD_HOST=root@VULTR_IP ./scripts/sync-to-cloud.sh` (deploys `/opt/calclaim`, webhook + `PUBLIC_BASE_URL=https://calclaim.jayhasty.com`).
-4. Recreate Caddy: `docker compose -f docker-compose.cloud.yml up -d --force-recreate caddy` in `/opt/dashbird`.
-5. Do **not** put CalClaim under `jayhasty.com/calclaim`.
+1. **Cloudflare:** `A` `calclaim` → Vultr IP. **Proxied (orange) is fine** (same pattern as live `dashbird`); fighting the grey-cloud toggle kept deleting this record and causing NXDOMAIN after deploys.
+2. Put `CLOUDFLARE_API_TOKEN` (Zone DNS Edit on `jayhasty.com`) in `calclaim/.env` so `scripts/sync-to-cloud.sh` upserts the record every deploy via `scripts/ensure-calclaim-dns.sh`.
+3. On VPS: set `CALCLAIM_DOMAIN=calclaim.jayhasty.com` in `/opt/dashbird/.env`, use multisite Caddy with the calclaim `reverse_proxy` block.
+4. From `calclaim/`: `CLOUD_HOST=root@VULTR_IP ./scripts/sync-to-cloud.sh` (deploys `/opt/calclaim`, upserts DNS, verifies public HTTPS).
+5. Recreate Caddy if the site block is new: `docker compose -f docker-compose.cloud.yml up -d --force-recreate caddy` in `/opt/dashbird`.
+6. Do **not** put CalClaim under `jayhasty.com/calclaim`.
 
 **CalClaim (Railway alternative):** `CNAME` `calclaim` → Railway hostname instead of Vultr `A`, then set the same `PUBLIC_BASE_URL`.
 

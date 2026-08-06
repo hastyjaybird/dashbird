@@ -212,9 +212,9 @@ export const DASHBOARD_MONITORING_SOURCES = [
   {
     id: 'job_watch_anthropic',
     group: 'Jobs',
-    label: 'Job Watch — Anthropic careers (targets + new-fit scan)',
+    label: 'Opportunity Watch — Anthropic / Google / OpenAI roles',
     source:
-      'Greenhouse public board API every 2h · /api/job-watch · docs/job-watch.md',
+      'Greenhouse + Ashby + Google Careers scrape every 2h · /api/job-watch · docs/job-watch.md',
   },
   {
     id: 'local_news_bd_watchlist',

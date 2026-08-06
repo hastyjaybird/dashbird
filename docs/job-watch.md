@@ -1,6 +1,8 @@
-# Job Watch — Anthropic careers panel
+# Opportunity Watch — roles panel
 
-**Purpose:** Watch STRATEGY-aligned Anthropic roles and assess brand-new postings — in a dedicated left-rail **Job Watch** card, not Local News.
+**Purpose:** Watch STRATEGY-aligned opportunities at Anthropic, Google, and OpenAI (jobs, contracts, fellowships, grants) and assess brand-new postings — in a dedicated left-rail **Opportunity Watch** card, not Local News.
+
+> Internal identifiers still say `job-watch` (files, CSS classes, `/api/job-watch`). Only the user-facing name changed.
 
 **Strategy source:** portfolio `products/applications/anthropic/STRATEGY.md`  
 **Config:** `src/data/job-watch-targets.json`  
@@ -26,7 +28,53 @@ Feed `anthropic-careers-bd` is stripped from Local News subscriptions on load/sa
 | Watch | Economic mobility / Claude Corps | Green sparkle star |
 | Queued | Startup Partnerships Lead | Green sparkle star |
 
-Closed targets show a **grey** hollow circle.
+Closed targets show a **solid grey crystal**.
+
+### OpenAI (Ashby)
+
+| Priority | Target |
+|----------|--------|
+| 1 | Forward Deployed Engineer, Gov |
+| 1 | AI Success Engineer, Government |
+| 2 | Partner AI Deployment Engineer |
+| Watch | AI Success / Education |
+| Watch | Academic / research partnerships |
+
+Board: `https://api.ashbyhq.com/posting-api/job-board/openai` (`type: ashby`, `includeCompensation=true`).
+
+---
+
+## Row contents
+
+Every row shows priority tier, posted / not posted, and opportunity **type**. Open rows add the
+**amount** and location, and the title links to the posting.
+
+| Field | Source |
+|-------|--------|
+| Type | Title/body keywords → `Full-time`, `Contract`, `Fellowship`, `Internship`, `Residency`, `Grant`, `Fixed-term`, `Part-time`. Closed rows fall back to the target's `kind` in the config. |
+| Amount | Parsed from the posting body (`Annual Salary: $215,000 — $300,000 USD`), shown compact as `$215K–$300K`. Hourly pay renders as `$85/hr`. |
+
+Greenhouse publishes no structured pay field and its `content` is **double** HTML-escaped, so
+`job-watch-detail.js` unescapes twice before stripping tags. About 355 of 398 Anthropic postings
+publish a range; the rest render `No published range`.
+
+Detail requests only run for **surfaced** rows (open targets + live candidates), are capped at 12
+per scan, and are cached in `state.details` keyed by the posting's `updated_at`.
+
+---
+
+## Match stars (1–3)
+
+Live posted matches use `assessJob` score → stars. Weak / near hard-pass roles
+rarely reach the panel, so the scale stays short:
+
+| Score | Stars | Meaning |
+|------:|:-----:|---------|
+| 9–10 | ★★★ | Strong apply / burn-worthy |
+| 7–8 | ★★☆ | Solid fit, read JD carefully |
+| 1–6 | ★☆☆ | Partial / queued / canary |
+
+Closed lanes show **expected** stars from priority (P1 = 3, P2/Watch = 2, Queued = 1) at lower opacity until a posting is live.
 
 ---
 
@@ -55,12 +103,12 @@ When a job ID appears that was not in the previous snapshot:
 ### Yellow dot UI
 
 - Unreviewed candidate → yellow glowing dot.
-- Click → modal with close-fit (`strong` / `partial` / `weak` / `none`), score, verdict, recommendation, reasons.
+- Click the **dot** → modal with type, amount, close-fit (`strong` / `partial` / `weak` / `none`), score, verdict, recommendation, reasons. The candidate **title** is a link straight to the posting.
 - Close marks **reviewed**; Dismiss hides the row.
 
 ### First scan
 
-Baselines the full Greenhouse board into `knownJobIds` **without** creating yellow dots. Only jobs that appear on a later scan become candidates.
+Baselines each source board into `knownJobIds` **without** creating yellow dots. Only jobs that appear on a later scan become candidates.
 
 ---
 

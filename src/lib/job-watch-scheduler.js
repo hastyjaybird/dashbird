@@ -1,5 +1,5 @@
 /**
- * Scan Anthropic careers every 2 hours for Job Watch targets + new-fit candidates.
+ * Scan Anthropic careers every 2 hours for Opportunity Watch targets + new-fit candidates.
  */
 import { runJobWatchScan } from './job-watch-scan.js';
 

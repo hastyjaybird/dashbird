@@ -681,8 +681,11 @@ export function mountEventsFinder(root) {
   let conferencePopoutBackdrop = null;
   /** @type {((e: KeyboardEvent) => void) | null} */
   let conferencePopoutKeyHandler = null;
+  /** Producers table `<tbody>` while the Event sources → Producers tab is open. */
   /** @type {HTMLElement | null} */
   let conferencePopoutStatusList = null;
+  /** @type {HTMLElement | null} */
+  let eventSourcesListEl = null;
   /**
    * Slugs pending a soft-delete. Value is the timeout id that will commit the
    * DELETE unless the user hits Undo first. Repaints render these rows in the
@@ -701,6 +704,7 @@ export function mountEventsFinder(root) {
     conferencePopoutBackdrop.remove();
     conferencePopoutBackdrop = null;
     conferencePopoutStatusList = null;
+    eventSourcesListEl = null;
     conferenceToggle.setAttribute('aria-expanded', 'false');
     conferenceToggle.classList.remove('events-finder__conferences-toggle--open');
   }
@@ -762,16 +766,24 @@ export function mountEventsFinder(root) {
   }
 
   function syncConferenceToggleLabel() {
-    const n = Number(conferenceToggle.dataset.sourceCount || 0);
+    const feeds = Number(conferenceToggle.dataset.sourceCount || 0);
+    const producers = Number(conferenceToggle.dataset.producerCount || 0);
+    const n = feeds + producers;
     conferenceToggle.textContent = n > 0 ? `Event sources (${n})` : 'Event sources';
   }
 
   async function refreshEventSourcesToggleCount() {
     try {
-      const res = await fetch('/api/events-finder-sources', { cache: 'no-store' });
-      const data = await res.json().catch(() => ({}));
-      const sources = Array.isArray(data.sources) ? data.sources : [];
+      const [srcRes, prodRes] = await Promise.all([
+        fetch('/api/events-finder-sources', { cache: 'no-store' }),
+        fetch('/api/events-finder/big-events/', { cache: 'no-store' }),
+      ]);
+      const srcData = await srcRes.json().catch(() => ({}));
+      const prodData = await prodRes.json().catch(() => ({}));
+      const sources = Array.isArray(srcData.sources) ? srcData.sources : [];
+      const items = Array.isArray(prodData.items) ? prodData.items : [];
       conferenceToggle.dataset.sourceCount = String(sources.length);
+      conferenceToggle.dataset.producerCount = String(items.length);
       syncConferenceToggleLabel();
     } catch {
       /* keep prior label */
@@ -821,6 +833,111 @@ export function mountEventsFinder(root) {
   }
 
   /**
+   * Double-click a scraped field → ask what needs correcting, then re-wire scrape.
+   * @param {HTMLElement} el
+   * @param {object} item
+   * @param {string} field
+   * @param {string} label
+   */
+  function makeCorrectable(el, item, field, label) {
+    el.classList.add('events-finder__big-events-cell--correctable');
+    el.title = `Double-click to correct ${label.toLowerCase()}`;
+    el.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openFieldCorrectionDialog(item, field, label);
+    });
+  }
+
+  /**
+   * @param {object} item
+   * @param {string} field
+   * @param {string} label
+   */
+  function openFieldCorrectionDialog(item, field, label) {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'events-finder__correct-backdrop';
+    const panel = document.createElement('div');
+    panel.className = 'events-finder__correct-dialog';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+
+    const title = document.createElement('h3');
+    title.className = 'events-finder__correct-title';
+    title.textContent = 'What needs correcting?';
+    const hint = document.createElement('p');
+    hint.className = 'events-finder__correct-hint muted';
+    hint.textContent = `${item.title || item.query || 'Producer'} · ${label}. We’ll re-check the site and remember how to find the right value.`;
+
+    const ta = document.createElement('textarea');
+    ta.className = 'events-finder__correct-input';
+    ta.rows = 4;
+    ta.placeholder =
+      field === 'ticketPrice'
+        ? 'e.g. correct the ticket prices to $575'
+        : field === 'eventStart'
+          ? 'e.g. dates should be Aug 30 – Sep 7, 2026'
+          : 'Describe what is wrong and what it should be';
+    ta.autocomplete = 'off';
+
+    const actions = document.createElement('div');
+    actions.className = 'events-finder__correct-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'events-finder__big-events-again';
+    cancel.textContent = 'Cancel';
+    const submit = document.createElement('button');
+    submit.type = 'button';
+    submit.className = 'events-finder__big-events-confirm';
+    submit.textContent = 'Correct & re-scrape';
+    const err = document.createElement('p');
+    err.className = 'events-finder__correct-err muted';
+    err.hidden = true;
+    actions.append(cancel, submit);
+
+    panel.append(title, hint, ta, actions, err);
+    backdrop.append(panel);
+    document.body.append(backdrop);
+    ta.focus();
+
+    const close = () => backdrop.remove();
+    cancel.addEventListener('click', close);
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) close();
+    });
+    submit.addEventListener('click', async () => {
+      const message = ta.value.trim();
+      if (!message) {
+        ta.focus();
+        return;
+      }
+      submit.disabled = true;
+      submit.textContent = 'Working…';
+      err.hidden = true;
+      try {
+        const res = await fetch(
+          `/api/events-finder/big-events/${encodeURIComponent(item.slug)}/correct`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ field, message }),
+          },
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        close();
+        void refreshBigEventsFromStore();
+        reloadBigEventsSoon();
+      } catch (e) {
+        submit.disabled = false;
+        submit.textContent = 'Correct & re-scrape';
+        err.hidden = false;
+        err.textContent = `Could not correct: ${String(e?.message || e)}`;
+      }
+    });
+  }
+
+  /**
    * @param {object} item
    * @returns {HTMLElement}
    */
@@ -856,9 +973,10 @@ export function mountEventsFinder(root) {
     }
     const nameText = document.createElement('span');
     nameText.className = 'events-finder__big-events-name-text';
-    nameText.textContent = String(item.title || item.query || 'Big event');
+    nameText.textContent = String(item.title || item.query || 'Producer event');
     nameEl.append(nameText);
     nameCell.append(nameEl);
+    makeCorrectable(nameCell, item, 'name', 'Event name');
 
     // Dates — stack the end date on its own line so this column stays narrow.
     const dateCell = document.createElement('td');
@@ -876,6 +994,7 @@ export function mountEventsFinder(root) {
     } else {
       dateCell.textContent = whenLabel;
     }
+    makeCorrectable(dateCell, item, 'eventStart', 'Event dates');
 
     // Ticket price (+ estimated badge + early bird note).
     const priceCell = document.createElement('td');
@@ -921,6 +1040,7 @@ export function mountEventsFinder(root) {
       priceWrap.append(tlink);
     }
     priceCell.append(priceWrap);
+    makeCorrectable(priceCell, item, 'ticketPrice', 'Ticket price');
 
     // Ticket sales status.
     const statusCell = document.createElement('td');
@@ -929,6 +1049,7 @@ export function mountEventsFinder(root) {
     statusPill.className = `events-finder__big-events-status events-finder__big-events-status--${item.salesStatusKind || 'unknown'}`;
     statusPill.textContent = String(item.salesStatus || '—');
     statusCell.append(statusPill);
+    makeCorrectable(statusCell, item, 'ticketSalesStart', 'Ticket sales');
 
     // Edit + Remove.
     const actionCell = document.createElement('td');
@@ -968,6 +1089,14 @@ export function mountEventsFinder(root) {
       editedTag.title = 'Hand-edited — auto research is paused for this event';
       descCell.append(document.createElement('br'), editedTag);
     }
+    if (item.planningNotes) {
+      const logTag = document.createElement('span');
+      logTag.className = 'events-finder__big-events-edited-tag';
+      logTag.textContent = 'logistics';
+      logTag.title = String(item.planningNotes).slice(0, 200);
+      descCell.append(document.createElement('br'), logTag);
+    }
+    makeCorrectable(descCell, item, 'notes', 'Description');
 
     row.append(nameCell, dateCell, priceCell, statusCell, descCell, actionCell);
 
@@ -1041,6 +1170,33 @@ export function mountEventsFinder(root) {
     const ebStartI = field('Early bird start', 'date', item.earlyBirdStart || '');
     const ebEndI = field('Early bird end', 'date', item.earlyBirdEnd || '');
     const notesI = field('Description', 'textarea', item.notes || '', true);
+    const logisticsI = field(
+      'Logistics notes (flights, lodging…)',
+      'textarea',
+      item.planningNotes || '',
+      true,
+    );
+    const leadI = field(
+      'Remind me (days before)',
+      'text',
+      item.reminderLeadDays != null ? String(item.reminderLeadDays) : '60',
+    );
+    if (leadI instanceof HTMLInputElement) {
+      leadI.type = 'number';
+      leadI.min = '0';
+      leadI.max = '365';
+      leadI.step = '1';
+    }
+
+    const notifyLab = document.createElement('label');
+    notifyLab.className = 'events-finder__big-events-edit-field events-finder__big-events-edit-field--wide events-finder__big-events-edit-check';
+    const notifyI = document.createElement('input');
+    notifyI.type = 'checkbox';
+    notifyI.checked = item.notifyWhenDatesSet !== false;
+    const notifySpan = document.createElement('span');
+    notifySpan.textContent = 'Notify me when event dates are announced (keep visible while TBD)';
+    notifyLab.append(notifyI, notifySpan);
+    wrap.append(notifyLab);
 
     const actions = document.createElement('div');
     actions.className = 'events-finder__big-events-edit-actions';
@@ -1078,6 +1234,7 @@ export function mountEventsFinder(root) {
       saveBtn.textContent = 'Saving…';
       setMsg('');
       try {
+        const leadRaw = leadI.value.trim();
         const body = {
           name: nameI.value.trim(),
           homepageUrl: urlI.value.trim(),
@@ -1092,6 +1249,9 @@ export function mountEventsFinder(root) {
           earlyBirdStart: ebStartI.value,
           earlyBirdEnd: ebEndI.value,
           notes: notesI.value.trim(),
+          planningNotes: logisticsI.value.trim(),
+          reminderLeadDays: leadRaw === '' ? null : Number(leadRaw),
+          notifyWhenDatesSet: notifyI.checked,
         };
         const res = await fetch(
           `/api/events-finder/big-events/${encodeURIComponent(item.slug)}`,
@@ -1153,7 +1313,7 @@ export function mountEventsFinder(root) {
       const td = document.createElement('td');
       td.colSpan = 6;
       td.className = 'events-finder__big-events-empty muted';
-      td.textContent = 'No big events tracked yet — add one above.';
+      td.textContent = 'No producers tracked yet — paste an official URL above (e.g. burningman.org).';
       tr.append(td);
       tbody.append(tr);
       return;
@@ -1341,10 +1501,37 @@ export function mountEventsFinder(root) {
     const wrap = document.createElement('div');
     wrap.className = 'events-finder__event-sources';
 
-    const intro = document.createElement('p');
-    intro.className = 'events-finder__event-sources-intro muted';
-    intro.textContent =
-      'Sites from Personal bookmarks → Events. Listing pages are scraped into the regular feed. Add a URL to watch, open a source, or re-scrape after changes.';
+    const tabs = document.createElement('div');
+    tabs.className = 'events-finder__event-sources-tabs';
+    tabs.setAttribute('role', 'tablist');
+    const feedsTab = document.createElement('button');
+    feedsTab.type = 'button';
+    feedsTab.className = 'events-finder__event-sources-tab events-finder__event-sources-tab--active';
+    feedsTab.setAttribute('role', 'tab');
+    feedsTab.setAttribute('aria-selected', 'true');
+    feedsTab.textContent = 'Event feeds';
+    const producersTab = document.createElement('button');
+    producersTab.type = 'button';
+    producersTab.className = 'events-finder__event-sources-tab';
+    producersTab.setAttribute('role', 'tab');
+    producersTab.setAttribute('aria-selected', 'false');
+    producersTab.textContent = 'Producers';
+    tabs.append(feedsTab, producersTab);
+
+    const feedsPanel = document.createElement('div');
+    feedsPanel.className = 'events-finder__event-sources-panel';
+    feedsPanel.setAttribute('role', 'tabpanel');
+
+    const producersPanel = document.createElement('div');
+    producersPanel.className = 'events-finder__event-sources-panel';
+    producersPanel.setAttribute('role', 'tabpanel');
+    producersPanel.hidden = true;
+
+    // ---- Event feeds (platform scrape sources) ---------------------------
+    const feedsIntro = document.createElement('p');
+    feedsIntro.className = 'events-finder__event-sources-intro muted';
+    feedsIntro.textContent =
+      'Platform listing feeds — scraped often, then filtered by location and taste. Sites from Personal bookmarks → Events.';
 
     const addBar = document.createElement('div');
     addBar.className = 'events-finder__big-events-addbar';
@@ -1386,20 +1573,96 @@ export function mountEventsFinder(root) {
     rescrapeAllBtn.title = 'Clear the webpage listings cache and refresh the Events feed';
     toolbar.append(rescrapeAllBtn);
 
-    const msg = document.createElement('p');
-    msg.className = 'events-finder__big-events-msg muted';
-    msg.hidden = true;
+    const feedsMsg = document.createElement('p');
+    feedsMsg.className = 'events-finder__big-events-msg muted';
+    feedsMsg.hidden = true;
 
     const list = document.createElement('ul');
     list.className = 'events-finder__event-sources-list';
-    conferencePopoutStatusList = list;
+    eventSourcesListEl = list;
 
-    wrap.append(intro, addBar, form, toolbar, msg, list);
+    feedsPanel.append(feedsIntro, addBar, form, toolbar, feedsMsg, list);
 
-    function setMsg(text, kind) {
-      msg.hidden = !text;
-      msg.textContent = text || '';
-      msg.className = `events-finder__big-events-msg${kind ? ` events-finder__big-events-msg--${kind}` : ' muted'}`;
+    // ---- Producers (notable / rare events — no location filter) ----------
+    const prodIntro = document.createElement('p');
+    prodIntro.className = 'events-finder__event-sources-intro muted';
+    prodIntro.textContent =
+      'Event producers (Burning Man, festivals, once-a-year shows). Paste an official URL — we pull dates, early bird, and tickets. Not filtered by location. Double-click a field to correct the scrape wiring.';
+
+    const prodAddBar = document.createElement('div');
+    prodAddBar.className = 'events-finder__big-events-addbar';
+    const prodAddToggle = document.createElement('button');
+    prodAddToggle.type = 'button';
+    prodAddToggle.className = 'events-finder__big-events-add';
+    prodAddToggle.textContent = '+ Add producer';
+
+    const prodForm = document.createElement('div');
+    prodForm.className = 'events-finder__big-events-form';
+    prodForm.hidden = true;
+    const prodUrlInput = document.createElement('input');
+    prodUrlInput.type = 'url';
+    prodUrlInput.className = 'events-finder__big-events-input events-finder__big-events-input--url';
+    prodUrlInput.placeholder = 'https://burningman.org/';
+    prodUrlInput.autocomplete = 'off';
+    const prodAddBtn = document.createElement('button');
+    prodAddBtn.type = 'button';
+    prodAddBtn.className = 'events-finder__big-events-confirm';
+    prodAddBtn.textContent = 'Add & scrape';
+    const prodCancelBtn = document.createElement('button');
+    prodCancelBtn.type = 'button';
+    prodCancelBtn.className = 'events-finder__big-events-again';
+    prodCancelBtn.textContent = 'Cancel';
+    prodForm.append(prodUrlInput, prodAddBtn, prodCancelBtn);
+    prodAddBar.append(prodAddToggle);
+
+    const prodMsg = document.createElement('p');
+    prodMsg.className = 'events-finder__big-events-msg muted';
+    prodMsg.hidden = true;
+
+    const tableWrap = document.createElement('div');
+    tableWrap.className = 'events-finder__big-events-table-wrap';
+    const table = document.createElement('table');
+    table.className = 'events-finder__big-events-table';
+    const thead = document.createElement('thead');
+    thead.innerHTML =
+      '<tr><th>Event</th><th>Dates</th><th>Ticket price</th><th>Ticket sales</th><th>Description</th><th aria-label="Actions"></th></tr>';
+    const tbody = document.createElement('tbody');
+    conferencePopoutStatusList = tbody;
+    paintBigEventsTable(conferenceWatchItemsFromPayload(), tbody);
+    void refreshBigEventsFromStore();
+    table.append(thead, tbody);
+    tableWrap.append(table);
+
+    producersPanel.append(prodIntro, prodAddBar, prodForm, prodMsg, tableWrap);
+
+    wrap.append(tabs, feedsPanel, producersPanel);
+
+    /**
+     * @param {'feeds' | 'producers'} which
+     */
+    function showTab(which) {
+      const onFeeds = which === 'feeds';
+      feedsPanel.hidden = !onFeeds;
+      producersPanel.hidden = onFeeds;
+      feedsTab.classList.toggle('events-finder__event-sources-tab--active', onFeeds);
+      producersTab.classList.toggle('events-finder__event-sources-tab--active', !onFeeds);
+      feedsTab.setAttribute('aria-selected', onFeeds ? 'true' : 'false');
+      producersTab.setAttribute('aria-selected', onFeeds ? 'false' : 'true');
+      if (!onFeeds) void refreshBigEventsFromStore();
+    }
+    feedsTab.addEventListener('click', () => showTab('feeds'));
+    producersTab.addEventListener('click', () => showTab('producers'));
+
+    function setFeedsMsg(text, kind) {
+      feedsMsg.hidden = !text;
+      feedsMsg.textContent = text || '';
+      feedsMsg.className = `events-finder__big-events-msg${kind ? ` events-finder__big-events-msg--${kind}` : ' muted'}`;
+    }
+
+    function setProdMsg(text, kind) {
+      prodMsg.hidden = !text;
+      prodMsg.textContent = text || '';
+      prodMsg.className = `events-finder__big-events-msg${kind ? ` events-finder__big-events-msg--${kind}` : ' muted'}`;
     }
 
     function deriveLabel(url) {
@@ -1473,15 +1736,15 @@ export function mountEventsFinder(root) {
     }
 
     async function loadSources() {
-      setMsg('Loading…');
+      setFeedsMsg('Loading…');
       try {
         const res = await fetch('/api/events-finder-sources', { cache: 'no-store' });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
         paintSources(Array.isArray(data.sources) ? data.sources : []);
-        setMsg('');
+        setFeedsMsg('');
       } catch (e) {
-        setMsg(`Could not load sources: ${String(e?.message || e)}`, 'error');
+        setFeedsMsg(`Could not load sources: ${String(e?.message || e)}`, 'error');
       }
     }
 
@@ -1506,14 +1769,14 @@ export function mountEventsFinder(root) {
         labelInput.value = '';
         urlInput.value = '';
         paintSources(Array.isArray(data.sources) ? data.sources : []);
-        setMsg(
+        setFeedsMsg(
           data.webpageListing
             ? 'Added — listing events appear after the next feed refresh.'
             : 'Added to Personal bookmarks → Events.',
         );
         void loadEvents();
       } catch (e) {
-        setMsg(`Could not add: ${String(e?.message || e)}`, 'error');
+        setFeedsMsg(`Could not add: ${String(e?.message || e)}`, 'error');
       } finally {
         addBtn.disabled = false;
       }
@@ -1531,10 +1794,43 @@ export function mountEventsFinder(root) {
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
         paintSources(Array.isArray(data.sources) ? data.sources : []);
-        setMsg('Removed.');
+        setFeedsMsg('Removed.');
       } catch (e) {
-        setMsg(`Could not remove: ${String(e?.message || e)}`, 'error');
+        setFeedsMsg(`Could not remove: ${String(e?.message || e)}`, 'error');
         btn.disabled = false;
+      }
+    }
+
+    async function addProducer() {
+      const url = normalizeUrl(prodUrlInput.value);
+      if (!url) {
+        prodUrlInput.focus();
+        return;
+      }
+      prodAddBtn.disabled = true;
+      prodAddBtn.textContent = 'Scraping…';
+      setProdMsg('Pulling name, dates, and tickets from the site…');
+      try {
+        const res = await fetch('/api/events-finder/big-events/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        prodForm.hidden = true;
+        prodAddToggle.hidden = false;
+        prodUrlInput.value = '';
+        setProdMsg('Added — looking up dates, early bird, and ticket sales…');
+        setTimeout(() => setProdMsg(''), 6000);
+        void refreshBigEventsFromStore();
+        reloadBigEventsSoon();
+        void refreshEventSourcesToggleCount();
+      } catch (e) {
+        setProdMsg(`Could not add: ${String(e?.message || e)}`, 'error');
+      } finally {
+        prodAddBtn.disabled = false;
+        prodAddBtn.textContent = 'Add & scrape';
       }
     }
 
@@ -1546,7 +1842,7 @@ export function mountEventsFinder(root) {
     cancelBtn.addEventListener('click', () => {
       form.hidden = true;
       addToggle.hidden = false;
-      setMsg('');
+      setFeedsMsg('');
     });
     addBtn.addEventListener('click', () => void addSource());
     urlInput.addEventListener('keydown', (e) => {
@@ -1562,14 +1858,32 @@ export function mountEventsFinder(root) {
         const res = await fetch('/api/events-finder-sources/rescrape', { method: 'POST' });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
-        setMsg('Cache cleared — refreshing feed…');
+        setFeedsMsg('Cache cleared — refreshing feed…');
         await loadEvents();
-        setMsg('Feed refresh started.');
+        setFeedsMsg('Feed refresh started.');
       } catch (e) {
-        setMsg(`Re-scrape failed: ${String(e?.message || e)}`, 'error');
+        setFeedsMsg(`Re-scrape failed: ${String(e?.message || e)}`, 'error');
       } finally {
         rescrapeAllBtn.disabled = false;
         rescrapeAllBtn.textContent = 'Re-scrape listings';
+      }
+    });
+
+    prodAddToggle.addEventListener('click', () => {
+      prodForm.hidden = false;
+      prodAddToggle.hidden = true;
+      prodUrlInput.focus();
+    });
+    prodCancelBtn.addEventListener('click', () => {
+      prodForm.hidden = true;
+      prodAddToggle.hidden = false;
+      setProdMsg('');
+    });
+    prodAddBtn.addEventListener('click', () => void addProducer());
+    prodUrlInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        void addProducer();
       }
     });
 
@@ -1578,9 +1892,11 @@ export function mountEventsFinder(root) {
       body: wrap,
       onClose: () => {
         conferencePopoutStatusList = null;
+        eventSourcesListEl = null;
       },
     });
     void loadSources();
+    void refreshEventSourcesToggleCount();
   }
 
   conferenceToggle.addEventListener('click', () => {
@@ -3135,8 +3451,16 @@ export function mountEventsFinder(root) {
       title.textContent = titleText;
     }
     const badge = document.createElement('span');
-    badge.className = 'events-finder__card-bigbadge';
-    badge.textContent = 'Big event';
+    badge.className = 'events-finder__card-bigbadge events-finder__card-bigbadge--icon';
+    badge.title = 'Producer event';
+    badge.setAttribute('aria-label', 'Producer event');
+    const badgeImg = document.createElement('img');
+    badgeImg.className = 'events-finder__card-bigbadge-img';
+    badgeImg.src = '/icons/producer-tent.png';
+    badgeImg.srcset = '/icons/producer-tent.png 1x, /icons/producer-tent@2x.png 2x';
+    badgeImg.alt = '';
+    badgeImg.decoding = 'async';
+    badge.append(badgeImg);
     head.append(title, badge);
 
     const cityEl = document.createElement('p');
@@ -3216,7 +3540,19 @@ export function mountEventsFinder(root) {
     calBtn.textContent = 'Add to cal';
     calBtn.addEventListener('click', (e) => e.stopPropagation());
 
-    actions.append(snoozeBtn, skipBtn, calBtn);
+    const logisticsBtn = document.createElement('button');
+    logisticsBtn.type = 'button';
+    logisticsBtn.className = 'events-finder__card-action events-finder__card-action--logistics';
+    logisticsBtn.title = 'Logistics notes — flights, lodging, packing';
+    logisticsBtn.setAttribute('aria-label', 'Edit logistics notes');
+    logisticsBtn.textContent = item.planningNotes ? 'Logistics ✓' : 'Logistics';
+    logisticsBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openProducerLogisticsDialog(item);
+    });
+
+    actions.append(logisticsBtn, snoozeBtn, skipBtn, calBtn);
 
     card.append(snap, head, cityEl, meta, priceEl, status, actions);
     if (eventHref) {
@@ -3226,6 +3562,80 @@ export function mountEventsFinder(root) {
       });
     }
     return card;
+  }
+
+  /**
+   * Checkbox-style logistics notes for a producer event (flights, lodging…).
+   * @param {object} item
+   */
+  function openProducerLogisticsDialog(item) {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'events-finder__correct-backdrop';
+    const panel = document.createElement('div');
+    panel.className = 'events-finder__correct-dialog';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+
+    const title = document.createElement('h3');
+    title.className = 'events-finder__correct-title';
+    title.textContent = 'Logistics notes';
+    const hint = document.createElement('p');
+    hint.className = 'events-finder__correct-hint muted';
+    hint.textContent = `${item.title || item.query || 'Producer'} — accommodations, flights, packing, etc.`;
+
+    const ta = document.createElement('textarea');
+    ta.className = 'events-finder__correct-input';
+    ta.rows = 8;
+    ta.placeholder = 'Flights…\nLodging…\nOther…';
+    ta.value = item.planningNotes ? String(item.planningNotes) : '';
+    ta.autocomplete = 'off';
+
+    const actions = document.createElement('div');
+    actions.className = 'events-finder__correct-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'events-finder__big-events-again';
+    cancel.textContent = 'Cancel';
+    const submit = document.createElement('button');
+    submit.type = 'button';
+    submit.className = 'events-finder__big-events-confirm';
+    submit.textContent = 'Save';
+    const err = document.createElement('p');
+    err.className = 'events-finder__correct-err muted';
+    err.hidden = true;
+    actions.append(cancel, submit);
+    panel.append(title, hint, ta, actions, err);
+    backdrop.append(panel);
+    document.body.append(backdrop);
+    ta.focus();
+
+    const close = () => backdrop.remove();
+    cancel.addEventListener('click', close);
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) close();
+    });
+    submit.addEventListener('click', async () => {
+      submit.disabled = true;
+      try {
+        const res = await fetch(
+          `/api/events-finder/big-events/${encodeURIComponent(item.slug)}`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ planningNotes: ta.value.trim() }),
+          },
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        close();
+        void refreshBigEventsFromStore();
+        void loadEvents({ catalogOnly: true, quiet: true });
+      } catch (e) {
+        submit.disabled = false;
+        err.hidden = false;
+        err.textContent = `Could not save: ${String(e?.message || e)}`;
+      }
+    });
   }
 
 
@@ -4151,8 +4561,16 @@ export function mountEventsFinder(root) {
       });
     const events = showSkipped ? skippedList : mainEvents;
     lastFilteredEvents = events;
-    // Legacy conference watchlist cards retired — notable catalog events pin via API sort.
-    const activeBigEvents = [];
+    // Producer events (rare festivals) pin above the filtered catalog feed —
+    // they are never location-filtered.
+    const activeBigEvents = showSkipped
+      ? []
+      : (Array.isArray(data.conferenceWatchlistItems) ? data.conferenceWatchlistItems : [])
+          .filter((it) => it && it.displayActive && !it.skipped && !it.snoozed);
+    conferenceToggle.dataset.producerCount = String(
+      (Array.isArray(data.conferenceWatchlistItems) ? data.conferenceWatchlistItems : []).length,
+    );
+    syncConferenceToggleLabel();
     const gmail = data.sources?.gmail;
     const facebook = data.sources?.facebook;
     const hadCards = listEl.querySelector('.events-finder__card') != null;

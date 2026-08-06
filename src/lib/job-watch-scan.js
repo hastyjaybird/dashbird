@@ -1,5 +1,5 @@
 /**
- * Fetch Anthropic Greenhouse board, match watch targets, assess new/interesting roles.
+ * Scan opportunity sources, match watch targets, assess new/interesting roles.
  */
 import {
   loadJobWatchState,
@@ -11,42 +11,35 @@ import {
   findMatchingTargets,
   isYellowCandidate,
   jobMatchesTarget,
+  priorityToStars,
+  scoreToStars,
 } from './job-watch-assess.js';
+import { parseLocations } from './job-watch-detail.js';
+import { fetchSourceDetail, fetchSourceJobs, normalizeSources } from './job-watch-sources.js';
 
-const UA = 'dashbird-job-watch/1.0 (+local; Anthropic careers watch)';
+/** Only surfaced rows get a detail fetch, so a scan stays a handful of requests. */
+const MAX_DETAIL_FETCHES = 12;
+
+/** Postings without an `updated_at` (Google) are re-read on this cadence. */
+const DETAIL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * @param {string} url
- * @param {number} [timeoutMs]
+ * @param {object | null} detail
+ * @param {object} job
+ * @returns {boolean}
  */
-async function fetchJson(url, timeoutMs = 20000) {
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      signal: ac.signal,
-      redirect: 'follow',
-      headers: { 'user-agent': UA, accept: 'application/json' },
-    });
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
-    return { ok: true, data: await res.json() };
-  } catch (e) {
-    return { ok: false, error: String(e?.message || e) };
-  } finally {
-    clearTimeout(t);
+function detailIsFresh(detail, job) {
+  if (!detail) return false;
+  // Older snapshots predate workMode / locations — force a refresh.
+  if (!detail.workMode || !Array.isArray(detail.locations) || detail.detailVersion !== 2) {
+    return false;
   }
-}
-
-/**
- * @param {object} raw Greenhouse job
- */
-function normalizeJob(raw) {
-  const id = raw?.id != null ? String(raw.id) : '';
-  const title = String(raw?.title || '').trim();
-  const url = String(raw?.absolute_url || '').trim();
-  const location = String(raw?.location?.name || '').trim();
-  const updatedAt = raw?.updated_at || raw?.first_published || null;
-  return { id, greenhouseId: raw?.id ?? null, title, url, location, updatedAt };
+  if (job.updatedAt && detail.updatedAt === job.updatedAt) return true;
+  if (!job.updatedAt && detail.fetchedAt) {
+    const age = Date.now() - Date.parse(detail.fetchedAt);
+    return Number.isFinite(age) && age < DETAIL_TTL_MS;
+  }
+  return false;
 }
 
 /**
@@ -56,54 +49,98 @@ function normalizeJob(raw) {
 export async function runJobWatchScan(env = process.env, opts = {}) {
   const config = await loadJobWatchTargets();
   const state = await loadJobWatchState(env);
-  const boardUrl = String(config.boardUrl || '').trim()
-    || 'https://boards-api.greenhouse.io/v1/boards/anthropic/jobs';
-
-  const fetched = await fetchJson(boardUrl);
+  const sources = normalizeSources(config);
+  const sourceById = new Map(sources.map((s) => [s.id, s]));
   const now = new Date().toISOString();
 
-  if (!fetched.ok) {
+  /** @type {Array<object>} */
+  const jobs = [];
+  /** @type {string[]} */
+  const sourceErrors = [];
+  for (const source of sources) {
+    const result = await fetchSourceJobs(source);
+    if (!result.ok) {
+      sourceErrors.push(`${source.id}: ${result.error || 'fetch_failed'}`);
+      continue;
+    }
+    jobs.push(...result.jobs);
+  }
+
+  // Every source down means no usable snapshot; a partial failure still updates.
+  if (!jobs.length) {
     state.lastScanAt = now;
-    state.lastScanError = fetched.error || 'fetch_failed';
+    state.lastScanError = sourceErrors.join('; ') || 'fetch_failed';
     await saveJobWatchState(state, env);
     return { ok: false, error: state.lastScanError, state };
   }
 
-  const jobs = (Array.isArray(fetched.data?.jobs) ? fetched.data.jobs : [])
-    .map(normalizeJob)
-    .filter((j) => j.id && j.title && j.url);
-
   const byId = new Map(jobs.map((j) => [j.id, j]));
   const known = new Set(state.knownJobIds || []);
-  const firstScan = known.size === 0 && !opts.forceBootstrapAsNew;
+  // Pre-multi-source state used bare Greenhouse ids; treat that as a fresh baseline
+  // so the whole board does not flood yellow-dot candidates on upgrade.
+  const legacyIds =
+    known.size > 0 && [...known].every((id) => !String(id).includes(':'));
+  const firstScan = (known.size === 0 || legacyIds) && !opts.forceBootstrapAsNew;
+  // A newly added company (e.g. OpenAI) also needs a quiet baseline — every id
+  // on that board looks "new" against an Anthropic/Google-only known set.
+  const knownSourceIds = new Set(
+    [...known]
+      .map((id) => {
+        const s = String(id);
+        const i = s.indexOf(':');
+        return i > 0 ? s.slice(0, i) : '';
+      })
+      .filter(Boolean),
+  );
+  const baseliningSources = new Set(
+    sources
+      .map((s) => s.id)
+      .filter((id) => id && !knownSourceIds.has(id) && !firstScan),
+  );
+  if (legacyIds) {
+    for (const c of state.candidates || []) {
+      if (!String(c.id || '').includes(':')) c.dismissedAt = c.dismissedAt || now;
+    }
+  }
 
-  // Target matches
+  // Target matches (scoped by source via jobMatchesTarget)
   /** @type {Record<string, object | null>} */
   const targetMatches = {};
   for (const target of config.targets || []) {
     const hit = jobs.find((j) => jobMatchesTarget(j, target)) || null;
-    targetMatches[target.id] = hit
-      ? {
-          id: hit.id,
-          title: hit.title,
-          location: hit.location,
-          url: hit.url,
-          updatedAt: hit.updatedAt,
-        }
-      : null;
+    if (!hit) {
+      targetMatches[target.id] = null;
+      continue;
+    }
+    const assessment = assessJob(hit, config);
+    targetMatches[target.id] = {
+      id: hit.id,
+      title: hit.title,
+      location: hit.location,
+      url: hit.url,
+      updatedAt: hit.updatedAt,
+      sourceId: hit.sourceId,
+      sourceLabel: hit.sourceLabel,
+      assessment,
+      matchStars: scoreToStars(assessment.score),
+      matchScore: assessment.score,
+    };
   }
 
-  // Update / create candidates for interesting unmatched jobs
+  // Yellow-dot candidates only from sources that opted in (Anthropic board).
   /** @type {Map<string, object>} */
   const candMap = new Map((state.candidates || []).map((c) => [String(c.id), c]));
+  const candidateSources = new Set(
+    sources.filter((s) => s.candidates !== false).map((s) => s.id),
+  );
 
   for (const job of jobs) {
+    if (!candidateSources.has(job.sourceId || 'anthropic')) continue;
+
     const matched = findMatchingTargets(job, config);
     const assessment = assessJob(job, config);
-    const isNew = !known.has(job.id);
-
-    // Seed: on first scan, don't flood yellow dots for the whole board —
-    // only surface maybe/burn/canary that aren't hard pass, marked as backlog.
+    const isNew =
+      !known.has(job.id) && !baseliningSources.has(job.sourceId || 'anthropic');
     const shouldConsider = isYellowCandidate(assessment, matched.map((t) => t.id));
     const prev = candMap.get(job.id);
 
@@ -113,33 +150,39 @@ export async function runJobWatchScan(env = process.env, opts = {}) {
       prev.title = job.title;
       prev.location = job.location;
       prev.url = job.url;
+      prev.sourceId = job.sourceId;
+      prev.sourceLabel = job.sourceLabel;
       prev.assessment = assessment;
+      prev.matchStars = scoreToStars(assessment.score);
+      prev.matchScore = assessment.score;
       if (matched.length) prev.matchedTargetIds = matched.map((t) => t.id);
       continue;
     }
 
     // First successful scan only baselines the board — no yellow-dot flood.
-    // After that, new interesting roles become review candidates.
     if (firstScan || !shouldConsider || !isNew) continue;
 
     candMap.set(job.id, {
       id: job.id,
-      greenhouseId: job.greenhouseId,
+      greenhouseId: job.rawId || null,
       title: job.title,
       location: job.location,
       url: job.url,
+      sourceId: job.sourceId,
+      sourceLabel: job.sourceLabel,
       firstSeenAt: now,
       lastSeenAt: now,
       open: true,
       isNew: true,
       backlog: false,
       assessment,
+      matchStars: scoreToStars(assessment.score),
+      matchScore: assessment.score,
       reviewedAt: null,
       dismissedAt: null,
     });
   }
 
-  // Mark candidates missing from board as closed
   for (const c of candMap.values()) {
     if (!byId.has(String(c.id))) {
       c.open = false;
@@ -147,14 +190,52 @@ export async function runJobWatchScan(env = process.env, opts = {}) {
     }
   }
 
+  // Type + pay come from the posting body — only fetch for rows we show.
+  const surfaced = new Set();
+  for (const match of Object.values(targetMatches)) {
+    if (match) surfaced.add(String(match.id));
+  }
+  for (const c of candMap.values()) {
+    if (c.open !== false && !c.dismissedAt) surfaced.add(String(c.id));
+  }
+
+  /** @type {Record<string, object>} */
+  const details = {};
+  for (const [id, detail] of Object.entries(state.details || {})) {
+    if (byId.has(String(id))) details[id] = detail;
+  }
+  let fetches = 0;
+  for (const id of surfaced) {
+    const job = byId.get(id);
+    if (!job) continue;
+    if (detailIsFresh(details[id], job)) continue;
+    const source = sourceById.get(job.sourceId) || sources[0];
+    // Ashby embeds the posting on the board listing — no extra HTTP, so it
+    // should not consume the Greenhouse/Google detail budget.
+    const ashbyInline = source?.type === 'ashby';
+    if (!ashbyInline && fetches >= MAX_DETAIL_FETCHES) break;
+    if (!ashbyInline) fetches += 1;
+    const detail = await fetchSourceDetail(source, job);
+    if (detail) {
+      details[id] = {
+        ...detail,
+        detailVersion: 2,
+        updatedAt: job.updatedAt,
+        fetchedAt: now,
+      };
+    }
+  }
+  state.details = details;
+
   state.lastScanAt = now;
-  state.lastScanError = null;
+  state.lastScanError = sourceErrors.length ? sourceErrors.join('; ') : null;
   state.knownJobIds = jobs.map((j) => j.id);
   state.openJobs = jobs.map((j) => ({
     id: j.id,
     title: j.title,
     location: j.location,
     url: j.url,
+    sourceId: j.sourceId,
   }));
   state.targetMatches = targetMatches;
   state.candidates = [...candMap.values()].sort((a, b) => {
@@ -168,7 +249,13 @@ export async function runJobWatchScan(env = process.env, opts = {}) {
   });
 
   await saveJobWatchState(state, env);
-  return { ok: true, state, config, jobCount: jobs.length };
+  return {
+    ok: true,
+    state,
+    config,
+    jobCount: jobs.length,
+    sourceErrors: sourceErrors.length ? sourceErrors : null,
+  };
 }
 
 /**
@@ -187,46 +274,111 @@ export async function getJobWatchPayload(env = process.env) {
     state = scanned.state;
   }
 
-  const targets = (config.targets || []).map((t) => {
-    const match = state.targetMatches?.[t.id] || null;
-    return {
-      id: t.id,
-      label: t.label,
-      priority: t.priority,
-      summary: t.summary,
-      status: match ? 'open' : 'closed',
-      job: match,
-    };
-  });
+  const priorityRank = (p) => {
+    if (p === 1 || p === '1') return 1;
+    if (p === 2 || p === '2') return 2;
+    if (p === 'watch') return 3;
+    if (p === 'queued') return 4;
+    return 5;
+  };
+
+  const detailFor = (id) => (id != null ? state.details?.[String(id)] || null : null);
+  const sources = normalizeSources(config);
+
+  const targets = (config.targets || [])
+    .map((t) => {
+      const match = state.targetMatches?.[t.id] || null;
+      const detail = detailFor(match?.id);
+      const open = Boolean(match);
+      const matchStars = open
+        ? Number(match.matchStars ?? scoreToStars(match.assessment?.score))
+        : priorityToStars(t.priority);
+      const matchScore = open
+        ? Number(match.matchScore ?? match.assessment?.score ?? 0)
+        : null;
+      const locations = Array.isArray(detail?.locations) && detail.locations.length
+        ? detail.locations
+        : parseLocations(match?.location || '');
+      return {
+        id: t.id,
+        label: t.label,
+        priority: t.priority,
+        summary: t.summary,
+        source: t.source || 'anthropic',
+        sourceLabel:
+          match?.sourceLabel
+          || sources.find((s) => s.id === (t.source || 'anthropic'))?.label
+          || t.source
+          || 'Anthropic',
+        status: open ? 'open' : 'closed',
+        type: detail?.type || t.kind || null,
+        compensation: detail?.compensation || null,
+        locations,
+        workMode: detail?.workMode || null,
+        matchStars,
+        matchScore,
+        // Closed rows use expected stars for the lane; open rows use live assessment.
+        matchStarsKind: open ? 'live' : 'expected',
+        job: match
+          ? {
+              id: match.id,
+              title: match.title,
+              location: match.location,
+              url: match.url,
+              updatedAt: match.updatedAt,
+            }
+          : null,
+      };
+    })
+    .sort((a, b) => {
+      if (a.status !== b.status) return a.status === 'open' ? -1 : 1;
+      if (b.matchStars !== a.matchStars) return b.matchStars - a.matchStars;
+      return priorityRank(a.priority) - priorityRank(b.priority);
+    });
 
   const candidates = (state.candidates || [])
     .filter((c) => c.open !== false && !c.dismissedAt)
     .filter((c) => {
       const matched = c.assessment?.matchedTargetIds || [];
-      // Hide ones that are purely represented as target rows unless canary/unreviewed interesting
       if (matched.length && targets.some((t) => t.status === 'open' && matched.includes(t.id))) {
         return false;
       }
       const v = c.assessment?.verdict;
       return v === 'maybe' || v === 'burn' || v === 'canary';
     })
-    .map((c) => ({
-      id: c.id,
-      title: c.title,
-      location: c.location,
-      url: c.url,
-      firstSeenAt: c.firstSeenAt,
-      isNew: c.isNew === true,
-      backlog: c.backlog === true,
-      reviewedAt: c.reviewedAt || null,
-      assessment: c.assessment,
-      needsReview: !c.reviewedAt,
-    }));
+    .map((c) => {
+      const score = Number(c.matchScore ?? c.assessment?.score ?? 0);
+      const detail = detailFor(c.id);
+      const locations = Array.isArray(detail?.locations) && detail.locations.length
+        ? detail.locations
+        : parseLocations(c.location || '');
+      return {
+        id: c.id,
+        title: c.title,
+        location: c.location,
+        url: c.url,
+        sourceId: c.sourceId || 'anthropic',
+        sourceLabel: c.sourceLabel || 'Anthropic',
+        type: detail?.type || null,
+        compensation: detail?.compensation || null,
+        locations,
+        workMode: detail?.workMode || null,
+        matchStars: Number(c.matchStars ?? scoreToStars(score)),
+        matchScore: score,
+        firstSeenAt: c.firstSeenAt,
+        isNew: c.isNew === true,
+        backlog: c.backlog === true,
+        reviewedAt: c.reviewedAt || null,
+        assessment: c.assessment,
+        needsReview: !c.reviewedAt,
+      };
+    });
 
   return {
     ok: true,
     company: config.company || 'Anthropic',
     careersUiUrl: config.careersUiUrl,
+    sources: sources.map((s) => ({ id: s.id, label: s.label || s.id, type: s.type })),
     lastScanAt: state.lastScanAt,
     lastScanError: state.lastScanError,
     scanIntervalMs: 2 * 60 * 60 * 1000,

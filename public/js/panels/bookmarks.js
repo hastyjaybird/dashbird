@@ -237,9 +237,6 @@ const BOOKMARK_CACHE_MAX_MS = 7 * 24 * 60 * 60 * 1000;
 const AUTO_OPEN_SECTION_TITLES = new Set([
   'tools',
   'utilities',
-  'projects',
-  'deployed projects',
-  'local projects',
   'clients',
   'community',
   'social',

@@ -33,6 +33,10 @@ function anyMatch(patterns, text) {
 export function jobMatchesTarget(job, target) {
   const title = String(job?.title || '');
   if (!title) return false;
+  // Keep Anthropic targets from swallowing Google titles (and vice versa).
+  const jobSource = String(job?.sourceId || 'anthropic');
+  const targetSource = String(target?.source || 'anthropic');
+  if (jobSource !== targetSource) return false;
   if (anyMatch(target.excludeAny, title)) return false;
   return anyMatch(target.matchAny, title);
 }
@@ -44,6 +48,32 @@ export function jobMatchesTarget(job, target) {
 export function findMatchingTargets(job, config) {
   const targets = Array.isArray(config?.targets) ? config.targets : [];
   return targets.filter((t) => jobMatchesTarget(job, t));
+}
+
+/**
+ * Map 0–10 fit score to a 1–3 star rating.
+ * Weak / near hard-pass scores rarely surface through the panel filter.
+ * @param {number} score
+ * @returns {number}
+ */
+export function scoreToStars(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  if (n >= 9) return 3;
+  if (n >= 7) return 2;
+  return 1;
+}
+
+/**
+ * Expected-fit stars for a watched lane that is not currently posted.
+ * @param {unknown} priority
+ * @returns {number}
+ */
+export function priorityToStars(priority) {
+  if (priority === 1 || priority === '1') return 3;
+  if (priority === 2 || priority === '2' || priority === 'watch') return 2;
+  if (priority === 'queued') return 1;
+  return 1;
 }
 
 /**

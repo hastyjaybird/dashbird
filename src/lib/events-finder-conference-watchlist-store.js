@@ -155,9 +155,18 @@ function normalizeRecord(raw) {
     // True when dates were estimated (+1 year) because no next-edition info exists.
     nextEditionEstimated: r.nextEditionEstimated === true,
     notes: String(r.notes || '').trim().slice(0, 400) || null,
-    // How many days before the event to start reminding from the event website.
-    // null = use the default heads-up window.
+    // Freeform logistics (flights, lodging, packing) — not overwritten by research.
+    planningNotes: String(r.planningNotes || '').trim().slice(0, 4000) || null,
+    // How many days before the event / sales to start reminding.
+    // null = use the default heads-up window (~60 days).
     reminderLeadDays: normalizeLeadDays(r.reminderLeadDays),
+    // Keep the producer card visible while dates are still TBD; when dates
+    // appear, flash as newly announced. Default on for producers.
+    notifyWhenDatesSet: r.notifyWhenDatesSet !== false,
+    datesAnnouncedAt: normalizeIsoDateTime(r.datesAnnouncedAt),
+    // Learned extraction hints per field after a user correction
+    // ({ ticketPrice: { hint, expectedValue, learnedAt }, ... }).
+    fieldWires: normalizeFieldWires(r.fieldWires),
     error: String(r.error || '').trim().slice(0, 200) || null,
     researching: r.researching === true,
     researchedAt: String(r.researchedAt || '').trim().slice(0, 40) || null,
@@ -169,6 +178,30 @@ function normalizeRecord(raw) {
     // this record alone so it never clobbers their corrections.
     manualEdit: r.manualEdit === true,
   };
+}
+
+/**
+ * @param {unknown} raw
+ * @returns {Record<string, { hint: string, expectedValue: string | null, learnedAt: string | null }>}
+ */
+function normalizeFieldWires(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  /** @type {Record<string, { hint: string, expectedValue: string | null, learnedAt: string | null }>} */
+  const out = {};
+  for (const [key, row] of Object.entries(raw)) {
+    const field = String(key || '').trim().slice(0, 40);
+    if (!field || !row || typeof row !== 'object') continue;
+    const hint = String(/** @type {Record<string, unknown>} */ (row).hint || '').trim().slice(0, 500);
+    if (!hint) continue;
+    const expectedValue = String(
+      /** @type {Record<string, unknown>} */ (row).expectedValue || '',
+    ).trim().slice(0, 160) || null;
+    const learnedAt = normalizeIsoDateTime(
+      /** @type {Record<string, unknown>} */ (row).learnedAt,
+    );
+    out[field] = { hint, expectedValue, learnedAt };
+  }
+  return out;
 }
 
 /**

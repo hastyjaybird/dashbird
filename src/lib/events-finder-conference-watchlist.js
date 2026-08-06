@@ -339,14 +339,91 @@ async function fetchPage(url) {
         // Sites without og:image still usually embed a header/feature upload —
         // collect those so thumbnail acquisition works without image-search APIs.
         const pageImages = extractPageImages(html, finalBase, 8);
-        return { text, ogImage, pageImages };
+        const pageTitle = extractPageTitle(html);
+        return { text, ogImage, pageImages, pageTitle, finalUrl: finalBase };
       } catch {
         /* try next UA / URL candidate */
       }
     }
   }
 
-  return { text: '', ogImage: null, pageImages: [] };
+  return { text: '', ogImage: null, pageImages: [], pageTitle: null, finalUrl: null };
+}
+
+/**
+ * Pull a human event name from HTML title / og:title.
+ * @param {string} html
+ * @returns {string | null}
+ */
+function extractPageTitle(html) {
+  const h = String(html || '');
+  const og = h.match(
+    /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i,
+  ) || h.match(
+    /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i,
+  );
+  if (og?.[1]) return cleanPageTitle(og[1]);
+  const t = h.match(/<title[^>]*>([^<]+)<\/title>/i);
+  if (t?.[1]) return cleanPageTitle(t[1]);
+  return null;
+}
+
+/**
+ * @param {string} raw
+ * @returns {string | null}
+ */
+function cleanPageTitle(raw) {
+  let s = String(raw || '')
+    .replace(/\s+/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#39;/g, "'")
+    .trim();
+  // Drop common " | Site" / " – Official" suffixes.
+  s = s.split(/\s*[|–—•·]\s*/)[0].trim();
+  s = s.replace(/\s*[-–—]\s*(home|official|tickets|welcome).*$/i, '').trim();
+  if (s.length < 2) return null;
+  return s.slice(0, 120);
+}
+
+/**
+ * Resolve a producer from a pasted URL — name from page title / host, then
+ * ready for research. No location filtering; rare festivals stay visible.
+ * @param {string} rawUrl
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Promise<{ ok: true, query: string, name: string, url: string, homepageUrl: string } | { ok: false, error: string }>}
+ */
+export async function probeProducerFromUrl(rawUrl, env = process.env) {
+  void env;
+  const href = String(rawUrl || '').trim();
+  if (!href) return { ok: false, error: 'missing_url' };
+  let normalized;
+  try {
+    const withProto = /^https?:\/\//i.test(href) ? href : `https://${href}`;
+    normalized = await assertPublicHttpUrl(withProto);
+  } catch {
+    return { ok: false, error: 'invalid_url' };
+  }
+  const page = await fetchPage(normalized);
+  const finalUrl = page.finalUrl || normalized;
+  let name = page.pageTitle || null;
+  if (!name) {
+    try {
+      const host = new URL(finalUrl).hostname.replace(/^www\./, '');
+      const base = host.split('.')[0] || host;
+      name = base.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    } catch {
+      name = 'Producer event';
+    }
+  }
+  const homepageUrl = homepageRootFromUrl(finalUrl) || finalUrl;
+  return {
+    ok: true,
+    query: name,
+    name,
+    url: finalUrl,
+    homepageUrl,
+  };
 }
 
 /**
@@ -1812,8 +1889,9 @@ function extractJsonObject(text) {
  * @param {string} query
  * @param {Array<{ url: string, title: string, text: string }>} pages
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {{ correction?: { field?: string, message?: string } | null, fieldWires?: Record<string, { hint?: string, expectedValue?: string | null }> | null }} [opts]
  */
-async function extractWithOpenRouter(query, pages, env = process.env) {
+async function extractWithOpenRouter(query, pages, env = process.env, opts = {}) {
   const key = String(env.OPENROUTER_API_KEY || '').trim();
   if (!key || !pages.length) return null;
 
@@ -1825,6 +1903,7 @@ async function extractWithOpenRouter(query, pages, env = process.env) {
   ).trim();
   const models = [model, ...TEXT_FALLBACK_MODELS.filter((m) => m !== model)];
 
+  /** @type {Record<string, unknown>} */
   const payload = {
     query,
     pages: pages.map((p) => ({
@@ -1833,6 +1912,27 @@ async function extractWithOpenRouter(query, pages, env = process.env) {
       text: p.text.slice(0, 6000),
     })),
   };
+  const correction = opts.correction;
+  if (correction?.message) {
+    payload.userCorrection = {
+      field: correction.field || null,
+      message: String(correction.message).slice(0, 500),
+      instruction:
+        'A human said the previous extraction was wrong. Find the value they describe on the pages and put the corrected value in the matching JSON field. Prefer their stated value when it appears on the page.',
+    };
+  }
+  const wires = opts.fieldWires && typeof opts.fieldWires === 'object' ? opts.fieldWires : null;
+  if (wires && Object.keys(wires).length) {
+    payload.learnedWires = Object.entries(wires).map(([field, w]) => ({
+      field,
+      hint: String(w?.hint || '').slice(0, 400),
+      lastCorrectValue: w?.expectedValue || null,
+    }));
+  }
+
+  const system = correction?.message
+    ? `${EXTRACT_SYSTEM}\n\nIMPORTANT: The user provided a correction in userCorrection — apply it. Locate the right figure/date on the pages so future scrapes can find it the same way.`
+    : EXTRACT_SYSTEM;
 
   for (const m of models) {
     let r;
@@ -1851,7 +1951,7 @@ async function extractWithOpenRouter(query, pages, env = process.env) {
           max_tokens: 900,
           response_format: { type: 'json_object' },
           messages: [
-            { role: 'system', content: EXTRACT_SYSTEM },
+            { role: 'system', content: system },
             { role: 'user', content: JSON.stringify(payload) },
           ],
         }),
@@ -1952,9 +2052,10 @@ function firstNonEmpty(...vals) {
 /**
  * @param {string} query
  * @param {NodeJS.ProcessEnv} [env]
- * @param {{ url?: string, homepageUrl?: string, ticketUrl?: string, screenshotPath?: string, force?: boolean }} [opts]
+ * @param {{ url?: string, homepageUrl?: string, ticketUrl?: string, screenshotPath?: string, force?: boolean, correction?: { field?: string, message?: string, expectedValue?: string | null } | null }} [opts]
  *   Seed from the Add-event preview. `force` re-researches even a hand-edited
- *   (manualEdit) record, clearing the lock.
+ *   (manualEdit) record, clearing the lock. `correction` guides extraction after
+ *   a user says a field was wrong (and learns a durable field wire).
  */
 export async function researchConferenceQuery(query, env = process.env, opts = {}) {
   const q = String(query || '').trim().slice(0, 120);
@@ -1986,16 +2087,40 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
   const urlProvidedNow = Boolean(
     normalizeEventPageUrl(opts.url) || homepageRootFromUrl(opts.homepageUrl),
   );
+  const correction = opts.correction && opts.correction.message
+    ? {
+        field: String(opts.correction.field || '').trim().slice(0, 40) || null,
+        message: String(opts.correction.message).trim().slice(0, 500),
+        expectedValue: opts.correction.expectedValue != null
+          ? String(opts.correction.expectedValue).trim().slice(0, 160) || null
+          : null,
+      }
+    : null;
   // Hand-edited records are locked: auto/daily research must not overwrite the
-  // user's corrections. Exceptions: forced re-research, or this call just
-  // provided a seed URL (manual add with a pasted link — scrape that page).
-  if (existing.manualEdit === true && opts.force !== true && !urlProvidedNow) {
+  // user's corrections. Exceptions: forced re-research, URL seed, or an explicit
+  // correction pass (learns wires then unlocks).
+  if (existing.manualEdit === true && opts.force !== true && !urlProvidedNow && !correction) {
     researchInFlight.delete(slug);
     return { ok: true, slug, skipped: true, manualEdit: true };
   }
-  const keepManualEdit = existing.manualEdit === true && opts.force !== true;
+  // Correction / force clears the lock so daily polls can keep following wires.
+  const keepManualEdit =
+    existing.manualEdit === true && opts.force !== true && !correction;
   let screenshotPath =
     String(opts.screenshotPath || '').trim() || existing.screenshotPath || null;
+
+  /** @type {Record<string, { hint: string, expectedValue: string | null, learnedAt: string | null }>} */
+  const fieldWires = {
+    ...(existing.fieldWires && typeof existing.fieldWires === 'object' ? existing.fieldWires : {}),
+  };
+  if (correction) {
+    const wireKey = correction.field || 'general';
+    fieldWires[wireKey] = {
+      hint: correction.message,
+      expectedValue: correction.expectedValue,
+      learnedAt: null,
+    };
+  }
 
   await upsertConferenceWatchlistRecords({
     [slug]: {
@@ -2007,6 +2132,7 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       homepageUrl: seedHomepage,
       ticketUrl: seedTicket,
       screenshotPath,
+      fieldWires,
       researching: true,
       researchedAt: nowIso,
     },
@@ -2098,12 +2224,13 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       }
     }
 
+    const extractOpts = { correction, fieldWires };
     const allPages = [...homePages, ...ticketPages];
     const homeParsed = homePages.length
-      ? (await extractWithOpenRouter(q, homePages, env)) || extractHeuristic(q, homePages)
+      ? (await extractWithOpenRouter(q, homePages, env, extractOpts)) || extractHeuristic(q, homePages)
       : null;
     const ticketParsed = ticketPages.length
-      ? (await extractWithOpenRouter(q, ticketPages, env)) || extractHeuristic(q, ticketPages)
+      ? (await extractWithOpenRouter(q, ticketPages, env, extractOpts)) || extractHeuristic(q, ticketPages)
       : null;
 
     // Merge across pages: dates/venue prefer the homepage; ticket price / early
@@ -2275,6 +2402,66 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
     }
 
     const resolvedHomepage = homepageUrl || seedHomepage || existing.homepageUrl || null;
+
+    // If the user stated an expected value in a correction, prefer it when the
+    // scrape still missed — then mark the wire as learned so daily polls follow it.
+    let finalTicketPrice = ticketPrice;
+    let finalEarlyBirdPrice = earlyBirdPrice || existing.earlyBirdPrice || null;
+    let finalNotes = notes || existing.notes || null;
+    let finalStartOut = finalStart;
+    let finalEndOut = finalEnd;
+    if (correction?.expectedValue && correction.field) {
+      const ev = correction.expectedValue;
+      if (correction.field === 'ticketPrice') {
+        finalTicketPrice = ev;
+        ticketPriceEstimated = false;
+        estimatedFromYear = null;
+      } else if (correction.field === 'earlyBirdPrice') {
+        finalEarlyBirdPrice = ev;
+      } else if (correction.field === 'eventStart') {
+        const ymd = normalizeYmd(ev);
+        if (ymd) finalStartOut = ymd;
+      } else if (correction.field === 'eventEnd') {
+        const ymd = normalizeYmd(ev);
+        if (ymd) finalEndOut = ymd;
+      } else if (correction.field === 'notes') {
+        finalNotes = ev;
+      }
+    }
+    if (correction) {
+      const wireKey = correction.field || 'general';
+      const scrapedMatch = (() => {
+        if (!correction.field) return true;
+        const got = {
+          ticketPrice: finalTicketPrice,
+          earlyBirdPrice: finalEarlyBirdPrice,
+          eventStart: finalStartOut,
+          eventEnd: finalEndOut,
+          notes: finalNotes,
+          ticketSalesStart: ticketSalesStart || existing.ticketSalesStart || null,
+          venue: venue || existing.venue || null,
+          city: city || existing.city || null,
+        }[correction.field];
+        if (!correction.expectedValue) return Boolean(got);
+        return String(got || '').toLowerCase().includes(
+          String(correction.expectedValue).toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 40),
+        ) || String(got || '').toLowerCase() === String(correction.expectedValue).toLowerCase();
+      })();
+      fieldWires[wireKey] = {
+        hint: correction.message,
+        expectedValue: correction.expectedValue
+          || (correction.field === 'ticketPrice' ? finalTicketPrice : null)
+          || null,
+        learnedAt: scrapedMatch ? nowIso : null,
+      };
+    }
+
+    // Dates went from TBD → set: stamp announcement time for the notify flag.
+    let datesAnnouncedAt = existing.datesAnnouncedAt || null;
+    if (!existing.eventStart && finalStartOut) {
+      datesAnnouncedAt = nowIso;
+    }
+
     const record = {
       slug,
       query: q,
@@ -2282,14 +2469,14 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       url: resolvedHomepage || existing.url || null,
       homepageUrl: resolvedHomepage,
       ticketUrl: ticketUrl || existing.ticketUrl || null,
-      eventStart: finalStart,
-      eventEnd: finalEnd,
+      eventStart: finalStartOut,
+      eventEnd: finalEndOut,
       venue: venue || existing.venue || null,
       city: city || existing.city || null,
-      ticketPrice,
+      ticketPrice: finalTicketPrice,
       ticketPriceEstimated,
       estimatedFromYear,
-      earlyBirdPrice: earlyBirdPrice || existing.earlyBirdPrice || null,
+      earlyBirdPrice: finalEarlyBirdPrice,
       earlyBirdStart: earlyBirdStart || existing.earlyBirdStart || null,
       earlyBirdEnd: earlyBirdEnd || existing.earlyBirdEnd || null,
       ticketSalesStart: ticketSalesStart || existing.ticketSalesStart || null,
@@ -2297,15 +2484,20 @@ export async function researchConferenceQuery(query, env = process.env, opts = {
       flierPath,
       flierCheckedAt,
       nextEditionEstimated,
-      notes: notes || existing.notes || null,
+      notes: finalNotes,
+      planningNotes: existing.planningNotes || null,
+      reminderLeadDays: existing.reminderLeadDays ?? null,
+      notifyWhenDatesSet: existing.notifyWhenDatesSet !== false,
+      datesAnnouncedAt,
+      fieldWires,
       researching: false,
-      // Preserve hand-edit lock (manual add / Edit save). Force clears it.
+      // Correction / force unlocks so wires keep tracking site changes.
       manualEdit: keepManualEdit,
       // Preserve user snooze/skip state across background re-research.
       snoozedUntil: existing.snoozedUntil || null,
       skipped: existing.skipped === true,
       error:
-        finalStart || ticketPrice || allPages.length ? null : 'no_pages_found',
+        finalStartOut || finalTicketPrice || allPages.length ? null : 'no_pages_found',
       researchedAt: nowIso,
     };
 
@@ -2418,13 +2610,37 @@ function formatMd(ymd) {
  */
 export function isConferenceHeadsUpActive(record, now = new Date()) {
   if (record.researching) return true;
+  if (record.skipped === true) return false;
+  if (record.snoozedUntil && Date.parse(String(record.snoozedUntil)) > now.getTime()) {
+    return false;
+  }
   const t = now.getTime();
-  const startMs = parseYmd(record.eventStart);
-  const endMs = parseYmd(record.eventEnd) || startMs;
   const leadMs =
     record.reminderLeadDays != null && Number.isFinite(Number(record.reminderLeadDays))
       ? Number(record.reminderLeadDays) * 24 * 60 * 60 * 1000
       : CONFERENCE_HEADS_UP_MS;
+
+  // Waiting for dates to be announced — stay visible until they land.
+  if (record.notifyWhenDatesSet === true && !record.eventStart) return true;
+
+  // Freshly announced dates — keep reminding for two weeks.
+  const announcedMs = Date.parse(String(record.datesAnnouncedAt || ''));
+  if (Number.isFinite(announcedMs) && t - announcedMs < 14 * 24 * 60 * 60 * 1000) {
+    return true;
+  }
+
+  /** @param {string | null | undefined} ymd */
+  const inLeadWindow = (ymd) => {
+    const ms = parseYmd(ymd);
+    if (!ms) return false;
+    return t >= ms - leadMs && t <= ms + 24 * 60 * 60 * 1000;
+  };
+
+  if (inLeadWindow(record.ticketSalesStart)) return true;
+  if (inLeadWindow(record.earlyBirdStart)) return true;
+
+  const startMs = parseYmd(record.eventStart);
+  const endMs = parseYmd(record.eventEnd) || startMs;
   if (startMs) {
     const windowStart = startMs - leadMs;
     const windowEnd = (endMs || startMs) + 24 * 60 * 60 * 1000;
@@ -2525,6 +2741,10 @@ export function conferenceRecordToHeadsUp(record, now = new Date()) {
     flierImageUrl: flierUrl || screenshotUrl,
     nextEditionEstimated: record.nextEditionEstimated === true,
     notes: record.notes || null,
+    planningNotes: record.planningNotes || null,
+    notifyWhenDatesSet: record.notifyWhenDatesSet === true,
+    datesAnnouncedAt: record.datesAnnouncedAt || null,
+    fieldWires: record.fieldWires || {},
     reminderLeadDays: record.reminderLeadDays ?? null,
     researching: record.researching === true,
     error: record.error || null,
@@ -2535,6 +2755,7 @@ export function conferenceRecordToHeadsUp(record, now = new Date()) {
     source: 'conference-watch',
     headsUp: true,
     conferenceWatch: true,
+    producer: true,
   };
 }
 

@@ -599,7 +599,7 @@ router.post('/subscriptions', async (req, res) => {
       res.status(400).json({
         ok: false,
         error: 'careers_moved_to_job_watch',
-        hint: 'Anthropic careers are watched in the Job Watch left-rail panel.',
+        hint: 'Anthropic careers are watched in the Opportunity Watch left-rail panel.',
       });
       return;
     }

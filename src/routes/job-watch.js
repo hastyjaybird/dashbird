@@ -16,9 +16,9 @@ function clientError(e) {
   const raw = String(/** @type {Error} */ (e)?.message || e);
   console.warn('[job-watch]', raw);
   if (raw.includes('job-watch-targets.json')) {
-    return 'Job Watch config missing on this server — redeploy to fix';
+    return 'Opportunity Watch config missing on this server — redeploy to fix';
   }
-  return 'Job Watch unavailable — see server logs';
+  return 'Opportunity Watch unavailable — see server logs';
 }
 
 router.get('/', async (_req, res) => {

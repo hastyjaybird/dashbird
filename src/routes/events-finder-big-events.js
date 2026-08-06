@@ -23,6 +23,7 @@ import {
   normalizeConferenceWatchlist,
   conferenceRecordToWatchItem,
   loadConferenceHeadsUp,
+  probeProducerFromUrl,
 } from '../lib/events-finder-conference-watchlist.js';
 
 const router = Router();
@@ -92,23 +93,36 @@ router.post('/search', async (req, res) => {
 });
 
 /**
- * POST /add { query, url?, homepageUrl?, ticketUrl?, manual? }
- * Commit to the watchlist. `manual: true` is for events that cannot be found
- * via search — locks the record as hand-edited and only runs research when a
- * URL was provided (scrape that page; do not rediscover a wrong site).
+ * POST /add { query?, url?, homepageUrl?, ticketUrl?, manual? }
+ * Commit to the producers watchlist. Prefer `url` alone — we probe the page for
+ * a display name, then scrape dates / tickets / early bird. `manual: true` locks
+ * name-only adds that cannot be found via search.
  */
 router.post('/add', async (req, res) => {
   try {
-    const query = String(req.body?.query || '').trim().slice(0, 120);
-    if (!query) {
-      res.status(400).json({ ok: false, error: 'missing_query' });
-      return;
-    }
-    const url = String(req.body?.url || '').trim().slice(0, 500) || null;
-    const homepageUrl = String(req.body?.homepageUrl || '').trim().slice(0, 500) || url || null;
+    let query = String(req.body?.query || '').trim().slice(0, 120);
+    let url = String(req.body?.url || '').trim().slice(0, 500) || null;
+    let homepageUrl = String(req.body?.homepageUrl || '').trim().slice(0, 500) || url || null;
     const ticketUrl = String(req.body?.ticketUrl || '').trim().slice(0, 500) || null;
     const screenshotPath = String(req.body?.screenshotPath || '').trim().slice(0, 200) || null;
     const manual = req.body?.manual === true;
+
+    // URL-only add (producers tab): pull the event name from the page.
+    if (!query && url) {
+      const probed = await probeProducerFromUrl(url, process.env);
+      if (!probed.ok) {
+        res.status(422).json(probed);
+        return;
+      }
+      query = probed.query;
+      url = probed.url;
+      homepageUrl = probed.homepageUrl || probed.url;
+    }
+
+    if (!query) {
+      res.status(400).json({ ok: false, error: 'missing_query_or_url' });
+      return;
+    }
     const slug = slugFromQuery(query);
     if (!slug) {
       res.status(400).json({ ok: false, error: 'invalid_query' });
@@ -152,6 +166,10 @@ router.post('/add', async (req, res) => {
           homepageUrl: homepageUrl || priorRec.homepageUrl || null,
           ticketUrl: ticketUrl || priorRec.ticketUrl || null,
           screenshotPath: screenshotPath || priorRec.screenshotPath || null,
+          // New producers default to "tell me when dates are set".
+          notifyWhenDatesSet:
+            priorRec.notifyWhenDatesSet === true
+            || priorRec.notifyWhenDatesSet == null,
           manualEdit: manual || priorRec.manualEdit === true,
           researching: runResearch,
           researchedAt: new Date().toISOString(),
@@ -224,6 +242,7 @@ const EDITABLE_STRING_FIELDS = [
   'ticketPrice',
   'earlyBirdPrice',
   'notes',
+  'planningNotes',
 ];
 const EDITABLE_DATE_FIELDS = [
   'eventStart',
@@ -240,6 +259,28 @@ function cleanDateInput(raw) {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) && Number.isFinite(Date.parse(`${s}T12:00:00Z`))
     ? s
     : undefined; // undefined → invalid, reject
+}
+
+/**
+ * Pull a plausible expected value out of a freeform correction
+ * ("correct the ticket prices to $575" → "$575").
+ * @param {string} message
+ * @param {string | null} field
+ */
+function guessExpectedFromCorrection(message, field) {
+  const msg = String(message || '');
+  if (field === 'ticketPrice' || field === 'earlyBirdPrice' || !field) {
+    const m = msg.match(/\$\s?[\d,]+(?:\.\d{2})?(?:\s*[-–—]\s*\$?\s?[\d,]+(?:\.\d{2})?)?/);
+    if (m) return m[0].replace(/\s+/g, '');
+  }
+  if (field === 'eventStart' || field === 'eventEnd' || field === 'ticketSalesStart'
+    || field === 'earlyBirdStart' || field === 'earlyBirdEnd') {
+    const iso = msg.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+    if (iso) return iso[1];
+  }
+  const toMatch = msg.match(/\b(?:to|is|are|should be)\s+["']?([^"'.,;]+)["']?/i);
+  if (toMatch) return toMatch[1].trim().slice(0, 120);
+  return null;
 }
 
 router.patch('/:slug', async (req, res) => {
@@ -271,7 +312,8 @@ router.patch('/:slug', async (req, res) => {
         patch.ticketPriceEstimated = false;
         patch.estimatedFromYear = null;
       }
-      metaEdited = true;
+      // Logistics notes are user-only; do not treat as research-lock.
+      if (key !== 'planningNotes') metaEdited = true;
     }
     for (const key of EDITABLE_DATE_FIELDS) {
       if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
@@ -288,14 +330,22 @@ router.patch('/:slug', async (req, res) => {
     if (Object.prototype.hasOwnProperty.call(body, 'reminderLeadDays')) {
       patch.reminderLeadDays = normalizeLeadDays(body.reminderLeadDays);
     }
+    if (Object.prototype.hasOwnProperty.call(body, 'notifyWhenDatesSet')) {
+      patch.notifyWhenDatesSet = body.notifyWhenDatesSet === true;
+    }
 
-    if (!metaEdited && !Object.prototype.hasOwnProperty.call(patch, 'reminderLeadDays')) {
+    if (
+      !metaEdited
+      && !Object.prototype.hasOwnProperty.call(patch, 'reminderLeadDays')
+      && !Object.prototype.hasOwnProperty.call(patch, 'notifyWhenDatesSet')
+      && !Object.prototype.hasOwnProperty.call(patch, 'planningNotes')
+    ) {
       res.status(400).json({ ok: false, error: 'no_editable_fields' });
       return;
     }
 
-    // Editing metadata locks the record from auto-research; a bare reminder
-    // change does not.
+    // Editing metadata locks the record from auto-research; reminder / logistics
+    // / notify toggles do not.
     if (metaEdited) {
       patch.manualEdit = true;
       patch.researching = false;
@@ -309,6 +359,80 @@ router.patch('/:slug', async (req, res) => {
     res.json({
       ok: true,
       item: conferenceRecordToWatchItem(updated.bySlug[slug] || rec, new Date()),
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+/**
+ * POST /:slug/correct { field?, message }
+ * Double-click correction: user says what is wrong; we re-scrape with that hint,
+ * apply any stated value, and store a field wire so future polls keep the right path.
+ */
+router.post('/:slug/correct', async (req, res) => {
+  try {
+    const slug = slugFromQuery(String(req.params.slug || ''));
+    if (!slug) {
+      res.status(400).json({ ok: false, error: 'invalid_slug' });
+      return;
+    }
+    const message = String(req.body?.message || '').trim().slice(0, 500);
+    if (!message) {
+      res.status(400).json({ ok: false, error: 'missing_message' });
+      return;
+    }
+    const field = String(req.body?.field || '').trim().slice(0, 40) || null;
+    const store = await loadConferenceWatchlistStore(process.env);
+    const rec = store.bySlug[slug];
+    if (!rec) {
+      res.status(404).json({ ok: false, error: 'not_found' });
+      return;
+    }
+
+    const expectedValue =
+      String(req.body?.expectedValue || '').trim().slice(0, 160)
+      || guessExpectedFromCorrection(message, field);
+
+    /** @type {Record<string, unknown>} */
+    const immediate = {
+      researching: true,
+      researchedAt: new Date().toISOString(),
+    };
+    if (expectedValue && field === 'ticketPrice') {
+      immediate.ticketPrice = expectedValue;
+      immediate.ticketPriceEstimated = false;
+      immediate.estimatedFromYear = null;
+    } else if (expectedValue && field === 'earlyBirdPrice') {
+      immediate.earlyBirdPrice = expectedValue;
+    } else if (expectedValue && (field === 'eventStart' || field === 'eventEnd'
+      || field === 'ticketSalesStart' || field === 'earlyBirdStart' || field === 'earlyBirdEnd')) {
+      const ymd = cleanDateInput(expectedValue);
+      if (ymd) immediate[field] = ymd;
+    }
+
+    await upsertConferenceWatchlistRecords(
+      { [slug]: { ...rec, ...immediate } },
+      process.env,
+    );
+
+    setImmediate(() => {
+      void researchConferenceQuery(rec.query || rec.name || slug, process.env, {
+        force: true,
+        url: rec.url || undefined,
+        homepageUrl: rec.homepageUrl || undefined,
+        ticketUrl: rec.ticketUrl || undefined,
+        correction: { field, message, expectedValue },
+      }).catch((err) => {
+        console.warn('[big-events] correct failed:', String(err?.message || err).slice(0, 160));
+      });
+    });
+
+    const fresh = await loadConferenceWatchlistStore(process.env);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({
+      ok: true,
+      item: conferenceRecordToWatchItem(fresh.bySlug[slug] || rec, new Date()),
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });

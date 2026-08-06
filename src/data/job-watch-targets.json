@@ -19,7 +19,9 @@
         "manager of applied ai",
         "manager,\\s*applied ai",
         "life sciences"
-      ]
+      ],
+      "kind": "Full-time",
+      "source": "anthropic"
     },
     {
       "id": "bd-customer-partner-success",
@@ -36,7 +38,9 @@
         "head of partner success",
         "industries",
         "enterprise tech"
-      ]
+      ],
+      "kind": "Full-time",
+      "source": "anthropic"
     },
     {
       "id": "bd-partnerships-agri-gdev",
@@ -54,7 +58,9 @@
         "clinical",
         "life sciences",
         "medical"
-      ]
+      ],
+      "kind": "Full-time",
+      "source": "anthropic"
     },
     {
       "id": "bd-agriculture",
@@ -68,7 +74,13 @@
         "agronom",
         "gaila"
       ],
-      "excludeAny": ["clinical", "global health", "life sciences"]
+      "excludeAny": [
+        "clinical",
+        "global health",
+        "life sciences"
+      ],
+      "kind": "Full-time",
+      "source": "anthropic"
     },
     {
       "id": "bd-economic-mobility",
@@ -80,15 +92,201 @@
         "claude corps",
         "claude for nonprofits"
       ],
-      "excludeAny": ["sales manager, nonprofit & education, emea"]
+      "excludeAny": [
+        "sales manager, nonprofit & education, emea"
+      ],
+      "kind": "Full-time",
+      "source": "anthropic"
     },
     {
       "id": "startup-partnerships-lead",
       "label": "Startup Partnerships Lead",
       "priority": "queued",
       "summary": "Queued cooldown burn — partnerships/GTM, not DevRel Evangelist. Confirm before submit.",
-      "matchAny": ["^startup partnerships lead$"],
-      "excludeAny": ["evangelist", "france", "india", "manager, startup partnerships"]
+      "matchAny": [
+        "^startup partnerships lead$"
+      ],
+      "excludeAny": [
+        "evangelist",
+        "france",
+        "india",
+        "manager, startup partnerships"
+      ],
+      "kind": "Full-time",
+      "source": "anthropic"
+    },
+    {
+      "id": "google-fde-public-sector",
+      "source": "google",
+      "label": "Forward Deployed Engineer, Public Sector",
+      "priority": 1,
+      "kind": "Full-time",
+      "summary": "Closest Google analog to Applied AI Architect (IC), BD — field deployment for government/mission customers.",
+      "matchAny": [
+        "forward.?deployed engineer.*(public sector|government|state and local)",
+        "forward.?deployed engineering",
+        "practice customer engineer,?\\s*applied ai"
+      ],
+      "excludeAny": [
+        "national security",
+        "federal security",
+        "intelligence community"
+      ]
+    },
+    {
+      "id": "google-ce-un-international",
+      "source": "google",
+      "label": "Customer Engineer, UN / International Orgs",
+      "priority": 1,
+      "kind": "Full-time",
+      "summary": "Global-development analog: technical partner work with UN agencies and multilateral orgs.",
+      "matchAny": [
+        "customer engineer.*(un and international|united nations|international organizations)",
+        "(customer|partner) engineer.*(global development|humanitarian|ngo)"
+      ],
+      "excludeAny": [
+        "security",
+        "databases",
+        "infrastructure"
+      ]
+    },
+    {
+      "id": "google-org-social-impact",
+      "source": "google",
+      "label": "Google.org / social impact program",
+      "priority": 2,
+      "kind": "Full-time",
+      "summary": "Philanthropic arm — grants, AI for social good, fellowship program management.",
+      "matchAny": [
+        "google\\.org",
+        "(social impact|social good|philanthrop).*(program|partnership|lead|manager|director)",
+        "ai for (social good|impact)"
+      ],
+      "excludeAny": [
+        "social media",
+        "social growth",
+        "social analytics",
+        "social support"
+      ]
+    },
+    {
+      "id": "google-agriculture",
+      "source": "google",
+      "label": "AnthroKrishi / agriculture AI",
+      "priority": "watch",
+      "kind": "Full-time",
+      "summary": "Google's smallholder-agriculture lane — the closest match to the Gates agri thesis.",
+      "matchAny": [
+        "anthrokrishi",
+        "smallholder",
+        "agricultur"
+      ],
+      "excludeAny": []
+    },
+    {
+      "id": "google-economic-opportunity",
+      "source": "google",
+      "label": "Economic / workforce development",
+      "priority": "watch",
+      "kind": "Full-time",
+      "summary": "US economic-mobility analog to Claude Corps / Economic Futures.",
+      "matchAny": [
+        "economic (community and )?workforce development",
+        "workforce development",
+        "grow with google",
+        "economic (mobility|opportunity)"
+      ],
+      "excludeAny": [
+        "workforce planning",
+        "energy market"
+      ]
+    },
+    {
+      "id": "openai-fde-gov",
+      "source": "openai",
+      "label": "Forward Deployed Engineer, Gov",
+      "priority": 1,
+      "kind": "Full-time",
+      "summary": "Closest OpenAI analog to Applied AI Architect (IC), BD — field deployment for government missions.",
+      "matchAny": [
+        "forward.?deployed engineer,?\\s*gov\\b",
+        "forward.?deployed engineer.*(government|public sector)",
+        "forward.?deployed software engineer.*(government|public sector|gov)\\b"
+      ],
+      "excludeAny": [
+        "life sciences",
+        "healthcare",
+        "manager,\\s*forward.?deployed",
+        "national security",
+        "intelligence community"
+      ]
+    },
+    {
+      "id": "openai-ai-success-gov",
+      "source": "openai",
+      "label": "AI Success Engineer, Government",
+      "priority": 1,
+      "kind": "Full-time",
+      "summary": "Customer/partner success motion for OpenAI for Government — closest to BD Success lanes.",
+      "matchAny": [
+        "ai success engineer,?\\s*government",
+        "ai support engineer,?\\s*government",
+        "(customer|technical) success.*(government|public sector)"
+      ],
+      "excludeAny": [
+        "healthcare",
+        "life sciences",
+        "ads solutions"
+      ]
+    },
+    {
+      "id": "openai-partner-deployment",
+      "source": "openai",
+      "label": "Partner AI Deployment Engineer",
+      "priority": 2,
+      "kind": "Full-time",
+      "summary": "Partner-channel deployment engineering — GTM/implementation analog.",
+      "matchAny": [
+        "partner ai deployment engineer",
+        "partner.?deployed"
+      ],
+      "excludeAny": [
+        "manager",
+        "director"
+      ]
+    },
+    {
+      "id": "openai-edu-success",
+      "source": "openai",
+      "label": "AI Success / Education",
+      "priority": "watch",
+      "kind": "Full-time",
+      "summary": "Education and campus success lanes — soft analog to Claude for Teachers / economic mobility.",
+      "matchAny": [
+        "ai success engineer.?edu",
+        "ai success engineer.?education",
+        "chatgpt education",
+        "openai edu",
+        "account director,?\\s*education"
+      ],
+      "excludeAny": [
+        "social media",
+        "content & systems"
+      ]
+    },
+    {
+      "id": "openai-academic-partnerships",
+      "source": "openai",
+      "label": "Academic / research partnerships",
+      "priority": "watch",
+      "kind": "Full-time",
+      "summary": "Academic research partnerships & programs — public-goods adjacent.",
+      "matchAny": [
+        "academic research partnerships",
+        "campus leaders",
+        "technical community lead,?\\s*campus"
+      ],
+      "excludeAny": []
     }
   ],
   "hardPassPatterns": [
@@ -105,7 +303,11 @@
     "research scientist",
     "research engineer,\\s*pretraining",
     "reinforcement learning",
-    "\\bpretraining\\b"
+    "\\bpretraining\\b",
+    "forward.?deployed engineer.*(healthcare|life sciences)",
+    "manager,\\s*forward.?deployed engineering",
+    "federal account director,?\\s*intelligence",
+    "\\bads solutions\\b"
   ],
   "candidateInterestPatterns": [
     "beneficial deployments",
@@ -121,6 +323,44 @@
     "startup partnerships",
     "forward.?deployed",
     "public goods",
-    "raising the floor"
+    "raising the floor",
+    "openai for gov",
+    "ai success engineer",
+    "partner ai deployment",
+    "chatgpt education",
+    "public sector"
+  ],
+  "sources": [
+    {
+      "id": "anthropic",
+      "label": "Anthropic",
+      "type": "greenhouse",
+      "boardUrl": "https://boards-api.greenhouse.io/v1/boards/anthropic/jobs",
+      "careersUiUrl": "https://job-boards.greenhouse.io/anthropic",
+      "candidates": true
+    },
+    {
+      "id": "google",
+      "label": "Google",
+      "type": "google-careers",
+      "searchUrl": "https://www.google.com/about/careers/applications/jobs/results/",
+      "careersUiUrl": "https://www.google.com/about/careers/applications/jobs/results/",
+      "queries": [
+        "forward deployed engineer public sector",
+        "customer engineer public sector",
+        "google.org social impact",
+        "workforce development",
+        "agriculture AI research"
+      ],
+      "candidates": false
+    },
+    {
+      "id": "openai",
+      "label": "OpenAI",
+      "type": "ashby",
+      "boardUrl": "https://api.ashbyhq.com/posting-api/job-board/openai",
+      "careersUiUrl": "https://openai.com/careers/search",
+      "candidates": true
+    }
   ]
 }

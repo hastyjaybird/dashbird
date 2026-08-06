@@ -4,6 +4,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import bundledTargets from '../data/job-watch-targets.json' with { type: 'json' };
 
 const PKG_ROOT = path.join(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 const TARGETS_PATH = path.join(PKG_ROOT, 'src/data/job-watch-targets.json');
@@ -29,6 +30,7 @@ const TARGETS_PATH = path.join(PKG_ROOT, 'src/data/job-watch-targets.json');
  *   knownJobIds: string[],
  *   openJobs: Array<object>,
  *   targetMatches: Record<string, object | null>,
+ *   details: Record<string, object>,
  *   candidates: JobWatchCandidate[],
  * }} JobWatchState */
 
@@ -39,6 +41,7 @@ const DEFAULT_STATE = /** @type {JobWatchState} */ ({
   knownJobIds: [],
   openJobs: [],
   targetMatches: {},
+  details: {},
   candidates: [],
 });
 
@@ -51,12 +54,21 @@ export function jobWatchStatePath(env = process.env) {
 }
 
 /**
+ * Prefer the on-disk targets file (LAN bind-mount / live edits), but never fail
+ * the panel when the file is missing from an image — fall back to the bundled JSON.
  * @returns {Promise<object>}
  */
 export async function loadJobWatchTargets() {
   if (targetsCache) return targetsCache;
-  const raw = await fs.readFile(TARGETS_PATH, 'utf8');
-  targetsCache = JSON.parse(raw);
+  try {
+    const raw = await fs.readFile(TARGETS_PATH, 'utf8');
+    targetsCache = JSON.parse(raw);
+  } catch (e) {
+    const code = /** @type {NodeJS.ErrnoException} */ (e)?.code;
+    if (code !== 'ENOENT') throw e;
+    console.warn('[job-watch] targets file missing; using bundled job-watch-targets.json');
+    targetsCache = structuredClone(bundledTargets);
+  }
   return targetsCache;
 }
 
@@ -70,7 +82,14 @@ export async function loadJobWatchState(env = process.env) {
     const parsed = JSON.parse(raw);
     return normalizeState(parsed);
   } catch {
-    return { ...DEFAULT_STATE, knownJobIds: [], openJobs: [], targetMatches: {}, candidates: [] };
+    return {
+      ...DEFAULT_STATE,
+      knownJobIds: [],
+      openJobs: [],
+      targetMatches: {},
+      details: {},
+      candidates: [],
+    };
   }
 }
 
@@ -89,6 +108,10 @@ export function normalizeState(raw) {
     targetMatches:
       o.targetMatches && typeof o.targetMatches === 'object' && !Array.isArray(o.targetMatches)
         ? /** @type {Record<string, object | null>} */ (o.targetMatches)
+        : {},
+    details:
+      o.details && typeof o.details === 'object' && !Array.isArray(o.details)
+        ? /** @type {Record<string, object>} */ (o.details)
         : {},
     candidates: Array.isArray(o.candidates) ? /** @type {JobWatchCandidate[]} */ (o.candidates) : [],
   };
