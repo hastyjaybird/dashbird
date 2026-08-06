@@ -23,11 +23,13 @@ if [[ -z "$HOST" && -f "$ROOT/.env" ]]; then
 fi
 HOST="${HOST:?Set CLOUD_HOST=root@your-server-ip (env or .env)}"
 
+# Anchor /data/ so we skip only the repo root data/ volume — not public/data/
+# (unanchored "data/" also matched public/data and left admin bookmarks stuck on VPS).
 RSYNC_CODE=(rsync -avz --delete
   --exclude node_modules
   --exclude .git
   --exclude .env
-  --exclude data/
+  --exclude /data/
   --exclude 'public/data/bookmarks-personal.json'
   --exclude 'public/data/notes.md'
   --exclude 'public/data/last-backup.txt'
@@ -37,6 +39,18 @@ RSYNC_CODE=(rsync -avz --delete
 echo "[dashbird] Syncing repo code to ${HOST}:${REMOTE_DIR}/"
 ssh "$HOST" "mkdir -p '${REMOTE_DIR}/data' '${REMOTE_DIR}/public/data' '${REMOTE_DIR}/data/vikunja/db' '${REMOTE_DIR}/data/vikunja/files'"
 "${RSYNC_CODE[@]}" "$ROOT/" "${HOST}:${REMOTE_DIR}/"
+
+# Fail loud if admin bookmarks did not sync (regression guard for the /data/ exclude).
+WORK_BM="$ROOT/public/data/bookmarks-work.json"
+if [[ -f "$WORK_BM" ]]; then
+  LOCAL_SUM="$(sha256sum "$WORK_BM" | awk '{print $1}')"
+  REMOTE_SUM="$(ssh "$HOST" "sha256sum '${REMOTE_DIR}/public/data/bookmarks-work.json'" | awk '{print $1}')"
+  if [[ "$LOCAL_SUM" != "$REMOTE_SUM" ]]; then
+    echo "[dashbird] ERROR: public/data/bookmarks-work.json mismatch after rsync (local=${LOCAL_SUM} remote=${REMOTE_SUM})" >&2
+    exit 1
+  fi
+  echo "[dashbird] Verified admin bookmarks synced (sha256=${LOCAL_SUM})"
+fi
 
 GUIDE_MD="$ROOT/data/gmail-daily-summary-guide.md"
 if [[ -f "$GUIDE_MD" ]]; then

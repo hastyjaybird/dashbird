@@ -57,11 +57,13 @@ jobs:
 
           ssh dashbird-cloud "mkdir -p '${REMOTE_DIR}/data' '${REMOTE_DIR}/public/data' '${REMOTE_DIR}/data/vikunja/db' '${REMOTE_DIR}/data/vikunja/files'"
 
+          # Anchor /data/ so we skip only the repo root data/ volume — not public/data/
+          # (unanchored "data/" also matched public/data and left admin bookmarks stuck on VPS).
           rsync -avz --delete \
             --exclude node_modules \
             --exclude .git \
             --exclude .env \
-            --exclude data/ \
+            --exclude /data/ \
             --exclude 'public/data/bookmarks-personal.json' \
             --exclude 'public/data/notes.md' \
             --exclude 'public/data/last-backup.txt' \
@@ -71,6 +73,21 @@ jobs:
 
           if [[ -f data/gmail-daily-summary-guide.md ]]; then
             rsync -avz data/gmail-daily-summary-guide.md "dashbird-cloud:${REMOTE_DIR}/data/gmail-daily-summary-guide.md"
+          fi
+
+          # Fail loud if admin bookmarks did not sync (regression guard for the /data/ exclude).
+          if [[ -f public/data/bookmarks-work.json ]]; then
+            LOCAL_SUM="$(sha256sum public/data/bookmarks-work.json | awk '{print $1}')"
+            REMOTE_SUM="$(ssh dashbird-cloud "sha256sum '${REMOTE_DIR}/public/data/bookmarks-work.json'" | awk '{print $1}')"
+            if [[ "$LOCAL_SUM" != "$REMOTE_SUM" ]]; then
+              echo "ERROR: public/data/bookmarks-work.json mismatch after rsync (local=${LOCAL_SUM} remote=${REMOTE_SUM})" >&2
+              exit 1
+            fi
+            if ! grep -q '"Deployed projects"' public/data/bookmarks-work.json; then
+              echo "ERROR: local bookmarks-work.json missing Deployed projects section" >&2
+              exit 1
+            fi
+            echo "Verified admin bookmarks synced (sha256=${LOCAL_SUM})"
           fi
 
           ssh dashbird-cloud "cd '${REMOTE_DIR}' && docker compose -f '${COMPOSE_FILE}' up -d --build --force-recreate dashboard caddy"

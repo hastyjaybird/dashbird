@@ -9,11 +9,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST="${HETZNER_HOST:?Set HETZNER_HOST=root@your-server-ip}"
 REMOTE_DIR="${HETZNER_DIR:-/opt/dashbird}"
 
+# Anchor /data/ so we skip only the repo root data/ volume — not public/data/
+# (unanchored "data/" also matched public/data and left admin bookmarks stuck).
 RSYNC=(rsync -avz --delete
   --exclude node_modules
   --exclude .git
   --exclude .env
-  --exclude data/
+  --exclude /data/
 )
 
 echo "[dashbird] Syncing repo to ${HOST}:${REMOTE_DIR}/"
